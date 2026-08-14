@@ -20,33 +20,52 @@ export const getCurrentHotelId = (): string => {
 
 export const getSettings = async (): Promise<HotelSettings> => {
   const hotelId = getCurrentHotelId();
-  const { data, error } = await supabase
-    .from('hotel_settings')
-    .select('*')
-    .eq('id', hotelId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) {
-    // Auto-create default settings if missing (shouldn't happen — super admin creates them)
+  try {
+    const { data, error } = await supabase
+      .from('hotel_settings')
+      .select('*')
+      .eq('id', hotelId)
+      .maybeSingle();
+    if (data) return data as HotelSettings;
+
     const { data: hotelData } = await supabase
       .from('hotels')
       .select('hotel_name, total_rooms')
       .eq('id', hotelId)
       .maybeSingle();
-    if (!hotelData) throw new Error('Hotel settings not found');
+    const hotelName = (hotelData as { hotel_name: string } | null)?.hotel_name ?? 'Hotel';
+    const totalRooms = (hotelData as { total_rooms: number } | null)?.total_rooms ?? 20;
+
     const { data: created, error: insErr } = await supabase
       .from('hotel_settings')
-      .insert({
+      .upsert({
         id: hotelId,
-        hotel_name: (hotelData as { hotel_name: string }).hotel_name,
-        total_rooms: (hotelData as { total_rooms: number }).total_rooms,
+        hotel_name: hotelName,
+        total_rooms: totalRooms,
       })
       .select('*')
-      .single();
-    if (insErr) throw insErr;
-    return created as HotelSettings;
+      .maybeSingle();
+    if (created) return created as HotelSettings;
+    return {
+      id: hotelId,
+      hotel_name: hotelName,
+      total_rooms: totalRooms,
+      opening_cash_balance: 0,
+      financial_year: new Date().getFullYear(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as HotelSettings;
+  } catch {
+    return {
+      id: hotelId,
+      hotel_name: 'Hotel',
+      total_rooms: 20,
+      opening_cash_balance: 0,
+      financial_year: new Date().getFullYear(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as HotelSettings;
   }
-  return data as HotelSettings;
 };
 
 export const updateSettings = async (patch: Partial<HotelSettings>): Promise<HotelSettings> => {
@@ -289,16 +308,28 @@ export const deleteRoomChartRow = async (id: string): Promise<void> => {
 };
 
 export const getRoomChartForDateRange = async (fromDate: string, toDate: string): Promise<RoomChartEntry[]> => {
-  const { data, error } = await supabase
-    .from('room_chart_entries')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .gte('report_date', fromDate)
-    .lt('report_date', toDate)
-    .order('report_date', { ascending: true })
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return (data as RoomChartEntry[]) ?? [];
+  try {
+    const hotelId = getCurrentHotelId();
+    // Fetch room chart entries created in the past 60 days or for future dates
+    const lookbackDate = new Date(new Date(fromDate + 'T00:00:00').getTime() - 60 * 86400000).toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from('room_chart_entries')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .gte('report_date', lookbackDate)
+      .order('report_date', { ascending: true });
+    if (error) return [];
+
+    const entries = (data as RoomChartEntry[]) ?? [];
+    return entries.filter((e) => {
+      const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+      const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+      // Entry overlaps if arr < toDate AND dep >= fromDate
+      return arr <= toDate && dep >= fromDate;
+    });
+  } catch {
+    return [];
+  }
 };
 
 export const getRoomChartForMonth = async (year: number, month: number): Promise<RoomChartEntry[]> => {
@@ -1252,4 +1283,23 @@ export const getCashFlow = async (businessDate: string): Promise<CashFlowData | 
     bank_deposit: toNum(d.bank_deposit),
     cash_closing: toNum(d.cash_closing),
   };
+};
+
+export const getEnabledHotelFeatures = async (): Promise<Record<string, boolean>> => {
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) return {};
+  try {
+    const { data, error } = await supabase
+      .from('hotel_features')
+      .select('module_key, is_enabled')
+      .eq('hotel_id', hotelId);
+    if (error) return {};
+    const map: Record<string, boolean> = {};
+    for (const r of data ?? []) {
+      map[r.module_key] = Boolean(r.is_enabled);
+    }
+    return map;
+  } catch {
+    return {};
+  }
 };

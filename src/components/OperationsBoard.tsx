@@ -25,7 +25,7 @@ import {
 import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
-import { fmtMoney, fmtInt, toNum } from '@/lib/calc';
+import { fmtMoney, fmtInt, toNum, getTodayLocal } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
 import { NewBookingModal } from '@/components/NewBookingModal';
 import { CheckInModal } from '@/components/frontoffice/CheckInModal';
@@ -485,7 +485,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
             <ChevronRight className="w-4 h-4" />
           </button>
           <button
-            onClick={() => setCenterDate(date)}
+            onClick={() => setCenterDate(getTodayLocal())}
             className="ml-1 px-2 py-1 text-xs text-brand-600 hover:bg-brand-50 rounded-md font-medium"
           >Today</button>
         </div>

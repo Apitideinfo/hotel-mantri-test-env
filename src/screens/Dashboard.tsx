@@ -11,8 +11,10 @@ import {
 import type { HotelSettings, DerivedReport } from '@/lib/types';
 import { getDashboardSummary } from '@/lib/api';
 import type { DashboardSummary } from '@/lib/api';
-import { calcArr, calcOcc, calcTotalRevenue, calcTotalExpenses, calcClosingRooms, aggregateDerived, fmtMoney, fmtInt, toNum } from '@/lib/calc';
+import { calcArr, calcOcc, calcTotalRevenue, calcTotalExpenses, calcClosingRooms, aggregateDerived, fmtMoney, fmtInt, toNum, getTodayLocal } from '@/lib/calc';
 import { AreaChart, DonutChart, LineChart, BarChart, Sparkline } from '@/components/charts';
+
+import { useAuth } from '@/lib/auth';
 
 interface DashboardProps {
   onNavigate: (screen: string, payload?: unknown) => void;
@@ -33,11 +35,13 @@ const COLORS = {
 const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
 export const Dashboard = ({ onNavigate }: DashboardProps) => {
+  const { role } = useAuth();
+  const isStaff = role === 'hotel_staff';
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getTodayLocal();
   const monthName = new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
   const load = useCallback(async () => {

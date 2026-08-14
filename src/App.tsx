@@ -1,6 +1,7 @@
 import { useState, lazy, Suspense, useEffect } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { getPosEnabled } from '@/lib/api-pos';
+import { getEnabledHotelFeatures } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
 import { AppShell } from '@/components/AppShell';
 import { LoginScreen } from '@/screens/LoginScreen';
@@ -131,10 +132,17 @@ function AppInner() {
   const { user, loading, profileLoaded, role, subscriptionStatus, hotelName, hotelId, signOut } = useAuth();
   const [nav, setNav] = useState<NavState>({ screen: 'dashboard' });
   const [posEnabled, setPosEnabled] = useState(false);
+  const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
 
   useEffect(() => {
     if (user && profileLoaded && role && role !== 'super_admin' && role !== 'company_user' && hotelId) {
       getPosEnabled().then(setPosEnabled).catch(() => setPosEnabled(false));
+      getEnabledHotelFeatures().then((f) => {
+        setFeatures(f);
+        if (f.dashboard === false) {
+          setNav({ screen: 'operations' });
+        }
+      }).catch(() => setFeatures(null));
     }
   }, [user, profileLoaded, role, hotelId]);
 
@@ -182,19 +190,11 @@ function AppInner() {
     );
   }
 
-  // Subscription expired or suspended → block operational access
-  if (subscriptionStatus === 'Expired') {
+  // Subscription expired / suspended / non-active
+  if (subscriptionStatus && subscriptionStatus !== 'Active' && subscriptionStatus !== 'Trial' && subscriptionStatus !== 'Grace Period') {
     return (
       <SubscriptionExpiredScreen
-        message="Your subscription has expired. Please contact the administrator to renew."
-        onSignOut={signOut}
-      />
-    );
-  }
-  if (subscriptionStatus === 'Suspended') {
-    return (
-      <SubscriptionExpiredScreen
-        message="Your account has been suspended. Please contact the administrator."
+        message={`Subscription is currently ${subscriptionStatus}. Please contact support to renew.`}
         onSignOut={signOut}
       />
     );
@@ -202,6 +202,42 @@ function AppInner() {
 
   // Hotel admin with active subscription → full app
   const go = (screen: string, payload?: { date?: string } | unknown) => {
+    if (role === 'hotel_staff') {
+      const restrictedScreens = [
+        'finance', 'property', 'settings', 'close-day', 'ledgers', 'pl-report',
+        'mtd', 'ytd', 'pdf', 'channel-manager', 'mis-report', 'analytics', 'owner-dashboard',
+        'expense-entry', 'expense-ledger', 'staff', 'salary-advance', 'salary-settlement',
+        'electricity', 'utility-bills', 'laundry', 'monthly-bills', 'profitability', 'gst-report',
+      ];
+      if (restrictedScreens.includes(screen)) {
+        setNav({ screen: 'dashboard', date: nav.date });
+        return;
+      }
+    }
+
+    if (features) {
+      if (screen === 'dashboard' && features.dashboard === false) {
+        setNav({ screen: 'operations', date: nav.date });
+        return;
+      }
+      if ((screen === 'roomchart' || screen === 'report' || screen === 'other') && features.daily_entry === false && features.room_chart === false) {
+        setNav({ screen: 'operations', date: nav.date });
+        return;
+      }
+      if ((screen === 'finance' || screen === 'close-day') && features.finance === false) {
+        setNav({ screen: 'operations', date: nav.date });
+        return;
+      }
+      if (screen === 'housekeeping' && features.housekeeping === false) {
+        setNav({ screen: 'operations', date: nav.date });
+        return;
+      }
+      if (screen === 'channel-manager' && features.channel_manager === false) {
+        setNav({ screen: 'operations', date: nav.date });
+        return;
+      }
+    }
+
     const date = (payload as { date?: string } | undefined)?.date;
     setNav({ screen: screen as Screen, date: date ?? nav.date });
   };
@@ -415,10 +451,52 @@ function EnterpriseRouter({ onSignOut }: { onSignOut: () => void }) {
   return <EnterpriseHQ onSignOut={onSignOut} />;
 }
 
+import { Component } from 'react';
+
+class AppErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("App Error Boundary caught error:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 max-w-md w-full shadow-lg text-center">
+            <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 font-bold text-xl">
+              !
+            </div>
+            <h2 className="text-xl font-bold text-slate-800 mb-2">Something went wrong</h2>
+            <p className="text-sm text-slate-500 mb-6">{this.state.error?.message || 'An unexpected error occurred.'}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-xl transition"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
-    <AuthProvider>
-      <AppInner />
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }

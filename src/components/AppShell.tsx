@@ -11,6 +11,8 @@ import {
 import { BrandIcon } from '@/components/BrandLogo';
 import { brand, layout } from '@/lib/theme';
 import { useAuth } from '@/lib/auth';
+import { getTodayLocal } from '@/lib/calc';
+import { getEnabledHotelFeatures } from '@/lib/api';
 
 export interface NavItem {
   key: string;
@@ -209,7 +211,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
     // Date-dependent screens need today's date when opened from sidebar
     const dateScreens = ['report', 'mtd', 'ytd', 'pdf', 'whatsapp', 'operations', 'history', 'entry', 'roomchart', 'other', 'ledger'];
     if (dateScreens.includes(key)) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getTodayLocal();
       onNavigate(key, { date: today });
     } else {
       onNavigate(key);
@@ -236,7 +238,43 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
     day: '2-digit', month: 'short', year: 'numeric',
   });
 
-  const allGroups = useMemo(() => posEnabled ? [...NAV_GROUPS, POS_GROUP] : NAV_GROUPS, [posEnabled]);
+  const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean> | null>(null);
+
+  useEffect(() => {
+    getEnabledHotelFeatures().then(setEnabledFeatures).catch(() => setEnabledFeatures(null));
+  }, []);
+
+  const allGroups = useMemo(() => {
+    let base = posEnabled ? [...NAV_GROUPS, POS_GROUP] : NAV_GROUPS;
+    if (role === 'hotel_staff') {
+      const restrictedLabels = ['Finance', 'Reports', 'Channel Manager', 'Master'];
+      base = base.filter((g) => !restrictedLabels.includes(g.label));
+    }
+
+    if (enabledFeatures) {
+      base = base.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          if (item.key === 'dashboard' && enabledFeatures.dashboard === false) return false;
+          if (item.key === 'operations' && enabledFeatures.daily_entry === false && enabledFeatures.room_chart === false) return false;
+          if (item.key === 'roomchart' && enabledFeatures.room_chart === false) return false;
+          if (item.key === 'finance' && enabledFeatures.finance === false) return false;
+          if (item.key === 'close-day' && enabledFeatures.finance === false) return false;
+          if (item.key === 'report' && enabledFeatures.daily_entry === false) return false;
+          if (item.key === 'mtd' && enabledFeatures.mtd === false) return false;
+          if (item.key === 'ytd' && enabledFeatures.ytd === false) return false;
+          if (item.key === 'mis-report' && enabledFeatures.dashboard === false) return false;
+          if (item.key === 'pdf' && enabledFeatures.pdf_reports === false) return false;
+          if (item.key === 'whatsapp' && enabledFeatures.whatsapp_reports === false) return false;
+          if (item.key === 'housekeeping' && enabledFeatures.housekeeping === false) return false;
+          if (item.key === 'channel-manager' && enabledFeatures.channel_manager === false) return false;
+          return true;
+        }),
+      })).filter((group) => group.items.length > 0);
+    }
+
+    return base;
+  }, [posEnabled, role, enabledFeatures]);
 
   const filteredGroups = useMemo(() => {
     if (!searchQuery.trim()) return allGroups;
