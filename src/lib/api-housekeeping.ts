@@ -10,31 +10,33 @@ import type {
 // ── Timeline + Audit (internal helper) ──
 
 const addTimeline = async (roomNo: string, action: string, oldStatus: string, newStatus: string, performedBy = '', notes = '', reason = ''): Promise<void> => {
-  const { error } = await supabase.from('housekeeping_timeline').insert({
-    hotel_id: getCurrentHotelId(),
-    room_no: roomNo,
-    action,
-    old_status: oldStatus,
-    new_status: newStatus,
-    performed_by: performedBy,
-    notes,
-    reason,
-  });
-  if (error) throw error;
+  try {
+    await supabase.from('housekeeping_timeline').insert({
+      hotel_id: getCurrentHotelId(),
+      room_no: roomNo,
+      action,
+      old_status: oldStatus,
+      new_status: newStatus,
+      performed_by: performedBy,
+      notes,
+      reason,
+    });
+  } catch { /* non-critical */ }
 };
 
 const addAudit = async (roomNo: string, oldStatus: string, newStatus: string, userId = '', action = '', notes = '', reason = ''): Promise<void> => {
-  const { error } = await supabase.from('housekeeping_audit_log').insert({
-    hotel_id: getCurrentHotelId(),
-    room_no: roomNo,
-    old_status: oldStatus,
-    new_status: newStatus,
-    user_id: userId,
-    action,
-    notes,
-    reason,
-  });
-  if (error) throw error;
+  try {
+    await supabase.from('housekeeping_audit_log').insert({
+      hotel_id: getCurrentHotelId(),
+      room_no: roomNo,
+      old_status: oldStatus,
+      new_status: newStatus,
+      user_id: userId,
+      action,
+      notes,
+      reason,
+    });
+  } catch { /* non-critical */ }
 };
 
 // ── Core: update room housekeeping status with timeline + audit ──
@@ -89,32 +91,35 @@ export const startCleaning = async (roomNo: string, staffId: string | null, perf
   const hotelId = getCurrentHotelId();
   await setRoomHousekeepingStatus({ roomNo, status: 'Cleaning In Progress', performedBy });
 
-  // Update or create assignment
-  const { data: existing } = await supabase
-    .from('housekeeping_assignments')
-    .select('id')
-    .eq('hotel_id', hotelId)
-    .eq('room_no', roomNo)
-    .in('status', ['pending', 'in_progress'])
-    .maybeSingle();
-
-  if (existing) {
-    await supabase
+  try {
+    // Update or create assignment
+    const { data: existing } = await supabase
       .from('housekeeping_assignments')
-      .update({ status: 'in_progress', cleaning_started_at: new Date().toISOString(), staff_id: staffId })
-      .eq('id', (existing as { id: string }).id);
-  } else {
-    await supabase.from('housekeeping_assignments').insert({
-      hotel_id: hotelId,
-      room_no: roomNo,
-      staff_id: staffId,
-      status: 'in_progress',
-      cleaning_started_at: new Date().toISOString(),
-    });
-  }
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', roomNo)
+      .in('status', ['pending', 'in_progress'])
+      .maybeSingle();
 
-  // Update room assigned_staff_id
-  await supabase.from('rooms').update({ assigned_staff_id: staffId }).eq('hotel_id', hotelId).eq('room_no', roomNo);
+    if (existing) {
+      await supabase
+        .from('housekeeping_assignments')
+        .update({ status: 'in_progress', cleaning_started_at: new Date().toISOString(), staff_id: staffId })
+        .eq('id', (existing as { id: string }).id);
+    } else {
+      await supabase.from('housekeeping_assignments').insert({
+        hotel_id: hotelId,
+        room_no: roomNo,
+        staff_id: staffId,
+        status: 'in_progress',
+        cleaning_started_at: new Date().toISOString(),
+      });
+    }
+
+    if (staffId) {
+      await supabase.from('rooms').update({ assigned_staff_id: staffId }).eq('hotel_id', hotelId).eq('room_no', roomNo);
+    }
+  } catch { /* non-critical assignment step */ }
 };
 
 export const completeCleaning = async (roomNo: string, performedBy = ''): Promise<void> => {

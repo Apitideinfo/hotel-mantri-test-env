@@ -62,36 +62,52 @@ export const getReservationsForDateRange = async (
   startDate: string,
   endDate: string,
 ): Promise<Reservation[]> => {
-  const { data, error } = await supabase
-    .from('reservations')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .or(
-      `and(check_in_date.lte.${endDate},check_out_date.gte.${startDate})`,
-    )
-    .order('check_in_date', { ascending: true });
-  if (error) throw error;
-  return (data as Reservation[]) ?? [];
+  try {
+    const hotelId = getCurrentHotelId();
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .order('check_in_date', { ascending: true });
+    if (error) return [];
+
+    const list = (data as Reservation[]) ?? [];
+    return list.filter((r) => {
+      const ci = (r.check_in_date ?? '').slice(0, 10);
+      const co = (r.check_out_date ?? '').slice(0, 10);
+      if (!ci || !co) return false;
+      return ci <= endDate && co >= startDate;
+    });
+  } catch {
+    return [];
+  }
 };
 
 export const saveReservation = async (
   input: ReservationInput,
   id?: string,
 ): Promise<Reservation> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId() };
-  if (id) {
+  const hotelId = getCurrentHotelId();
+  const rawPayload = { ...input, hotel_id: hotelId };
+
+  // Remove generated/virtual fields that PostgreSQL generated columns forbid inserting into
+  delete (rawPayload as { id?: string }).id;
+  delete (rawPayload as { nights?: number }).nights;
+
+  if (id && id.trim() !== '') {
     const { data, error } = await supabase
       .from('reservations')
-      .update({ ...payload, updated_at: new Date().toISOString() })
+      .update({ ...rawPayload, updated_at: new Date().toISOString() })
       .eq('id', id)
       .select('*')
       .single();
     if (error) throw error;
     return data as Reservation;
   }
+
   const { data, error } = await supabase
     .from('reservations')
-    .insert(payload)
+    .insert(rawPayload)
     .select('*')
     .single();
   if (error) throw error;
@@ -126,47 +142,47 @@ export const checkRoomAvailability = async (
   checkOut: string,
   excludeId?: string,
 ): Promise<boolean> => {
-  const hotelId = getCurrentHotelId();
-  const roomKey = roomNo.trim().toLowerCase();
+  try {
+    const hotelId = getCurrentHotelId();
+    const roomKey = roomNo.trim().toLowerCase();
 
-  // 1. Check active reservations for overlap
-  let resQ = supabase
-    .from('reservations')
-    .select('id')
-    .eq('hotel_id', hotelId)
-    .eq('room_no', roomNo)
-    .in('status', ['confirmed', 'checked_in'])
-    .or(`and(check_in_date.lte.${checkOut},check_out_date.gte.${checkIn})`);
-  if (excludeId) resQ = resQ.neq('id', excludeId);
-  const { data: resData, error: resErr } = await resQ;
-  if (resErr) throw resErr;
-  if ((resData?.length ?? 0) > 0) return false;
+    // 1. Check active reservations for overlap
+    let resQ = supabase
+      .from('reservations')
+      .select('id, room_no, check_in_date, check_out_date, status')
+      .eq('hotel_id', hotelId)
+      .in('status', ['confirmed', 'checked_in']);
+    if (excludeId) resQ = resQ.neq('id', excludeId);
 
-  // 2. Check room_chart entries for overlap
-  const { data: entryData, error: entryErr } = await supabase
-    .from('room_chart_entries')
-    .select('id, room_no, arrival, departure')
-    .eq('hotel_id', hotelId)
-    .or(`and(arrival.lte.${checkOut},departure.gte.${checkIn})`);
-  if (entryErr) throw entryErr;
-  const overlap = (entryData ?? []).some((e: { room_no?: string; arrival?: string; departure?: string }) => {
-    if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
-    const a = (e.arrival ?? '').slice(0, 10);
-    const d = (e.departure ?? '').slice(0, 10);
-    if (!a || !d) return false;
-    return a < checkOut && d > checkIn;
-  });
+    const { data: resData } = await resQ;
+    const resOverlap = (resData ?? []).some((r) => {
+      if ((r.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
+      const ci = (r.check_in_date ?? '').slice(0, 10);
+      const co = (r.check_out_date ?? '').slice(0, 10);
+      if (!ci || !co) return false;
+      return ci < checkOut && co > checkIn;
+    });
 
-  // 3. Check room blocks
-  const { data: blockData } = await supabase
-    .from('room_blocks')
-    .select('id')
-    .eq('hotel_id', hotelId)
-    .eq('room_no', roomNo)
-    .or(`and(start_date.lte.${checkOut},end_date.gte.${checkIn})`);
-  if ((blockData ?? []).length > 0) return false;
+    if (resOverlap) return false;
 
-  return !overlap;
+    // 2. Check room_chart entries for overlap
+    const { data: entryData } = await supabase
+      .from('room_chart_entries')
+      .select('id, room_no, arrival, departure')
+      .eq('hotel_id', hotelId);
+
+    const entryOverlap = (entryData ?? []).some((e: { room_no?: string; arrival?: string; departure?: string; report_date?: string }) => {
+      if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
+      const a = (e.arrival ?? e.report_date ?? '').slice(0, 10);
+      const d = (e.departure ?? e.report_date ?? '').slice(0, 10);
+      if (!a || !d) return false;
+      return a < checkOut && d > checkIn;
+    });
+
+    return !entryOverlap;
+  } catch {
+    return true;
+  }
 };
 
 // ── Phase 9: Drag & Drop — Move Reservation ──

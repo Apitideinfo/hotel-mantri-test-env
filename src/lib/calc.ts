@@ -15,6 +15,14 @@ export const fmtInt = (n: number): string => {
   return v.toLocaleString('en-IN');
 };
 
+export const getTodayLocal = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const calcArr = (roomSale: number, roomsOccupied: number): number =>
   roomsOccupied > 0 ? toNum(roomSale) / roomsOccupied : 0;
 
