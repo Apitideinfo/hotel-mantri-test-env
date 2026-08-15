@@ -1,0 +1,200 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  -webkit-tap-highlight-color: transparent;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Sidebar scrollbar */
+.sidebar-scroll::-webkit-scrollbar { width: 4px; }
+.sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+.sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+.sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+.sidebar-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
+
+/* Remove number input spinners for a cleaner mobile look */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+@keyframes slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+/* ===== Page fade-in ===== */
+@keyframes page-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-page-fade { animation: page-fade 0.3s ease-out; }
+
+/* ===== Fade in (overlay) ===== */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+
+/* ===== Card hover lift ===== */
+.card-lift { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.card-lift:hover { transform: translateY(-2px); }
+
+/* ===== Chart bar grow ===== */
+@keyframes bar-grow {
+  from { transform: scaleY(0); }
+  to   { transform: scaleY(1); }
+}
+
+/* ===== KPI card entrance ===== */
+@keyframes kpi-slide-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-kpi { animation: kpi-slide-in 0.4s ease-out both; }
+
+/* ===== Bottom sheet slide up ===== */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.animate-slide-up { animation: slide-up 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+
+/* ===== Login screen animations ===== */
+
+@keyframes login-fade-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.login-fade-in { animation: login-fade-in 0.7s ease-out both; }
+
+@keyframes login-card-slide {
+  from { opacity: 0; transform: translateY(24px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.login-card-slide { animation: login-card-slide 0.6s cubic-bezier(0.22,1,0.36,1) 0.15s both; }
+
+@keyframes login-logo-fade {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+.login-logo-fade { animation: login-logo-fade 0.8s ease-out both; }
+
+/* Floating particles */
+@keyframes login-particle {
+  0%   { transform: translateY(0) translateX(0); opacity: 0; }
+  10%  { opacity: 0.7; }
+  90%  { opacity: 0.5; }
+  100% { transform: translateY(-120vh) translateX(20px); opacity: 0; }
+}
+
+/* Mesh gradient drift */
+@keyframes login-mesh {
+  0%, 100% { transform: translate(0,0) scale(1); }
+  33%      { transform: translate(3%, -2%) scale(1.05); }
+  66%      { transform: translate(-2%, 3%) scale(0.98); }
+}
+.login-mesh { animation: login-mesh 18s ease-in-out infinite; }
+
+/* Hotel scene animations */
+@keyframes bell-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.08); }
+}
+.bell-pulse { animation: bell-pulse 2.5s ease-in-out infinite; transform-origin: center bottom; }
+
+@keyframes key-float {
+  0%, 100% { transform: translateY(0) rotate(-6deg); }
+  50%      { transform: translateY(-10px) rotate(2deg); }
+}
+.key-float { animation: key-float 4s ease-in-out infinite; }
+
+@keyframes room-card-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+.room-card-float { animation: room-card-float 5s ease-in-out infinite; }
+.room-card-float-2 { animation: room-card-float 6s ease-in-out infinite 1s; }
+
+@keyframes graph-bar {
+  0%, 100% { transform: scaleY(0.3); }
+  50%      { transform: scaleY(1); }
+}
+
+@keyframes dash-slide {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(6px); }
+}
+.dash-slide { animation: dash-slide 3s ease-in-out infinite; }
+
+@keyframes cloud-drift {
+  from { transform: translateX(-20px); }
+  to   { transform: translateX(20px); }
+}
+.cloud-drift { animation: cloud-drift 12s ease-in-out infinite alternate; }
+.cloud-drift-2 { animation: cloud-drift 16s ease-in-out infinite alternate; }
+
+@keyframes window-blink {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+@keyframes notif-bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+.notif-bounce { animation: notif-bounce 2s ease-in-out infinite; }
+
+@keyframes occupancy-ring {
+  from { stroke-dashoffset: 226; }
+  to   { stroke-dashoffset: 60; }
+}
+.occupancy-ring { animation: occupancy-ring 3s ease-out infinite alternate; }
+
+/* Button ripple */
+@keyframes login-ripple {
+  from { transform: scale(0); opacity: 0.5; }
+  to   { transform: scale(4); opacity: 0; }
+}
+
+/* Success check */
+@keyframes login-check {
+  from { stroke-dashoffset: 48; }
+  to   { stroke-dashoffset: 0; }
+}
+.login-check { animation: login-check 0.4s ease-out 0.1s both; stroke-dasharray: 48; }
+
+/* Floating label */
+.login-float-label {
+  position: absolute;
+  left: 44px;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: all 0.2s ease;
+  pointer-events: none;
+  font-size: 0.875rem;
+  color: #94a3b8;
+}
+.login-float-label.floated {
+  top: 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #60a5fa;
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .login-fade-in, .login-card-slide, .login-logo-fade, .login-mesh,
+  .bell-pulse, .key-float, .room-card-float, .room-card-float-2,
+  .dash-slide, .cloud-drift, .cloud-drift-2, .notif-bounce, .occupancy-ring {
+    animation: none !important;
+  }
+}
