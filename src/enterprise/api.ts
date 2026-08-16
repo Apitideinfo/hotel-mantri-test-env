@@ -87,7 +87,7 @@ export const getEnterpriseHotels = async (): Promise<EnterpriseHotel[]> => {
 export const getChannelManagerHotelStatuses = async (): Promise<ChannelManagerHotelStatus[]> => {
   try {
     const [settingsResult, connectionsResult, mappingsResult] = await Promise.all([
-      supabase.from('channel_settings').select('hotel_id, channel_manager_enabled, status, last_sync_at, last_error'),
+      supabase.from('channel_settings').select('hotel_id, status, last_tested_at, last_test_result'),
       supabase.from('channel_connections').select('hotel_id, status, last_sync_at, last_error'),
       supabase.from('channel_rate_mappings').select('hotel_id, status'),
     ]);
@@ -102,14 +102,14 @@ export const getChannelManagerHotelStatuses = async (): Promise<ChannelManagerHo
       const settings = settingsData.find((row) => row.hotel_id === hotelId);
       const connections = connectionsData.filter((row) => row.hotel_id === hotelId);
       const mappings = mappingsData.filter((row) => row.hotel_id === hotelId);
-      const lastSyncs = [settings?.last_sync_at, ...connections.map((row) => row.last_sync_at)].filter((value): value is string => Boolean(value)).sort().reverse();
+      const lastSyncs = [settings?.last_tested_at, ...connections.map((row) => row.last_sync_at)].filter((value): value is string => Boolean(value)).sort().reverse();
       return {
         hotel_id: hotelId,
-        enabled: settings?.channel_manager_enabled === true,
+        enabled: settings?.status === 'connected',
         connected: settings?.status === 'connected' || connections.some((row) => row.status === 'connected'),
         mapping_complete: mappings.length > 0 && mappings.every((row) => row.status === 'mapped'),
         last_sync: lastSyncs[0] ?? null,
-        sync_error: settings?.last_error ?? connections.find((row) => row.last_error)?.last_error ?? null,
+        sync_error: settings?.last_test_result ?? connections.find((row) => row.last_error)?.last_error ?? null,
       };
     });
   } catch {
@@ -1380,7 +1380,7 @@ export const duplicateInvoice = async (invoiceId: string): Promise<string> => {
     is_interstate: invoice.is_interstate ?? false,
     place_of_supply: invoice.place_of_supply ?? '',
     notes: invoice.notes ?? '',
-    due_date: invoice.due_date ?? null,
+    due_date: invoice.due_date ?? undefined,
     items: items.map((item) => ({
       description: item.description,
       hsn_sac: item.hsn_sac,
@@ -1459,10 +1459,28 @@ export const convertTrialToPaid = async (hotelId: string, planId: string, billin
 
 export const generateRenewalInvoice = async (hotelId: string): Promise<{ invoice_id: string }> => {
   const { data: userData } = await supabase.auth.getUser();
+  if (!userData.user) {
+    throw new Error('You must be signed in to generate a renewal invoice.');
+  }
+
   const { data, error } = await supabase.rpc('generate_renewal_invoice', {
-    p_hotel_id: hotelId, p_user_email: userData.user?.email ?? '',
+    p_hotel_id: hotelId, p_user_email: userData.user.email ?? '',
   });
-  if (error) throw error;
+
+  if (error) {
+    console.error('Renewal invoice RPC failed:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
+    // Throw a more user friendly error if it's an authorization issue
+    if (error.message.includes('Not authorized')) {
+      throw new Error('You do not have permission to renew subscriptions. Please contact an administrator.');
+    }
+    throw new Error(`Unable to generate the renewal invoice: ${error.message}`);
+  }
+
   return { invoice_id: (data as Record<string, unknown>).invoice_id as string };
 };
 

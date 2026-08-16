@@ -125,6 +125,10 @@ export const SubscriptionTab = ({ hotel, onReload, onCreateInvoice, onViewInvoic
   };
 
   const handleGenerateRenewal = async () => {
+    if (!hotel.plan_id) {
+      setError('This hotel does not have an active subscription plan. Assign a subscription plan before renewing.');
+      return;
+    }
     setActing(true); setError(null);
     try {
       await generateRenewalInvoice(hotel.id);
@@ -246,7 +250,7 @@ export const SubscriptionTab = ({ hotel, onReload, onCreateInvoice, onViewInvoic
                 <ActionButton icon={<FileText className="w-4 h-4" />} label="Create Invoice" onClick={onCreateInvoice} />
               )}
               {canWrite && (
-                <ActionButton icon={<RefreshCw className="w-4 h-4" />} label="Generate Renewal Invoice" onClick={handleGenerateRenewal} disabled={acting} />
+                <ActionButton icon={<RefreshCw className="w-4 h-4" />} label="Generate Renewal Invoice" onClick={handleGenerateRenewal} disabled={acting || !hotel.plan_id} />
               )}
               {canPayment && outstandingAmount > 0 && (
                 <ActionButton icon={<DollarSign className="w-4 h-4" />} label="Record Payment" onClick={() => setModal('payment')} />
