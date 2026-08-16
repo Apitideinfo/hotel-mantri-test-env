@@ -200,9 +200,9 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
 
         {/* Summary cards */}
         <div className="grid grid-cols-4 gap-2 px-5 py-3 border-b border-slate-100 bg-white shrink-0">
-          <MiniStat label="Total" value={fmtMoney(invoice.total_amount)} />
-          <MiniStat label="Paid" value={fmtMoney(invoice.amount_paid)} color="text-emerald-600" />
-          <MiniStat label="Balance" value={fmtMoney(invoice.balance_due)} color="text-red-600" />
+          <MiniStat label="Total" value={'₹' + (invoice.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} />
+          <MiniStat label="Paid" value={'₹' + (invoice.amount_paid || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} color="text-emerald-600" />
+          <MiniStat label="Balance" value={'₹' + (invoice.balance_due || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} color="text-red-600" />
           <MiniStat label="Due Date" value={fmtDate(invoice.due_date)} />
         </div>
 
@@ -215,14 +215,14 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
               items={items}
               settings={effectiveSettings}
               hotelName={invoice.hotel_name}
-              hotelAddress={hotelData.address as string ?? ''}
-              hotelCity={hotelData.city as string ?? ''}
-              hotelState={hotelData.state as string ?? ''}
+              hotelAddress={invoice.address ?? ''}
+              hotelCity={invoice.city ?? ''}
+              hotelState={invoice.state ?? ''}
               hotelPropertyCode={invoice.property_code}
-              hotelAdminEmail={hotelData.admin_email as string ?? ''}
-              hotelMobile={hotelData.mobile as string ?? ''}
-              hotelOwnerName={hotelData.owner_name as string ?? ''}
-              planName={invoice.plan_name}
+              hotelAdminEmail={invoice.admin_email ?? ''}
+              hotelMobile={invoice.mobile ?? ''}
+              hotelOwnerName={invoice.owner_name ?? ''}
+              planName={invoice.plan_name || (items[0]?.description ? items[0].description.split(' — ')[0] : undefined)}
               preview
               scale={1}
             />

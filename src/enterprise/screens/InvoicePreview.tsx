@@ -86,13 +86,18 @@ export const InvoicePreview = forwardRef<HTMLDivElement, Props>(({
     'Credit Note Issued': '#be185d',
   };
 
+  const derivedPlanName = planName
+    || (items && items[0]?.description ? items[0].description.split(' — ')[0].trim() : '')
+    || (inv as Record<string, unknown> | null)?.plan_name as string
+    || 'Pro';
+
   return (
     <div
       ref={ref}
       className={`bg-white ${preview ? 'shadow-2xl' : ''} mx-auto`}
       style={{
         width: preview ? `${210 * (scale || 1)}mm` : '210mm',
-        minHeight: preview ? `${297 * (scale || 1)}mm` : '297mm',
+        minHeight: preview ? 'auto' : '297mm',
         maxWidth: '100%',
         fontFamily: 'system-ui, -apple-system, sans-serif',
         fontSize: `${(scale || 1) * 11}px`,
@@ -138,10 +143,11 @@ export const InvoicePreview = forwardRef<HTMLDivElement, Props>(({
               )}
               <div style={{ fontSize: '9px', opacity: 0.8, marginTop: '4px', lineHeight: 1.4 }}>
                 {cd.address && <p style={{ margin: 0 }}>{cd.address}</p>}
-                <p style={{ margin: 0 }}>
-                  {[cd.city, cd.state, cd.pin_code].filter(Boolean).join(', ')}
-                  {cd.country ? `, ${cd.country}` : ''}
-                </p>
+                {[cd.city, cd.state, cd.pin_code, cd.country].filter(Boolean).length > 0 && (
+                  <p style={{ margin: 0 }}>
+                    {[cd.city, cd.state, cd.pin_code, cd.country].filter(Boolean).join(', ')}
+                  </p>
+                )}
                 {cd.gstin && <p style={{ margin: '2px 0 0' }}>GSTIN: {cd.gstin}</p>}
                 <div style={{ display: 'flex', gap: '12px', marginTop: '2px' }}>
                   {cd.pan && <span>PAN: {cd.pan}</span>}
@@ -201,7 +207,7 @@ export const InvoicePreview = forwardRef<HTMLDivElement, Props>(({
           <div style={{ fontSize: '10px', lineHeight: 1.6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: '#64748b' }}>Plan:</span>
-              <span style={{ fontWeight: 600 }}>{planName || '—'}</span>
+              <span style={{ fontWeight: 600 }}>{derivedPlanName}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: '#64748b' }}>Billing Period:</span>
@@ -322,23 +328,30 @@ export const InvoicePreview = forwardRef<HTMLDivElement, Props>(({
         {/* Payment Section */}
         <div style={{ flex: 1, background: '#f8fafc', padding: '12px 16px' }}>
           <h4 style={{ fontSize: '9px', fontWeight: 700, color: accent, textTransform: 'uppercase', letterSpacing: '1px', margin: '0 0 8px' }}>Payment Details</h4>
-          <div style={{ display: 'flex', gap: '12px' }}>
-            {pay.qr_code_url && (
-              <div style={{ textAlign: 'center' }}>
-                <img src={pay.qr_code_url} alt="QR" style={{ width: '80px', height: '80px', borderRadius: '6px' }} />
-                <p style={{ fontSize: '8px', color: '#64748b', margin: '4px 0 0' }}>Scan to Pay</p>
-                {pay.upi_id && <p style={{ fontSize: '8px', fontWeight: 600, margin: '2px 0 0' }}>{pay.upi_id}</p>}
-              </div>
-            )}
-            <div style={{ flex: 1, fontSize: '9px', lineHeight: 1.6 }}>
-              {pay.bank_name && <p style={{ margin: '0 0 2px' }}><strong>Bank:</strong> {pay.bank_name}</p>}
-              {pay.account_holder && <p style={{ margin: '0 0 2px' }}><strong>A/C:</strong> {pay.account_holder}</p>}
-              {pay.account_number && <p style={{ margin: '0 0 2px' }}><strong>AC No:</strong> {pay.account_number}</p>}
-              {pay.ifsc && <p style={{ margin: '0 0 2px' }}><strong>IFSC:</strong> {pay.ifsc}</p>}
-              {pay.branch && <p style={{ margin: '0 0 2px' }}><strong>Branch:</strong> {pay.branch}</p>}
-              {pay.payment_link && <p style={{ margin: '4px 0 0' }}><strong>Pay Online:</strong> <span style={{ color: '#2563eb' }}>{pay.payment_link}</span></p>}
+          {(!pay.bank_name && !pay.account_number && !pay.upi_id && !pay.payment_link && !pay.qr_code_url) ? (
+            <div style={{ fontSize: '9px', color: '#64748b', lineHeight: 1.6 }}>
+              <p style={{ margin: '0 0 2px' }}><strong>Payment Mode:</strong> Bank Transfer / UPI / Card / Online</p>
+              <p style={{ margin: '0 0 2px' }}>Contact Enterprise HQ Admin to record offline payment or request UPI link.</p>
             </div>
-          </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '12px' }}>
+              {pay.qr_code_url && (
+                <div style={{ textAlign: 'center' }}>
+                  <img src={pay.qr_code_url} alt="QR" style={{ width: '80px', height: '80px', borderRadius: '6px' }} />
+                  <p style={{ fontSize: '8px', color: '#64748b', margin: '4px 0 0' }}>Scan to Pay</p>
+                  {pay.upi_id && <p style={{ fontSize: '8px', fontWeight: 600, margin: '2px 0 0' }}>{pay.upi_id}</p>}
+                </div>
+              )}
+              <div style={{ flex: 1, fontSize: '9px', lineHeight: 1.6 }}>
+                {pay.bank_name && <p style={{ margin: '0 0 2px' }}><strong>Bank:</strong> {pay.bank_name}</p>}
+                {pay.account_holder && <p style={{ margin: '0 0 2px' }}><strong>A/C:</strong> {pay.account_holder}</p>}
+                {pay.account_number && <p style={{ margin: '0 0 2px' }}><strong>AC No:</strong> {pay.account_number}</p>}
+                {pay.ifsc && <p style={{ margin: '0 0 2px' }}><strong>IFSC:</strong> {pay.ifsc}</p>}
+                {pay.branch && <p style={{ margin: '0 0 2px' }}><strong>Branch:</strong> {pay.branch}</p>}
+                {pay.payment_link && <p style={{ margin: '4px 0 0' }}><strong>Pay Online:</strong> <span style={{ color: '#2563eb' }}>{pay.payment_link}</span></p>}
+              </div>
+            </div>
+          )}
           {pay.payment_instructions && (
             <p style={{ fontSize: '8px', color: '#64748b', marginTop: '6px', fontStyle: 'italic' }}>{pay.payment_instructions}</p>
           )}

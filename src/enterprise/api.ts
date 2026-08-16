@@ -1124,7 +1124,7 @@ export const getInvoices = async (filters?: {
 }): Promise<InvoiceWithDetails[]> => {
   let q = supabase
     .from('invoices')
-    .select('*, hotels!inner(hotel_name, property_code), subscription_plans(name)')
+    .select('*, hotels!inner(hotel_name, property_code, address, city, state, admin_email, mobile, owner_name, total_rooms), subscription_plans(name)')
     .order('created_at', { ascending: false });
   if (filters?.hotelId) q = q.eq('hotel_id', filters.hotelId);
   if (filters?.status) q = q.eq('status', filters.status);
@@ -1133,12 +1133,23 @@ export const getInvoices = async (filters?: {
   if (filters?.dateTo) q = q.lte('invoice_date', filters.dateTo);
   const { data, error } = await q;
   if (error) throw error;
-  return (data ?? []).map((r: Record<string, unknown>) => ({
-    ...r,
-    hotel_name: (r.hotels as Record<string, unknown>)?.hotel_name as string,
-    property_code: (r.hotels as Record<string, unknown>)?.property_code as string,
-    plan_name: (r.subscription_plans as Record<string, unknown>)?.name as string,
-  })) as InvoiceWithDetails[];
+  return (data ?? []).map((r: Record<string, unknown>) => {
+    const h = (r.hotels as Record<string, unknown>) ?? {};
+    const p = (r.subscription_plans as Record<string, unknown>) ?? {};
+    return {
+      ...r,
+      hotel_name: h.hotel_name as string,
+      property_code: h.property_code as string,
+      address: h.address as string,
+      city: h.city as string,
+      state: h.state as string,
+      admin_email: h.admin_email as string,
+      mobile: h.mobile as string,
+      owner_name: h.owner_name as string,
+      total_rooms: h.total_rooms as number,
+      plan_name: p.name as string,
+    };
+  }) as InvoiceWithDetails[];
 };
 
 export const getInvoice = async (id: string): Promise<InvoiceWithDetails | null> => {
@@ -1149,10 +1160,29 @@ export const getInvoice = async (id: string): Promise<InvoiceWithDetails | null>
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
+  const h = (data.hotels as Record<string, unknown>) ?? {};
+  const p = (data.subscription_plans as Record<string, unknown>) ?? {};
+  let planName = p.name as string | undefined;
+  if (!planName && data.plan_id) {
+    const { data: planData } = await supabase
+      .from('subscription_plans')
+      .select('name')
+      .eq('id', data.plan_id)
+      .maybeSingle();
+    if (planData) planName = planData.name;
+  }
   return {
     ...data,
-    hotel_name: (data.hotels as Record<string, unknown>)?.hotel_name as string,
-    property_code: (data.hotels as Record<string, unknown>)?.property_code as string,
+    hotel_name: h.hotel_name as string,
+    property_code: h.property_code as string,
+    address: h.address as string,
+    city: h.city as string,
+    state: h.state as string,
+    admin_email: h.admin_email as string,
+    mobile: h.mobile as string,
+    owner_name: h.owner_name as string,
+    total_rooms: h.total_rooms as number,
+    plan_name: planName,
   } as InvoiceWithDetails;
 };
 
