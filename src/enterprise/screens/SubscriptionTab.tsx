@@ -76,7 +76,7 @@ export const SubscriptionTab = ({ hotel, onReload, onCreateInvoice, onViewInvoic
   const currentPlan = plans.find((p) => p.id === hotel.plan_id);
   const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
   const outstandingAmount = invoices
-    .filter((i) => i.status !== 'Cancelled' && i.status !== 'Draft')
+    .filter((i) => i.status !== 'Cancelled' && i.status !== 'Paid')
     .reduce((s, i) => s + i.balance_due, 0);
 
   const handleConvertTrial = async (planId: string, billingCycle: string) => {
@@ -131,8 +131,11 @@ export const SubscriptionTab = ({ hotel, onReload, onCreateInvoice, onViewInvoic
     }
     setActing(true); setError(null);
     try {
-      await generateRenewalInvoice(hotel.id);
+      const res = await generateRenewalInvoice(hotel.id);
       onReload(); await load();
+      if (res?.invoice_id) {
+        onViewInvoice(res.invoice_id);
+      }
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
     finally { setActing(false); }
   };
@@ -186,18 +189,18 @@ export const SubscriptionTab = ({ hotel, onReload, onCreateInvoice, onViewInvoic
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               <Field label="Current Plan" value={currentPlan?.name ?? 'Trial'} />
-              <Field label="Billing Cycle" value={currentPlan?.billing_period ?? '—'} />
+              <Field label="Billing Cycle" value={hotel.billing_cycle || currentPlan?.billing_period || '—'} />
               <Field label="Status" value={hotel.subscription_status} />
               <Field label="Start Date" value={fmtDate(hotel.subscription_start)} />
               <Field label="End Date" value={fmtDate(hotel.subscription_expiry)} />
-              <Field label="Renewal Date" value={fmtDate(hotel.subscription_expiry)} />
+              <Field label="Renewal Date" value={fmtDate(hotel.renewal_date || hotel.subscription_expiry)} />
               <Field label="Trial Start" value={fmtDate(hotel.trial_start)} />
               <Field label="Trial End" value={fmtDate(hotel.trial_end)} />
               <Field label="Grace Period End" value={fmtDate(hotel.grace_period_end)} />
-              <Field label="Base Amount" value={fmtMoney(currentPlan?.price ?? 0)} />
+              <Field label="Base Amount" value={fmtMoney(hotel.base_amount ?? currentPlan?.price ?? 0)} />
               <Field label="Discount" value={fmtMoney(0)} />
-              <Field label="Tax" value={fmtMoney(0)} />
-              <Field label="Total Payable" value={fmtMoney(currentPlan?.price ?? 0)} />
+              <Field label="Tax" value={fmtMoney(hotel.tax_amount ?? 0)} />
+              <Field label="Total Payable" value={fmtMoney(hotel.total_payable ?? currentPlan?.price ?? 0)} />
               <Field label="Paid Amount" value={fmtMoney(totalPaid)} />
               <Field label="Outstanding" value={fmtMoney(outstandingAmount)} />
               <Field label="Sales Exec" value={hotel.assigned_sales_exec ?? '—'} />

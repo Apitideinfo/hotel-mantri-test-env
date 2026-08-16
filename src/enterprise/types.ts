@@ -330,12 +330,13 @@ export interface ImpersonationSession {
 
 export const MODULE_KEYS = [
   'dashboard', 'daily_entry', 'room_chart', 'finance', 'gst',
+  'inventory', 'housekeeping', 'channel_manager',
   'whatsapp_reports', 'pdf_reports', 'mtd', 'ytd', 'profit_loss',
   'multi_hotel', 'company_ledger',
 ] as const;
 
 export const COMING_SOON_MODULES = [
-  'inventory', 'housekeeping', 'channel_manager', 'restaurant_pos', 'ai_insights',
+  'restaurant_pos', 'ai_insights',
 ] as const;
 
 export const MODULE_LABELS: Record<string, string> = {
@@ -558,6 +559,13 @@ export interface InvoiceWithDetails extends Invoice {
   hotel_name?: string;
   property_code?: string;
   plan_name?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  admin_email?: string;
+  mobile?: string;
+  owner_name?: string;
+  total_rooms?: number;
   items?: InvoiceItem[];
   payments?: InvoicePayment[];
 }

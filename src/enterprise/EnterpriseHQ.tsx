@@ -226,7 +226,7 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-3 mb-1.5">Coming Soon</p>
             <div className="space-y-0.5">
-              {['Inventory', 'Housekeeping', 'Channel Manager', 'Restaurant POS', 'AI Insights'].map((label) => (
+              {['Restaurant POS', 'AI Insights'].map((label) => (
                 <div key={label} className="flex items-center gap-2.5 px-3 py-2 text-sm text-slate-600 cursor-not-allowed">
                   <div className="w-4 h-4" />
                   <span className="flex-1">{label}</span>
