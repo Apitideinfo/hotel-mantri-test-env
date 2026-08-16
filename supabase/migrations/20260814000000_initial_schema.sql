@@ -19,6 +19,7 @@
    - anon + authenticated CRUD allowed (intentionally shared single-tenant data).
    - Unique constraint on (hotel_id, report_date) prevents duplicate daily reports.
 */
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS hotel_settings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -974,7 +975,7 @@ BEGIN
       '00000000-0000-0000-0000-000000000000',
       gen_random_uuid(),
       'authenticated', 'authenticated', 'admin@hotelmis.com',
-      crypt('Admin@2026', gen_salt('bf')),
+      extensions.crypt('Admin@2026', extensions.gen_salt('bf')),
       now(), now(), now(),
       '{"role": "super_admin"}'::jsonb,
       '{}'::jsonb
@@ -8150,6 +8151,7 @@ CREATE TRIGGER trg_pos_order_updated_at BEFORE UPDATE ON pos_orders
    Adds cancelled_reason column for audit.
    Adds kitchen_status_updated_at to track when the KOT last changed
    kitchen status (for average preparation time calculation).
+*/
 
 ALTER TABLE pos_kots DROP CONSTRAINT IF EXISTS pos_kots_kot_status_check;
 

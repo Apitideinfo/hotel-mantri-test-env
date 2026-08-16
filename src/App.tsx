@@ -353,7 +353,7 @@ function AppInner() {
           )}
 
           {nav.screen === 'housekeeping' && (
-            <HousekeepingBoard onBack={back} role={role === 'hotel_admin' ? 'admin' : role === 'super_admin' ? 'super_admin' : 'reception'} />
+            <HousekeepingBoard onBack={back} role={role === 'hotel_admin' ? 'admin' : 'reception'} />
           )}
 
           {/* CRM module routes */}
@@ -419,7 +419,7 @@ function AppInner() {
             <TablesScreen onBack={back} />
           )}
           {nav.screen === 'pos-dashboard' && (
-            <PosDashboard onBack={back} onNavigate={(s) => setNav({ screen: s as NavScreen })} />
+            <PosDashboard onBack={back} onNavigate={(s) => setNav({ screen: s as Screen })} />
           )}
           {nav.screen === 'pos-new-order' && (
             <NewOrderScreen onBack={back} />

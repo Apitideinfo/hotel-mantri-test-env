@@ -20,7 +20,7 @@ export interface AuthContext {
   companyRole: CompanyRole | null;
   hotelId: string | null;
   hotelName: string | null;
-  subscriptionStatus: 'Active' | 'Expired' | 'Suspended' | null;
+  subscriptionStatus: 'Active' | 'Expired' | 'Suspended' | 'Trial' | 'Grace Period' | null;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;

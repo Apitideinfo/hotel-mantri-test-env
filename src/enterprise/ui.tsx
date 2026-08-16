@@ -172,11 +172,12 @@ export const fmtMoney = (n: number): string => {
   return `₹${n.toLocaleString('en-IN')}`;
 };
 
-export const fmtDate = (d: string | null): string => {
+export const fmtDate = (d: string | null | undefined): string => {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
-export const fmtDateTime = (d: string): string => {
+export const fmtDateTime = (d: string | null | undefined): string => {
+  if (!d) return '—';
   return new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 };
