@@ -455,10 +455,10 @@ const StatCard = ({ label, value, color }: { label: string; value: number; color
   </div>
 );
 
-const Input = ({ label, value, onChange, type = 'text' }: { label: string; value: string; onChange: (v: string) => void; type?: string }) => (
+const Input = ({ label, value, onChange, type = 'text', placeholder }: { label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string }) => (
   <label className="block">
     <span className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">{label}</span>
-    <input type={type} value={value} onChange={(e) => onChange(e.target.value)}
+    <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
       className="w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500" />
   </label>
 );

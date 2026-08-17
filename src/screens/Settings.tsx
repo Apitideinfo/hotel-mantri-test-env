@@ -12,6 +12,8 @@ import {
   getRoomCategories, upsertRoomCategory, deleteRoomCategory, reorderRoomCategories,
 } from '@/lib/api';
 import { getPosEnabled, setPosEnabled } from '@/lib/api-pos';
+import { getHotSeasons, addHotSeason, deleteHotSeason } from '@/lib/api-calendar';
+import type { HotSeason } from '@/lib/types';
 
 interface SettingsProps {
   onBack: () => void;
@@ -122,17 +124,25 @@ export const Settings = ({ onBack }: SettingsProps) => {
   const [posEnabled, setPosEnabledState] = useState(false);
   const [posSaving, setPosSaving] = useState(false);
 
+  /* Hot Seasons */
+  const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
+  const [newSeasonName, setNewSeasonName] = useState('');
+  const [newSeasonStart, setNewSeasonStart] = useState('');
+  const [newSeasonEnd, setNewSeasonEnd] = useState('');
+  const [seasonError, setSeasonError] = useState<string | null>(null);
+
   /* load */
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [s, srcs, cats, posOn] = await Promise.all([getSettings(), getCompanySources(), getRoomCategories(), getPosEnabled()]);
+        const [s, srcs, cats, posOn, seasons] = await Promise.all([getSettings(), getCompanySources(), getRoomCategories(), getPosEnabled(), getHotSeasons()]);
         if (!mounted) return;
         applySettings(s);
         setSources(srcs);
         setCategories(cats);
         setPosEnabledState(posOn);
+        setHotSeasons(seasons);
       } catch (e) {
         if (mounted) setError(e instanceof Error ? e.message : 'Failed to load settings');
       } finally {
@@ -298,6 +308,33 @@ export const Settings = ({ onBack }: SettingsProps) => {
       setSources((prev) => prev.filter((s) => s.id !== id));
     } catch (e) {
       setCompanyError(e instanceof Error ? e.message : 'Failed to delete');
+    }
+  };
+
+  /* hot season helpers */
+  const handleAddSeason = async () => {
+    setSeasonError(null);
+    if (!newSeasonName.trim() || !newSeasonStart || !newSeasonEnd) {
+      setSeasonError('Please fill all fields.'); return;
+    }
+    if (newSeasonStart > newSeasonEnd) {
+      setSeasonError('Start date must be before end date.'); return;
+    }
+    try {
+      const added = await addHotSeason(newSeasonName.trim(), newSeasonStart, newSeasonEnd);
+      setHotSeasons((p) => [...p, added].sort((a,b) => a.start_date.localeCompare(b.start_date)));
+      setNewSeasonName(''); setNewSeasonStart(''); setNewSeasonEnd('');
+    } catch (e) {
+      setSeasonError(e instanceof Error ? e.message : 'Failed to add hot season');
+    }
+  };
+  const handleDeleteSeason = async (id: string) => {
+    if (!confirm('Delete this Hot Season?')) return;
+    try {
+      await deleteHotSeason(id);
+      setHotSeasons((p) => p.filter((s) => s.id !== id));
+    } catch (e) {
+      setSeasonError(e instanceof Error ? e.message : 'Failed to delete');
     }
   };
 
@@ -854,7 +891,54 @@ export const Settings = ({ onBack }: SettingsProps) => {
               )}
             </SectionCard>
 
-            {/* ── 8. PDF HEADER PREVIEW ── */}
+            {/* ── 8. SEASON & CALENDAR ── */}
+            <SectionCard title="Season & Calendar" icon={<Building2 className="w-4 h-4" />}>
+              <p className="text-xs text-slate-500">
+                Define Hot Seasons. All Saturdays and Sundays are automatically treated as Hot Seasons.
+              </p>
+              {seasonError && (
+                <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg p-2">
+                  <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" /> {seasonError}
+                </div>
+              )}
+              <div className="space-y-2">
+                {hotSeasons.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                    <div>
+                      <p className="text-sm font-bold text-slate-800">{s.name}</p>
+                      <p className="text-xs text-slate-500">
+                        {new Date(s.start_date).toLocaleDateString('en-IN')} — {new Date(s.end_date).toLocaleDateString('en-IN')}
+                      </p>
+                    </div>
+                    <button onClick={() => handleDeleteSeason(s.id)}
+                      className="p-1.5 text-slate-400 hover:text-red-500 transition rounded-lg hover:bg-red-50">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+                {hotSeasons.length === 0 && (
+                  <p className="text-xs text-slate-400 text-center py-4">No hot seasons configured.</p>
+                )}
+              </div>
+              <div className="border-t border-slate-100 pt-3 space-y-2">
+                <input className={input} value={newSeasonName} onChange={(e) => setNewSeasonName(e.target.value)} placeholder="Season Name (e.g. Diwali Vacation)" />
+                <div className="grid grid-cols-2 gap-2">
+                  <Field>
+                    <Label>Start Date</Label>
+                    <input type="date" className={input} value={newSeasonStart} onChange={(e) => setNewSeasonStart(e.target.value)} />
+                  </Field>
+                  <Field>
+                    <Label>End Date</Label>
+                    <input type="date" className={input} value={newSeasonEnd} onChange={(e) => setNewSeasonEnd(e.target.value)} />
+                  </Field>
+                </div>
+                <button onClick={handleAddSeason} className="w-full flex items-center justify-center gap-1.5 bg-sky-700 hover:bg-sky-800 text-white font-semibold px-4 py-2.5 rounded-lg text-sm transition">
+                  <Plus className="w-4 h-4" /> Add Hot Season
+                </button>
+              </div>
+            </SectionCard>
+
+            {/* ── 9. PDF HEADER PREVIEW ── */}
             <SectionCard title="PDF Header Preview" icon={<Eye className="w-4 h-4" />}>
               <p className="text-xs text-slate-400 mb-2">
                 This is how the header will appear on every PDF report. Save settings to apply changes.
@@ -900,10 +984,10 @@ export const Settings = ({ onBack }: SettingsProps) => {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="w-full flex items-center justify-center gap-2 bg-sky-700 hover:bg-sky-800 active:scale-[0.99] disabled:opacity-60 text-white font-bold py-3.5 rounded-2xl shadow transition"
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold py-3.5 rounded-xl text-base shadow-sm transition"
             >
               <Save className="w-5 h-5" />
-              {saving ? 'Saving…' : 'Save Settings'}
+              {saving ? 'Saving Settings…' : 'Save All Settings'}
             </button>
           </div>
         </div>

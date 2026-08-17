@@ -11,6 +11,8 @@ import {
   getReservationAlerts, bulkCheckIn, bulkCheckOut, bulkCancel,
   checkRoomAvailability, getRoomAvailabilityForDate, type RoomAvailability,
 } from '@/lib/api-reservations';
+import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
+import type { HotSeason } from '@/lib/types';
 import { RESERVATION_STATUS_COLORS, ROOM_STATUS_COLORS } from '@/lib/types-reservations';
 
 type ViewMode = 'timeline' | 'calendar' | 'list' | 'arrival' | 'departure';
@@ -35,6 +37,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [inHouseStays, setInHouseStays] = useState<RoomChartEntry[]>([]);
   const [availability, setAvailability] = useState<RoomAvailability[]>([]);
+  const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<ReservationAlert[]>([]);
@@ -51,14 +54,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     setLoading(true);
     setError(null);
     try {
-      const [res, avail, stays] = await Promise.all([
+      const [res, avail, stays, hs] = await Promise.all([
         getReservationsForDateRange(startDate, endDate),
         getRoomAvailabilityForDate(startDate),
         initialView === 'list' ? getActiveRoomChartEntries(startDate) : Promise.resolve([] as RoomChartEntry[]),
+        getHotSeasons(),
       ]);
       setReservations(res);
       setInHouseStays(stays);
       setAvailability(avail);
+      setHotSeasons(hs);
       const al = await getReservationAlerts(res);
       setAlerts(al);
     } catch (e) {
@@ -328,8 +333,9 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                     {dateColumns.map((d) => {
                       const dt = new Date(d + 'T00:00:00');
                       const isToday = d === new Date().toISOString().slice(0, 10);
+                      const isHot = isHotSeasonDate(d, hotSeasons);
                       return (
-                        <th key={d} className={`px-2 py-2 text-center font-bold min-w-[80px] ${isToday ? 'bg-brand-50 text-brand-700' : 'text-slate-500'}`}>
+                        <th key={d} className={`px-2 py-2 text-center font-bold min-w-[80px] ${isHot ? 'bg-rose-50 text-rose-700' : isToday ? 'bg-brand-50 text-brand-700' : 'text-slate-500'}`}>
                           {dt.toLocaleDateString('en-IN', { weekday: 'short' })}
                           <br />
                           <span className="text-[10px]">{dt.getDate()}</span>
@@ -417,9 +423,10 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                     r.check_in_date === d && (r.status === 'confirmed' || r.status === 'checked_in'),
                   );
                   const isToday = d === new Date().toISOString().slice(0, 10);
+                  const isHot = isHotSeasonDate(d, hotSeasons);
                   return (
-                    <div key={d} className={`min-h-[60px] rounded-lg border p-1.5 ${isToday ? 'border-brand-300 bg-brand-50' : 'border-slate-100'}`}>
-                      <p className={`text-xs font-bold ${isToday ? 'text-brand-700' : 'text-slate-600'}`}>{dt.getDate()}</p>
+                    <div key={d} className={`min-h-[60px] rounded-lg border p-1.5 ${isHot ? 'border-rose-300 bg-rose-50' : isToday ? 'border-brand-300 bg-brand-50' : 'border-slate-100'}`}>
+                      <p className={`text-xs font-bold ${isHot ? 'text-rose-700' : isToday ? 'text-brand-700' : 'text-slate-600'}`}>{dt.getDate()}</p>
                       {dayRes.slice(0, 3).map((r) => (
                         <div key={r.id} className={`text-[9px] rounded px-1 py-0.5 mt-0.5 truncate ${
                           r.status === 'checked_in' ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
