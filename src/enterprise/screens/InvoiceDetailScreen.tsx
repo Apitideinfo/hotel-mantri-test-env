@@ -163,14 +163,14 @@ export const InvoiceDetailScreen = ({ invoiceId, onBack }: Props) => {
             items={items}
             settings={effectiveSettings}
             hotelName={invoice.hotel_name}
-            hotelAddress={(invoice as unknown as Record<string, unknown>).address as string ?? ''}
-            hotelCity={(invoice as unknown as Record<string, unknown>).city as string ?? ''}
-            hotelState={(invoice as unknown as Record<string, unknown>).state as string ?? ''}
+            hotelAddress={invoice.address ?? ''}
+            hotelCity={invoice.city ?? ''}
+            hotelState={invoice.state ?? ''}
             hotelPropertyCode={invoice.property_code}
-            hotelAdminEmail={(invoice as unknown as Record<string, unknown>).admin_email as string ?? ''}
-            hotelMobile={(invoice as unknown as Record<string, unknown>).mobile as string ?? ''}
-            hotelOwnerName={(invoice as unknown as Record<string, unknown>).owner_name as string ?? ''}
-            planName={invoice.plan_name}
+            hotelAdminEmail={invoice.admin_email ?? ''}
+            hotelMobile={invoice.mobile ?? ''}
+            hotelOwnerName={invoice.owner_name ?? ''}
+            planName={invoice.plan_name || (items[0]?.description ? items[0].description.split(' — ')[0] : undefined)}
             preview
             scale={1}
           />

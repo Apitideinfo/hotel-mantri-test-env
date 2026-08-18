@@ -3814,25 +3814,37 @@ BEGIN
   SELECT * INTO v_plan FROM subscription_plans WHERE id = v_hotel.plan_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Plan not found'; END IF;
 
-  -- Prevent duplicates: check for existing draft/issued invoice for same billing period
+  -- Compute start and end dates
+  v_new_start := COALESCE(v_hotel.subscription_expiry, v_hotel.subscription_start, CURRENT_DATE);
+  v_new_end := compute_next_renewal_date(v_new_start, COALESCE(v_hotel.billing_cycle, 'monthly'));
+
+  -- Check if invoice already exists for this billing period
   SELECT count(*) INTO v_existing_count
   FROM invoices
   WHERE hotel_id = p_hotel_id
     AND plan_id = v_hotel.plan_id
-    AND billing_cycle = v_hotel.billing_cycle
     AND status IN ('Draft','Issued','Sent','Partially Paid')
-    AND subscription_start = v_hotel.subscription_expiry;
+    AND (
+      subscription_start = v_new_start
+      OR (v_hotel.subscription_expiry IS NULL AND created_at >= (now() - INTERVAL '1 day'))
+    );
 
   IF v_existing_count > 0 THEN
-    RAISE EXCEPTION 'Invoice already exists for this billing period';
+    SELECT id INTO v_invoice_id
+    FROM invoices
+    WHERE hotel_id = p_hotel_id
+      AND plan_id = v_hotel.plan_id
+      AND status IN ('Draft','Issued','Sent','Partially Paid')
+    ORDER BY created_at DESC LIMIT 1;
+
+    RETURN jsonb_build_object(
+      'success', true,
+      'invoice_id', v_invoice_id,
+      'message', 'An invoice already exists for this billing period'
+    );
   END IF;
 
-  -- Compute next period
-  v_new_start := v_hotel.subscription_expiry;
-  IF v_new_start IS NULL THEN v_new_start := CURRENT_DATE; END IF;
-  v_new_end := compute_next_renewal_date(v_new_start, v_hotel.billing_cycle);
-
-  v_base := CASE WHEN v_hotel.billing_cycle = 'yearly' THEN v_plan.yearly_price ELSE v_plan.price END;
+  v_base := CASE WHEN COALESCE(v_hotel.billing_cycle, 'monthly') = 'yearly' THEN v_plan.yearly_price ELSE v_plan.price END;
   v_gst_rate := COALESCE((SELECT (gst->>'default_gst_rate')::numeric FROM billing_settings WHERE id = 1), 18);
   v_tax := ROUND(v_base * v_gst_rate / 100, 2);
   v_total := v_base + v_tax;
@@ -3846,28 +3858,30 @@ BEGIN
     subtotal, taxable_amount, cgst_amount, sgst_amount, igst_amount,
     total_amount, balance_due, is_interstate, due_date, created_by
   ) VALUES (
-    p_hotel_id, v_hotel.plan_id, 'Draft', v_hotel.billing_cycle, v_hotel.billing_cycle,
-    v_hotel.total_rooms, v_new_start, v_new_end,
+    p_hotel_id, v_hotel.plan_id, 'Draft', COALESCE(v_hotel.billing_cycle, 'monthly'), COALESCE(v_hotel.billing_cycle, 'monthly'),
+    COALESCE(v_hotel.total_rooms, 0), v_new_start, v_new_end,
     v_base, v_base, v_tax / 2, v_tax / 2, 0,
-    v_total, v_total, false, CURRENT_DATE + v_settings.default_due_date_offset, v_user_id
+    v_total, v_total, false, CURRENT_DATE + COALESCE(v_settings.default_due_date_offset, 7), v_user_id
   ) RETURNING id INTO v_invoice_id;
 
   INSERT INTO invoice_items (
     invoice_id, sr_no, description, hsn_sac, quantity, rate, discount,
     taxable_value, gst_rate, cgst_amount, sgst_amount, igst_amount, amount, item_type
   ) VALUES (
-    v_invoice_id, 1, v_plan.name || ' — ' || v_hotel.billing_cycle || ' renewal',
+    v_invoice_id, 1, v_plan.name || ' — ' || COALESCE(v_hotel.billing_cycle, 'monthly') || ' renewal',
     COALESCE((SELECT gst->>'hsn_sac' FROM billing_settings WHERE id = 1), '9983'),
     1, v_base, 0, v_base, v_gst_rate, v_tax / 2, v_tax / 2, 0, v_total, 'subscription'
   );
 
-  -- Update hotel renewal info
+  -- Update hotel renewal & subscription dates
   UPDATE hotels SET
+    subscription_start = COALESCE(subscription_start, v_new_start),
+    subscription_expiry = COALESCE(subscription_expiry, v_new_end),
     renewal_date = v_new_end,
     base_amount = v_base,
     tax_amount = v_tax,
     total_payable = v_total,
-    outstanding_amount = v_total,
+    outstanding_amount = COALESCE(outstanding_amount, 0) + v_total,
     updated_at = now()
   WHERE id = p_hotel_id;
 
@@ -8427,6 +8441,7 @@ BEGIN
   END LOOP;
 END $$;
 
+
 -- =========================================
 -- File: 20260814000001_repair_subscription_system.sql
 -- Description: Assigns a default 'Pro' plan to the seeded test hotel to prevent renewal errors.
@@ -8452,9 +8467,6 @@ BEGIN
 END $$;
 
 -- 2. Repair channel_settings RLS policies
--- The previous policies compared auth.uid() (a User UUID) to hotel_id (a Hotel UUID), which is structurally invalid and always false.
--- We replace them with correct access controls matching the rest of the application's patterns.
-
 DROP POLICY IF EXISTS "select_own_channel_settings" ON channel_settings;
 CREATE POLICY "select_own_channel_settings" ON channel_settings FOR SELECT
   TO authenticated USING (true);
@@ -8467,35 +8479,4 @@ DROP POLICY IF EXISTS "update_own_channel_settings" ON channel_settings;
 CREATE POLICY "update_own_channel_settings" ON channel_settings FOR UPDATE
   TO authenticated USING (true) WITH CHECK (true);
 
--- End of migration
-
--- =========================================
--- Migration: Create hot_seasons table
--- =========================================
-
-CREATE TABLE IF NOT EXISTS hot_seasons (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  hotel_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
-  name text NOT NULL,
-  start_date date NOT NULL,
-  end_date date NOT NULL,
-  created_at timestamptz DEFAULT now()
-);
-
-ALTER TABLE hot_seasons ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "anon_select_hot_seasons" ON hot_seasons FOR SELECT
-  TO anon, authenticated USING (true);
-
-CREATE POLICY "anon_insert_hot_seasons" ON hot_seasons FOR INSERT
-  TO anon, authenticated WITH CHECK (true);
-
-CREATE POLICY "anon_update_hot_seasons" ON hot_seasons FOR UPDATE
-  TO anon, authenticated USING (true) WITH CHECK (true);
-
-CREATE POLICY "anon_delete_hot_seasons" ON hot_seasons FOR DELETE
-  TO anon, authenticated USING (true);
-
-CREATE INDEX IF NOT EXISTS idx_hot_seasons_hotel ON hot_seasons (hotel_id);
-CREATE INDEX IF NOT EXISTS idx_hot_seasons_dates ON hot_seasons (start_date, end_date);
 
