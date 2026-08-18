@@ -9,7 +9,7 @@ import type { Reservation, ReservationStatus, ReservationAlert } from '@/lib/typ
 import {
   getReservationsForDateRange, getActiveRoomChartEntries, moveReservation, quickReservation,
   getReservationAlerts, bulkCheckIn, bulkCheckOut, bulkCancel,
-  checkRoomAvailability, getRoomAvailabilityForDate, type RoomAvailability,
+  checkRoomAvailability, getRoomAvailabilityForDate, type RoomAvailability, extendReservation,
 } from '@/lib/api-reservations';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
@@ -47,6 +47,9 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [extendModalRes, setExtendModalRes] = useState<Reservation | null>(null);
+  const [stretchingRes, setStretchingRes] = useState<Reservation | null>(null);
+  const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
 
   const endDate = useMemo(() => addDays(startDate, days - 1), [startDate, days]);
 
@@ -127,14 +130,26 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     const res = reservations.find((r) => r.id === draggedRes);
     if (!res) return;
 
-    // Same room, same date — no-op
-    if (res.room_no === roomNo && res.check_in_date === date) {
-      setDraggedRes(null);
-      return;
-    }
-
     setBusy(true);
     try {
+      if (res.room_no === roomNo) {
+        if (res.status === 'checked_in' || date >= res.check_in_date) {
+          const targetCheckOut = addDays(date, 1);
+          if (targetCheckOut > res.check_in_date) {
+            await extendReservation({
+              reservationId: draggedRes,
+              newCheckOut: targetCheckOut,
+            });
+            await load();
+            return;
+          }
+        }
+      }
+
+      if (res.status === 'checked_in') {
+        throw new Error('Checked-in guests cannot change room via drag. Use Room Shift or Extend Stay.');
+      }
+
       const newCheckOut = addDays(date, res.nights);
       await moveReservation({
         reservationId: draggedRes,
@@ -144,12 +159,69 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
       });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Move failed');
+      setError(err instanceof Error ? err.message : 'Action failed');
     } finally {
       setBusy(false);
       setDraggedRes(null);
     }
   };
+
+  const handleExtendRes = async (newCheckOut: string) => {
+    if (!extendModalRes) return;
+    setBusy(true);
+    try {
+      await extendReservation({
+        reservationId: extendModalRes.id,
+        newCheckOut,
+      });
+      setExtendModalRes(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to extend stay');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const commitStretch = useCallback(async (res: Reservation, targetDate: string) => {
+    const newCheckOut = addDays(targetDate, 1);
+    if (newCheckOut <= res.check_in_date || newCheckOut === res.check_out_date) {
+      setStretchingRes(null);
+      setStretchTargetDate(null);
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await extendReservation({
+        reservationId: res.id,
+        newCheckOut,
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to stretch reservation');
+    } finally {
+      setBusy(false);
+      setStretchingRes(null);
+      setStretchTargetDate(null);
+    }
+  }, [load]);
+
+  useEffect(() => {
+    if (!stretchingRes) return;
+
+    const handleGlobalMouseUp = () => {
+      if (stretchingRes && stretchTargetDate) {
+        commitStretch(stretchingRes, stretchTargetDate);
+      } else {
+        setStretchingRes(null);
+        setStretchTargetDate(null);
+      }
+    };
+
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [stretchingRes, stretchTargetDate, commitStretch]);
 
   const handleQuickRes = async (params: { roomNo: string; guestName: string; guestPhone?: string; checkIn: string; checkOut: string; rate: number }) => {
     setBusy(true);
@@ -355,40 +427,90 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                         const res = getResForRoomDate(room.room_no, d);
                         const isDragOver = dragOverRoom === room.room_no;
                         const isStart = res?.check_in_date === d;
+                        const isEnd = res && addDays(res.check_out_date, -1) === d;
+                        const isStretchPreview = Boolean(
+                          stretchingRes &&
+                          stretchingRes.room_no === room.room_no &&
+                          stretchTargetDate &&
+                          d > addDays(stretchingRes.check_out_date, -1) &&
+                          d <= stretchTargetDate
+                        );
+
                         return (
                           <td
                             key={d}
                             onDragOver={(e) => handleDragOver(e, room.room_no)}
                             onDragLeave={() => setDragOverRoom(null)}
                             onDrop={(e) => handleDrop(e, room.room_no, d)}
-                            onClick={() => !res && setShowQuickRes({ roomNo: room.room_no, date: d })}
-                            className={`px-1 py-1 text-center border-l border-slate-50 cursor-pointer transition ${isDragOver ? 'bg-brand-100' : 'hover:bg-slate-50'}`}
+                            onMouseEnter={() => {
+                              if (stretchingRes && stretchingRes.room_no === room.room_no && d >= stretchingRes.check_in_date) {
+                                setStretchTargetDate(d);
+                              }
+                            }}
+                            onClick={() => !res && !stretchingRes && setShowQuickRes({ roomNo: room.room_no, date: d })}
+                            className={`px-1 py-1 text-center border-l border-slate-50 cursor-pointer transition relative ${
+                              isDragOver
+                                ? 'bg-brand-100'
+                                : isStretchPreview
+                                ? 'bg-emerald-100/80 ring-1 ring-emerald-400'
+                                : 'hover:bg-slate-50'
+                            }`}
                           >
                             {res ? (
                               <div
-                                draggable
+                                draggable={!stretchingRes}
                                 onDragStart={(e) => handleDragStart(e, res.id)}
                                 onClick={(e) => { e.stopPropagation(); toggleSelect(res.id); }}
-                                className={`rounded-lg px-1.5 py-1 text-left cursor-move transition select-none ${
+                                className={`group relative rounded-lg px-1.5 py-1 text-left cursor-move transition select-none ${
                                   selected.has(res.id) ? 'ring-2 ring-brand-500' : ''
                                 } ${
                                   res.status === 'checked_in'
-                                    ? 'bg-emerald-100 text-emerald-800'
-                                    : 'bg-blue-100 text-blue-800'
+                                    ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-200/60'
+                                    : 'bg-blue-100 text-blue-800 hover:bg-blue-200 border border-blue-200/60'
                                 }`}
                               >
-                                {isStart && (
-                                  <>
-                                    <div className="flex items-center gap-0.5">
-                                      <GripVertical className="w-2.5 h-2.5 opacity-50" />
-                                      <p className="font-bold text-[10px] truncate">{res.guest_name}</p>
-                                    </div>
-                                    <p className="text-[9px] opacity-70">{fmtMoney(res.rate)}/n</p>
-                                  </>
+                                <div className="flex items-center justify-between gap-0.5 min-w-0">
+                                  <div className="flex items-center gap-0.5 min-w-0 flex-1">
+                                    {isStart && <GripVertical className="w-2.5 h-2.5 opacity-50 shrink-0" />}
+                                    <p className="font-bold text-[10px] truncate" title={res.guest_name}>
+                                      {res.guest_name}
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExtendModalRes(res);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-white/60 rounded text-[9px] font-extrabold shrink-0 transition text-emerald-900 pr-3"
+                                    title="Extend Stay"
+                                  >
+                                    +Extend
+                                  </button>
+                                </div>
+                                
+                                <div className="flex items-center justify-between text-[9px] opacity-75 mt-0.5">
+                                  <span className="truncate">{isStart ? `${fmtMoney(res.rate)}/n` : 'staying'}</span>
+                                </div>
+
+                                {/* Cursor Click-Drag Stretch Handle on right edge */}
+                                {isEnd && (
+                                  <div
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      setStretchingRes(res);
+                                      setStretchTargetDate(d);
+                                    }}
+                                    className="absolute right-0 top-0 bottom-0 w-3.5 cursor-ew-resize flex items-center justify-center bg-emerald-400/40 hover:bg-emerald-500/80 rounded-r z-20 transition group/handle"
+                                    title="Click & Drag cursor right to stretch stay check-out date"
+                                  >
+                                    <div className="w-1 h-3 bg-emerald-800/80 rounded-full group-hover/handle:bg-white shrink-0" />
+                                  </div>
                                 )}
-                                {!isStart && (
-                                  <div className="h-1.5 bg-current opacity-30 rounded" />
-                                )}
+                              </div>
+                            ) : isStretchPreview ? (
+                              <div className="h-6 rounded-lg bg-emerald-200/90 border border-emerald-400 text-emerald-900 text-[9px] font-bold flex items-center justify-center shadow-inner animate-pulse">
+                                Release to stretch →
                               </div>
                             ) : (
                               <div className="h-6 flex items-center justify-center text-slate-200 hover:text-brand-400">
@@ -401,6 +523,69 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="border-t-2 border-slate-200 bg-slate-50 text-[11px]">
+                  {/* Occupied Row */}
+                  <tr className="border-b border-slate-200">
+                    <td className="px-3 py-2 sticky left-0 bg-slate-50 z-10 border-r font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                      Occupied
+                    </td>
+                    {dateColumns.map((d) => {
+                      const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
+                      return (
+                        <td key={d} className="px-2 py-2 text-center font-bold text-brand-navy-800 border-l border-slate-200">
+                          {occCount}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {/* Available Row */}
+                  <tr className="border-b border-slate-200">
+                    <td className="px-3 py-2 sticky left-0 bg-slate-50 z-10 border-r font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                      Available
+                    </td>
+                    {dateColumns.map((d) => {
+                      const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
+                      const availCount = Math.max(0, rooms.length - occCount);
+                      return (
+                        <td key={d} className="px-2 py-2 text-center font-bold text-emerald-600 border-l border-slate-200">
+                          {availCount}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {/* Occupancy % Row */}
+                  <tr className="border-b border-slate-200">
+                    <td className="px-3 py-2 sticky left-0 bg-slate-50 z-10 border-r font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                      Occupancy %
+                    </td>
+                    {dateColumns.map((d) => {
+                      const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
+                      const pct = rooms.length > 0 ? Math.round((occCount / rooms.length) * 100) : 0;
+                      return (
+                        <td key={d} className="px-2 py-2 text-center font-semibold text-slate-600 border-l border-slate-200">
+                          {pct}%
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  {/* Daily Tariff Row */}
+                  <tr>
+                    <td className="px-3 py-2 sticky left-0 bg-slate-50 z-10 border-r font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                      Daily Tariff
+                    </td>
+                    {dateColumns.map((d) => {
+                      const rev = rooms.reduce((sum, r) => {
+                        const res = getResForRoomDate(r.room_no, d);
+                        return sum + (res ? (res.rate || 0) : 0);
+                      }, 0);
+                      return (
+                        <td key={d} className="px-2 py-2 text-center font-bold text-brand-600 border-l border-slate-200">
+                          {fmtMoney(rev)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tfoot>
               </table>
               {rooms.length === 0 && (
                 <div className="p-8 text-center text-slate-400 text-sm">No rooms configured.</div>
@@ -544,6 +729,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         </>
       )}
 
+      {/* Extend Stay Modal */}
+      {extendModalRes && (
+        <ExtendResModal
+          res={extendModalRes}
+          onClose={() => setExtendModalRes(null)}
+          onSave={handleExtendRes}
+          busy={busy}
+        />
+      )}
+
       {/* Quick Reservation Modal */}
       {showQuickRes && (
         <QuickResModal
@@ -682,6 +877,77 @@ const QuickResModal = ({ roomNo, defaultDate, onClose, onSave, busy }: {
             {busy ? 'Saving…' : 'Create Reservation'}
           </button>
           <button onClick={onClose} className="px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-200 rounded-xl">Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Extend Reservation Modal ──
+const ExtendResModal = ({ res, onClose, onSave, busy }: {
+  res: Reservation;
+  onClose: () => void;
+  onSave: (newCheckOut: string) => Promise<void>;
+  busy: boolean;
+}) => {
+  const [newCheckOut, setNewCheckOut] = useState(res.check_out_date);
+
+  const addNights = (n: number) => {
+    setNewCheckOut(addDays(res.check_out_date, n));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-brand-navy-800">Extend Stay · Room {res.room_no}</h2>
+            <p className="text-xs text-slate-500">{res.guest_name}</p>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs space-y-1">
+            <p className="text-slate-600"><span className="font-semibold text-slate-700">Check-in:</span> {fmtDate(res.check_in_date)}</p>
+            <p className="text-slate-600"><span className="font-semibold text-slate-700">Current Check-out:</span> {fmtDate(res.check_out_date)} ({res.nights} Nights)</p>
+            <p className="text-slate-600"><span className="font-semibold text-slate-700">Status:</span> <span className="capitalize font-medium text-emerald-700">{res.status.replace('_', ' ')}</span></p>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-600 mb-1.5 block">Quick Add Nights</label>
+            <div className="flex gap-2">
+              {[1, 2, 3, 7].map((num) => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => addNights(num)}
+                  className="flex-1 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 hover:border-brand-500 hover:bg-brand-50 text-slate-700 transition"
+                >
+                  +{num} Day{num > 1 ? 's' : ''}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-slate-600 mb-1 block">New Check-out Date *</label>
+            <input
+              type="date"
+              value={newCheckOut}
+              onChange={(e) => setNewCheckOut(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
+            />
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex gap-2">
+          <button
+            onClick={() => onSave(newCheckOut)}
+            disabled={busy || newCheckOut <= res.check_in_date}
+            className="flex-1 px-4 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl disabled:opacity-50 transition"
+          >
+            {busy ? 'Extending…' : 'Confirm Extension'}
+          </button>
+          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl">Cancel</button>
         </div>
       </div>
     </div>
