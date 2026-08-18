@@ -9,7 +9,7 @@ import {
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
   CompanySource, SourceCategory, PayMode, MealPlan, GstMode, GstType, GstSlab,
-  RoomCategory, Room,
+  RoomCategory, Room, HotSeason,
 } from '@/lib/types';
 import { MEAL_PLANS, GST_SLABS, GST_MODES, GST_TYPES, SPLIT_PAYMENT_KEYS, SPLIT_PAY_MODE_KEYS, SPLIT_PAYMENT_LABELS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
 import type { ExpenseEntry, ExpenseEntryInput, RevenueEntry, RevenueEntryInput, ExpenseHead, RevenueHead, RevenuePaymentMode } from '@/lib/types-finance';
@@ -25,6 +25,7 @@ import {
   getExpenseEntriesForDate, saveExpenseEntry, deleteExpenseEntry,
   getRevenueEntriesForDate, saveRevenueEntry, deleteRevenueEntry,
 } from '@/lib/api-finance';
+import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import { aggregateRoomChart, fmtMoney, fmtInt, calcOcc, calcClosingRooms, calcGst, calcGstFull, toNum } from '@/lib/calc';
 import { brand } from '@/lib/theme';
 import type { DerivedReport, DayCloseRecord, DayCloseAuditLog } from '@/lib/types';
@@ -98,6 +99,14 @@ const emptyRow = (date: string, settings?: HotelSettings | null): RoomChartEntry
     pay_bank: 0,
     pay_advance: 0,
     pay_balance: 0,
+    id_proof_type: 'None',
+    id_proof_number: '',
+    id_proof_verified: false,
+    arrival_time: '',
+    checkout_time: '',
+    checked_in_at: null,
+    checked_out_at: null,
+    reservation_id: null,
   };
 };
 
@@ -132,6 +141,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
   const [categories, setCategories] = useState<RoomCategory[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [entries, setEntries] = useState<RoomChartEntry[]>([]);
+  const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,16 +189,18 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     try {
       setLoading(true);
       setError(null);
-      const [s, srcs, cats, rms] = await Promise.all([
+      const [s, srcs, cats, rms, hs] = await Promise.all([
         getSettings(),
         getCompanySources(),
         getRoomCategories(),
         getRooms(),
+        getHotSeasons(),
       ]);
       setSettings(s);
       setSources(srcs);
       setCategories(cats);
       setRooms(rms);
+      setHotSeasons(hs);
       const [es, exp, rev] = await Promise.all([
         getRoomChart(d),
         getExpenseEntriesForDate(d),
@@ -360,8 +372,8 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
   const openEditPanel = (e: RoomChartEntry) => {
     setPanelMode('edit');
     setEditingId(e.id);
-    const entryGstType: GstType = (e as Record<string, unknown>).gst_type != null
-      ? ((e as Record<string, unknown>).gst_type as GstType)
+    const entryGstType: GstType = e.gst_type != null
+      ? e.gst_type
       : (!settings?.gst_registered ? 'No Scope' : ((e.gst_mode ?? 'Exclusive') as GstType));
     setPanelRow({
       report_date: e.report_date,
@@ -384,17 +396,25 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
       gst_slab: (e.gst_slab ?? 0) as GstSlab,
       gst_amount: toNum(e.gst_amount),
       taxable_amount: toNum(e.taxable_amount),
-      invoice_total: toNum((e as Record<string, unknown>).invoice_total) || (toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate)),
-      revenue_category: ((e as Record<string, unknown>).revenue_category as string) ?? 'Room Revenue',
-      remarks: ((e as Record<string, unknown>).remarks as string) ?? '',
-      created_by: ((e as Record<string, unknown>).created_by as string) ?? '',
-      business_date: ((e as Record<string, unknown>).business_date as string | null) ?? e.report_date,
+      invoice_total: toNum((e as unknown as Record<string, unknown>).invoice_total) || (toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate)),
+      revenue_category: ((e as unknown as Record<string, unknown>).revenue_category as string) ?? 'Room Revenue',
+      remarks: ((e as unknown as Record<string, unknown>).remarks as string) ?? '',
+      created_by: ((e as unknown as Record<string, unknown>).created_by as string) ?? '',
+      business_date: ((e as unknown as Record<string, unknown>).business_date as string | null) ?? e.report_date,
       pay_cash: toNum(e.pay_cash),
       pay_upi: toNum(e.pay_upi),
       pay_card: toNum(e.pay_card),
       pay_bank: toNum(e.pay_bank),
       pay_advance: toNum(e.pay_advance),
       pay_balance: toNum(e.pay_balance),
+      id_proof_type: e.id_proof_type ?? 'None',
+      id_proof_number: e.id_proof_number ?? '',
+      id_proof_verified: e.id_proof_verified ?? false,
+      arrival_time: e.arrival_time ?? '',
+      checkout_time: e.checkout_time ?? '',
+      checked_in_at: e.checked_in_at ?? null,
+      checked_out_at: e.checked_out_at ?? null,
+      reservation_id: e.reservation_id ?? null,
     });
     setPanelOpen(true);
   };
@@ -638,11 +658,16 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
       <div className="px-4 lg:px-6 pt-4 w-full space-y-3">
         {/* Date + Occupancy bar */}
         <div className="flex flex-col sm:flex-row gap-3">
-          <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-3 sm:w-48">
-            <Clock className="w-4 h-4 text-slate-400" />
-            <input type="date" value={selectedDate} max={initialDate}
-              onChange={(e) => handleDateChange(e.target.value)}
-              className="flex-1 bg-transparent text-slate-900 text-sm font-medium focus:outline-none w-full" />
+          <div className={`rounded-xl border px-4 py-3 flex items-center gap-3 sm:w-48 transition-colors ${isHotSeasonDate(selectedDate, hotSeasons) ? 'bg-rose-50 border-rose-300' : 'bg-white border-slate-200'}`}>
+            <Clock className={`w-4 h-4 ${isHotSeasonDate(selectedDate, hotSeasons) ? 'text-rose-500' : 'text-slate-400'}`} />
+            <div className="flex-1">
+              <input type="date" value={selectedDate} max={initialDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                className={`bg-transparent text-sm font-medium focus:outline-none w-full ${isHotSeasonDate(selectedDate, hotSeasons) ? 'text-rose-700' : 'text-slate-900'}`} />
+              {isHotSeasonDate(selectedDate, hotSeasons) && (
+                <p className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mt-0.5">Hot Season</p>
+              )}
+            </div>
           </div>
           {/* Occupancy progress bar */}
           <div className="flex-1 bg-white rounded-xl border border-slate-200 px-4 py-3 flex items-center gap-4">

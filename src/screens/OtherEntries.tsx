@@ -13,7 +13,6 @@ interface OtherEntriesProps {
 
 export const OtherEntries = ({ date: initialDate, onBack, onSaved }: OtherEntriesProps) => {
   const [selectedDate, setSelectedDate] = useState(initialDate);
-  const [settings, setSettings] = useState<HotelSettings | null>(null);
   const [entries, setEntries] = useState<OtherDailyEntriesInput | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,8 +20,6 @@ export const OtherEntries = ({ date: initialDate, onBack, onSaved }: OtherEntrie
 
   const load = async (d: string) => {
     try {
-      const s = await getSettings();
-      setSettings(s);
       const e = await getOtherEntries(d);
       setEntries(e ?? emptyOtherEntries(d));
     } catch (err) {

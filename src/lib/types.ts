@@ -39,6 +39,15 @@ export const MEAL_PLANS: { value: MealPlan; label: string }[] = [
   { value: 'AP',  label: 'AP – Room + All Meals' },
 ];
 
+export interface HotSeason {
+  id: string;
+  hotel_id: string;
+  name: string;
+  start_date: string;
+  end_date: string;
+  created_at?: string;
+}
+
 export interface HotelSettings {
   id: string;
   hotel_name: string;
@@ -367,7 +376,7 @@ export interface Room {
   last_departure_time: string;
 }
 
-export type RoomInput = Omit<Room, 'id' | 'hotel_id' | 'created_at'>;
+export type RoomInput = Omit<Room, 'id' | 'hotel_id' | 'created_at' | 'housekeeping_status' | 'housekeeping_note' | 'housekeeping_updated_at' | 'cleaning_priority' | 'assigned_staff_id' | 'last_cleaned_at' | 'last_inspected_at' | 'last_guest_name' | 'last_departure_time'> & Partial<Pick<Room, 'housekeeping_status' | 'housekeeping_note' | 'housekeeping_updated_at' | 'cleaning_priority' | 'assigned_staff_id' | 'last_cleaned_at' | 'last_inspected_at' | 'last_guest_name' | 'last_departure_time'>>;
 
 export interface RoomChartEntry {
   id: string;

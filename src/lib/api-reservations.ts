@@ -205,6 +205,10 @@ export const moveReservation = async (params: {
   if (!current) throw new Error('Reservation not found.');
   const res = current as Reservation;
 
+  if (res.status === 'checked_in' || res.status === 'checked_out') {
+    throw new Error('Cannot move a reservation that is already checked in or checked out.');
+  }
+
   const roomNo = newRoomNo ?? res.room_no;
   const checkIn = newCheckIn ?? res.check_in_date;
   const checkOut = newCheckOut ?? res.check_out_date;
@@ -215,18 +219,12 @@ export const moveReservation = async (params: {
     throw new Error('Room is not available for the selected dates (overlap or block detected).');
   }
 
-  // Recalculate nights
-  const nights = Math.max(1, Math.round(
-    (new Date(checkOut + 'T00:00:00').getTime() - new Date(checkIn + 'T00:00:00').getTime()) / 86400000,
-  ));
-
   const { data: updated, error } = await supabase
     .from('reservations')
     .update({
       room_no: roomNo,
       check_in_date: checkIn,
       check_out_date: checkOut,
-      nights,
       updated_at: new Date().toISOString(),
     })
     .eq('id', reservationId)
@@ -261,10 +259,6 @@ export const splitReservation = async (params: {
   }
 
   // Create new reservation for the split portion
-  const newNights = Math.max(1, Math.round(
-    (new Date(original.check_out_date + 'T00:00:00').getTime() - new Date(splitDate + 'T00:00:00').getTime()) / 86400000,
-  ));
-
   const { data: newRes, error: insertErr } = await supabase
     .from('reservations')
     .insert({
@@ -279,7 +273,6 @@ export const splitReservation = async (params: {
       company_gst: original.company_gst,
       check_in_date: splitDate,
       check_out_date: original.check_out_date,
-      nights: newNights,
       rate: original.rate,
       source_category: original.source_category,
       source_name: original.source_name,
@@ -302,14 +295,10 @@ export const splitReservation = async (params: {
   if (insertErr) throw insertErr;
 
   // Update original reservation's checkout to split date
-  const originalNights = Math.max(1, Math.round(
-    (new Date(splitDate + 'T00:00:00').getTime() - new Date(original.check_in_date + 'T00:00:00').getTime()) / 86400000,
-  ));
   await supabase
     .from('reservations')
     .update({
       check_out_date: splitDate,
-      nights: originalNights,
       updated_at: new Date().toISOString(),
     })
     .eq('id', reservationId);
