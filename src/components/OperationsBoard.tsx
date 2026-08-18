@@ -10,9 +10,10 @@ import {
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, GstType, GstSlab,
-  FrontOfficeRole,
+  FrontOfficeRole, HotSeason,
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo, mapAuthRoleToFrontOffice } from '@/lib/types';
+import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
 import {
   getSettings, getRoomChartForDateRange, saveRoomChartRow, deleteRoomChartRow,
@@ -151,6 +152,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [showFolio, setShowFolio] = useState(false);
   const [saving, setSaving] = useState(false);
   const [vipGuests, setVipGuests] = useState<Guest[]>([]);
+  const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
 
   const { role: authRole } = useAuth();
   const foRole: FrontOfficeRole | null = authRole ? mapAuthRoleToFrontOffice(authRole) : null;
@@ -166,16 +168,18 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     try {
       setLoading(true);
       setError(null);
-      const [s, srcs, cats, rms] = await Promise.all([
+      const [s, srcs, cats, rms, hs] = await Promise.all([
         getSettings(),
         getCompanySources(),
         getRoomCategories(),
         getRooms(),
+        getHotSeasons(),
       ]);
       setSettings(s);
       setSources(srcs);
       setCategories(cats);
       setRooms(rms);
+      setHotSeasons(hs);
 
       const rangeStart = timelineDates[0];
       const rangeEnd = addDays(timelineDates[timelineDates.length - 1], 1);
@@ -644,12 +648,18 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
               </div>
               {timelineDates.map((d) => {
                 const isToday = d === date;
-                const isWeekend = [0, 6].includes(new Date(d + 'T00:00:00').getDay());
+                const isHot = isHotSeasonDate(d, hotSeasons);
                 return (
                   <div
                     key={d}
                     className={`flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center text-xs font-bold border-r border-slate-200 ${
-                      isToday ? 'bg-brand-100 text-brand-700' : isWeekend ? 'bg-slate-100 text-slate-500' : 'text-slate-600'
+                      isHot
+                        ? isToday
+                          ? 'bg-rose-100 text-rose-700 border-b-2 border-rose-500'
+                          : 'bg-rose-50 text-rose-700'
+                        : isToday
+                        ? 'bg-brand-100 text-brand-700'
+                        : 'text-slate-600'
                     }`}
                   >
                     {fmtDay(d)}
@@ -696,10 +706,18 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                           const dayBookings = roomBookings.filter(
                             (b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut),
                           );
+                          const isToday = d === date;
+                          const isHot = isHotSeasonDate(d, hotSeasons);
                           return (
                             <div
                               key={d}
-                              className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 ${d === date ? 'bg-brand-50/40' : ''}`}
+                              className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 ${
+                                isHot
+                                  ? 'bg-rose-50/20'
+                                  : isToday
+                                  ? 'bg-brand-50/40'
+                                  : ''
+                              }`}
                             >
                               {dayBookings.length === 0 ? (
                                 <button
