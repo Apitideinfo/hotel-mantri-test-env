@@ -149,12 +149,26 @@ export const checkRoomAvailability = async (
     // 1. Check active reservations for overlap
     let resQ = supabase
       .from('reservations')
-      .select('id, room_no, check_in_date, check_out_date, status')
+      .select('id, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
       .eq('hotel_id', hotelId)
       .in('status', ['confirmed', 'checked_in']);
     if (excludeId) resQ = resQ.neq('id', excludeId);
 
     const { data: resData } = await resQ;
+
+    // Find if excludeId has an associated room_chart_entry_id
+    let excludeEntryId: string | null = null;
+    if (excludeId) {
+      const { data: exRes } = await supabase
+        .from('reservations')
+        .select('room_chart_entry_id')
+        .eq('id', excludeId)
+        .maybeSingle();
+      if (exRes?.room_chart_entry_id) {
+        excludeEntryId = exRes.room_chart_entry_id;
+      }
+    }
+
     const resOverlap = (resData ?? []).some((r) => {
       if ((r.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
       const ci = (r.check_in_date ?? '').slice(0, 10);
@@ -165,14 +179,18 @@ export const checkRoomAvailability = async (
 
     if (resOverlap) return false;
 
-    // 2. Check room_chart entries for overlap
+    // 2. Check room_chart entries for overlap (excluding this reservation's own entry)
     const { data: entryData } = await supabase
       .from('room_chart_entries')
-      .select('id, room_no, arrival, departure')
+      .select('id, room_no, arrival, departure, reservation_id')
       .eq('hotel_id', hotelId);
 
-    const entryOverlap = (entryData ?? []).some((e: { room_no?: string; arrival?: string; departure?: string; report_date?: string }) => {
+    const entryOverlap = (entryData ?? []).some((e: { id?: string; room_no?: string; arrival?: string; departure?: string; report_date?: string; reservation_id?: string }) => {
       if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
+      // Exclude if entry belongs to the reservation being extended/moved
+      if (excludeId && e.reservation_id === excludeId) return false;
+      if (excludeEntryId && e.id === excludeEntryId) return false;
+
       const a = (e.arrival ?? e.report_date ?? '').slice(0, 10);
       const d = (e.departure ?? e.report_date ?? '').slice(0, 10);
       if (!a || !d) return false;
@@ -183,6 +201,66 @@ export const checkRoomAvailability = async (
   } catch {
     return true;
   }
+};
+
+export const extendReservation = async (params: {
+  reservationId: string;
+  newCheckOut: string;
+}): Promise<Reservation> => {
+  const { reservationId, newCheckOut } = params;
+
+  const { data: current, error: fetchErr } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('id', reservationId)
+    .maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!current) throw new Error('Reservation not found.');
+  const res = current as Reservation;
+
+  if (new Date(newCheckOut + 'T00:00:00') <= new Date(res.check_in_date + 'T00:00:00')) {
+    throw new Error('New check-out date must be after check-in date.');
+  }
+
+  const available = await checkRoomAvailability(res.room_no, res.check_in_date, newCheckOut, reservationId);
+  if (!available) {
+    throw new Error('Room is not available for the extended date range (conflict detected).');
+  }
+
+  // Update reservations (do NOT pass 'nights' because it is PostgreSQL GENERATED ALWAYS AS STORED column)
+  const { data: updated, error } = await supabase
+    .from('reservations')
+    .update({
+      check_out_date: newCheckOut,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', reservationId)
+    .select('*')
+    .single();
+  if (error) throw error;
+
+  if (res.status === 'checked_in') {
+    try {
+      const hotelId = getCurrentHotelId();
+      const checkInDt = new Date(res.check_in_date + 'T00:00:00');
+      const checkOutDt = new Date(newCheckOut + 'T00:00:00');
+      const newNights = Math.max(1, Math.round((checkOutDt.getTime() - checkInDt.getTime()) / 86400000));
+
+      await supabase
+        .from('room_chart_entries')
+        .update({
+          departure: newCheckOut,
+          nights: newNights,
+        })
+        .eq('hotel_id', hotelId)
+        .eq('room_no', res.room_no)
+        .is('checked_out_at', null);
+    } catch {
+      /* non-critical fallback */
+    }
+  }
+
+  return updated as Reservation;
 };
 
 // ── Phase 9: Drag & Drop — Move Reservation ──
@@ -205,13 +283,20 @@ export const moveReservation = async (params: {
   if (!current) throw new Error('Reservation not found.');
   const res = current as Reservation;
 
-  if (res.status === 'checked_in' || res.status === 'checked_out') {
-    throw new Error('Cannot move a reservation that is already checked in or checked out.');
-  }
-
   const roomNo = newRoomNo ?? res.room_no;
   const checkIn = newCheckIn ?? res.check_in_date;
   const checkOut = newCheckOut ?? res.check_out_date;
+
+  if (res.status === 'checked_in') {
+    if (roomNo === res.room_no && checkIn === res.check_in_date && checkOut > res.check_out_date) {
+      return extendReservation({ reservationId, newCheckOut: checkOut });
+    }
+    throw new Error('Cannot change room or check-in date for a checked-in guest. Use Room Shift or Extend Stay.');
+  }
+
+  if (res.status === 'checked_out') {
+    throw new Error('Cannot move a reservation that is already checked out.');
+  }
 
   // Validate availability of new room/dates
   const available = await checkRoomAvailability(roomNo, checkIn, checkOut, reservationId);
