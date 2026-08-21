@@ -370,16 +370,19 @@ export const extendStay = async (params: {
   }
 
   // Also check reservations
-  const { data: resOverlap } = await supabase
+  const { data: resOverlaps } = await supabase
     .from('reservations')
-    .select('id')
+    .select('id, room_chart_entry_id')
     .eq('hotel_id', hotelId)
     .eq('room_no', entry.room_no)
     .in('status', ['confirmed', 'checked_in'])
-    .or(`and(check_in_date.lte.${params.newCheckOut},check_out_date.gte.${(entry.arrival ?? entry.report_date)})`)
-    .maybeSingle();
-  if (resOverlap) {
-    throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
+    .or(`and(check_in_date.lte.${params.newCheckOut},check_out_date.gte.${(entry.arrival ?? entry.report_date)})`);
+    
+  if (resOverlaps && resOverlaps.length > 0) {
+    const actualOverlap = resOverlaps.find(r => r.room_chart_entry_id !== params.entryId);
+    if (actualOverlap) {
+      throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
+    }
   }
 
   // Recalculate billing
@@ -408,6 +411,18 @@ export const extendStay = async (params: {
     .select('*')
     .single();
   if (error) throw error;
+  const saved = updated as RoomChartEntry;
+
+  // Update reservation if this entry is linked to one
+  if (saved.reservation_id) {
+    await supabase
+      .from('reservations')
+      .update({
+        check_out_date: params.newCheckOut,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', saved.reservation_id);
+  }
 
   await addTimelineEvent({
     entryId: params.entryId,

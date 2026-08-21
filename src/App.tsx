@@ -5,6 +5,7 @@ import { getEnabledHotelFeatures } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
 import { AppShell } from '@/components/AppShell';
 import { LoginScreen } from '@/screens/LoginScreen';
+import { SignupScreen } from '@/screens/SignupScreen';
 import { SubscriptionExpiredScreen } from '@/screens/SubscriptionExpiredScreen';
 import { Dashboard } from '@/screens/Dashboard';
 
@@ -131,6 +132,7 @@ function ScreenLoader() {
 function AppInner() {
   const { user, loading, profileLoaded, role, subscriptionStatus, hotelName, hotelId, signOut } = useAuth();
   const [nav, setNav] = useState<NavState>({ screen: 'dashboard' });
+  const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [posEnabled, setPosEnabled] = useState(false);
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
 
@@ -157,9 +159,12 @@ function AppInner() {
     );
   }
 
-  // Not authenticated → login screen only
+  // Not authenticated → login or signup screen
   if (!user) {
-    return <LoginScreen onAuthSuccess={() => {}} />;
+    if (authView === 'signup') {
+      return <SignupScreen onNavigateToLogin={() => setAuthView('login')} onAuthSuccess={() => {}} />;
+    }
+    return <LoginScreen onAuthSuccess={() => {}} onNavigateToSignup={() => setAuthView('signup')} />;
   }
 
   // Super admin → Enterprise HQ (they should have a company_users row as founder)

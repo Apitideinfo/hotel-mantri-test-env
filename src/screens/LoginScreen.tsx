@@ -6,9 +6,10 @@ import { HotelScene } from '@/components/HotelScene';
 
 interface LoginScreenProps {
   onAuthSuccess: () => void;
+  onNavigateToSignup?: () => void;
 }
 
-export const LoginScreen = ({ onAuthSuccess: _onAuthSuccess }: LoginScreenProps) => {
+export const LoginScreen = ({ onAuthSuccess: _onAuthSuccess, onNavigateToSignup }: LoginScreenProps) => {
   const { signIn, resetPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -255,6 +256,14 @@ export const LoginScreen = ({ onAuthSuccess: _onAuthSuccess }: LoginScreenProps)
                   </>
                 )}
               </>
+            )}
+
+            {mode === 'login' && onNavigateToSignup && (
+              <div className="mt-6 text-center login-fade-in" style={{ animationDelay: '0.2s' }}>
+                <button type="button" onClick={onNavigateToSignup} className="text-slate-400 hover:text-white text-sm transition">
+                  Don't have an account? <span className="text-blue-400 font-medium">Sign Up</span>
+                </button>
+              </div>
             )}
           </div>
 

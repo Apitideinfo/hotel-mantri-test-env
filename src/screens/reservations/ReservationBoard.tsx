@@ -9,7 +9,7 @@ import type { Reservation, ReservationStatus, ReservationAlert } from '@/lib/typ
 import {
   getReservationsForDateRange, getActiveRoomChartEntries, moveReservation, quickReservation,
   getReservationAlerts, bulkCheckIn, bulkCheckOut, bulkCancel,
-  checkRoomAvailability, getRoomAvailabilityForDate, type RoomAvailability, extendReservation,
+  getRoomAvailabilityForDate, type RoomAvailability, extendReservation,
 } from '@/lib/api-reservations';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
@@ -47,7 +47,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [extendModalRes, setExtendModalRes] = useState<Reservation | null>(null);
   const [stretchingRes, setStretchingRes] = useState<Reservation | null>(null);
   const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
 
@@ -163,23 +162,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     } finally {
       setBusy(false);
       setDraggedRes(null);
-    }
-  };
-
-  const handleExtendRes = async (newCheckOut: string) => {
-    if (!extendModalRes) return;
-    setBusy(true);
-    try {
-      await extendReservation({
-        reservationId: extendModalRes.id,
-        newCheckOut,
-      });
-      setExtendModalRes(null);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to extend stay');
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -476,16 +458,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                                       {res.guest_name}
                                     </p>
                                   </div>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setExtendModalRes(res);
-                                    }}
-                                    className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-white/60 rounded text-[9px] font-extrabold shrink-0 transition text-emerald-900 pr-3"
-                                    title="Extend Stay"
-                                  >
-                                    +Extend
-                                  </button>
                                 </div>
                                 
                                 <div className="flex items-center justify-between text-[9px] opacity-75 mt-0.5">
@@ -729,16 +701,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         </>
       )}
 
-      {/* Extend Stay Modal */}
-      {extendModalRes && (
-        <ExtendResModal
-          res={extendModalRes}
-          onClose={() => setExtendModalRes(null)}
-          onSave={handleExtendRes}
-          busy={busy}
-        />
-      )}
-
       {/* Quick Reservation Modal */}
       {showQuickRes && (
         <QuickResModal
@@ -877,77 +839,6 @@ const QuickResModal = ({ roomNo, defaultDate, onClose, onSave, busy }: {
             {busy ? 'Saving…' : 'Create Reservation'}
           </button>
           <button onClick={onClose} className="px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-200 rounded-xl">Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// ── Extend Reservation Modal ──
-const ExtendResModal = ({ res, onClose, onSave, busy }: {
-  res: Reservation;
-  onClose: () => void;
-  onSave: (newCheckOut: string) => Promise<void>;
-  busy: boolean;
-}) => {
-  const [newCheckOut, setNewCheckOut] = useState(res.check_out_date);
-
-  const addNights = (n: number) => {
-    setNewCheckOut(addDays(res.check_out_date, n));
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-bold text-brand-navy-800">Extend Stay · Room {res.room_no}</h2>
-            <p className="text-xs text-slate-500">{res.guest_name}</p>
-          </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-        </div>
-        <div className="p-5 space-y-4">
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-xs space-y-1">
-            <p className="text-slate-600"><span className="font-semibold text-slate-700">Check-in:</span> {fmtDate(res.check_in_date)}</p>
-            <p className="text-slate-600"><span className="font-semibold text-slate-700">Current Check-out:</span> {fmtDate(res.check_out_date)} ({res.nights} Nights)</p>
-            <p className="text-slate-600"><span className="font-semibold text-slate-700">Status:</span> <span className="capitalize font-medium text-emerald-700">{res.status.replace('_', ' ')}</span></p>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-600 mb-1.5 block">Quick Add Nights</label>
-            <div className="flex gap-2">
-              {[1, 2, 3, 7].map((num) => (
-                <button
-                  key={num}
-                  type="button"
-                  onClick={() => addNights(num)}
-                  className="flex-1 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 hover:border-brand-500 hover:bg-brand-50 text-slate-700 transition"
-                >
-                  +{num} Day{num > 1 ? 's' : ''}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="text-xs font-semibold text-slate-600 mb-1 block">New Check-out Date *</label>
-            <input
-              type="date"
-              value={newCheckOut}
-              onChange={(e) => setNewCheckOut(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/20"
-            />
-          </div>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex gap-2">
-          <button
-            onClick={() => onSave(newCheckOut)}
-            disabled={busy || newCheckOut <= res.check_in_date}
-            className="flex-1 px-4 py-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl disabled:opacity-50 transition"
-          >
-            {busy ? 'Extending…' : 'Confirm Extension'}
-          </button>
-          <button onClick={onClose} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-xl">Cancel</button>
         </div>
       </div>
     </div>
