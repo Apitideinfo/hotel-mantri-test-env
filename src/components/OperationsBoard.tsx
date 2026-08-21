@@ -23,6 +23,7 @@ import {
   getReservationsForDateRange, saveReservation, deleteReservation,
   updateReservationStatus, checkRoomAvailability,
 } from '@/lib/api-reservations';
+import { extendStay } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
@@ -153,6 +154,10 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [saving, setSaving] = useState(false);
   const [vipGuests, setVipGuests] = useState<Guest[]>([]);
   const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
+
+  // Drag-to-resize state
+  const [stretchingEntry, setStretchingEntry] = useState<RoomChartEntry | null>(null);
+  const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
 
   const { role: authRole } = useAuth();
   const foRole: FrontOfficeRole | null = authRole ? mapAuthRoleToFrontOffice(authRole) : null;
@@ -441,6 +446,45 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     onSaved();
   };
 
+  const commitStretch = useCallback(async (entry: RoomChartEntry, targetDate: string) => {
+    const newCheckOut = new Date(targetDate + 'T00:00:00');
+    newCheckOut.setDate(newCheckOut.getDate() + 1);
+    const newCheckOutStr = newCheckOut.toISOString().slice(0, 10);
+    const currentCheckOut = entry.departure ?? entry.report_date;
+    
+    if (newCheckOutStr === currentCheckOut) {
+      setStretchingEntry(null);
+      setStretchTargetDate(null);
+      return;
+    }
+    
+    setSaving(true);
+    try {
+      await extendStay({ entryId: entry.id, newCheckOut: newCheckOutStr });
+      await load();
+      onSaved?.();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to resize stay');
+    } finally {
+      setSaving(false);
+      setStretchingEntry(null);
+      setStretchTargetDate(null);
+    }
+  }, [load, onSaved]);
+
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (stretchingEntry && stretchTargetDate) {
+        commitStretch(stretchingEntry, stretchTargetDate);
+      } else {
+        setStretchingEntry(null);
+        setStretchTargetDate(null);
+      }
+    };
+    window.addEventListener('mouseup', handleGlobalMouseUp);
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
+  }, [stretchingEntry, stretchTargetDate, commitStretch]);
+
   const shiftTimeline = (delta: number) => {
     setCenterDate((d) => addDays(d, delta));
   };
@@ -708,10 +752,37 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                           );
                           const isToday = d === date;
                           const isHot = isHotSeasonDate(d, hotSeasons);
+                          
+                          const isStretchPreview = Boolean(
+                            stretchingEntry &&
+                            stretchingEntry.room_no === room.room_no &&
+                            stretchTargetDate &&
+                            d > addDays(stretchingEntry.departure ?? stretchingEntry.report_date, -1) &&
+                            d <= stretchTargetDate
+                          );
+                          
+                          const isStretchShrinkPreview = Boolean(
+                            stretchingEntry &&
+                            stretchingEntry.room_no === room.room_no &&
+                            stretchTargetDate &&
+                            d > stretchTargetDate &&
+                            d <= addDays(stretchingEntry.departure ?? stretchingEntry.report_date, -1)
+                          );
+                          
                           return (
                             <div
                               key={d}
-                              className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 ${
+                              onMouseEnter={() => {
+                                if (stretchingEntry && stretchingEntry.room_no === room.room_no) {
+                                  const checkIn = stretchingEntry.arrival ?? stretchingEntry.report_date;
+                                  if (d >= checkIn) {
+                                    setStretchTargetDate(d);
+                                  }
+                                }
+                              }}
+                              className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 transition-colors ${
+                                isStretchPreview ? 'bg-emerald-100/80 ring-1 ring-emerald-400 z-10' :
+                                isStretchShrinkPreview ? 'bg-red-50/80 ring-1 ring-red-400 opacity-60 z-10' :
                                 isHot
                                   ? 'bg-rose-50/20'
                                   : isToday
@@ -732,9 +803,27 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                                   <Plus className="w-3 h-3 text-slate-300 group-hover:text-brand-500 transition" />
                                 </button>
                               ) : (
-                                dayBookings.map((b) => (
-                                  <BookingBar key={b.id} booking={b} onClick={() => setSelectedBooking(b)} />
-                                ))
+                                dayBookings.map((b) => {
+                                  const isEnd = addDays(b.checkOut, -1) === d;
+                                  const isStretching = stretchingEntry?.id === b.id;
+                                  return (
+                                    <BookingBar 
+                                      key={b.id} 
+                                      booking={b} 
+                                      onClick={() => setSelectedBooking(b)} 
+                                      isEnd={isEnd}
+                                      isStretching={isStretching}
+                                      onMouseDownStretch={
+                                        b.type === 'entry' ? (e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          setStretchingEntry(b.raw as RoomChartEntry);
+                                          setStretchTargetDate(d);
+                                        } : undefined
+                                      }
+                                    />
+                                  );
+                                })
                               )}
                             </div>
                           );
@@ -885,8 +974,8 @@ const KpiCard = ({
 );
 
 const BookingBar = ({
-  booking, onClick,
-}: { booking: BoardBooking; onClick: () => void }) => {
+  booking, onClick, isEnd = false, isStretching = false, onMouseDownStretch,
+}: { booking: BoardBooking; onClick: () => void; isEnd?: boolean; isStretching?: boolean; onMouseDownStretch?: (e: React.MouseEvent) => void }) => {
   const sourceColor = SOURCE_COLORS[booking.sourceCategory] ?? 'bg-slate-400';
   const statusColor = STATUS_COLORS[booking.status] ?? 'bg-slate-400';
   const statusText = STATUS_TEXT_COLORS[booking.status] ?? 'text-slate-600';
@@ -895,7 +984,8 @@ const BookingBar = ({
   const balance = Math.max(0, total - (booking.type === 'reservation' ? toNum((booking.raw as Reservation).advance_paid) : 0));
 
   return (
-    <button
+    <div className={`relative ${isStretching ? 'opacity-50' : ''}`}>
+      <button
       onClick={onClick}
       title={`${booking.guestName || 'Guest'} · ${booking.sourceCategory} · ₹${fmtMoney(booking.rate)}/night${balance > 0 ? ` · Bal ₹${fmtMoney(balance)}` : ''}`}
       className="w-full text-left rounded-md px-2 py-1 mb-1 text-xs transition hover:shadow-md hover:z-20 relative group border border-slate-200 bg-white"
@@ -927,6 +1017,17 @@ const BookingBar = ({
         </div>
       </div>
     </button>
+    {/* Drag handle for resizing stay */}
+    {isEnd && onMouseDownStretch && booking.type === 'entry' && (
+      <div
+        onMouseDown={onMouseDownStretch}
+        className="absolute right-0 top-0 bottom-1 w-3.5 cursor-ew-resize flex items-center justify-center bg-brand-gold-400/40 hover:bg-brand-gold-500/80 rounded-r z-20 transition group/handle"
+        title="Drag to extend or shorten stay"
+      >
+        <div className="w-1 h-3 bg-brand-gold-800/80 rounded-full group-hover/handle:bg-white shrink-0" />
+      </div>
+    )}
+  </div>
   );
 };
 
