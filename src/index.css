@@ -190,11 +190,37 @@ input[type="number"] { -moz-appearance: textfield; }
   color: #60a5fa;
 }
 
-/* Reduced motion */
+/* Reduced motion accessibility */
 @media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .login-fade-in, .login-card-slide, .login-logo-fade, .login-mesh,
   .bell-pulse, .key-float, .room-card-float, .room-card-float-2,
   .dash-slide, .cloud-drift, .cloud-drift-2, .notif-bounce, .occupancy-ring {
     animation: none !important;
   }
 }
+
+/* ===== HotelMantri 2.0 Dashboard Utility Classes ===== */
+.shadow-card {
+  box-shadow: 0 1px 3px 0 rgba(15, 23, 42, 0.04), 0 1px 2px -1px rgba(15, 23, 42, 0.03);
+}
+
+.shadow-card-hover {
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
+}
+
+.shadow-soft-blue {
+  box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.25);
+}
+
+.bg-glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+}
+
+

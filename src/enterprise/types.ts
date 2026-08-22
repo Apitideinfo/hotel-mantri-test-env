@@ -69,6 +69,7 @@ export interface EnterpriseHotel {
   assigned_sales_exec: string | null;
   archived_at: string | null;
   last_login_at: string | null;
+  onboarding_status?: string | null;
   trial_start?: string | null;
   trial_end?: string | null;
   grace_period_end?: string | null;

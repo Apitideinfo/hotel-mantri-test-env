@@ -300,8 +300,8 @@ function addPageFooters(doc: jsPDF, hotelName: string) {
     .internal.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
-    const pw = doc.getPageWidth();
-    const ph = doc.getPageHeight();
+    const pw = (doc as any).getPageWidth ? (doc as any).getPageWidth() : doc.internal.pageSize.getWidth();
+    const ph = (doc as any).getPageHeight ? (doc as any).getPageHeight() : doc.internal.pageSize.getHeight();
     doc.setFillColor(...C.footBg);
     doc.rect(0, ph - 12, pw, 12, 'F');
     doc.setFont('helvetica', 'italic');
@@ -478,7 +478,7 @@ export async function buildGstStatementPDF(opts: GstPdfOpts): Promise<jsPDF> {
 
   // ── Signature area ──
   const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY;
-  const ph = doc.getPageHeight();
+  const ph = (doc as any).getPageHeight ? (doc as any).getPageHeight() : doc.internal.pageSize.getHeight();
   if (finalY < ph - 40) {
     doc.setDrawColor(...C.muted);
     doc.setLineWidth(0.2);

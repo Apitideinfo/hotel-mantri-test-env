@@ -921,10 +921,11 @@ const QUICK_RANGES = [
   { label: 'Next Month', from: 0, to: 30, dynamic: true },
 ];
 
-const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, onClose, onApply }: {
+const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, existingRestrictions, onClose, onApply }: {
   categories: RoomCategory[];
   defaultStart: string;
   defaultEnd: string;
+  existingRestrictions?: Map<string, ChannelInventoryRestriction>;
   onClose: () => void;
   onApply: (updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>>) => Promise<void>;
 }) => {
@@ -992,7 +993,7 @@ const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, onClose, onApp
     const updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>> = [];
     for (const catId of selectedCats) {
       for (const date of allDays) {
-        const existing = existingRestrictions.get(`${catId}|${date}`);
+        const existing = existingRestrictions?.get(`${catId}|${date}`);
         const oldAvail = toNum(existing?.availability);
         const oldBase = toNum(existing?.base_rate);
         const oldChannel = toNum(existing?.channel_rate);
@@ -1595,6 +1596,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
               channex_room_type_id: channexRoomType || null,
               channex_rate_plan_id: channexRatePlan || null,
               status: channexRoomType && channexRatePlan ? 'mapped' : 'unmapped',
+              is_active: true,
+              mapping_error: null,
               last_sync_at: null,
             }, editing.mappingId);
             setEditing(null);

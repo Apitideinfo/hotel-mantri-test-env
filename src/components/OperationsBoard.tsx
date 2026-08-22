@@ -174,11 +174,11 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       setLoading(true);
       setError(null);
       const [s, srcs, cats, rms, hs] = await Promise.all([
-        getSettings(),
-        getCompanySources(),
-        getRoomCategories(),
-        getRooms(),
-        getHotSeasons(),
+        getSettings().catch(() => null),
+        getCompanySources().catch(() => []),
+        getRoomCategories().catch(() => []),
+        getRooms().catch(() => []),
+        getHotSeasons().catch(() => []),
       ]);
       setSettings(s);
       setSources(srcs);
@@ -190,11 +190,12 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       const rangeEnd = addDays(timelineDates[timelineDates.length - 1], 1);
 
       const [es, resvs] = await Promise.all([
-        getRoomChartForDateRange(rangeStart, rangeEnd),
-        getReservationsForDateRange(rangeStart, rangeEnd),
+        getRoomChartForDateRange(rangeStart, rangeEnd).catch(() => []),
+        getReservationsForDateRange(rangeStart, rangeEnd).catch(() => []),
       ]);
       setEntries(es);
       setReservations(resvs);
+
 
       // Fetch VIP guests for badge display
       try {
@@ -503,121 +504,143 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Top bar */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 flex-wrap">
-        <button onClick={onBack} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600">
-          <ChevronLeft className="w-5 h-5" />
-        </button>
-        <div className="flex items-center gap-2">
-          <BedDouble className="w-5 h-5 text-brand-600" />
-          <h1 className="text-lg font-bold text-brand-navy-800">Operations Board</h1>
+      <div className="bg-white border-b border-slate-200/80 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition">
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center text-brand-600">
+              <BedDouble className="w-4 h-4" />
+            </div>
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900">Operations Board</h1>
+          </div>
         </div>
-        <div className="flex items-center gap-1 ml-2 bg-slate-100 rounded-lg p-0.5">
+
+        {/* Segmented Day/Week switcher */}
+        <div className="flex items-center gap-1 bg-slate-100/90 border border-slate-200/80 rounded-xl p-1">
           <button
             onClick={() => setViewMode('day')}
-            className={`px-3 py-1 text-sm rounded-md transition ${viewMode === 'day' ? 'bg-white text-brand-navy-800 shadow-sm font-medium' : 'text-slate-500'}`}
-          >Day</button>
+            className={`px-3.5 py-1.5 text-xs sm:text-sm rounded-lg transition-all ${viewMode === 'day' ? 'bg-brand-600 text-white font-bold shadow-soft-blue' : 'text-slate-600 hover:text-slate-900 font-semibold'}`}
+          >
+            Day
+          </button>
           <button
             onClick={() => setViewMode('week')}
-            className={`px-3 py-1 text-sm rounded-md transition ${viewMode === 'week' ? 'bg-white text-brand-navy-800 shadow-sm font-medium' : 'text-slate-500'}`}
-          >Week</button>
+            className={`px-3.5 py-1.5 text-xs sm:text-sm rounded-lg transition-all ${viewMode === 'week' ? 'bg-brand-600 text-white font-bold shadow-soft-blue' : 'text-slate-600 hover:text-slate-900 font-semibold'}`}
+          >
+            Week
+          </button>
         </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => shiftTimeline(viewMode === 'day' ? -1 : -7)} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600">
+
+        {/* Date Navigator */}
+        <div className="flex items-center gap-2 bg-white border border-slate-200/80 px-3 py-1.5 rounded-xl shadow-sm">
+          <button onClick={() => shiftTimeline(viewMode === 'day' ? -1 : -7)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition">
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="text-sm text-slate-600 font-medium min-w-[120px] text-center">
+          <span className="text-xs sm:text-sm text-slate-800 font-bold min-w-[130px] text-center">
             {fmtDateFull(timelineDates[0])}
             {viewMode === 'week' && ` – ${fmtDateFull(timelineDates[6])}`}
           </span>
-          <button onClick={() => shiftTimeline(viewMode === 'day' ? 1 : 7)} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600">
+          <button onClick={() => shiftTimeline(viewMode === 'day' ? 1 : 7)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition">
             <ChevronRight className="w-4 h-4" />
           </button>
           <button
             onClick={() => setCenterDate(getTodayLocal())}
-            className="ml-1 px-2 py-1 text-xs text-brand-600 hover:bg-brand-50 rounded-md font-medium"
-          >Today</button>
+            className="ml-1 px-2.5 py-1 text-xs text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-200/80 rounded-lg font-bold transition"
+          >
+            Today
+          </button>
         </div>
-        <div className="flex-1" />
+
         <button
           onClick={load}
-          className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600"
-          title="Refresh"
+          className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition active:rotate-180 duration-300"
+          title="Refresh Operations Board"
         >
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Quick Actions */}
-      <div className="px-4 py-2 bg-white border-b border-slate-200 flex items-center gap-2 overflow-x-auto">
-        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">Quick Actions</span>
-        <button
-          onClick={() => setShowNewBooking(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <Plus className="w-3.5 h-3.5" /> New Reservation
-        </button>
-        <button
-          onClick={() => setShowWalkIn(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-navy-600 hover:bg-brand-navy-700 text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <LogIn className="w-3.5 h-3.5" /> Walk-In
-        </button>
-        <button
-          onClick={() => selectedBooking && handleCheckIn(selectedBooking)}
-          disabled={!selectedBooking || selectedBooking.type !== 'reservation'}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <LogIn className="w-3.5 h-3.5" /> Check-In
-        </button>
-        <button
-          onClick={() => selectedBooking && handleCheckOut(selectedBooking)}
-          disabled={!selectedBooking || selectedBooking.type !== 'entry'}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <LogOut className="w-3.5 h-3.5" /> Check-Out
-        </button>
-        <button
-          onClick={() => onNavigate?.('roomchart')}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-navy-700 hover:bg-brand-navy-800 text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <FileText className="w-3.5 h-3.5" /> Daily Entry
-        </button>
-        <button
-          onClick={() => selectedBooking && handleViewFolio(selectedBooking)}
-          disabled={!selectedBooking || selectedBooking.type !== 'entry'}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <Wallet className="w-3.5 h-3.5" /> Collect Payment
-        </button>
-        <button
-          onClick={() => selectedBooking && handleRoomShift(selectedBooking)}
-          disabled={!selectedBooking || selectedBooking.type !== 'entry'}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-600 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <ArrowRightLeft className="w-3.5 h-3.5" /> Room Shift
-        </button>
-        <button
-          onClick={() => selectedBooking && handleExtendStay(selectedBooking)}
-          disabled={!selectedBooking || selectedBooking.type !== 'entry'}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-gold-600 hover:bg-brand-gold-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-lg transition shrink-0"
-        >
-          <CalendarPlus className="w-3.5 h-3.5" /> Extend Stay
-        </button>
+      {/* Quick Actions Toolbar */}
+      <div className="px-4 sm:px-6 py-3 bg-white border-b border-slate-200/80 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Quick Actions</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-8 gap-2.5">
+          <button
+            onClick={() => setShowNewBooking(true)}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl shadow-soft-blue hover:shadow-md transition active:scale-95 shrink-0"
+          >
+            <Plus className="w-4 h-4" /> <span className="whitespace-nowrap">New Reservation</span>
+          </button>
+          <button
+            onClick={() => setShowWalkIn(true)}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-navy-600 hover:bg-brand-navy-700 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Walk-In</span>
+          </button>
+          <button
+            onClick={() => selectedBooking && handleCheckIn(selectedBooking)}
+            disabled={!selectedBooking || selectedBooking.type !== 'reservation'}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Check-In</span>
+          </button>
+          <button
+            onClick={() => selectedBooking && handleCheckOut(selectedBooking)}
+            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <LogOut className="w-4 h-4" /> <span className="whitespace-nowrap">Check-Out</span>
+          </button>
+          <button
+            onClick={() => onNavigate?.('roomchart')}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <FileText className="w-4 h-4" /> <span className="whitespace-nowrap">Daily Entry</span>
+          </button>
+          <button
+            onClick={() => selectedBooking && handleViewFolio(selectedBooking)}
+            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <Wallet className="w-4 h-4" /> <span className="whitespace-nowrap">Collect Payment</span>
+          </button>
+          <button
+            onClick={() => selectedBooking && handleRoomShift(selectedBooking)}
+            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-slate-600 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <ArrowRightLeft className="w-4 h-4" /> <span className="whitespace-nowrap">Room Shift</span>
+          </button>
+          <button
+            onClick={() => selectedBooking && handleExtendStay(selectedBooking)}
+            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+          >
+            <CalendarPlus className="w-4 h-4" /> <span className="whitespace-nowrap">Extend Stay</span>
+          </button>
+        </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="px-4 py-3 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
-        <KpiCard icon={BedDouble} label="Occupied" value={fmtInt(todayStats.occupied)} color="text-emerald-600 bg-emerald-50" />
-        <KpiCard icon={BedDouble} label="Vacant" value={fmtInt(todayStats.vacant)} color="text-slate-600 bg-slate-100" />
-        <KpiCard icon={LogIn} label="Arrivals" value={fmtInt(todayStats.arrivals)} color="text-brand-600 bg-brand-50" />
-        <KpiCard icon={LogOut} label="Departures" value={fmtInt(todayStats.departures)} color="text-orange-600 bg-orange-50" />
-        <KpiCard icon={Calendar} label="Future" value={fmtInt(todayStats.futureBookings)} color="text-brand-navy-600 bg-brand-navy-50" />
-        <KpiCard icon={IndianRupee} label="Revenue" value={`₹${fmtMoney(todayStats.todayRevenue)}`} color="text-emerald-600 bg-emerald-50" />
-        <KpiCard icon={AlertCircle} label="Missing Tariff" value={fmtInt(todayStats.missingTariff)} color="text-red-600 bg-red-50" />
-        <KpiCard icon={AlertCircle} label="Missing Pay" value={fmtInt(todayStats.missingPayment)} color="text-red-600 bg-red-50" />
-        {/* Housekeeping indicators */}
+      {/* KPI Cards Grid */}
+      <div className="px-4 sm:px-6 py-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-8 gap-3 sm:gap-4">
+        <KpiCard icon={BedDouble} label="Occupied" value={fmtInt(todayStats.occupied)} color="text-emerald-600 bg-emerald-50 border border-emerald-100" />
+        <KpiCard icon={BedDouble} label="Vacant" value={fmtInt(todayStats.vacant)} color="text-slate-600 bg-slate-100 border border-slate-200" />
+        <KpiCard icon={LogIn} label="Arrivals" value={fmtInt(todayStats.arrivals)} color="text-brand-600 bg-brand-50 border border-brand-100" />
+        <KpiCard icon={LogOut} label="Departures" value={fmtInt(todayStats.departures)} color="text-orange-600 bg-orange-50 border border-orange-100" />
+        <KpiCard icon={Calendar} label="Future" value={fmtInt(todayStats.futureBookings)} color="text-brand-navy-600 bg-brand-navy-50 border border-brand-navy-100" />
+        <KpiCard icon={IndianRupee} label="Revenue" value={`₹${fmtMoney(todayStats.todayRevenue)}`} color="text-emerald-600 bg-emerald-50 border border-emerald-100" />
+        <KpiCard icon={AlertCircle} label="Missing Tariff" value={fmtInt(todayStats.missingTariff)} color="text-rose-600 bg-rose-50 border border-rose-100" />
+        <KpiCard icon={AlertCircle} label="Missing Pay" value={fmtInt(todayStats.missingPayment)} color="text-rose-600 bg-rose-50 border border-rose-100" />
+      </div>
+
+      {/* Housekeeping Indicators Strip */}
+      <div className="px-4 sm:px-6 pb-2">
         <HkIndicator rooms={activeRooms} />
       </div>
+
 
       {/* Search + Filters */}
       <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">

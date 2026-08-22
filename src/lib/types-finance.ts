@@ -52,7 +52,10 @@ export interface ExpenseEntry {
   updated_at: string;
 }
 
-export type ExpenseEntryInput = Omit<ExpenseEntry, 'id' | 'hotel_id' | 'created_at' | 'updated_at'>;
+export type ExpenseEntryInput = Omit<ExpenseEntry, 'id' | 'hotel_id' | 'created_at' | 'updated_at' | 'created_by' | 'notes'> & {
+  created_by?: string | null;
+  notes?: string;
+};
 
 // ── Daily Revenue Entry (Other Revenue from Daily Room Chart) ─────────────────
 export type RevenuePaymentMode = 'Cash' | 'Bank' | 'UPI' | 'Card';

@@ -151,8 +151,8 @@ function addPageFooters(doc: jsPDF, _landscape?: boolean) {
     .internal.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
-    const pw = doc.getPageWidth();
-    const ph = doc.getPageHeight();
+    const pw = (doc as any).getPageWidth ? (doc as any).getPageWidth() : doc.internal.pageSize.getWidth();
+    const ph = (doc as any).getPageHeight ? (doc as any).getPageHeight() : doc.internal.pageSize.getHeight();
     doc.setFillColor(...C.footBg);
     doc.rect(0, ph - 10, pw, 10, 'F');
     doc.setFont('helvetica', 'italic');

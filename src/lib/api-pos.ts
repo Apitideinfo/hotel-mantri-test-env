@@ -6,7 +6,7 @@ import type {
   PosOrder, PosOrderItem, PosKot, PosKotItem, PosOrderType, PosOrderStatus,
   PosBill, PosPayment, BillStatus, PaymentMode,
 } from './types';
-import type { RoomChartEntry } from './types-reservations';
+import type { RoomChartEntry } from './types';
 
 // ── Menu Categories ──
 
