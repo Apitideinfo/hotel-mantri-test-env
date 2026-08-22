@@ -58,20 +58,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const checkDemoUser = useCallback(() => {
     try {
-      let demoUserRaw = localStorage.getItem('hotelmantri_demo_user');
-      if (!demoUserRaw) {
-        const defaultDemo = {
-          email: 'admin@hotelmantri.com',
-          fullName: 'Hotel Admin',
-          hotelName: 'Hotel Mantri Royal',
-        };
-        try {
-          localStorage.setItem('hotelmantri_demo_user', JSON.stringify(defaultDemo));
-        } catch {
-          // Ignore
-        }
-        demoUserRaw = JSON.stringify(defaultDemo);
-      }
+      const demoUserRaw = localStorage.getItem('hotelmantri_demo_user');
       if (demoUserRaw) {
         const demoData = JSON.parse(demoUserRaw);
         const mockUser = {
@@ -251,36 +238,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (user) {
       profileLoadedRef.current = null;
       await loadProfile(user);
-    } else {
-      // Fallback: Ensure active demo hotel_admin session so user enters Dashboard cleanly
-      try {
-        localStorage.setItem(
-          'hotelmantri_demo_user',
-          JSON.stringify({
-            email: 'admin@hotelmantri.com',
-            fullName: 'Hotel Admin',
-            hotelName: 'Hotel Mantri Royal',
-          }),
-        );
-      } catch {
-        // Ignore localStorage error
-      }
-      const mockUser = {
-        id: 'demo-user-id-101',
-        email: 'admin@hotelmantri.com',
-        user_metadata: { full_name: 'Hotel Admin' },
-        app_metadata: {},
-        aud: 'authenticated',
-        created_at: new Date().toISOString(),
-      } as unknown as User;
-
-      setUser(mockUser);
-      setRole('hotel_admin');
-      setHotelId('demo-hotel-id-101');
-      setCurrentHotelId('demo-hotel-id-101');
-      setHotelName('Hotel Mantri Royal');
-      setSubscriptionStatus('Active');
-      setProfileLoaded(true);
     }
   }, [checkDemoUser, user, loadProfile]);
 
