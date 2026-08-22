@@ -152,6 +152,8 @@ function AppInner() {
   const [posEnabled, setPosEnabled] = useState(false);
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
 
+  const [superAdminMode, setSuperAdminMode] = useState<'panel' | 'dashboard'>('dashboard');
+
   useEffect(() => {
     if (user && profileLoaded && role && role !== 'super_admin' && role !== 'company_user' && hotelId) {
       getPosEnabled().then(setPosEnabled).catch(() => setPosEnabled(false));
@@ -242,20 +244,32 @@ function AppInner() {
 
 
 
-  // Super admin → Enterprise HQ (they should have a company_users row as founder)
-  if (role === 'super_admin') {
+  // Super admin → Enterprise HQ Panel (with option to preview Hotel Dashboard)
+  if (role === 'super_admin' && superAdminMode === 'panel') {
     return (
       <Suspense fallback={<ScreenLoader />}>
-        <SuperAdminRouter onSignOut={signOut} />
+        <SuperAdminRouter
+          onSignOut={signOut}
+          onViewDashboard={(selectedHotelId) => {
+            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
+            setSuperAdminMode('dashboard');
+          }}
+        />
       </Suspense>
     );
   }
 
   // Company user (enterprise HQ staff) → Enterprise HQ
-  if (role === 'company_user') {
+  if (role === 'company_user' && superAdminMode === 'panel') {
     return (
       <Suspense fallback={<ScreenLoader />}>
-        <SuperAdminRouter onSignOut={signOut} />
+        <SuperAdminRouter
+          onSignOut={signOut}
+          onViewDashboard={(selectedHotelId) => {
+            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
+            setSuperAdminMode('dashboard');
+          }}
+        />
       </Suspense>
     );
   }
@@ -271,8 +285,8 @@ function AppInner() {
     );
   }
 
-  // Subscription expired / suspended / non-active
-  if (subscriptionStatus && subscriptionStatus !== 'Active' && subscriptionStatus !== 'Trial' && subscriptionStatus !== 'Grace Period') {
+  // Subscription expired / suspended / non-active (bypassed for Super Admin)
+  if (role !== 'super_admin' && subscriptionStatus && subscriptionStatus !== 'Active' && subscriptionStatus !== 'Trial' && subscriptionStatus !== 'Grace Period') {
     return (
       <SubscriptionExpiredScreen
         message={`Subscription is currently ${subscriptionStatus}. Please contact support to renew.`}
@@ -281,8 +295,13 @@ function AppInner() {
     );
   }
 
-  // Hotel admin with active subscription → full app
+  // Hotel admin with active subscription or Super Admin previewing dashboard → full app
   const go = (screen: string, payload?: { date?: string } | unknown) => {
+    if (screen === 'super-admin-panel') {
+      setSuperAdminMode('panel');
+      return;
+    }
+
     if (role === 'hotel_staff') {
       const restrictedScreens = [
         'finance', 'property', 'settings', 'close-day', 'ledgers', 'pl-report',
@@ -327,8 +346,24 @@ function AppInner() {
   const backToAnalytics = () => setNav({ screen: 'analytics' });
 
   return (
-    <AppShell currentScreen={nav.screen} onNavigate={(s, payload) => go(s, payload)} onSignOut={signOut} hotelName={hotelName ?? undefined} posEnabled={posEnabled}>
-      <div className="px-4 py-4 w-full">
+    <div className="min-h-screen flex flex-col">
+      {role === 'super_admin' && (
+        <div className="bg-[#06152F] text-white px-4 py-2 flex items-center justify-between text-xs border-b border-blue-900/40 shadow-sm z-50">
+          <div className="flex items-center gap-2 font-bold">
+            <span className="bg-[#1a68fb] text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Super Admin View</span>
+            <span className="text-slate-300">Previewing Hotel Dashboard</span>
+          </div>
+          <button
+            onClick={() => setSuperAdminMode('panel')}
+            className="bg-blue-600/30 hover:bg-blue-600 text-sky-300 hover:text-white border border-blue-400/30 font-bold px-3 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+          >
+            ← Return to Super Admin Panel
+          </button>
+        </div>
+      )}
+      <div className="flex-1">
+        <AppShell currentScreen={nav.screen} onNavigate={(s, payload) => go(s, payload)} onSignOut={signOut} hotelName={hotelName ?? undefined} posEnabled={posEnabled}>
+          <div className="px-4 py-4 w-full">
         <Suspense fallback={<ScreenLoader />}>
           {nav.screen === 'dashboard' && (
             <Dashboard onNavigate={go} />
@@ -517,15 +552,17 @@ function AppInner() {
         </Suspense>
       </div>
     </AppShell>
-  );
+  </div>
+</div>
+);
 }
 
-function SuperAdminRouter({ onSignOut }: { onSignOut: () => void }) {
+function SuperAdminRouter({ onSignOut, onViewDashboard }: { onSignOut: () => void; onViewDashboard?: (hotelId?: string) => void }) {
   const [view, setView] = useState<'panel' | 'db-tools'>('panel');
   if (view === 'db-tools') {
     return <DatabaseTools onBack={() => setView('panel')} onSignOut={onSignOut} />;
   }
-  return <SuperAdminPanel onSignOut={onSignOut} onNavigateDbTools={() => setView('db-tools')} />;
+  return <SuperAdminPanel onSignOut={onSignOut} onNavigateDbTools={() => setView('db-tools')} onViewDashboard={onViewDashboard} />;
 }
 
 
