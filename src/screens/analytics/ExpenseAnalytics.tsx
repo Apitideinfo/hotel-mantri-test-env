@@ -112,12 +112,13 @@ export const ExpenseAnalytics = ({ onBack }: { onBack: () => void }) => {
             </div>
 
             <SectionCard title="Expense Trend" icon={<Receipt className="w-4 h-4 text-orange-600" />}>
-              {trend.length > 0 ? <LineChart series={[{ name: 'Expenses', color: '#dc2626', points: trend }]} yFormat={(v) => `₹${fmtInt(v)}`} height={200} /> : <EmptyState />}
+              {trend.length > 0 ? <LineChart series={[{ name: 'Expenses', color: '#dc2626', points: trend }]} yFormat={(v: number) => `₹${fmtInt(v)}`} height={200} /> : <EmptyState />}
             </SectionCard>
 
             <SectionCard title="Top Expenses by Category" icon={<Receipt className="w-4 h-4 text-red-600" />}>
-              {catBars.length > 0 ? <BarChart points={catBars} color="#dc2626" yFormat={(v) => `₹${fmtInt(v)}`} height={200} horizontal /> : <EmptyState />}
+              {catBars.length > 0 ? <BarChart points={catBars} color="#dc2626" yFormat={(v: number) => `₹${fmtInt(v)}`} height={200} horizontal /> : <EmptyState />}
             </SectionCard>
+
 
             <SectionCard title="Top Vendors" icon={<Receipt className="w-4 h-4 text-teal-600" />}>
               {vendorBars.length > 0 ? <BarChart points={vendorBars} color="#0d9488" yFormat={(v) => `₹${fmtInt(v)}`} height={200} horizontal /> : <EmptyState />}

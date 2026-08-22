@@ -92,11 +92,12 @@ export const BookingSourceAnalytics = ({ onBack }: { onBack: () => void }) => {
                 {donutData.length > 0 ? <DonutChart slices={donutData} size={170} centerValue={`₹${fmtInt(stats.reduce((s, v) => s + v.revenue, 0))}`} centerLabel="Total" /> : <EmptyState />}
               </SectionCard>
               <SectionCard title="Booking Count by Source" icon={<Users className="w-4 h-4 text-emerald-600" />}>
-                {barData.length > 0 ? <BarChart points={barData} color="#2563eb" yFormat={(v) => fmtInt(v)} height={200} /> : <EmptyState />}
+                {barData.length > 0 ? <BarChart points={barData} color="#2563eb" yFormat={(v: number) => fmtInt(v)} height={200} /> : <EmptyState />}
               </SectionCard>
             </div>
             <SectionCard title="Source Trend" icon={<Users className="w-4 h-4 text-blue-600" />}>
-              {trendByDay[0].points.length > 0 ? <LineChart series={trendByDay} yFormat={(v) => `₹${fmtInt(v)}`} height={220} /> : <EmptyState />}
+              {trendByDay[0].points.length > 0 ? <LineChart series={trendByDay} yFormat={(v: number) => `₹${fmtInt(v)}`} height={220} /> : <EmptyState />}
+
             </SectionCard>
             <SectionCard title="Source Performance Table" icon={<Users className="w-4 h-4 text-slate-600" />}>
               {stats.length > 0 ? (

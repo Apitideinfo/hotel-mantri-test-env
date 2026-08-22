@@ -979,7 +979,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                   <NumField label="Amount" prefix="₹" value={toNum(newExpense.amount)}
                     onChange={(v) => setNewExpense((p) => ({ ...p, amount: v }))} />
                 </div>
-                <TextField label="Notes" value={newExpense.notes}
+                <TextField label="Notes" value={newExpense.notes ?? ''}
                   onChange={(v) => setNewExpense((p) => ({ ...p, notes: v }))} />
                 <button onClick={handleAddExpense} disabled={saving}
                   className="w-full flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white font-semibold py-3 rounded-xl text-sm transition shadow-sm">

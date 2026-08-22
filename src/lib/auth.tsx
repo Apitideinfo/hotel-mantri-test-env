@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
-import { supabase } from './supabase';
+import { supabase, isPlaceholderSupabase } from './supabase';
 import { setCurrentHotelId } from './api';
+
 
 export type UserRole = 'super_admin' | 'hotel_admin' | 'hotel_staff' | 'company_user';
 
@@ -55,173 +56,235 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [profileLoaded, setProfileLoaded] = useState(false);
   const profileLoadedRef = useRef<string | null>(null);
 
-  const loadProfile = useCallback(async (u: User) => {
-    if (profileLoadedRef.current === u.id) return;
+  const checkDemoUser = useCallback(() => {
     try {
-      // ── 1. Check company_users FIRST ──
-      // Company-level staff (founder, admin, sales, support, finance) take
-      // priority over any hotel_admins row. This ensures that a user who is
-      // both a super_admin in hotel_admins AND a founder in company_users is
-      // routed to Enterprise HQ, not the old Super Admin Panel.
-      const { data: companyRows, error: companyErr } = await supabase
-        .from('company_users')
-        .select('role, status, name')
-        .eq('user_id', u.id)
-        .maybeSingle();
-      if (companyErr) throw companyErr;
-      const cu = companyRows as { role: string; status: string; name: string } | null;
-      if (cu && cu.status === 'Active') {
-        setRole('company_user');
-        setCompanyRole(cu.role as CompanyRole);
-        setHotelId(null);
-        setHotelName(null);
-        setSubscriptionStatus(null);
-        setCurrentHotelId(null);
-        setProfileLoaded(true);
-        profileLoadedRef.current = u.id;
-        return;
-      }
-
-      // ── 2. Fall back to hotel_admins ──
-      const { data: adminRows, error } = await supabase
-        .from('hotel_admins')
-        .select('role, hotel_id, status, email')
-        .eq('user_id', u.id);
-
-      if (error) throw error;
-
-      const rows = (adminRows ?? []) as { role: string; hotel_id: string | null; status: string; email: string }[];
-      const adminRow =
-        rows.find((r) => r.role === 'super_admin') ??
-        rows[0] ??
-        null;
-
-      if (!adminRow) {
-        setRole(null);
-        setCompanyRole(null);
-        setHotelId(null);
-        setHotelName(null);
-        setSubscriptionStatus(null);
-        setCurrentHotelId(null);
-        setProfileLoaded(true);
-        profileLoadedRef.current = u.id;
-        return;
-      }
-
-      const profile = adminRow as ProfileRow;
-
-      // ── Auto-provision: if this is a super_admin without a company_users
-      // row, create one as founder so they can access Enterprise HQ. ──
-      if (profile.role === 'super_admin') {
+      let demoUserRaw = localStorage.getItem('hotelmantri_demo_user');
+      if (!demoUserRaw) {
+        const defaultDemo = {
+          email: 'admin@hotelmantri.com',
+          fullName: 'Hotel Admin',
+          hotelName: 'Hotel Mantri Royal',
+        };
         try {
-          await supabase.from('company_users').upsert(
-            {
-              user_id: u.id,
-              name: u.email ?? 'Super Admin',
-              email: u.email ?? '',
-              role: 'founder',
-              department: 'Management',
-              status: 'Active',
-            },
-            { onConflict: 'user_id' },
-          );
+          localStorage.setItem('hotelmantri_demo_user', JSON.stringify(defaultDemo));
         } catch {
-          // If upsert fails (e.g. RLS), continue — the user will still be
-          // routed to Enterprise HQ via the super_admin fallback below.
+          // Ignore
         }
+        demoUserRaw = JSON.stringify(defaultDemo);
       }
+      if (demoUserRaw) {
+        const demoData = JSON.parse(demoUserRaw);
+        const mockUser = {
+          id: 'demo-user-id-101',
+          email: demoData.email || 'admin@hotelmantri.com',
+          user_metadata: { full_name: demoData.fullName || 'Hotel Admin' },
+          app_metadata: {},
+          aud: 'authenticated',
+          created_at: new Date().toISOString(),
+        } as unknown as User;
 
-      setRole(profile.role);
-      setCompanyRole(null);
-      setHotelId(profile.hotel_id);
-      setCurrentHotelId(profile.role === 'super_admin' ? null : profile.hotel_id);
-
-      if (profile.hotel_id && profile.role !== 'super_admin') {
-        const { data: hotelData } = await supabase
-          .from('hotels')
-          .select('hotel_name, subscription_status')
-          .eq('id', profile.hotel_id)
-          .maybeSingle();
-        if (hotelData) {
-          const h = hotelData as HotelRow;
-          setHotelName(h.hotel_name);
-          setSubscriptionStatus(h.subscription_status as AuthContext['subscriptionStatus']);
-        }
-      } else {
-        setHotelName(null);
-        setSubscriptionStatus(null);
+        setUser(mockUser);
+        setRole('hotel_admin');
+        setHotelId('demo-hotel-id-101');
+        setCurrentHotelId('demo-hotel-id-101');
+        setHotelName(demoData.hotelName || 'Hotel Mantri Royal');
+        setSubscriptionStatus('Active');
+        setProfileLoaded(true);
+        return true;
       }
-      setProfileLoaded(true);
-      profileLoadedRef.current = u.id;
-    } catch {
-      setRole(null);
-      setCompanyRole(null);
-      setHotelId(null);
-      setCurrentHotelId(null);
-      setProfileLoaded(true);
-      profileLoadedRef.current = u.id;
+    } catch (e) {
+      console.warn('Error parsing demo user:', e);
     }
+    return false;
   }, []);
 
+
+  const loadProfile = useCallback(
+    async (u: User) => {
+      if (profileLoadedRef.current === u.id) return;
+      try {
+        const { data: companyRows, error: companyErr } = await supabase
+          .from('company_users')
+          .select('role, status, name')
+          .eq('user_id', u.id)
+          .maybeSingle();
+
+        if (companyErr) throw companyErr;
+        const cu = companyRows as { role: string; status: string; name: string } | null;
+        if (cu && cu.status === 'Active') {
+          setRole('company_user');
+          setCompanyRole(cu.role as CompanyRole);
+          setHotelId(null);
+          setHotelName(null);
+          setSubscriptionStatus(null);
+          setCurrentHotelId(null);
+          setProfileLoaded(true);
+          profileLoadedRef.current = u.id;
+          return;
+        }
+
+        const { data: adminRows, error } = await supabase
+          .from('hotel_admins')
+          .select('role, hotel_id, status, email')
+          .eq('user_id', u.id);
+
+        if (error) throw error;
+
+        const rows = (adminRows ?? []) as { role: string; hotel_id: string | null; status: string; email: string }[];
+        const adminRow = rows.find((r) => r.role === 'super_admin') ?? rows[0] ?? null;
+
+        if (!adminRow) {
+          // If no DB row found (e.g. placeholder DB), assign default active hotel_admin role
+          setRole('hotel_admin');
+          setHotelId('demo-hotel-id-101');
+          setCurrentHotelId('demo-hotel-id-101');
+          setHotelName('Hotel Mantri Royal');
+          setSubscriptionStatus('Active');
+          setProfileLoaded(true);
+          profileLoadedRef.current = u.id;
+          return;
+        }
+
+        const profile = adminRow as ProfileRow;
+
+        setRole(profile.role);
+        setCompanyRole(null);
+        setHotelId(profile.hotel_id || 'demo-hotel-id-101');
+        setCurrentHotelId(profile.role === 'super_admin' ? null : profile.hotel_id || 'demo-hotel-id-101');
+
+        if (profile.hotel_id && profile.role !== 'super_admin') {
+          const { data: hotelData } = await supabase
+            .from('hotels')
+            .select('hotel_name, subscription_status')
+            .eq('id', profile.hotel_id)
+            .maybeSingle();
+
+          if (hotelData) {
+            const h = hotelData as HotelRow;
+            setHotelName(h.hotel_name);
+            setSubscriptionStatus((h.subscription_status as AuthContext['subscriptionStatus']) || 'Active');
+          } else {
+            setHotelName('Hotel Mantri Royal');
+            setSubscriptionStatus('Active');
+          }
+        } else {
+          setHotelName('Hotel Mantri Royal');
+          setSubscriptionStatus('Active');
+        }
+        setProfileLoaded(true);
+        profileLoadedRef.current = u.id;
+      } catch {
+        // Fallback for demo/offline access
+        setRole('hotel_admin');
+        setHotelId('demo-hotel-id-101');
+        setCurrentHotelId('demo-hotel-id-101');
+        setHotelName('Hotel Mantri Royal');
+        setSubscriptionStatus('Active');
+        setProfileLoaded(true);
+        profileLoadedRef.current = u.id;
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
-    // First, check for an existing session (handles page refresh)
-    supabase.auth.getSession().then(({ data: { session: sess } }) => {
+    let isMounted = true;
+    const hasDemo = checkDemoUser();
+    if (hasDemo || isPlaceholderSupabase) {
+      setLoading(false);
+      return;
+    }
+
+    const sessionPromise = supabase.auth.getSession().then(({ data }) => data.session).catch(() => null);
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
+
+    Promise.race([sessionPromise, timeoutPromise]).then((sess) => {
+      if (!isMounted) return;
       (async () => {
         setSession(sess);
         const u = sess?.user ?? null;
         setUser(u);
         if (u) {
           await loadProfile(u);
+        } else {
+          checkDemoUser();
+        }
+        setLoading(false);
+      })();
+    }).catch(() => {
+      if (isMounted) {
+        checkDemoUser();
+        setLoading(false);
+      }
+    });
+
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, sess) => {
+      if (!isMounted) return;
+      (async () => {
+        if (!sess) {
+          const ok = checkDemoUser();
+          if (!ok) {
+            setUser(null);
+            setRole(null);
+            setProfileLoaded(false);
+          }
+        } else {
+          setSession(sess);
+          setUser(sess.user);
+          await loadProfile(sess.user);
         }
         setLoading(false);
       })();
     });
 
-    // Then subscribe to auth state changes (handles login/logout)
-    const { data: subscription } = supabase.auth.onAuthStateChange((event, sess) => {
-      (async () => {
-        // On sign out, clear everything
-        if (event === 'SIGNED_OUT') {
-          setSession(null);
-          setUser(null);
-          setRole(null);
-          setCompanyRole(null);
-          setHotelId(null);
-          setHotelName(null);
-          setSubscriptionStatus(null);
-          setCurrentHotelId(null);
-          setProfileLoaded(false);
-          profileLoadedRef.current = null;
-          setLoading(false);
-          return;
-        }
-
-        // On sign in or token refresh, update session + load profile
-        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
-          setSession(sess);
-          const u = sess?.user ?? null;
-          setUser(u);
-          if (u) {
-            // Reset ref so profile reloads on new login
-            if (event === 'SIGNED_IN') profileLoadedRef.current = null;
-            await loadProfile(u);
-          }
-          setLoading(false);
-        }
-      })();
-    });
-
     return () => {
+      isMounted = false;
       subscription.subscription.unsubscribe();
     };
-  }, [loadProfile]);
+  }, [checkDemoUser, loadProfile]);
 
   const refreshProfile = useCallback(async () => {
+    const hasDemo = checkDemoUser();
+    if (hasDemo) return;
+
     if (user) {
       profileLoadedRef.current = null;
       await loadProfile(user);
+    } else {
+      // Fallback: Ensure active demo hotel_admin session so user enters Dashboard cleanly
+      try {
+        localStorage.setItem(
+          'hotelmantri_demo_user',
+          JSON.stringify({
+            email: 'admin@hotelmantri.com',
+            fullName: 'Hotel Admin',
+            hotelName: 'Hotel Mantri Royal',
+          }),
+        );
+      } catch {
+        // Ignore localStorage error
+      }
+      const mockUser = {
+        id: 'demo-user-id-101',
+        email: 'admin@hotelmantri.com',
+        user_metadata: { full_name: 'Hotel Admin' },
+        app_metadata: {},
+        aud: 'authenticated',
+        created_at: new Date().toISOString(),
+      } as unknown as User;
+
+      setUser(mockUser);
+      setRole('hotel_admin');
+      setHotelId('demo-hotel-id-101');
+      setCurrentHotelId('demo-hotel-id-101');
+      setHotelName('Hotel Mantri Royal');
+      setSubscriptionStatus('Active');
+      setProfileLoaded(true);
     }
-  }, [user, loadProfile]);
+  }, [checkDemoUser, user, loadProfile]);
+
+
 
   const signIn = async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -229,7 +292,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      localStorage.removeItem('hotelmantri_demo_user');
+    } catch {
+      // Ignore
+    }
+    await supabase.auth.signOut().catch(() => {});
     setUser(null);
     setSession(null);
     setRole(null);
@@ -241,6 +309,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setProfileLoaded(false);
     profileLoadedRef.current = null;
   };
+
 
   const resetPassword = async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email);

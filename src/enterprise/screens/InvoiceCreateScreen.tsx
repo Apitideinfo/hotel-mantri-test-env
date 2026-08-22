@@ -77,10 +77,10 @@ export const InvoiceCreateScreen = ({ hotelId, onBack, onCreated }: Props) => {
       setFeatures(f);
       setSettings(s);
 
-      const isInterstate = (s.company_details.state || '').trim().toLowerCase() !== (h.state || '').trim().toLowerCase();
+      const isInterstate = (s.company_details.state || '').trim().toLowerCase() !== (h?.state || '').trim().toLowerCase();
       const gstRate = s.gst.default_gst_rate;
 
-      const plan = p.find((x) => x.id === h.plan_id);
+      const plan = h ? p.find((x) => x.id === h.plan_id) : undefined;
       if (plan) {
         setSelectedPlanId(plan.id);
         setBillingCycle(plan.billing_period === 'yearly' ? 'yearly' : 'monthly');

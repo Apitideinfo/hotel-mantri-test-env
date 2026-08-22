@@ -1,15 +1,24 @@
-import { useState, lazy, Suspense, useEffect } from 'react';
+import React, { useState, lazy, Suspense, useEffect, Component } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { getPosEnabled } from '@/lib/api-pos';
 import { getEnabledHotelFeatures } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
 import { AppShell } from '@/components/AppShell';
-import { LoginScreen } from '@/screens/LoginScreen';
-import { SignupScreen } from '@/screens/SignupScreen';
-import { SubscriptionExpiredScreen } from '@/screens/SubscriptionExpiredScreen';
-import { Dashboard } from '@/screens/Dashboard';
+import { getTodayLocal } from '@/lib/calc';
+
+
+type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'checkout' | 'payment-success';
+
 
 // Lazy-loaded screens — each becomes a separate chunk loaded on demand
+const LoginScreen = lazy(() => import('@/screens/LoginScreen').then(m => ({ default: m.LoginScreen })));
+const SignupScreen = lazy(() => import('@/screens/SignupScreen').then(m => ({ default: m.SignupScreen })));
+const OtpVerificationScreen = lazy(() => import('@/screens/OtpVerificationScreen').then(m => ({ default: m.OtpVerificationScreen })));
+const LandingPage = lazy(() => import('@/screens/LandingPage').then(m => ({ default: m.LandingPage })));
+const CheckoutScreen = lazy(() => import('@/screens/CheckoutScreen').then(m => ({ default: m.CheckoutScreen })));
+const PaymentSuccessScreen = lazy(() => import('@/screens/PaymentSuccessScreen').then(m => ({ default: m.PaymentSuccessScreen })));
+const SubscriptionExpiredScreen = lazy(() => import('@/screens/SubscriptionExpiredScreen').then(m => ({ default: m.SubscriptionExpiredScreen })));
+const Dashboard = lazy(() => import('@/screens/Dashboard').then(m => ({ default: m.Dashboard })));
 const SuperAdminPanel = lazy(() => import('@/screens/SuperAdminPanel').then(m => ({ default: m.SuperAdminPanel })));
 const EnterpriseHQ = lazy(() => import('@/enterprise/EnterpriseHQ').then(m => ({ default: m.EnterpriseHQ })));
 const DatabaseTools = lazy(() => import('@/screens/DatabaseTools').then(m => ({ default: m.DatabaseTools })));
@@ -129,10 +138,15 @@ function ScreenLoader() {
   );
 }
 
+
+
 function AppInner() {
-  const { user, loading, profileLoaded, role, subscriptionStatus, hotelName, hotelId, signOut } = useAuth();
-  const [nav, setNav] = useState<NavState>({ screen: 'dashboard' });
+  const { user, loading, profileLoaded, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile } = useAuth();
+  const [nav, setNav] = useState<NavState>({ screen: 'dashboard', date: getTodayLocal() });
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
+  const [publicView, setPublicView] = useState<PublicView>('landing');
+  const [selectedPlanId, setSelectedPlanId] = useState<string>('pro');
+  const [registeredEmail, setRegisteredEmail] = useState<string>('rajesh@hotelroyal.com');
   const [posEnabled, setPosEnabled] = useState(false);
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
 
@@ -142,7 +156,7 @@ function AppInner() {
       getEnabledHotelFeatures().then((f) => {
         setFeatures(f);
         if (f.dashboard === false) {
-          setNav({ screen: 'operations' });
+          setNav((prev) => ({ ...prev, screen: 'operations' }));
         }
       }).catch(() => setFeatures(null));
     }
@@ -150,28 +164,78 @@ function AppInner() {
 
   if (loading || (user && !profileLoaded)) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-4 bg-slate-800/80 border border-slate-700 p-8 rounded-3xl shadow-2xl">
           <BrandLogo variant="sidebar" />
-          <p className="text-slate-400 text-sm animate-pulse">Loading…</p>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping" />
+            <p className="text-slate-300 text-sm font-semibold tracking-wide">Loading HotelMantri…</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  // Not authenticated → login or signup screen
+
+  // Not authenticated → Public landing page & complete conversion funnel
   if (!user) {
-    if (authView === 'signup') {
-      return <SignupScreen onNavigateToLogin={() => setAuthView('login')} onAuthSuccess={() => {}} />;
-    }
-    return <LoginScreen onAuthSuccess={() => {}} onNavigateToSignup={() => setAuthView('signup')} />;
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        {publicView === 'login' && (
+          <LoginScreen
+            onAuthSuccess={() => refreshProfile()}
+            onNavigateToSignup={() => setPublicView('signup')}
+          />
+        )}
+        {publicView === 'signup' && (
+          <SignupScreen
+            onNavigateToLogin={() => setPublicView('login')}
+            onAuthSuccess={(userEmail) => {
+              if (userEmail) setRegisteredEmail(userEmail);
+              setPublicView('otp-verify');
+            }}
+          />
+        )}
+        {publicView === 'otp-verify' && (
+          <OtpVerificationScreen
+            email={registeredEmail}
+            onNavigateBack={() => setPublicView('signup')}
+            onVerifySuccess={() => setPublicView('checkout')}
+          />
+        )}
+        {publicView === 'checkout' && (
+          <CheckoutScreen
+            planId={selectedPlanId}
+            onNavigateBack={() => setPublicView('otp-verify')}
+            onNavigateSuccess={() => refreshProfile()}
+          />
+        )}
+        {publicView === 'payment-success' && (
+          <PaymentSuccessScreen
+            onGoToDashboard={() => refreshProfile()}
+          />
+        )}
+        {publicView === 'landing' && (
+          <LandingPage
+            onNavigateLogin={() => setPublicView('login')}
+            onNavigateSignup={(planId) => {
+              if (planId) setSelectedPlanId(planId);
+              setPublicView('signup');
+            }}
+          />
+        )}
+      </Suspense>
+    );
   }
+
+
+
 
   // Super admin → Enterprise HQ (they should have a company_users row as founder)
   if (role === 'super_admin') {
     return (
       <Suspense fallback={<ScreenLoader />}>
-        <EnterpriseRouter onSignOut={signOut} />
+        <SuperAdminRouter onSignOut={signOut} />
       </Suspense>
     );
   }
@@ -180,10 +244,11 @@ function AppInner() {
   if (role === 'company_user') {
     return (
       <Suspense fallback={<ScreenLoader />}>
-        <EnterpriseRouter onSignOut={signOut} />
+        <SuperAdminRouter onSignOut={signOut} />
       </Suspense>
     );
   }
+
 
   // No role assigned → access denied
   if (!role) {
@@ -452,11 +517,7 @@ function SuperAdminRouter({ onSignOut }: { onSignOut: () => void }) {
   return <SuperAdminPanel onSignOut={onSignOut} onNavigateDbTools={() => setView('db-tools')} />;
 }
 
-function EnterpriseRouter({ onSignOut }: { onSignOut: () => void }) {
-  return <EnterpriseHQ onSignOut={onSignOut} />;
-}
 
-import { Component } from 'react';
 
 class AppErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: React.ReactNode }) {
