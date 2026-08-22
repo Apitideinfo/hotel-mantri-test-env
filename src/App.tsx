@@ -7,13 +7,14 @@ import { AppShell } from '@/components/AppShell';
 import { getTodayLocal } from '@/lib/calc';
 
 
-type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'checkout' | 'payment-success';
+type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'hotel-details' | 'checkout' | 'payment-success';
 
 
 // Lazy-loaded screens — each becomes a separate chunk loaded on demand
 const LoginScreen = lazy(() => import('@/screens/LoginScreen').then(m => ({ default: m.LoginScreen })));
 const SignupScreen = lazy(() => import('@/screens/SignupScreen').then(m => ({ default: m.SignupScreen })));
 const OtpVerificationScreen = lazy(() => import('@/screens/OtpVerificationScreen').then(m => ({ default: m.OtpVerificationScreen })));
+const HotelOnboardingScreen = lazy(() => import('@/screens/HotelOnboardingScreen').then(m => ({ default: m.HotelOnboardingScreen })));
 const LandingPage = lazy(() => import('@/screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const CheckoutScreen = lazy(() => import('@/screens/CheckoutScreen').then(m => ({ default: m.CheckoutScreen })));
 const PaymentSuccessScreen = lazy(() => import('@/screens/PaymentSuccessScreen').then(m => ({ default: m.PaymentSuccessScreen })));
@@ -146,7 +147,8 @@ function AppInner() {
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [publicView, setPublicView] = useState<PublicView>('landing');
   const [selectedPlanId, setSelectedPlanId] = useState<string>('pro');
-  const [registeredEmail, setRegisteredEmail] = useState<string>('rajesh@hotelroyal.com');
+  const [registeredEmail, setRegisteredEmail] = useState<string>('');
+  const [signupData, setSignupData] = useState<{ fullName: string; email: string; mobile: string; password: string } | null>(null);
   const [posEnabled, setPosEnabled] = useState(false);
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
 
@@ -190,8 +192,9 @@ function AppInner() {
         {publicView === 'signup' && (
           <SignupScreen
             onNavigateToLogin={() => setPublicView('login')}
-            onAuthSuccess={(userEmail) => {
+            onPersonalDetailsSuccess={(userEmail, details) => {
               if (userEmail) setRegisteredEmail(userEmail);
+              setSignupData(details);
               setPublicView('otp-verify');
             }}
           />
@@ -200,13 +203,21 @@ function AppInner() {
           <OtpVerificationScreen
             email={registeredEmail}
             onNavigateBack={() => setPublicView('signup')}
-            onVerifySuccess={() => setPublicView('checkout')}
+            onVerifySuccess={() => setPublicView('hotel-details')}
+          />
+        )}
+        {publicView === 'hotel-details' && (
+          <HotelOnboardingScreen
+            personalData={signupData}
+            email={registeredEmail}
+            onNavigateBack={() => setPublicView('otp-verify')}
+            onOnboardingSuccess={() => setPublicView('checkout')}
           />
         )}
         {publicView === 'checkout' && (
           <CheckoutScreen
             planId={selectedPlanId}
-            onNavigateBack={() => setPublicView('otp-verify')}
+            onNavigateBack={() => setPublicView('hotel-details')}
             onNavigateSuccess={() => refreshProfile()}
           />
         )}
