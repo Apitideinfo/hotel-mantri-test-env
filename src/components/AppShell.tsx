@@ -490,6 +490,16 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
                     </span>
                   </div>
                   <div className="p-2">
+                    {role === 'super_admin' && (
+                      <ProfileMenuButton
+                        icon={<ShieldCheck className="text-sky-600" />}
+                        label="Super Admin Panel"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          onNavigate('super-admin-panel');
+                        }}
+                      />
+                    )}
                     <ProfileMenuButton icon={<UserRound />} label="My Profile" onClick={openProfileDialog} />
                     {canManageProperty && <ProfileMenuButton icon={<Building2 />} label="Hotel / Property Settings" onClick={() => navigateFromProfile('property')} />}
                     <ProfileMenuButton icon={<KeyRound />} label="Change Password" onClick={openPasswordDialog} />

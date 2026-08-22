@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Building2, Plus, Pencil, Power, Check, X, Mail, Users, AlertCircle,
-  Shield, LogOut, RefreshCw, KeyRound, CheckCircle2, Database,
+  Shield, LogOut, RefreshCw, KeyRound, CheckCircle2, Database, LayoutDashboard, Eye,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -33,6 +33,7 @@ interface PlanRow {
 interface SuperAdminPanelProps {
   onSignOut: () => void;
   onNavigateDbTools: () => void;
+  onViewDashboard?: (hotelId?: string) => void;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -45,7 +46,7 @@ const emptyForm = {
   subscription_expiry: '', subscription_status: 'Active' as string,
 };
 
-export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools }: SuperAdminPanelProps) => {
+export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard }: SuperAdminPanelProps) => {
   const { user } = useAuth();
   const [hotels, setHotels] = useState<HotelRow[]>([]);
   const [plans, setPlans] = useState<PlanRow[]>([]);
@@ -271,10 +272,16 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools }: SuperAdminPane
           <h1 className="text-base font-bold leading-tight">Super Admin Panel</h1>
           <p className="text-slate-400 text-xs">{user?.email}</p>
         </div>
-        <button onClick={onNavigateDbTools} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition">
+        <button
+          onClick={() => onViewDashboard?.()}
+          className="flex items-center gap-1.5 text-xs font-extrabold bg-[#1a68fb] hover:bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow-sm transition cursor-pointer"
+        >
+          <LayoutDashboard className="w-3.5 h-3.5" /> Open Hotel Dashboard
+        </button>
+        <button onClick={onNavigateDbTools} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition cursor-pointer">
           <Database className="w-4 h-4" /> DB Tools
         </button>
-        <button onClick={onSignOut} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition">
+        <button onClick={onSignOut} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition cursor-pointer">
           <LogOut className="w-4 h-4" /> Sign Out
         </button>
       </header>
@@ -399,7 +406,10 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools }: SuperAdminPane
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 mt-2 pt-2 border-t border-slate-100">
+                  <div className="flex items-center gap-1 mt-2 pt-2 border-t border-slate-100 flex-wrap">
+                    <button onClick={() => onViewDashboard?.(h.id)} className="flex items-center gap-1 text-xs font-bold text-[#1a68fb] hover:text-blue-800 transition px-2 py-1 bg-blue-50 rounded-md">
+                      <Eye className="w-3 h-3" /> View Dashboard
+                    </button>
                     <button onClick={() => handleEdit(h)} className="flex items-center gap-1 text-xs text-sky-700 hover:text-sky-900 transition px-2 py-1">
                       <Pencil className="w-3 h-3" /> Edit
                     </button>
