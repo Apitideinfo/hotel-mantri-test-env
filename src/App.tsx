@@ -360,7 +360,7 @@ function AppInner() {
     const next = { screen: screen as Screen, date: date ?? nav.date };
     try {
       window.history.pushState({ screen: next.screen, date: next.date }, '');
-      window._hotelMantriHasHistory = true; // Track that we've pushed at least once
+      (window as any)._hotelMantriHasHistory = true; // Track that we've pushed at least once
     } catch {
       // ignore
     }

@@ -99,7 +99,7 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
   const navigateHq = (newPage: Page) => {
     try {
       window.history.pushState({ hqPage: newPage }, '');
-      window._hotelMantriHasHistory = true;
+      (window as any)._hotelMantriHasHistory = true;
     } catch {}
     setPage(newPage);
   };

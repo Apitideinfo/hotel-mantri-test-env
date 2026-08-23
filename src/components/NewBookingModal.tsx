@@ -48,21 +48,21 @@ export const NewBookingModal = ({
   const [email, setEmail] = useState('');
   const [checkIn, setCheckIn] = useState(preselectCheckIn ?? defaultDate);
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
-  const [rate, setRate] = useState(0);
+  const [rate, setRate] = useState<number | ''>('');
   const [sourceName, setSourceName] = useState('');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
   const [payMode, setPayMode] = useState('Cash');
-  const [payCash, setPayCash] = useState(0);
-  const [payUpi, setPayUpi] = useState(0);
-  const [payCard, setPayCard] = useState(0);
-  const [payBank, setPayBank] = useState(0);
+  const [payCash, setPayCash] = useState<number | ''>('');
+  const [payUpi, setPayUpi] = useState<number | ''>('');
+  const [payCard, setPayCard] = useState<number | ''>('');
+  const [payBank, setPayBank] = useState<number | ''>('');
   const [paymentRef, setPaymentRef] = useState('');
-  const [discount, setDiscount] = useState(0);
+  const [discount, setDiscount] = useState<number | ''>('');
   const [mealPlan, setMealPlan] = useState<MealPlan>('EP');
   const [gstType, setGstType] = useState<GstType>('No Scope');
   const [gstSlab, setGstSlab] = useState<GstSlab>(0);
-  const [adults, setAdults] = useState(1);
-  const [children, setChildren] = useState(0);
+  const [adults, setAdults] = useState<number | ''>('');
+  const [children, setChildren] = useState<number | ''>('');
   const [remarks, setRemarks] = useState('');
   const [internalNote, setInternalNote] = useState('');
   const [guestAddress, setGuestAddress] = useState('');
@@ -88,7 +88,7 @@ export const NewBookingModal = ({
     return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
   }, [checkIn, checkOut]);
 
-  const subtotal = rate * nights;
+  const subtotal = toNum(rate) * nights;
   const afterDiscount = Math.max(0, subtotal - toNum(discount));
   const { taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, gstType, gstSlab);
   const totalReceived = toNum(payCash) + toNum(payUpi) + toNum(payCard) + toNum(payBank);
@@ -140,25 +140,25 @@ export const NewBookingModal = ({
     company_gst: companyGst.trim(),
     check_in_date: checkIn,
     check_out_date: checkOut,
-    rate,
+    rate: toNum(rate),
     source_category: sourceCat,
     source_name: sourceName.trim(),
     payment_mode: payMode,
     advance_paid: totalReceived,
-    pay_cash: payCash,
-    pay_upi: payUpi,
-    pay_card: payCard,
-    pay_bank: payBank,
+    pay_cash: toNum(payCash),
+    pay_upi: toNum(payUpi),
+    pay_card: toNum(payCard),
+    pay_bank: toNum(payBank),
     payment_ref: paymentRef.trim(),
-    discount,
+    discount: toNum(discount),
     meal_plan: mealPlan,
     gst_type: gstType,
     gst_slab: gstSlab,
     gst_amount: gst,
     taxable_amount: taxable,
     invoice_total: invoiceTotal,
-    adults,
-    children,
+    adults: toNum(adults),
+    children: toNum(children),
     remarks: remarks.trim(),
     internal_note: internalNote.trim(),
     created_by: createdBy.trim(),
@@ -274,7 +274,13 @@ export const NewBookingModal = ({
               <div className="space-y-4">
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   <Field label="Check-in *">
-                    <input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)}
+                    <input type="date" value={checkIn} onChange={(e) => {
+                      const newCi = e.target.value;
+                      setCheckIn(newCi);
+                      const ciDate = new Date(newCi + 'T00:00:00');
+                      ciDate.setDate(ciDate.getDate() + nights);
+                      setCheckOut(ciDate.toISOString().split('T')[0]);
+                    }}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Check-out *">
@@ -282,8 +288,17 @@ export const NewBookingModal = ({
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Nights">
-                    <input value={nights} disabled
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-500 font-medium" />
+                    <input 
+                      type="number"
+                      min="1"
+                      value={nights} 
+                      onChange={(e) => {
+                        const newNights = Math.max(1, parseInt(e.target.value) || 1);
+                        const ciDate = new Date(checkIn + 'T00:00:00');
+                        ciDate.setDate(ciDate.getDate() + newNights);
+                        setCheckOut(ciDate.toISOString().split('T')[0]);
+                      }}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30 font-medium" />
                   </Field>
                 </div>
 
@@ -328,7 +343,7 @@ export const NewBookingModal = ({
                 {selectedRoom && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <Field label="Rate / Night">
-                      <input type="number" value={rate} onChange={(e) => setRate(Number(e.target.value))}
+                      <input type="number" value={rate} onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
                         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                     </Field>
                     <Field label="Meal Plan">
@@ -338,11 +353,11 @@ export const NewBookingModal = ({
                       </select>
                     </Field>
                     <Field label="Adults">
-                      <input type="number" min={1} value={adults} onChange={(e) => setAdults(Math.max(1, Number(e.target.value)))}
+                      <input type="number" min={1} value={adults} onChange={(e) => setAdults(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
                         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                     </Field>
                     <Field label="Children">
-                      <input type="number" min={0} value={children} onChange={(e) => setChildren(Math.max(0, Number(e.target.value)))}
+                      <input type="number" min={0} value={children} onChange={(e) => setChildren(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
                         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                     </Field>
                   </div>
@@ -483,7 +498,7 @@ export const NewBookingModal = ({
                     <span className="font-semibold text-slate-800">₹{fmtMoney(subtotal)}</span>
                   </div>
                   <Field label="Discount">
-                    <input type="number" min={0} value={discount} onChange={(e) => setDiscount(Math.max(0, Number(e.target.value)))}
+                    <input type="number" min={0} value={discount} onChange={(e) => setDiscount(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <div className="flex items-center justify-between text-sm">
@@ -653,13 +668,13 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
 );
 
 const PayField = ({ icon: Icon, label, value, onChange }: {
-  icon: typeof Wallet; label: string; value: number; onChange: (v: number) => void;
+  icon: typeof Wallet; label: string; value: number | ''; onChange: (v: number | '') => void;
 }) => (
   <label className="block">
     <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
     <div className="relative">
       <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-      <input type="number" min={0} value={value === 0 ? '' : value} onChange={(e) => onChange(Math.max(0, Number(e.target.value)))}
+      <input type="number" min={0} value={value} onChange={(e) => onChange(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
         placeholder="0"
         className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
     </div>
