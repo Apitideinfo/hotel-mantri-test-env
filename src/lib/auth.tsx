@@ -17,6 +17,7 @@ export interface AuthContext {
   session: Session | null;
   loading: boolean;
   profileLoaded: boolean;
+  profileError: string | null;
   role: UserRole | null;
   companyRole: CompanyRole | null;
   hotelId: string | null;
@@ -54,6 +55,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [hotelName, setHotelName] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<AuthContext['subscriptionStatus']>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const profileLoadedRef = useRef<string | null>(null);
 
   const checkDemoUser = useCallback(() => {
@@ -90,26 +92,61 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     async (u: User) => {
       if (profileLoadedRef.current === u.id) return;
       try {
+        setProfileError(null);
+        // Explicitly check RPC is_super_admin() — this ensures Super Admin precedence
+        try {
+          const { data: isSuper, error: isSuperErr } = await supabase.rpc('is_super_admin');
+          if (isSuperErr) throw isSuperErr;
+          if (isSuper === true) {
+            setRole('super_admin');
+            
+            // Fetch company role if exists to populate companyRole for EnterpriseHQ
+            const { data: cu } = await supabase
+              .from('company_users')
+              .select('role')
+              .eq('user_id', u.id)
+              .eq('status', 'Active')
+              .maybeSingle();
+              
+            setCompanyRole((cu?.role as CompanyRole) || 'founder'); // Default to founder
+            setHotelId(null);
+            setHotelName('Hotel Mantri Royal');
+            setSubscriptionStatus('Active');
+            setCurrentHotelId(null);
+            setProfileLoaded(true);
+            profileLoadedRef.current = u.id;
+            return;
+          }
+        } catch (rpcErr) {
+          console.error('is_super_admin RPC failed:', rpcErr);
+          // Don't fail completely, try the fallback just in case
+        }
+
+        // Check for company-level role next
         const { data: companyRows, error: companyErr } = await supabase
           .from('company_users')
           .select('role, status, name')
           .eq('user_id', u.id)
           .maybeSingle();
 
-        if (companyErr) throw companyErr;
+        if (companyErr && companyErr.code !== 'PGRST116') {
+          console.error('company_users lookup error:', companyErr);
+        }
+        
         const cu = companyRows as { role: string; status: string; name: string } | null;
         if (cu && cu.status === 'Active') {
           setRole('company_user');
           setCompanyRole(cu.role as CompanyRole);
           setHotelId(null);
-          setHotelName(null);
-          setSubscriptionStatus(null);
+          setHotelName('Enterprise HQ');
+          setSubscriptionStatus('Active');
           setCurrentHotelId(null);
           setProfileLoaded(true);
           profileLoadedRef.current = u.id;
           return;
         }
 
+        // Fallback to hotel_admins lookup
         const { data: adminRows, error } = await supabase
           .from('hotel_admins')
           .select('role, hotel_id, status, email')
@@ -121,12 +158,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const adminRow = rows.find((r) => r.role === 'super_admin') ?? rows[0] ?? null;
 
         if (!adminRow) {
-          // If no DB row found (e.g. placeholder DB), assign default active hotel_admin role
-          setRole('hotel_admin');
-          setHotelId('demo-hotel-id-101');
-          setCurrentHotelId('demo-hotel-id-101');
-          setHotelName('Hotel Mantri Royal');
-          setSubscriptionStatus('Active');
+          // No role found — do NOT silently assume hotel_admin. Surface as no-role.
+          setRole(null);
+          setCompanyRole(null);
+          setHotelId(null);
+          setHotelName(null);
+          setSubscriptionStatus(null);
+          setCurrentHotelId(null);
           setProfileLoaded(true);
           profileLoadedRef.current = u.id;
           return;
@@ -134,10 +172,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         const profile = adminRow as ProfileRow;
 
-        setRole(profile.role);
+        setRole(profile.role as UserRole);
         setCompanyRole(null);
-        setHotelId(profile.hotel_id || 'demo-hotel-id-101');
-        setCurrentHotelId(profile.role === 'super_admin' ? null : profile.hotel_id || 'demo-hotel-id-101');
+        setHotelId(profile.hotel_id || null);
+        setCurrentHotelId(profile.role === 'super_admin' ? null : profile.hotel_id || null);
 
         if (profile.hotel_id && profile.role !== 'super_admin') {
           const { data: hotelData } = await supabase
@@ -160,13 +198,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         }
         setProfileLoaded(true);
         profileLoadedRef.current = u.id;
-      } catch {
-        // Fallback for demo/offline access
-        setRole('hotel_admin');
-        setHotelId('demo-hotel-id-101');
-        setCurrentHotelId('demo-hotel-id-101');
-        setHotelName('Hotel Mantri Royal');
-        setSubscriptionStatus('Active');
+      } catch (err) {
+        console.error('Failed to load user profile:', err);
+        setProfileError(err instanceof Error ? err.message : String(err));
+        setRole(null);
+        setCompanyRole(null);
+        setHotelId(null);
+        setHotelName(null);
+        setSubscriptionStatus(null);
+        setCurrentHotelId(null);
         setProfileLoaded(true);
         profileLoadedRef.current = u.id;
       }
@@ -264,6 +304,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     setSubscriptionStatus(null);
     setCurrentHotelId(null);
     setProfileLoaded(false);
+    setProfileError(null);
     profileLoadedRef.current = null;
   };
 
@@ -287,7 +328,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <Ctx.Provider value={{ user, session, loading, profileLoaded, role, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile }}>
+    <Ctx.Provider value={{ user, session, loading, profileLoaded, profileError, role, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile }}>
       {children}
     </Ctx.Provider>
   );

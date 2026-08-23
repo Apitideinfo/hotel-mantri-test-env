@@ -1,8 +1,9 @@
 import React, { useState, lazy, Suspense, useEffect, Component } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { getPosEnabled } from '@/lib/api-pos';
-import { getEnabledHotelFeatures } from '@/lib/api';
+import { getEnabledHotelFeatures, setCurrentHotelId } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
+import { mapAuthRoleToFrontOffice } from '@/lib/types';
 import { AppShell } from '@/components/AppShell';
 import { getTodayLocal } from '@/lib/calc';
 
@@ -142,8 +143,16 @@ function ScreenLoader() {
 
 
 function AppInner() {
-  const { user, loading, profileLoaded, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile } = useAuth();
-  const [nav, setNav] = useState<NavState>({ screen: 'dashboard', date: getTodayLocal() });
+  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile } = useAuth();
+  const [nav, setNav] = useState<NavState>(() => {
+    try {
+      const st = window.history.state;
+      if (st && st.screen) {
+        return { screen: st.screen as Screen, date: st.date ?? getTodayLocal() };
+      }
+    } catch {}
+    return { screen: 'dashboard', date: getTodayLocal() };
+  });
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [publicView, setPublicView] = useState<PublicView>('landing');
   const [selectedPlanId, setSelectedPlanId] = useState<string>('pro');
@@ -151,8 +160,12 @@ function AppInner() {
   const [signupData, setSignupData] = useState<{ fullName: string; email: string; mobile: string; password: string } | null>(null);
   const [posEnabled, setPosEnabled] = useState(false);
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
-
-  const [superAdminMode, setSuperAdminMode] = useState<'panel' | 'dashboard'>('dashboard');
+  
+  const [superAdminMode, setSuperAdminMode] = useState<'panel' | 'dashboard'>('panel');
+  
+  // NOTE: Removed the useEffect that changed superAdminMode on mount
+  // to avoid race conditions. superAdminMode starts as 'panel' so the 
+  // user immediately sees EnterpriseHQ.
 
   useEffect(() => {
     if (user && profileLoaded && role && role !== 'super_admin' && role !== 'company_user' && hotelId) {
@@ -165,6 +178,28 @@ function AppInner() {
       }).catch(() => setFeatures(null));
     }
   }, [user, profileLoaded, role, hotelId]);
+
+  // Keep browser history in sync with internal nav state so Back/Forward work naturally
+  useEffect(() => {
+    // Replace initial history entry with current nav if it doesn't have our state
+    try {
+      if (!window.history.state || !window.history.state.screen) {
+        window.history.replaceState({ screen: nav.screen, date: nav.date }, '');
+      }
+    } catch {
+      // ignore
+    }
+
+    const onPop = (e: PopStateEvent) => {
+      const st = e.state as { screen?: string; date?: string } | null;
+      if (st && st.screen) {
+        setNav({ screen: st.screen as Screen, date: st.date });
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading || (user && !profileLoaded)) {
     return (
@@ -179,7 +214,6 @@ function AppInner() {
       </div>
     );
   }
-
 
   // Not authenticated → Public landing page & complete conversion funnel
   if (!user) {
@@ -241,49 +275,33 @@ function AppInner() {
     );
   }
 
-
-
-
-  // Super admin → Enterprise HQ Panel (with option to preview Hotel Dashboard)
-  if (role === 'super_admin' && superAdminMode === 'panel') {
-    return (
-      <Suspense fallback={<ScreenLoader />}>
-        <SuperAdminRouter
-          onSignOut={signOut}
-          onViewDashboard={(selectedHotelId) => {
-            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
-            setSuperAdminMode('dashboard');
-          }}
-        />
-      </Suspense>
-    );
-  }
-
-  // Company user (enterprise HQ staff) → Enterprise HQ
-  if (role === 'company_user' && superAdminMode === 'panel') {
-    return (
-      <Suspense fallback={<ScreenLoader />}>
-        <SuperAdminRouter
-          onSignOut={signOut}
-          onViewDashboard={(selectedHotelId) => {
-            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
-            setSuperAdminMode('dashboard');
-          }}
-        />
-      </Suspense>
-    );
-  }
-
-
-  // No role assigned → access denied
-  if (!role) {
+  // If profile resolution failed, surface explicit message and prevent access
+  if (profileError) {
     return (
       <SubscriptionExpiredScreen
-        message="Your account has not been linked to a hotel. Please contact the administrator."
+        message={`Unable to determine user role: ${profileError}`}
         onSignOut={signOut}
       />
     );
   }
+
+  // Super admin / Company user → Enterprise HQ Panel
+  if ((role === 'super_admin' || role === 'company_user') && superAdminMode === 'panel') {
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        <EnterpriseHQ
+          onSignOut={signOut}
+          onViewDashboard={(selectedHotelId) => {
+            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
+            setSuperAdminMode('dashboard');
+          }}
+        />
+      </Suspense>
+    );
+  }
+
+
+  
 
   // Subscription expired / suspended / non-active (bypassed for Super Admin)
   if (role !== 'super_admin' && subscriptionStatus && subscriptionStatus !== 'Active' && subscriptionStatus !== 'Trial' && subscriptionStatus !== 'Grace Period') {
@@ -310,54 +328,70 @@ function AppInner() {
         'electricity', 'utility-bills', 'laundry', 'monthly-bills', 'profitability', 'gst-report',
       ];
       if (restrictedScreens.includes(screen)) {
-        setNav({ screen: 'dashboard', date: nav.date });
+        go('dashboard', { date: nav.date });
         return;
       }
     }
 
     if (features) {
       if (screen === 'dashboard' && features.dashboard === false) {
-        setNav({ screen: 'operations', date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
       if ((screen === 'roomchart' || screen === 'report' || screen === 'other') && features.daily_entry === false && features.room_chart === false) {
-        setNav({ screen: 'operations', date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
       if ((screen === 'finance' || screen === 'close-day') && features.finance === false) {
-        setNav({ screen: 'operations', date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
       if (screen === 'housekeeping' && features.housekeeping === false) {
-        setNav({ screen: 'operations', date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
       if (screen === 'channel-manager' && features.channel_manager === false) {
-        setNav({ screen: 'operations', date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
     }
 
     const date = (payload as { date?: string } | undefined)?.date;
-    setNav({ screen: screen as Screen, date: date ?? nav.date });
+    const next = { screen: screen as Screen, date: date ?? nav.date };
+    try {
+      window.history.pushState({ screen: next.screen, date: next.date }, '');
+      window._hotelMantriHasHistory = true; // Track that we've pushed at least once
+    } catch {
+      // ignore
+    }
+    setNav(next);
   };
-  const back = () => setNav({ screen: 'dashboard' });
-  const backToFinance = () => setNav({ screen: 'finance' });
-  const backToAnalytics = () => setNav({ screen: 'analytics' });
+  
+  const navigateBack = (fallback: Screen) => {
+    if ((window as any)._hotelMantriHasHistory) {
+      window.history.back();
+    } else {
+      go(fallback);
+    }
+  };
+
+  const back = () => navigateBack('dashboard');
+  const backToFinance = () => navigateBack('finance');
+  const backToAnalytics = () => navigateBack('analytics');
 
   return (
     <div className="min-h-screen flex flex-col">
-      {role === 'super_admin' && (
+      {(role === 'super_admin' || role === 'company_user') && (
         <div className="bg-[#06152F] text-white px-4 py-2 flex items-center justify-between text-xs border-b border-blue-900/40 shadow-sm z-50">
           <div className="flex items-center gap-2 font-bold">
-            <span className="bg-[#1a68fb] text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Super Admin View</span>
+            <span className="bg-[#1a68fb] text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Enterprise HQ Mode</span>
             <span className="text-slate-300">Previewing Hotel Dashboard</span>
           </div>
           <button
             onClick={() => setSuperAdminMode('panel')}
             className="bg-blue-600/30 hover:bg-blue-600 text-sky-300 hover:text-white border border-blue-400/30 font-bold px-3 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
           >
-            ← Return to Super Admin Panel
+            ← Return to Enterprise HQ
           </button>
         </div>
       )}
@@ -369,19 +403,19 @@ function AppInner() {
             <Dashboard onNavigate={go} />
           )}
           {nav.screen === 'roomchart' && nav.date && (
-            <DailyEntryTabs date={nav.date} onBack={back} onSaved={() => setNav({ screen: 'dashboard' })} />
+            <DailyEntryTabs date={nav.date} onBack={back} onSaved={() => go('dashboard')} />
           )}
           {nav.screen === 'property' && (
             <PropertyMaster onBack={back} />
           )}
           {nav.screen === 'other' && nav.date && (
-            <OtherEntries date={nav.date} onBack={back} onSaved={() => setNav({ screen: 'dashboard' })} />
+            <OtherEntries date={nav.date} onBack={back} onSaved={() => go('dashboard')} />
           )}
           {nav.screen === 'ledger' && nav.date && (
             <CompanyLedger onBack={back} initialDate={nav.date} />
           )}
           {nav.screen === 'entry' && nav.date && (
-            <EntryForm date={nav.date} onBack={back} onSaved={(savedDate) => setNav({ screen: 'report', date: savedDate ?? nav.date })} />
+            <EntryForm date={nav.date} onBack={back} onSaved={(savedDate) => go('report', { date: savedDate ?? nav.date })} />
           )}
           {nav.screen === 'report' && nav.date && (
             <ReportView date={nav.date} onBack={back} onNavigate={go} />
@@ -465,11 +499,11 @@ function AppInner() {
           {nav.screen === 'analytics-revenue' && <RevenueAnalytics onBack={backToAnalytics} />}
 
           {nav.screen === 'operations' && nav.date && (
-            <OperationsBoard date={nav.date} onBack={back} onSaved={() => setNav({ screen: 'dashboard' })} onNavigate={go} />
+            <OperationsBoard date={nav.date} onBack={back} onSaved={() => go('dashboard')} onNavigate={go} />
           )}
 
           {nav.screen === 'housekeeping' && (
-            <HousekeepingBoard onBack={back} role={role === 'hotel_admin' ? 'admin' : 'reception'} />
+            <HousekeepingBoard onBack={back} role={mapAuthRoleToFrontOffice(role)} />
           )}
 
           {/* CRM module routes */}
