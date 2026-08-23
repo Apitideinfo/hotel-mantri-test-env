@@ -241,7 +241,13 @@ export const WalkInModal = ({
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Check-in *">
-                    <input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)}
+                    <input type="date" value={checkIn} onChange={(e) => {
+                      const newCi = e.target.value;
+                      setCheckIn(newCi);
+                      const ciDate = new Date(newCi + 'T00:00:00');
+                      ciDate.setDate(ciDate.getDate() + nights);
+                      setCheckOut(ciDate.toISOString().split('T')[0]);
+                    }}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Check-out *">
@@ -255,8 +261,17 @@ export const WalkInModal = ({
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Nights">
-                    <input value={nights} disabled
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-500 font-medium" />
+                    <input 
+                      type="number"
+                      min="1"
+                      value={nights} 
+                      onChange={(e) => {
+                        const newNights = Math.max(1, parseInt(e.target.value) || 1);
+                        const ciDate = new Date(checkIn + 'T00:00:00');
+                        ciDate.setDate(ciDate.getDate() + newNights);
+                        setCheckOut(ciDate.toISOString().split('T')[0]);
+                      }}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30 font-medium" />
                   </Field>
                 </div>
                 <div>
