@@ -134,8 +134,8 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
       ? metadata.name
       : user?.email?.split('@')[0] ?? 'User';
   const userMobile = typeof metadata.phone === 'string' ? metadata.phone : '';
-  const roleLabel = role === 'hotel_admin' ? 'Hotel Admin' : role === 'hotel_staff' ? 'Receptionist' : role ?? 'User';
-  const canManageProperty = role === 'hotel_admin';
+  const roleLabel = role === 'super_admin' ? 'Super Admin' : role === 'hotel_admin' ? 'Hotel Admin' : role === 'hotel_staff' ? 'Receptionist' : role ?? 'User';
+  const canManageProperty = role === 'hotel_admin' || role === 'super_admin';
 
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => {

@@ -65,11 +65,45 @@ const NAV_ITEMS: NavItem[] = [
 
 interface EnterpriseHQProps {
   onSignOut: () => void;
+  onViewDashboard?: (hotelId: string) => void;
 }
 
-export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
+export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) => {
   const { user, companyRole, signOut } = useAuth();
-  const [page, setPage] = useState<Page>('dashboard');
+  const [page, setPage] = useState<Page>(() => {
+    try {
+      const st = window.history.state;
+      if (st && st.hqPage) return st.hqPage as Page;
+    } catch {}
+    return 'dashboard';
+  });
+
+  // Keep browser history in sync with internal page state so Back/Forward work naturally
+  useEffect(() => {
+    try {
+      if (!window.history.state || !window.history.state.hqPage) {
+        window.history.replaceState({ hqPage: page }, '');
+      }
+    } catch {}
+
+    const onPop = (e: PopStateEvent) => {
+      const st = e.state as { hqPage?: string } | null;
+      if (st && st.hqPage) {
+        setPage(st.hqPage as Page);
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const navigateHq = (newPage: Page) => {
+    try {
+      window.history.pushState({ hqPage: newPage }, '');
+      window._hotelMantriHasHistory = true;
+    } catch {}
+    setPage(newPage);
+  };
+
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedHotelId, setSelectedHotelId] = useState<string | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
@@ -104,13 +138,17 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
 
   const navigateToHotel = (hotelId: string) => {
     setSelectedHotelId(hotelId);
-    setPage('hotel-detail');
+    navigateHq('hotel-detail');
     setSidebarOpen(false);
   };
 
   const startImpersonationSession = (hotelId: string, hotelName: string) => {
-    setCurrentHotelId(hotelId);
-    setImpersonating({ hotelId, hotelName, sessionId: '' });
+    if (onViewDashboard) {
+      onViewDashboard(hotelId);
+    } else {
+      setCurrentHotelId(hotelId);
+      setImpersonating({ hotelId, hotelName, sessionId: '' });
+    }
   };
 
   const returnToHQ = async () => {
@@ -119,7 +157,7 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
     }
     setCurrentHotelId(null);
     setImpersonating(null);
-    setPage('hotels');
+    navigateHq('hotels');
   };
 
   const handleMarkAllRead = async () => {
@@ -149,17 +187,17 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
       );
     }
     if (showOnboarding) {
-      return <OnboardingWizard onComplete={() => { setShowOnboarding(false); setPage('hotels'); }} onCancel={() => setShowOnboarding(false)} />;
+      return <OnboardingWizard onComplete={() => { setShowOnboarding(false); navigateHq('hotels'); }} onCancel={() => setShowOnboarding(false)} />;
     }
     switch (page) {
-      case 'dashboard': return <DashboardScreen onNavigateHotels={() => setPage('hotels')} onNavigateLeads={() => setPage('crm')} onNavigateTickets={() => setPage('support')} />;
+      case 'dashboard': return <DashboardScreen onNavigateHotels={() => navigateHq('hotels')} onNavigateLeads={() => navigateHq('crm')} onNavigateTickets={() => navigateHq('support')} />;
       case 'hotels': return <HotelsScreen onViewHotel={navigateToHotel} onNewHotel={() => setShowOnboarding(true)} onImpersonate={startImpersonationSession} />;
-      case 'hotel-detail': return selectedHotelId ? <HotelDetailScreen hotelId={selectedHotelId} onBack={() => setPage('hotels')} onImpersonate={startImpersonationSession} onViewInvoice={(id) => setDrawerInvoiceId(id)} onCreateInvoice={() => { setPage('invoice-create'); }} /> : null;
+      case 'hotel-detail': return selectedHotelId ? <HotelDetailScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotels')} onImpersonate={startImpersonationSession} onViewInvoice={(id) => setDrawerInvoiceId(id)} onCreateInvoice={() => { navigateHq('invoice-create'); }} /> : null;
       case 'users': return <CompanyUsersScreen />;
       case 'subscriptions': return <SubscriptionsScreen onViewHotel={navigateToHotel} />;
-      case 'invoices': return <InvoiceListScreen onOpenDrawer={(id) => setDrawerInvoiceId(id)} onNewInvoice={() => { setPage('invoice-create'); }} />;
-      case 'invoice-detail': return selectedInvoiceId ? <InvoiceDetailScreen invoiceId={selectedInvoiceId} onBack={() => setPage('invoices')} /> : null;
-      case 'invoice-create': return selectedHotelId ? <InvoiceCreateScreen hotelId={selectedHotelId} onBack={() => setPage('hotel-detail')} onCreated={(id) => { setSelectedInvoiceId(id); setPage('invoice-detail'); }} /> : <InvoiceCreateScreen hotelId={''} onBack={() => setPage('invoices')} onCreated={(id) => { setSelectedInvoiceId(id); setPage('invoice-detail'); }} />;
+      case 'invoices': return <InvoiceListScreen onOpenDrawer={(id) => setDrawerInvoiceId(id)} onNewInvoice={() => { navigateHq('invoice-create'); }} />;
+      case 'invoice-detail': return selectedInvoiceId ? <InvoiceDetailScreen invoiceId={selectedInvoiceId} onBack={() => navigateHq('invoices')} /> : null;
+      case 'invoice-create': return selectedHotelId ? <InvoiceCreateScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotel-detail')} onCreated={(id) => { setSelectedInvoiceId(id); navigateHq('invoice-detail'); }} /> : <InvoiceCreateScreen hotelId={''} onBack={() => navigateHq('invoices')} onCreated={(id) => { setSelectedInvoiceId(id); navigateHq('invoice-detail'); }} />;
       case 'billing-settings': return <BillingSettings />;
       case 'renewals': return <RenewalDashboardScreen onViewHotel={navigateToHotel} onViewInvoice={(id) => setDrawerInvoiceId(id)} />;
       case 'features': return <FeatureControlsScreen />;
@@ -168,7 +206,7 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
       case 'audit': return <AuditLogsScreen />;
       case 'notifications': return <NotificationsScreen />;
       case 'settings': return <SystemSettingsScreen />;
-      default: return <DashboardScreen onNavigateHotels={() => setPage('hotels')} onNavigateLeads={() => setPage('crm')} onNavigateTickets={() => setPage('support')} />;
+      default: return <DashboardScreen onNavigateHotels={() => navigateHq('hotels')} onNavigateLeads={() => navigateHq('crm')} onNavigateTickets={() => navigateHq('support')} />;
     }
   };
 
@@ -204,7 +242,7 @@ export const EnterpriseHQ = ({ onSignOut }: EnterpriseHQProps) => {
                 {visibleNav.filter((n) => n.group === group).map((item) => (
                   <button
                     key={item.key}
-                    onClick={() => { setPage(item.key); setSidebarOpen(false); }}
+                    onClick={() => { navigateHq(item.key); setSidebarOpen(false); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition ${
                       page === item.key
                         ? 'bg-sky-600 text-white shadow-sm'

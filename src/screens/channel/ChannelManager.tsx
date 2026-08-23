@@ -130,7 +130,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
     if (typeof window !== 'undefined' && window.history.replaceState) {
       const url = new URL(window.location.href);
       url.hash = `cm-${tab}`;
-      window.history.replaceState(null, '', url);
+      window.history.replaceState(window.history.state, '', url);
     }
   }, [tab]);
 
