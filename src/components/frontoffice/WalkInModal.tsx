@@ -42,13 +42,13 @@ export const WalkInModal = ({
   const [roomNo, setRoomNo] = useState(preselectRoom ?? '');
   const [checkIn, setCheckIn] = useState(defaultDate);
   const [checkOut, setCheckOut] = useState(addDays(defaultDate, 1));
-  const [rate, setRate] = useState(0);
+  const [rate, setRate] = useState<number | ''>('');
   const [arrivalTime, setArrivalTime] = useState(new Date().toTimeString().slice(0, 5));
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
-  const [payCash, setPayCash] = useState(0);
-  const [payUpi, setPayUpi] = useState(0);
-  const [payCard, setPayCard] = useState(0);
-  const [payBank, setPayBank] = useState(0);
+  const [payCash, setPayCash] = useState<number | ''>('');
+  const [payUpi, setPayUpi] = useState<number | ''>('');
+  const [payCard, setPayCard] = useState<number | ''>('');
+  const [payBank, setPayBank] = useState<number | ''>('');
   const [performedBy, setPerformedBy] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,7 +75,7 @@ export const WalkInModal = ({
     return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
   }, [checkIn, checkOut]);
 
-  const subtotal = rate * nights;
+  const subtotal = toNum(rate) * nights;
   const { invoiceTotal } = calcGstFull(subtotal, 'No Scope', 0);
   const totalReceived = toNum(payCash) + toNum(payUpi) + toNum(payCard) + toNum(payBank);
   const balance = Math.max(0, invoiceTotal - totalReceived);
@@ -103,13 +103,13 @@ export const WalkInModal = ({
       email,
       checkIn,
       checkOut,
-      rate,
+      rate: toNum(rate),
       sourceCategory: sourceCat,
       paymentMode: 'Cash' as PayMode,
-      payCash,
-      payUpi,
-      payCard,
-      payBank,
+      payCash: toNum(payCash),
+      payUpi: toNum(payUpi),
+      payCard: toNum(payCard),
+      payBank: toNum(payBank),
       arrivalTime,
       performedBy,
     };
@@ -257,7 +257,7 @@ export const WalkInModal = ({
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Rate / Night">
-                    <input type="number" value={rate} onChange={(e) => setRate(Number(e.target.value))}
+                    <input type="number" value={rate} onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
                       className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Nights">
@@ -416,13 +416,13 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
 );
 
 const PayField = ({ icon: Icon, label, value, onChange }: {
-  icon: typeof Wallet; label: string; value: number; onChange: (v: number) => void;
+  icon: typeof Wallet; label: string; value: number | ''; onChange: (v: number | '') => void;
 }) => (
   <label className="block">
     <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
     <div className="relative">
       <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-      <input type="number" min={0} value={value === 0 ? '' : value} onChange={(e) => onChange(Math.max(0, Number(e.target.value)))}
+      <input type="number" min={0} value={value} onChange={(e) => onChange(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
         placeholder="0"
         className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
     </div>
