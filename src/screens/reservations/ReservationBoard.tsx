@@ -47,8 +47,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [stretchingRes, setStretchingRes] = useState<Reservation | null>(null);
-  const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
 
   const endDate = useMemo(() => addDays(startDate, days - 1), [startDate, days]);
 
@@ -138,45 +136,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
       setDraggedRes(null);
     }
   };
-
-  const commitStretch = useCallback(async (res: Reservation, targetDate: string) => {
-    const newCheckOut = addDays(targetDate, 1);
-    if (newCheckOut === res.check_out_date) {
-      setStretchingRes(null);
-      setStretchTargetDate(null);
-      return;
-    }
-    setBusy(true);
-    try {
-      await extendReservation({
-        reservationId: res.id,
-        newCheckOut,
-      });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to stretch reservation');
-    } finally {
-      setBusy(false);
-      setStretchingRes(null);
-      setStretchTargetDate(null);
-    }
-  }, [load]);
-
-  useEffect(() => {
-    if (!stretchingRes) return;
-
-    const handleGlobalMouseUp = () => {
-      if (stretchingRes && stretchTargetDate) {
-        commitStretch(stretchingRes, stretchTargetDate);
-      } else {
-        setStretchingRes(null);
-        setStretchTargetDate(null);
-      }
-    };
-
-    window.addEventListener('mouseup', handleGlobalMouseUp);
-    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [stretchingRes, stretchTargetDate, commitStretch]);
 
   const handleQuickRes = async (params: { roomNo: string; guestName: string; guestPhone?: string; checkIn: string; checkOut: string; rate: number }) => {
     setBusy(true);
@@ -447,14 +406,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                           const res = getResForRoomDate(room.room_no, d);
                           const isDragOver = dragOverRoom === room.room_no;
                           const isStart = res?.check_in_date === d;
-                          const isEnd = res && addDays(res.check_out_date, -1) === d;
-                          const isStretchPreview = Boolean(
-                            stretchingRes &&
-                            stretchingRes.room_no === room.room_no &&
-                            stretchTargetDate &&
-                            d > addDays(stretchingRes.check_out_date, -1) &&
-                            d <= stretchTargetDate
-                          );
 
                           return (
                             <td
@@ -462,23 +413,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                               onDragOver={(e) => handleDragOver(e, room.room_no)}
                               onDragLeave={() => setDragOverRoom(null)}
                               onDrop={(e) => handleDrop(e, room.room_no, d)}
-                              onMouseEnter={() => {
-                                if (stretchingRes && stretchingRes.room_no === room.room_no && d >= stretchingRes.check_in_date) {
-                                  setStretchTargetDate(d);
-                                }
-                              }}
-                              onClick={() => !res && !stretchingRes && setShowQuickRes({ roomNo: room.room_no, date: d })}
+                              onClick={() => !res && setShowQuickRes({ roomNo: room.room_no, date: d })}
                               className={`px-1.5 py-1.5 text-center border-r border-slate-100 cursor-pointer transition relative ${
                                 isDragOver
                                   ? 'bg-brand-100'
-                                  : isStretchPreview
-                                  ? 'bg-emerald-100/80 ring-1 ring-emerald-400'
                                   : 'hover:bg-slate-50'
                               }`}
                             >
                               {res ? (
                                 <div
-                                  draggable={!stretchingRes}
+                                  draggable
                                   onDragStart={(e) => handleDragStart(e, res.id)}
                                   onClick={(e) => { e.stopPropagation(); toggleSelect(res.id); }}
                                   className={`group relative rounded-xl px-2 py-1.5 text-left cursor-move transition select-none shadow-sm ${
@@ -501,26 +445,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                                   <div className="flex items-center justify-between text-[10px] font-semibold opacity-75 mt-0.5">
                                     <span className="truncate">{isStart ? `${fmtMoney(res.rate)}/n` : 'staying'}</span>
                                   </div>
-
-                                  {/* Cursor Click-Drag Stretch Handle on right edge */}
-                                  {isEnd && (
-                                    <div
-                                      onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        setStretchingRes(res);
-                                        setStretchTargetDate(d);
-                                      }}
-                                      className="absolute right-0 top-0 bottom-0 w-3.5 cursor-ew-resize flex items-center justify-center bg-emerald-400/40 hover:bg-emerald-500/80 rounded-r-xl z-20 transition group/handle"
-                                      title="Click & Drag cursor right to stretch stay check-out date"
-                                    >
-                                      <div className="w-1 h-3 bg-emerald-800/80 rounded-full group-hover/handle:bg-white shrink-0" />
-                                    </div>
-                                  )}
-                                </div>
-                              ) : isStretchPreview ? (
-                                <div className="h-7 rounded-xl bg-emerald-200/90 border border-emerald-400 text-emerald-900 text-[10px] font-bold flex items-center justify-center shadow-inner animate-pulse">
-                                  Release to stretch →
                                 </div>
                               ) : (
                                 <div className="h-7 flex items-center justify-center text-slate-300 hover:text-brand-600 transition">
