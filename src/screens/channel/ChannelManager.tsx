@@ -13,7 +13,7 @@ import {
   saveChannelRateMapping, deleteChannelRateMapping, insertSyncLog,
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
-  CHANNEL_TYPES, getChannelMetadata,
+  CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
 } from '@/lib/api-channel';
 import { testAiosellConnection, getAiosellMapping } from '@/lib/api-aiosell';
 import type {
@@ -38,10 +38,19 @@ const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n 
 const addDays = (dateStr: string, n: number): string => {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
-const todayStr = (): string => new Date().toISOString().slice(0, 10);
+const todayStr = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const fmtDate = (d: string): string => {
   const dt = new Date(d + 'T00:00:00');
@@ -281,8 +290,8 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
   const checklist = [
     { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
     { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
-    { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_room_code), action: () => onTab('mapping') },
-    { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_rate_plan_code), action: () => onTab('mapping') },
+    { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_room_type_id), action: () => onTab('mapping') },
+    { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_rate_plan_id), action: () => onTab('mapping') },
     { label: 'At least one channel connected', done: connected > 0, action: () => onTab('channels') },
     { label: 'First inventory sync completed', done: overview.syncLogs.some((l) => l.log_type === 'inventory' && l.status === 'success'), action: () => onTab('inventory') },
   ];
@@ -585,7 +594,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                   {days.map((d) => {
                     const isToday = d === todayStr();
                     return (
-                      <th key={d} className={`text-center px-2 py-3 text-xs font-bold min-w-[64px] ${isToday ? 'text-brand-600 bg-brand-50 border-b-2 border-brand-400' : 'text-slate-500'}`}>
+                      <th key={`header-${d}`} className={`text-center px-2 py-3 text-xs font-bold min-w-[64px] ${isToday ? 'text-brand-600 bg-brand-50 border-b-2 border-brand-400' : 'text-slate-500'}`}>
                         <div className={isToday ? 'text-brand-600' : ''}>{fmtDate(d)}</div>
                         <div className={`text-[9px] font-normal mt-0.5 ${isToday ? 'text-brand-400' : 'text-slate-400'}`}>
                           {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' })}
@@ -675,7 +684,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                           </button>
                           <p className="text-[10px] text-slate-400 ml-5.5">Tariff: {rs(cat.default_tariff)}</p>
                         </td>
-                        {days.map((d) => <td key={d} className="px-1 py-1" />)}
+                        {days.map((d) => <td key={`${cat.id}-empty-${d}`} className="px-1 py-1" />)}
                       </tr>
 
                       {/* Sub-rows */}
@@ -685,7 +694,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                             <span className="text-xs font-medium text-slate-500 pl-5.5">{row.label}</span>
                           </td>
                           {days.map((d) => (
-                            <td key={d} className="px-1 py-1">{row.render(d)}</td>
+                            <td key={`${cat.id}-${row.key}-${d}`} className="px-1 py-1">{row.render(d)}</td>
                           ))}
                         </tr>
                       ))}
@@ -699,7 +708,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const val = toNum(r.max_stay);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-maxstay-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className="text-xs text-slate-500 hover:text-slate-700 px-1 py-1">
                                     {val > 0 ? `${val}n` : '—'}
                                   </button>
@@ -713,7 +722,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const cta = Boolean(r.closed_to_arrival);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-cta-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className={`text-xs px-2 py-1 rounded ${cta ? 'text-red-600 bg-red-50' : 'text-emerald-600 bg-emerald-50'}`}>
                                     {cta ? 'Closed' : 'Open'}
                                   </button>
@@ -727,7 +736,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const ctd = Boolean(r.closed_to_departure);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-ctd-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className={`text-xs px-2 py-1 rounded ${ctd ? 'text-red-600 bg-red-50' : 'text-emerald-600 bg-emerald-50'}`}>
                                     {ctd ? 'Closed' : 'Open'}
                                   </button>
@@ -1499,16 +1508,55 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
   onChanged: () => void;
 }) => {
   const [editing, setEditing] = useState<{ catId: string; ratePlanId: string; aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string } | null>(null);
+  const [aiosellMapping, setAiosellMapping] = useState<any>(null);
+  const [fetchingMapping, setFetchingMapping] = useState(false);
+  const [mappingError, setMappingError] = useState<string | null>(null);
+  const [mappingSuccess, setMappingSuccess] = useState(false);
+
+  const handleFetchMapping = async () => {
+    setFetchingMapping(true);
+    setMappingError(null);
+    setMappingSuccess(false);
+    try {
+      const data = await fetchAiosellMapping();
+      setAiosellMapping(data);
+      setMappingSuccess(true);
+      setTimeout(() => setMappingSuccess(false), 3000);
+    } catch (err: any) {
+      setMappingError(err.message || 'Failed to fetch mapping');
+    } finally {
+      setFetchingMapping(false);
+    }
+  };
 
   const getMapping = (catId: string, ratePlanId: string) => {
-    return mappings.find((m) => m.room_category_id === catId && m.rate_plan_id === ratePlanId);
+    return mappings.find((m) => 
+      m.room_category_id === catId && 
+      (m.rate_plan_id === ratePlanId || (!m.rate_plan_id && !ratePlanId))
+    );
   };
 
   const mappedCount = mappings.filter((m) => m.status === 'mapped').length;
-  const unmappedCount = mappings.length - mappedCount;
+  
+  // A category is mapped if at least one of its rate plans (or its default rate plan) has a mapping
+  const mappedCategoryIds = new Set(mappings.filter((m) => m.status === 'mapped').map((m) => m.room_category_id));
+  const unmappedCount = categories.length - mappedCategoryIds.size;
 
   return (
     <div className="space-y-4">
+      {mappingError && (
+        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fade-in">
+          <AlertCircle className="w-4 h-4" />
+          {mappingError}
+        </div>
+      )}
+      {mappingSuccess && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fade-in">
+          <CheckCircle2 className="w-4 h-4" />
+          Aiosell mapping fetched successfully
+        </div>
+      )}
+
       {/* Summary */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 shadow-card p-3 text-center">
@@ -1527,9 +1575,28 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
 
       {/* Mapping table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-brand-navy-800">Room & Rate Plan Mapping</h3>
-          <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Aiosell room types and rate plans</p>
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-brand-navy-800">Room & Rate Plan Mapping</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Aiosell room types and rate plans</p>
+          </div>
+          <button 
+            onClick={handleFetchMapping}
+            disabled={fetchingMapping}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 rounded-lg transition disabled:opacity-50"
+          >
+            {fetchingMapping ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Fetching mapping...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" />
+                Fetch Aiosell Mapping
+              </>
+            )}
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[800px]">
@@ -1554,8 +1621,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                     <tr key={`${cat.id}-${rp.id ?? 'default'}-${idx}`} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">{idx === 0 ? cat.name : ''}</td>
                       <td className="px-4 py-2.5 text-sm text-slate-600">{rp.plan_name}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.external_room_code ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.external_rate_plan_code ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.channex_room_type_id ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.channex_rate_plan_id ?? '—'}</td>
                       <td className="px-4 py-2.5 text-center">
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${mapping ? STATUS_STYLES[mapping.status] : STATUS_STYLES.unmapped}`}>{mapping?.status ?? 'unmapped'}</span>
                       </td>
@@ -1564,8 +1631,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                           onClick={() => setEditing({
                             catId: cat.id,
                             ratePlanId: rp.id,
-                            aiosellRoomCode: mapping?.external_room_code ?? '',
-                            aiosellRatePlan: mapping?.external_rate_plan_code ?? '',
+                            aiosellRoomCode: mapping?.channex_room_type_id ?? '',
+                            aiosellRatePlan: mapping?.channex_rate_plan_id ?? '',
                             mappingId: mapping?.id,
                           })}
                           className="text-xs font-semibold text-brand-600 hover:text-brand-700"
@@ -1592,8 +1659,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             await saveChannelRateMapping({
               room_category_id: editing.catId,
               rate_plan_id: editing.ratePlanId || null,
-              external_room_code: aiosellRoom || null,
-              external_rate_plan_code: aiosellRate || null,
+              channex_room_type_id: aiosellRoom || null,
+              channex_rate_plan_id: aiosellRate || null,
               status: (aiosellRoom && aiosellRate) ? 'mapped' : 'unmapped',
               is_active: true,
               mapping_error: null,
@@ -1607,19 +1674,21 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             setEditing(null);
             onChanged();
           } : undefined}
+          aiosellMapping={aiosellMapping}
         />
       )}
     </div>
   );
 };
 
-const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete }: {
+const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete, aiosellMapping }: {
   data: { aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string };
   category: string;
   ratePlan: string;
   onClose: () => void;
   onSave: (aiosellRoom: string, aiosellRate: string) => Promise<void>;
   onDelete?: () => Promise<void>;
+  aiosellMapping?: any;
 }) => {
   const [aiosellRoomCode, setAiosellRoomCode] = useState(data.aiosellRoomCode);
   const [aiosellRatePlan, setAiosellRatePlan] = useState(data.aiosellRatePlan);
@@ -1643,11 +1712,31 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete 
 
           <div>
             <label className="text-xs font-semibold text-slate-500">Aiosell Room Code</label>
-            <input type="text" value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell room code" />
+            {aiosellMapping && aiosellMapping.rooms ? (
+              <select value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+                <option value="">Select a room...</option>
+                {aiosellMapping.rooms.map((r: any) => (
+                  <option key={r.room_id} value={r.room_id}>{r.room_name} ({r.room_id})</option>
+                ))}
+              </select>
+            ) : (
+              <input type="text" value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell room code (or Fetch Mapping first)" />
+            )}
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Aiosell Rate Plan Code</label>
-            <input type="text" value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell rate plan code" />
+            {aiosellMapping && aiosellMapping.ratePlans ? (
+              <select value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+                <option value="">Select a rate plan...</option>
+                {aiosellMapping.ratePlans
+                  .filter((rp: any) => !aiosellRoomCode || rp.room_id === aiosellRoomCode)
+                  .map((rp: any) => (
+                  <option key={rp.rate_plan_id} value={rp.rate_plan_id}>{rp.rate_plan_name} ({rp.rate_plan_id})</option>
+                ))}
+              </select>
+            ) : (
+              <input type="text" value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell rate plan code" />
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 mt-4">
@@ -1842,7 +1931,17 @@ const SettingsTab = ({ settings, onChanged }: {
   const [aiosellPartner, setAiosellPartner] = useState(settings?.aiosell_partner_id ?? '');
   const [aiosellEnv, setAiosellEnv] = useState<'test' | 'production'>(settings?.aiosell_environment ?? 'test');
   const [aiosellTesting, setAiosellTesting] = useState(false);
-  const [aiosellTestResult, setAiosellTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [aiosellTestResult, setAiosellTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    details?: {
+      status: number;
+      responseTimeMs: number;
+      hotelCode: string;
+      roomsCount: number;
+      ratePlansCount: number;
+    }
+  } | null>(null);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -1851,9 +1950,6 @@ const SettingsTab = ({ settings, onChanged }: {
       await saveChannelSettings({
         ...settings!,
         channel_manager_enabled: enabled,
-        aiosell_hotel_code: aiosellHotel,
-        aiosell_partner_id: aiosellPartner,
-        aiosell_environment: aiosellEnv,
       });
       onChanged();
     } catch (e) {
@@ -1868,9 +1964,28 @@ const SettingsTab = ({ settings, onChanged }: {
     setAiosellTestResult(null);
     try {
       const res = await testAiosellConnection();
-      setAiosellTestResult({ ok: res.success, message: res.message });
+      if (res.success) {
+        setAiosellTestResult({ 
+          ok: true, 
+          message: "✓ Aiosell Sandbox Connected",
+          details: {
+            status: res.status,
+            responseTimeMs: res.responseTimeMs,
+            hotelCode: res.hotelCode,
+            roomsCount: res.mapping?.rooms?.length || 0,
+            ratePlansCount: res.mapping?.ratePlans?.length || 0,
+          }
+        });
+        onChanged();
+      } else {
+        setAiosellTestResult({ ok: false, message: res.error?.message || "Failed to connect to Aiosell sandbox." });
+      }
     } catch (err: any) {
-      setAiosellTestResult({ ok: false, message: err.message });
+      const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
+      setAiosellTestResult({ 
+        ok: false, 
+        message: isAuthError ? "✕ Aiosell Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
+      });
     } finally {
       setAiosellTesting(false);
     }
@@ -1952,9 +2067,20 @@ const SettingsTab = ({ settings, onChanged }: {
         </div>
 
         {aiosellTestResult && (
-          <div className={`mt-4 rounded-lg p-3 flex items-center gap-2 animate-fade-in ${aiosellTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
-            {aiosellTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
-            <p className={`text-sm ${aiosellTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{aiosellTestResult.message}</p>
+          <div className={`mt-4 rounded-lg p-3 flex flex-col gap-2 animate-fade-in ${aiosellTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
+            <div className="flex items-center gap-2">
+              {aiosellTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+              <p className={`text-sm font-semibold ${aiosellTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{aiosellTestResult.message}</p>
+            </div>
+            {aiosellTestResult.details && (
+              <div className="text-xs text-emerald-700 ml-6 space-y-1">
+                <p>HTTP Status: {aiosellTestResult.details.status}</p>
+                <p>Response Time: {aiosellTestResult.details.responseTimeMs} ms</p>
+                <p>Hotel: {aiosellTestResult.details.hotelCode}</p>
+                <p>Rooms: {aiosellTestResult.details.roomsCount}</p>
+                <p>Rate Plans: {aiosellTestResult.details.ratePlansCount}</p>
+              </div>
+            )}
           </div>
         )}
 
@@ -1964,7 +2090,7 @@ const SettingsTab = ({ settings, onChanged }: {
             disabled={aiosellTesting}
             className="flex items-center justify-center gap-2 text-sm font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 rounded-xl py-3 transition border border-brand-200"
           >
-            {aiosellTesting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />} Test Connection
+            {aiosellTesting ? <><Loader2 className="w-4 h-4 animate-spin" /> Testing Aiosell Sandbox...</> : <><Plug className="w-4 h-4" /> Test Connection</>}
           </button>
           <button
             onClick={handleSave}
