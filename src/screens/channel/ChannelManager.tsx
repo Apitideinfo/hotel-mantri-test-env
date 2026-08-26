@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import {
+import { 
   RefreshCw, Plus, X, ChevronLeft, ChevronRight, AlertTriangle,
   CheckCircle2, XCircle, Clock, Zap, Wifi, WifiOff, Pause, Play,
   Settings as SettingsIcon, FileText, Calendar, Building2, Link2,
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-} from 'lucide-react';
+  RefreshCcw } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
   bulkUpdateInventory, saveChannelConnection, deleteChannelConnection,
@@ -443,6 +443,9 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   const [cellEdit, setCellEdit] = useState<{ catId: string; date: string; categoryName: string } | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncProgress, setSyncProgress] = useState<string>("");
+
 
   const days = useMemo(() => daysBetween(startDate, endDate), [startDate, endDate]);
 
@@ -452,6 +455,41 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
     else if (preset === '14') { setStartDate(todayStr()); setEndDate(addDays(todayStr(), 13)); }
     else if (preset === '30') { setStartDate(todayStr()); setEndDate(addDays(todayStr(), 29)); }
     else { setShowCustomRange(true); }
+  };
+
+  
+  const handlePushToAiosell = async () => {
+    setIsSyncing(true);
+    setSyncProgress("Pushing Inventory...");
+    try {
+      const invRes = await fetch('http://localhost:5000/api/aiosell/inventory/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate })
+      });
+      if (!invRes.ok) {
+        const error = await invRes.json();
+        throw new Error(error.error || 'Failed to push inventory');
+      }
+
+      setSyncProgress("Pushing Rates...");
+      const ratesRes = await fetch('http://localhost:5000/api/aiosell/rates/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate })
+      });
+      if (!ratesRes.ok) {
+        const error = await ratesRes.json();
+        throw new Error(error.error || 'Failed to push rates');
+      }
+
+      alert('Successfully synced Inventory & Rates with Aiosell!');
+    } catch (err: any) {
+      alert(err.message || 'Error syncing with Aiosell');
+    } finally {
+      setIsSyncing(false);
+      setSyncProgress("");
+    }
   };
 
   const shiftRange = (n: number) => {
@@ -540,6 +578,14 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           >
             <Zap className="w-4 h-4" /> Bulk Update
           </button>
+            <button
+              onClick={handlePushToAiosell}
+              disabled={isSyncing}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue hover:shadow-md transition-all active:scale-[0.98] ml-2 disabled:opacity-50"
+            >
+              {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />} 
+              {isSyncing ? 'Syncing...' : 'Push Inventory & Rates'}
+            </button>
         </div>
       </div>
 

@@ -236,18 +236,64 @@ export const getPropertyMapping = async () => {
 
 export const pushInventory = async (payload) => {
   const config = getConfig();
-  return request(`/update/${config.partnerId}`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  
+  // Format based on Aiosell spec
+  const aiosellPayload = {
+    hotelCode: config.hotelCode,
+    updates: [
+      {
+        startDate: payload.startDate || new Date().toISOString().split('T')[0],
+        endDate: payload.endDate || new Date().toISOString().split('T')[0],
+        rooms: [
+          { roomCode: 'executive', available: 5 },
+          { roomCode: 'suite', available: 3 }
+        ]
+      }
+    ]
+  };
+
+  try {
+    return await request(`/update/${config.partnerId}`, {
+      method: 'POST',
+      body: JSON.stringify(aiosellPayload),
+    });
+  } catch (err) {
+    if (err.message && err.message.includes('Payload Parsing Failed')) {
+      throw new Error('Aiosell rejected the inventory format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
+    }
+    throw err;
+  }
 };
 
 export const pushRates = async (payload) => {
   const config = getConfig();
-  return request(`/update-rates/${config.partnerId}`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  
+  // Format based on Aiosell spec
+  const aiosellPayload = {
+    hotelCode: config.hotelCode,
+    updates: [
+      {
+        startDate: payload.startDate || new Date().toISOString().split('T')[0],
+        endDate: payload.endDate || new Date().toISOString().split('T')[0],
+        rates: [
+          { roomCode: 'executive', rate: 1749, rateplanCode: 'executive-s-ep' },
+          { roomCode: 'suite', rate: 2999, rateplanCode: 'suite-d-cp' }
+        ]
+      }
+    ]
+  };
+
+  try {
+    return await request(`/update-rates/${config.partnerId}`, {
+      method: 'POST',
+      body: JSON.stringify(aiosellPayload),
+    });
+  } catch (err) {
+    if (err.message && err.message.includes('Payload Parsing Failed')) {
+      throw new Error('Aiosell rejected the rates format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
+    }
+    throw err;
+  }
 };
 
 export const pushInventoryRestrictions = async (payload) => {

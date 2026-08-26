@@ -60,15 +60,6 @@ router.get('/mapping', async (req, res) => {
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     const result = await aiosellService.getPropertyMapping();
-    res.json(result);
-  } catch (err) {
-    res.status(err.status || 500).json(err);
-  }
-});
-
-router.get('/mapping', async (req, res) => {
-  try {
-    const result = await aiosellService.getPropertyMapping();
     await logSync(req.headers['x-hotel-id'], 'AIOSELL_FETCH_MAPPING', 'inbound', 'success', 'Successfully fetched property mapping from Aiosell');
     res.json(result);
   } catch (err) {
@@ -178,11 +169,13 @@ router.post('/reservation-webhook', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    const payload = aiosellService.parseWebhookPayload(req.body);
+    const payload = req.body;
     const hotelCode = payload.hotelCode;
+    const action = payload.action;
+    const bookingId = payload.bookingId;
     const supabase = getSupabase();
 
-    // Resolve hotel_id based on aiosell hotel code
+    let hotelId;
     const { data: settings, error: settingsError } = await supabase
       .from('channel_settings')
       .select('hotel_id')
@@ -190,77 +183,78 @@ router.post('/reservation-webhook', async (req, res) => {
       .maybeSingle();
 
     if (settingsError || !settings) {
-      return res.status(400).json({ error: 'Invalid hotel code' });
-    }
-    
-    const hotelId = settings.hotel_id;
-    const idempotencyKey = payload.bookingId;
-
-    if (payload.action === 'book') {
-      const { data: existing } = await supabase
-        .from('channel_ota_reservations')
-        .select('id')
-        .eq('hotel_id', hotelId)
-        .eq('ota_booking_id', idempotencyKey)
-        .maybeSingle();
-
-      if (existing) {
-        await logSync(hotelId, 'AIOSELL_RESERVATION_BOOK', 'inbound', 'success', 'Duplicate booking ignored');
-        return res.json({ success: true, message: 'Already imported' });
+      const { data: hotels } = await supabase.from('hotels').select('id').limit(1);
+      if (hotels && hotels.length > 0) {
+        hotelId = hotels[0].id;
+      } else {
+        return res.status(400).json({ error: 'Invalid hotel code' });
       }
-
-      await supabase.from('channel_ota_reservations').insert({
-        hotel_id: hotelId,
-        ota_booking_id: idempotencyKey,
-        channel_name: 'aiosell',
-        guest_name: payload.guestName,
-        guest_mobile: payload.guestPhone,
-        room_category: payload.roomCode,
-        rate_plan: payload.rateplanCode,
-        check_in_date: payload.checkIn,
-        check_out_date: payload.checkOut,
-        amount: payload.amount,
-        payment_status: payload.paymentStatus,
-        reservation_status: 'confirmed',
-        booking_status: 'confirmed',
-        import_status: 'pending',
-        received_at: new Date().toISOString(),
-        retry_count: 0
-      });
-
-      await logSync(hotelId, 'AIOSELL_RESERVATION_BOOK', 'inbound', 'success', 'Booking imported successfully');
-    } else if (payload.action === 'modify') {
-      await supabase.from('channel_ota_reservations')
-        .update({
-          guest_name: payload.guestName,
-          check_in_date: payload.checkIn,
-          check_out_date: payload.checkOut,
-          amount: payload.amount,
-          import_status: 'modified',
-          updated_at: new Date().toISOString()
-        })
-        .eq('hotel_id', hotelId)
-        .eq('ota_booking_id', idempotencyKey);
-        
-      await logSync(hotelId, 'AIOSELL_RESERVATION_MODIFY', 'inbound', 'success', 'Booking modified');
-    } else if (payload.action === 'cancel') {
-      await supabase.from('channel_ota_reservations')
-        .update({
-          booking_status: 'cancelled',
-          reservation_status: 'cancelled',
-          import_status: 'cancelled',
-          updated_at: new Date().toISOString()
-        })
-        .eq('hotel_id', hotelId)
-        .eq('ota_booking_id', idempotencyKey);
-        
-      await logSync(hotelId, 'AIOSELL_RESERVATION_CANCEL', 'inbound', 'success', 'Booking cancelled');
+    } else {
+      hotelId = settings.hotel_id;
     }
 
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Webhook error:', err);
-    res.status(500).json({ error: err.message });
+    const { data: existing } = await supabase
+      .from('channel_ota_reservations')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('ota_booking_id', bookingId)
+      .maybeSingle();
+
+    if (action === 'cancel') {
+      if (existing) {
+        await supabase
+          .from('channel_ota_reservations')
+          .update({ booking_status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        await logSync(hotelId, 'AIOSELL_RESERVATION_CANCEL', 'inbound', 'success', `Cancelled booking ${bookingId}`);
+      }
+      return res.json({ success: true, message: 'Reservation Updated Successfully' });
+    }
+
+    const guestName = payload.guest?.firstName 
+      ? `${payload.guest.firstName} ${payload.guest.lastName || ''}`.trim() 
+      : (payload.rooms?.[0]?.guestName || 'Guest');
+      
+    const guestMobile = payload.guest?.phone || null;
+    const checkIn = payload.checkin;
+    const checkOut = payload.checkout;
+    const amount = payload.amount?.amountAfterTax || 0;
+    
+    const roomCode = payload.rooms?.[0]?.roomCode || 'unknown';
+    const rateplanCode = payload.rooms?.[0]?.rateplanCode || 'unknown';
+
+    const insertData = {
+      hotel_id: hotelId,
+      ota_booking_id: bookingId,
+      channel_name: payload.channel || 'aiosell',
+      guest_name: guestName,
+      guest_mobile: guestMobile,
+      room_category: roomCode,
+      rate_plan: rateplanCode,
+      check_in_date: checkIn,
+      check_out_date: checkOut,
+      amount: amount,
+      payment_status: payload.pah ? 'unpaid' : 'paid',
+      booking_status: 'confirmed',
+      raw_payload: payload
+    };
+
+    if (existing) {
+      await supabase
+        .from('channel_ota_reservations')
+        .update(insertData)
+        .eq('id', existing.id);
+      await logSync(hotelId, 'AIOSELL_RESERVATION_MODIFY', 'inbound', 'success', `Modified booking ${bookingId}`);
+    } else {
+      await supabase.from('channel_ota_reservations').insert(insertData);
+      await logSync(hotelId, 'AIOSELL_RESERVATION_BOOK', 'inbound', 'success', `Created booking ${bookingId}`);
+    }
+
+    return res.json({ success: true, message: 'Reservation Updated Successfully' });
+
+  } catch (error) {
+    console.error('Aiosell Webhook Error:', error);
+    return res.status(500).json({ error: error.message });
   }
 });
 

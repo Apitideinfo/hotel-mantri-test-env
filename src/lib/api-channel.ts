@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
+export { getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
 
 // ── Types ──
 
@@ -148,21 +149,6 @@ export const getChannelMetadata = (type: string): { label: string; short: string
   CHANNEL_TYPES.find((channel) => channel.type === type) ?? { label: type, short: '?' };
 
 // ── Channel Connections ──
-
-export const fetchAiosellMapping = async (): Promise<AiosellMappingResponse> => {
-  const token = localStorage.getItem('token');
-  const res = await fetch('http://localhost:5000/api/aiosell/mapping', {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-    },
-  });
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.message || 'Failed to fetch Aiosell mapping');
-  }
-  return await res.json();
-};
 
 export const getChannelConnections = async (): Promise<ChannelConnection[]> => {
   const { data, error } = await supabase
