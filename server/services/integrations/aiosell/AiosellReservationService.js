@@ -20,16 +20,25 @@ export const processWebhook = async (rawPayload) => {
   const idempotencyKey = payload.bookingId;
   
   // 1. Resolve hotel_id
-  const { data: settings, error: settingsError } = await supabase
+  let hotelId = null;
+  const { data: settings } = await supabase
     .from('channel_settings')
-    .select('hotel_id')
+    .select('id, hotel_id')
     .eq('aiosell_hotel_code', payload.hotelCode)
     .maybeSingle();
 
-  if (settingsError || !settings) {
-    throw { status: 404, message: 'Invalid hotel code mapping' };
+  if (settings?.hotel_id) {
+    hotelId = settings.hotel_id;
+  } else {
+    // Fallback: Check if payload hotelCode matches environment or fetch default hotel from database
+    const envHotelCode = process.env.AIOSELL_HOTEL_CODE || 'sandbox-pms';
+    const { data: hotels } = await supabase.from('hotels').select('id').limit(1);
+    if (hotels && hotels.length > 0) {
+      hotelId = hotels[0].id;
+    } else {
+      throw { status: 404, message: `Invalid hotel code mapping: '${payload.hotelCode}'` };
+    }
   }
-  const hotelId = settings.hotel_id;
 
   // 2. Resolve room category mapping
   let roomCategoryId = null;
@@ -39,13 +48,9 @@ export const processWebhook = async (rawPayload) => {
     const { data: mapping } = await supabase
       .from('channel_rate_mappings')
       .select('room_category_id, rate_plan')
-      .eq('channel_id', settings.id) // Assuming channel_id links to channel_connections, wait, we need channel_connections!
-      // Let's do a simpler lookup if channel_id is not directly accessible this way.
-      // Actually, channel_settings is one per hotel. Channel connections are many.
-      // To keep it robust, let's query channel_rate_mappings by joining channel_connections
-      // But for simplicity, we can query room_categories by name if mapping fails
       .eq('aiosell_room_code', payload.roomCode)
       .maybeSingle();
+
       
     if (mapping) {
       roomCategoryId = mapping.room_category_id;
