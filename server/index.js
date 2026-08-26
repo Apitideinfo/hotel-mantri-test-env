@@ -3,8 +3,9 @@ import cors from 'cors';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import aiosellRoutes from './routes/aiosell.js';
+import aiosellIntegrationRoutes from './services/integrations/aiosell/AiosellWebhookController.js';
 
-dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
@@ -12,6 +13,9 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+app.use('/api/aiosell', aiosellRoutes);
+app.use('/api/integrations/aiosell', aiosellIntegrationRoutes);
 
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';

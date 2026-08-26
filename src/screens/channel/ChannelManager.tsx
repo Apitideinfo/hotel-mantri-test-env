@@ -1,20 +1,21 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import {
+import { 
   RefreshCw, Plus, X, ChevronLeft, ChevronRight, AlertTriangle,
   CheckCircle2, XCircle, Clock, Zap, Wifi, WifiOff, Pause, Play,
   Settings as SettingsIcon, FileText, Calendar, Building2, Link2,
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-} from 'lucide-react';
+  RefreshCcw } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
   bulkUpdateInventory, saveChannelConnection, deleteChannelConnection,
   saveChannelRateMapping, deleteChannelRateMapping, insertSyncLog,
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
-  CHANNEL_TYPES, getChannelMetadata,
+  CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
 } from '@/lib/api-channel';
+import { testAiosellConnection, getAiosellMapping } from '@/lib/api-aiosell';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
   ChannelSyncLog, ChannelOtaReservation, ChannelSettings,
@@ -37,10 +38,19 @@ const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n 
 const addDays = (dateStr: string, n: number): string => {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
-const todayStr = (): string => new Date().toISOString().slice(0, 10);
+const todayStr = (): string => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const fmtDate = (d: string): string => {
   const dt = new Date(d + 'T00:00:00');
@@ -178,7 +188,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
-          <p className="text-sm text-slate-400 mt-0.5">Channex.io integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}</p>
+          <p className="text-sm text-slate-400 mt-0.5">Aiosell integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${overview?.isLiveMode ? STATUS_STYLES.connected : 'bg-amber-100 text-amber-700 border-amber-300'}`}>
@@ -195,7 +205,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">Mock/Test Mode:</span> Channex credentials are not yet configured. Data shown is from your PMS. Connect Channex in Connection Settings to enable live OTA sync.
+            <span className="font-semibold">Mock/Test Mode:</span> Aiosell credentials are not yet configured. Connect Aiosell in Connection Settings to enable live OTA sync.
           </p>
         </div>
       )}
@@ -278,8 +288,8 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
 
   // Setup checklist
   const checklist = [
-    { label: 'Channex credentials configured', done: overview.settings?.status === 'connected' || (overview.settings?.property_id != null && overview.settings?.api_key_secret_name != null), action: () => onTab('settings') },
-    { label: 'Property connection established', done: overview.settings?.status === 'connected', action: () => onTab('settings') },
+    { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
+    { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
     { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_room_type_id), action: () => onTab('mapping') },
     { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_rate_plan_id), action: () => onTab('mapping') },
     { label: 'At least one channel connected', done: connected > 0, action: () => onTab('channels') },
@@ -433,6 +443,9 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   const [cellEdit, setCellEdit] = useState<{ catId: string; date: string; categoryName: string } | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [syncProgress, setSyncProgress] = useState<string>("");
+
 
   const days = useMemo(() => daysBetween(startDate, endDate), [startDate, endDate]);
 
@@ -442,6 +455,41 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
     else if (preset === '14') { setStartDate(todayStr()); setEndDate(addDays(todayStr(), 13)); }
     else if (preset === '30') { setStartDate(todayStr()); setEndDate(addDays(todayStr(), 29)); }
     else { setShowCustomRange(true); }
+  };
+
+  
+  const handlePushToAiosell = async () => {
+    setIsSyncing(true);
+    setSyncProgress("Pushing Inventory...");
+    try {
+      const invRes = await fetch('http://localhost:5000/api/aiosell/inventory/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate })
+      });
+      if (!invRes.ok) {
+        const error = await invRes.json();
+        throw new Error(error.error || 'Failed to push inventory');
+      }
+
+      setSyncProgress("Pushing Rates...");
+      const ratesRes = await fetch('http://localhost:5000/api/aiosell/rates/push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ startDate, endDate })
+      });
+      if (!ratesRes.ok) {
+        const error = await ratesRes.json();
+        throw new Error(error.error || 'Failed to push rates');
+      }
+
+      alert('Successfully synced Inventory & Rates with Aiosell!');
+    } catch (err: any) {
+      alert(err.message || 'Error syncing with Aiosell');
+    } finally {
+      setIsSyncing(false);
+      setSyncProgress("");
+    }
   };
 
   const shiftRange = (n: number) => {
@@ -530,6 +578,14 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           >
             <Zap className="w-4 h-4" /> Bulk Update
           </button>
+            <button
+              onClick={handlePushToAiosell}
+              disabled={isSyncing}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue hover:shadow-md transition-all active:scale-[0.98] ml-2 disabled:opacity-50"
+            >
+              {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />} 
+              {isSyncing ? 'Syncing...' : 'Push Inventory & Rates'}
+            </button>
         </div>
       </div>
 
@@ -584,7 +640,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                   {days.map((d) => {
                     const isToday = d === todayStr();
                     return (
-                      <th key={d} className={`text-center px-2 py-3 text-xs font-bold min-w-[64px] ${isToday ? 'text-brand-600 bg-brand-50 border-b-2 border-brand-400' : 'text-slate-500'}`}>
+                      <th key={`header-${d}`} className={`text-center px-2 py-3 text-xs font-bold min-w-[64px] ${isToday ? 'text-brand-600 bg-brand-50 border-b-2 border-brand-400' : 'text-slate-500'}`}>
                         <div className={isToday ? 'text-brand-600' : ''}>{fmtDate(d)}</div>
                         <div className={`text-[9px] font-normal mt-0.5 ${isToday ? 'text-brand-400' : 'text-slate-400'}`}>
                           {new Date(d + 'T00:00:00').toLocaleDateString('en-IN', { weekday: 'short' })}
@@ -674,7 +730,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                           </button>
                           <p className="text-[10px] text-slate-400 ml-5.5">Tariff: {rs(cat.default_tariff)}</p>
                         </td>
-                        {days.map((d) => <td key={d} className="px-1 py-1" />)}
+                        {days.map((d) => <td key={`${cat.id}-empty-${d}`} className="px-1 py-1" />)}
                       </tr>
 
                       {/* Sub-rows */}
@@ -684,7 +740,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                             <span className="text-xs font-medium text-slate-500 pl-5.5">{row.label}</span>
                           </td>
                           {days.map((d) => (
-                            <td key={d} className="px-1 py-1">{row.render(d)}</td>
+                            <td key={`${cat.id}-${row.key}-${d}`} className="px-1 py-1">{row.render(d)}</td>
                           ))}
                         </tr>
                       ))}
@@ -698,7 +754,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const val = toNum(r.max_stay);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-maxstay-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className="text-xs text-slate-500 hover:text-slate-700 px-1 py-1">
                                     {val > 0 ? `${val}n` : '—'}
                                   </button>
@@ -712,7 +768,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const cta = Boolean(r.closed_to_arrival);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-cta-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className={`text-xs px-2 py-1 rounded ${cta ? 'text-red-600 bg-red-50' : 'text-emerald-600 bg-emerald-50'}`}>
                                     {cta ? 'Closed' : 'Open'}
                                   </button>
@@ -726,7 +782,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                               const r = getR(cat.id, d);
                               const ctd = Boolean(r.closed_to_departure);
                               return (
-                                <td key={d} className="px-1 py-1 text-center">
+                                <td key={`${cat.id}-ctd-${d}`} className="px-1 py-1 text-center">
                                   <button onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })} className={`text-xs px-2 py-1 rounded ${ctd ? 'text-red-600 bg-red-50' : 'text-emerald-600 bg-emerald-50'}`}>
                                     {ctd ? 'Closed' : 'Open'}
                                   </button>
@@ -1370,7 +1426,7 @@ const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
               </div>
               <div className="space-y-1 text-xs text-slate-500 mb-3">
                 <p>Last Sync: {c.last_sync_at ? fmtDateTime(c.last_sync_at) : 'Never'}</p>
-                <p>Channex ID: {c.channex_channel_id ?? 'Not set'}</p>
+                <p>External ID: {c.external_hotel_code ?? 'Not set'}</p>
                 {c.last_error && <p className="text-red-500">Error: {c.last_error}</p>}
               </div>
               <div className="flex items-center gap-2">
@@ -1379,7 +1435,6 @@ const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
                     await saveChannelConnection({
                       channel_type: c.channel_type, channel_name: c.channel_name,
                       status: c.status === 'paused' ? 'connected' : 'paused',
-                      channex_channel_id: c.channex_channel_id,
                       last_sync_at: c.last_sync_at, last_sync_status: c.last_sync_status, last_error: c.last_error,
                     }, c.id);
                     onChanged();
@@ -1402,7 +1457,7 @@ const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-8 text-center">
           <WifiOff className="w-10 h-10 text-slate-300 mx-auto mb-3" />
           <p className="text-sm text-slate-500 mb-1">No channels connected.</p>
-          <p className="text-xs text-slate-400 mb-3">Add a channel to start syncing inventory and rates via Channex.</p>
+          <p className="text-xs text-slate-400 mb-3">Add a channel to start syncing inventory and rates via Aiosell.</p>
           <button onClick={() => setShowAdd(true)} className="text-sm font-semibold text-brand-600 hover:text-brand-700">Add a channel</button>
         </div>
       )}
@@ -1434,9 +1489,8 @@ const AddChannelModal = ({ isLiveMode, onClose, onAdded }: {
         channel_type: channelType,
         channel_name: channelName,
         status: 'disconnected',
-        channex_channel_id: null,
-        last_sync_at: null,
         last_sync_status: null,
+        last_sync_at: null,
         last_error: null,
       });
       onAdded();
@@ -1473,7 +1527,7 @@ const AddChannelModal = ({ isLiveMode, onClose, onAdded }: {
           </div>
           {!isLiveMode && (
             <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
-              Channel will be added in <span className="font-semibold">disconnected</span> state. {isLiveMode ? 'Activate it after adding the Channex channel ID.' : 'Connect Channex in Connection Settings to activate.'}
+              Channel will be added in <span className="font-semibold">disconnected</span> state. {isLiveMode ? 'Activate it after adding the channel.' : 'Connect Aiosell in Connection Settings to activate.'}
             </p>
           )}
         </div>
@@ -1499,17 +1553,56 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
   mappings: ChannelManagerOverview['mappings'];
   onChanged: () => void;
 }) => {
-  const [editing, setEditing] = useState<{ catId: string; ratePlanId: string; channexRoomType: string; channexRatePlan: string; mappingId?: string } | null>(null);
+  const [editing, setEditing] = useState<{ catId: string; ratePlanId: string; aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string } | null>(null);
+  const [aiosellMapping, setAiosellMapping] = useState<any>(null);
+  const [fetchingMapping, setFetchingMapping] = useState(false);
+  const [mappingError, setMappingError] = useState<string | null>(null);
+  const [mappingSuccess, setMappingSuccess] = useState(false);
+
+  const handleFetchMapping = async () => {
+    setFetchingMapping(true);
+    setMappingError(null);
+    setMappingSuccess(false);
+    try {
+      const data = await fetchAiosellMapping();
+      setAiosellMapping(data);
+      setMappingSuccess(true);
+      setTimeout(() => setMappingSuccess(false), 3000);
+    } catch (err: any) {
+      setMappingError(err.message || 'Failed to fetch mapping');
+    } finally {
+      setFetchingMapping(false);
+    }
+  };
 
   const getMapping = (catId: string, ratePlanId: string) => {
-    return mappings.find((m) => m.room_category_id === catId && m.rate_plan_id === ratePlanId);
+    return mappings.find((m) => 
+      m.room_category_id === catId && 
+      (m.rate_plan_id === ratePlanId || (!m.rate_plan_id && !ratePlanId))
+    );
   };
 
   const mappedCount = mappings.filter((m) => m.status === 'mapped').length;
-  const unmappedCount = mappings.length - mappedCount;
+  
+  // A category is mapped if at least one of its rate plans (or its default rate plan) has a mapping
+  const mappedCategoryIds = new Set(mappings.filter((m) => m.status === 'mapped').map((m) => m.room_category_id));
+  const unmappedCount = categories.length - mappedCategoryIds.size;
 
   return (
     <div className="space-y-4">
+      {mappingError && (
+        <div className="bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fade-in">
+          <AlertCircle className="w-4 h-4" />
+          {mappingError}
+        </div>
+      )}
+      {mappingSuccess && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fade-in">
+          <CheckCircle2 className="w-4 h-4" />
+          Aiosell mapping fetched successfully
+        </div>
+      )}
+
       {/* Summary */}
       <div className="grid grid-cols-3 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 shadow-card p-3 text-center">
@@ -1528,9 +1621,28 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
 
       {/* Mapping table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-brand-navy-800">Room & Rate Plan Mapping</h3>
-          <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Channex room types and rate plans</p>
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-brand-navy-800">Room & Rate Plan Mapping</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Aiosell room types and rate plans</p>
+          </div>
+          <button 
+            onClick={handleFetchMapping}
+            disabled={fetchingMapping}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 rounded-lg transition disabled:opacity-50"
+          >
+            {fetchingMapping ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Fetching mapping...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" />
+                Fetch Aiosell Mapping
+              </>
+            )}
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[800px]">
@@ -1538,8 +1650,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
               <tr className="border-b border-slate-200 bg-slate-50">
                 <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Hotel Category</th>
                 <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Rate Plan</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Channex Room Type</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Channex Rate Plan</th>
+                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Aiosell Room</th>
+                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Aiosell Rate</th>
                 <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Status</th>
                 <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Actions</th>
               </tr>
@@ -1565,8 +1677,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                           onClick={() => setEditing({
                             catId: cat.id,
                             ratePlanId: rp.id,
-                            channexRoomType: mapping?.channex_room_type_id ?? '',
-                            channexRatePlan: mapping?.channex_rate_plan_id ?? '',
+                            aiosellRoomCode: mapping?.channex_room_type_id ?? '',
+                            aiosellRatePlan: mapping?.channex_rate_plan_id ?? '',
                             mappingId: mapping?.id,
                           })}
                           className="text-xs font-semibold text-brand-600 hover:text-brand-700"
@@ -1589,13 +1701,13 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
           category={categories.find((c) => c.id === editing.catId)?.name ?? ''}
           ratePlan={ratePlans.find((r) => r.id === editing.ratePlanId)?.plan_name ?? 'Default'}
           onClose={() => setEditing(null)}
-          onSave={async (channexRoomType, channexRatePlan) => {
+          onSave={async (aiosellRoom, aiosellRate) => {
             await saveChannelRateMapping({
               room_category_id: editing.catId,
               rate_plan_id: editing.ratePlanId || null,
-              channex_room_type_id: channexRoomType || null,
-              channex_rate_plan_id: channexRatePlan || null,
-              status: channexRoomType && channexRatePlan ? 'mapped' : 'unmapped',
+              channex_room_type_id: aiosellRoom || null,
+              channex_rate_plan_id: aiosellRate || null,
+              status: (aiosellRoom && aiosellRate) ? 'mapped' : 'unmapped',
               is_active: true,
               mapping_error: null,
               last_sync_at: null,
@@ -1608,22 +1720,24 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             setEditing(null);
             onChanged();
           } : undefined}
+          aiosellMapping={aiosellMapping}
         />
       )}
     </div>
   );
 };
 
-const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete }: {
-  data: { channexRoomType: string; channexRatePlan: string; mappingId?: string };
+const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete, aiosellMapping }: {
+  data: { aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string };
   category: string;
   ratePlan: string;
   onClose: () => void;
-  onSave: (roomType: string, ratePlan: string) => Promise<void>;
+  onSave: (aiosellRoom: string, aiosellRate: string) => Promise<void>;
   onDelete?: () => Promise<void>;
+  aiosellMapping?: any;
 }) => {
-  const [roomType, setRoomType] = useState(data.channexRoomType);
-  const [ratePlanId, setRatePlanId] = useState(data.channexRatePlan);
+  const [aiosellRoomCode, setAiosellRoomCode] = useState(data.aiosellRoomCode);
+  const [aiosellRatePlan, setAiosellRatePlan] = useState(data.aiosellRatePlan);
   const [saving, setSaving] = useState(false);
 
   return (
@@ -1641,13 +1755,34 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete 
             <p className="text-xs text-slate-400 mt-1">Rate Plan</p>
             <p className="text-sm font-semibold text-slate-800">{ratePlan}</p>
           </div>
+
           <div>
-            <label className="text-xs font-semibold text-slate-500">Channex Room Type ID</label>
-            <input type="text" value={roomType} onChange={(e) => setRoomType(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Channex room type ID" />
+            <label className="text-xs font-semibold text-slate-500">Aiosell Room Code</label>
+            {aiosellMapping && aiosellMapping.rooms ? (
+              <select value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+                <option value="">Select a room...</option>
+                {aiosellMapping.rooms.map((r: any) => (
+                  <option key={r.room_id} value={r.room_id}>{r.room_name} ({r.room_id})</option>
+                ))}
+              </select>
+            ) : (
+              <input type="text" value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell room code (or Fetch Mapping first)" />
+            )}
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500">Channex Rate Plan ID</label>
-            <input type="text" value={ratePlanId} onChange={(e) => setRatePlanId(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Channex rate plan ID" />
+            <label className="text-xs font-semibold text-slate-500">Aiosell Rate Plan Code</label>
+            {aiosellMapping && aiosellMapping.ratePlans ? (
+              <select value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+                <option value="">Select a rate plan...</option>
+                {aiosellMapping.ratePlans
+                  .filter((rp: any) => !aiosellRoomCode || rp.room_id === aiosellRoomCode)
+                  .map((rp: any) => (
+                  <option key={rp.rate_plan_id} value={rp.rate_plan_id}>{rp.rate_plan_name} ({rp.rate_plan_id})</option>
+                ))}
+              </select>
+            ) : (
+              <input type="text" value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell rate plan code" />
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 mt-4">
@@ -1656,7 +1791,7 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete 
           )}
           <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-2.5 transition">Cancel</button>
           <button
-            onClick={async () => { setSaving(true); await onSave(roomType, ratePlanId); setSaving(false); }}
+            onClick={async () => { setSaving(true); await onSave(aiosellRoomCode, aiosellRatePlan); setSaving(false); }}
             disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-2.5 transition"
           >
@@ -1833,71 +1968,80 @@ const LogsTab = ({ logs, connections }: {
 // ══════════════════════════════════════════════════════════════════
 // SETTINGS TAB
 // ══════════════════════════════════════════════════════════════════
-
 const SettingsTab = ({ settings, onChanged }: {
   settings: ChannelSettings | null;
   onChanged: () => void;
 }) => {
-  const [apiBaseUrl, setApiBaseUrl] = useState(settings?.api_base_url ?? 'https://api.channex.io/api/v1');
-  const [apiKey, setApiKey] = useState('');
-  const [propertyId, setPropertyId] = useState(settings?.property_id ?? '');
-  const [environment, setEnvironment] = useState<'test' | 'production'>(settings?.environment ?? 'test');
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [saved, setSaved] = useState(false);
   const [enabled, setEnabled] = useState(settings?.channel_manager_enabled ?? false);
-
-  const hasKey = Boolean(settings?.api_key_secret_name);
+  const [aiosellHotel, setAiosellHotel] = useState(settings?.aiosell_hotel_code ?? '');
+  const [aiosellPartner, setAiosellPartner] = useState(settings?.aiosell_partner_id ?? '');
+  const [aiosellEnv, setAiosellEnv] = useState<'test' | 'production'>(settings?.aiosell_environment ?? 'test');
+  const [aiosellTesting, setAiosellTesting] = useState(false);
+  const [aiosellTestResult, setAiosellTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    details?: {
+      status: number;
+      responseTimeMs: number;
+      hotelCode: string;
+      roomsCount: number;
+      ratePlansCount: number;
+    }
+  } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
     try {
       await saveChannelSettings({
-        api_base_url: apiBaseUrl,
-        api_key_secret_name: apiKey ? 'channex_api_key' : (settings?.api_key_secret_name ?? null),
-        property_id: propertyId,
-        environment,
-        status: settings?.status ?? 'disconnected',
+        ...settings!,
         channel_manager_enabled: enabled,
       });
-      setSaved(true);
-      setApiKey('');
-      setTimeout(() => setSaved(false), 3000);
       onChanged();
-    } catch {
-      // non-critical
+    } catch (e) {
+      console.error(e);
     } finally {
       setSaving(false);
     }
   };
 
-  const handleTest = async () => {
-    setTesting(true);
-    setTestResult(null);
+  const handleTestAiosell = async () => {
+    setAiosellTesting(true);
+    setAiosellTestResult(null);
     try {
-      if (!propertyId || !hasKey) {
-        setTestResult({ ok: false, message: 'Channex connection not configured — Test Mode. Add the server-side Channex secret and Property ID before enabling live sync.' });
-        await updateChannelSettingsStatus('disconnected', 'Channex connection not configured — Test Mode');
+      const res = await testAiosellConnection();
+      if (res.success) {
+        setAiosellTestResult({ 
+          ok: true, 
+          message: "✓ Aiosell Sandbox Connected",
+          details: {
+            status: res.status,
+            responseTimeMs: res.responseTimeMs,
+            hotelCode: res.hotelCode,
+            roomsCount: res.mapping?.rooms?.length || 0,
+            ratePlansCount: res.mapping?.ratePlans?.length || 0,
+          }
+        });
+        onChanged();
       } else {
-        setTestResult({ ok: false, message: 'Live connection testing requires the secure Channex server connector. No live sync was started.' });
-        await updateChannelSettingsStatus('disconnected', 'Server connector pending');
+        setAiosellTestResult({ ok: false, message: res.error?.message || "Failed to connect to Aiosell sandbox." });
       }
-      onChanged();
-    } catch {
-      setTestResult({ ok: false, message: 'Connection test failed. Check credentials and try again.' });
+    } catch (err: any) {
+      const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
+      setAiosellTestResult({ 
+        ok: false, 
+        message: isAuthError ? "✕ Aiosell Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
+      });
     } finally {
-      setTesting(false);
+      setAiosellTesting(false);
     }
   };
 
   const handleDisconnect = async () => {
     setSaving(true);
     try {
-      await updateChannelSettingsStatus('disconnected', 'Manually disconnected');
+      await saveChannelSettings({ ...settings!, aiosell_status: 'disconnected', channel_manager_enabled: false });
       onChanged();
-    } catch {
-      // non-critical
     } finally {
       setSaving(false);
     }
@@ -1908,71 +2052,59 @@ const SettingsTab = ({ settings, onChanged }: {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-5">
         <div className="flex items-center gap-2 mb-1">
           <KeyRound className="w-4 h-4 text-brand-600" />
-          <h3 className="text-sm font-bold text-brand-navy-800">Channex Connection Settings</h3>
-        </div>
-        <p className="text-xs text-slate-400 mb-4">Configure your Channex.io API credentials to enable live OTA sync. Until then, the Channel Manager runs in mock/test mode.</p>
-
-        {/* Status badge */}
-        <div className="mb-4">
-          <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${settings?.status === 'connected' ? STATUS_STYLES.connected : settings?.status === 'error' ? STATUS_STYLES.error : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
-            {settings?.status === 'connected' ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Connected</> : settings?.status === 'error' ? <><XCircle className="w-3 h-3 inline mr-1" /> Error</> : <><Clock className="w-3 h-3 inline mr-1" /> Disconnected</>}
-          </span>
-          {settings?.last_tested_at && (
-            <span className="text-[10px] text-slate-400 ml-2">Last tested: {fmtDateTime(settings.last_tested_at)}</span>
+          <h3 className="text-sm font-bold text-brand-navy-800">Aiosell Connection Settings</h3>
+          {settings?.aiosell_environment === 'test' && (
+            <span className="ml-auto text-xs font-bold px-2.5 py-1 rounded bg-amber-100 text-amber-700">
+              AIOSELL SANDBOX / TEST
+            </span>
           )}
+        </div>
+        <p className="text-xs text-slate-400 mb-4">Configure your Aiosell PMS integration parameters.</p>
+
+        <div className="mb-4">
+          <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${settings?.aiosell_status === 'connected' ? STATUS_STYLES.connected : settings?.aiosell_status === 'error' ? STATUS_STYLES.error : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+            {settings?.aiosell_status === 'connected' ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Connected</> : settings?.aiosell_status === 'error' ? <><XCircle className="w-3 h-3 inline mr-1" /> Error</> : <><Clock className="w-3 h-3 inline mr-1" /> Disconnected</>}
+          </span>
         </div>
 
         <div className="space-y-3">
-          {/* API Base URL */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Server className="w-3 h-3" /> Channex API Base URL</label>
-            <input
-              type="text"
-              value={apiBaseUrl}
-              onChange={(e) => setApiBaseUrl(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              placeholder="https://api.channex.io/api/v1"
-            />
-          </div>
-
-          {/* API Key status */}
-          <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5">
-            <p className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> Channex API Secret</p>
-            <p className="text-xs text-slate-600 mt-1">{hasKey ? 'Configured in secure server storage.' : 'Not configured. The module remains in Mock/Test Mode.'}</p>
-            <p className="text-[10px] text-slate-400 mt-1">Credentials are never entered or stored in this browser.</p>
-          </div>
-
-          {/* Property ID */}
-          <div>
-            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Channex Property ID</label>
-            <input
-              type="text"
-              value={propertyId}
-              onChange={(e) => setPropertyId(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              placeholder="Enter your Channex property ID"
-            />
-            <p className="text-[10px] text-slate-400 mt-1">Find this in Channex → Properties → your property</p>
-          </div>
-
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-600 mb-4">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400" />
             Enable Channel Manager for this hotel
           </label>
 
-          {/* Environment */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Aiosell Hotel Code</label>
+            <input
+              type="text"
+              value={aiosellHotel}
+              onChange={(e) => setAiosellHotel(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+              placeholder="hotel-code"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> Aiosell Partner ID</label>
+            <input
+              type="text"
+              value={aiosellPartner}
+              onChange={(e) => setAiosellPartner(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+              placeholder="partner-id"
+            />
+          </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Environment</label>
             <div className="flex gap-2 mt-1">
               <button
-                onClick={() => setEnvironment('test')}
-                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${environment === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200'}`}
+                onClick={() => setAiosellEnv('test')}
+                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${aiosellEnv === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200'}`}
               >
-                Test
+                Test / Sandbox
               </button>
               <button
-                onClick={() => setEnvironment('production')}
-                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${environment === 'production' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200'}`}
+                onClick={() => setAiosellEnv('production')}
+                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${aiosellEnv === 'production' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200'}`}
               >
                 Production
               </button>
@@ -1980,33 +2112,42 @@ const SettingsTab = ({ settings, onChanged }: {
           </div>
         </div>
 
-        {/* Test result */}
-        {testResult && (
-          <div className={`mt-4 rounded-lg p-3 flex items-center gap-2 animate-fade-in ${testResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
-            {testResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
-            <p className={`text-sm ${testResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{testResult.message}</p>
+        {aiosellTestResult && (
+          <div className={`mt-4 rounded-lg p-3 flex flex-col gap-2 animate-fade-in ${aiosellTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
+            <div className="flex items-center gap-2">
+              {aiosellTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+              <p className={`text-sm font-semibold ${aiosellTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{aiosellTestResult.message}</p>
+            </div>
+            {aiosellTestResult.details && (
+              <div className="text-xs text-emerald-700 ml-6 space-y-1">
+                <p>HTTP Status: {aiosellTestResult.details.status}</p>
+                <p>Response Time: {aiosellTestResult.details.responseTimeMs} ms</p>
+                <p>Hotel: {aiosellTestResult.details.hotelCode}</p>
+                <p>Rooms: {aiosellTestResult.details.roomsCount}</p>
+                <p>Rate Plans: {aiosellTestResult.details.ratePlansCount}</p>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Actions */}
         <div className="grid grid-cols-2 gap-2 mt-4">
           <button
-            onClick={handleTest}
-            disabled={testing}
+            onClick={handleTestAiosell}
+            disabled={aiosellTesting}
             className="flex items-center justify-center gap-2 text-sm font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 rounded-xl py-3 transition border border-brand-200"
           >
-            {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />} Test Connection
+            {aiosellTesting ? <><Loader2 className="w-4 h-4 animate-spin" /> Testing Aiosell Sandbox...</> : <><Plug className="w-4 h-4" /> Test Connection</>}
           </button>
           <button
             onClick={handleSave}
             disabled={saving}
             className="flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-3 transition"
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : saved ? <CheckCircle2 className="w-4 h-4" /> : <Save className="w-4 h-4" />} {saved ? 'Saved' : 'Save Securely'}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Setup
           </button>
         </div>
 
-        {settings?.status === 'connected' && (
+        {settings?.aiosell_status === 'connected' && (
           <button
             onClick={handleDisconnect}
             disabled={saving}
@@ -2015,12 +2156,6 @@ const SettingsTab = ({ settings, onChanged }: {
             <XCircle className="w-4 h-4" /> Disconnect
           </button>
         )}
-
-        <div className="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-3">
-          <p className="text-xs text-amber-700">
-            <span className="font-semibold">Security:</span> API keys are stored securely as Supabase secrets and are never exposed in the browser. After saving, the system will validate the connection and activate live sync for all connected channels.
-          </p>
-        </div>
       </div>
     </div>
   );

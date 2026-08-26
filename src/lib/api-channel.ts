@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
+export { getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
 
 // ── Types ──
 
@@ -11,7 +12,9 @@ export interface ChannelConnection {
   channel_type: string;
   channel_name: string;
   status: 'connected' | 'disconnected' | 'paused' | 'error';
-  channex_channel_id: string | null;
+  provider?: string;
+  external_hotel_code?: string | null;
+  external_partner_id?: string | null;
   last_sync_at: string | null;
   last_sync_status: string | null;
   last_error: string | null;
@@ -24,8 +27,9 @@ export interface ChannelRateMapping {
   hotel_id: string;
   room_category_id: string | null;
   rate_plan_id: string | null;
-  channex_room_type_id: string | null;
-  channex_rate_plan_id: string | null;
+  provider?: string;
+  channex_room_type_id?: string | null;
+  channex_rate_plan_id?: string | null;
   status: 'mapped' | 'unmapped' | 'error';
   is_active: boolean;
   mapping_error: string | null;
@@ -100,9 +104,31 @@ export interface ChannelSettings {
   status: 'connected' | 'disconnected' | 'error';
   last_tested_at: string | null;
   last_test_result: string | null;
+  aiosell_status?: 'connected' | 'disconnected' | 'error' | 'paused';
+  aiosell_environment?: 'test' | 'production';
+  aiosell_hotel_code?: string | null;
+  aiosell_partner_id?: string | null;
   channel_manager_enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AiosellMappingResponse {
+  hotel: {
+    hotel_id: string;
+    hotel_name: string;
+  };
+  rooms: {
+    room_id: string;
+    room_name: string;
+    count: number;
+  }[];
+  ratePlans: {
+    rate_plan_id: string;
+    rate_plan_name: string;
+    room_id: string;
+  }[];
+  rawResponse?: any;
 }
 
 export const CHANNEL_TYPES: { type: string; label: string; short: string }[] = [
@@ -116,6 +142,7 @@ export const CHANNEL_TYPES: { type: string; label: string; short: string }[] = [
   { type: 'easemytrip', label: 'EaseMyTrip', short: 'EMT' },
   { type: 'hotels_com', label: 'Hotels.com', short: 'H' },
   { type: 'trip_com', label: 'Trip.com', short: 'T' },
+  { type: 'aiosell', label: 'Aiosell', short: 'AS' },
 ];
 
 export const getChannelMetadata = (type: string): { label: string; short: string } =>
@@ -366,6 +393,10 @@ export const saveChannelSettings = async (
 ): Promise<ChannelSettings> => {
   const existing = await getChannelSettings();
   const payload = { ...input, hotel_id: getCurrentHotelId() };
+  delete payload.aiosell_status;
+  delete payload.aiosell_environment;
+  delete payload.aiosell_hotel_code;
+  delete payload.aiosell_partner_id;
   if (existing) {
     const { data, error } = await supabase
       .from('channel_settings')
@@ -443,16 +474,29 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     getChannelSettings(),
   ]);
 
-  const isLiveMode = settings?.channel_manager_enabled === true && settings.status === 'connected' && connections.some((c) => c.status === 'connected' && c.channex_channel_id);
+  let isLiveMode = false;
+  try {
+    const aiosellTest = await fetch('http://localhost:5000/api/aiosell/test', {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+    if (aiosellTest.ok) {
+      const data = await aiosellTest.json();
+      isLiveMode = data.success === true;
+    }
+  } catch (err) {
+    console.error('Failed to check aiosell status', err);
+  }
 
   return {
+    settings,
     connections,
     otaReservations,
     categories,
     ratePlans,
     mappings,
     syncLogs,
-    settings,
     isLiveMode,
   };
 };
