@@ -30,6 +30,10 @@ export interface ChannelRateMapping {
   provider?: string;
   channex_room_type_id?: string | null;
   channex_rate_plan_id?: string | null;
+  external_room_code?: string | null;
+  external_room_name?: string | null;
+  external_rate_plan_code?: string | null;
+  external_rate_plan_name?: string | null;
   status: 'mapped' | 'unmapped' | 'error';
   is_active: boolean;
   mapping_error: string | null;
