@@ -237,20 +237,8 @@ export const getPropertyMapping = async () => {
 export const pushInventory = async (payload) => {
   const config = getConfig();
   
-  // Format based on Aiosell spec
-  const aiosellPayload = {
-    hotelCode: config.hotelCode,
-    updates: [
-      {
-        startDate: payload.startDate || new Date().toISOString().split('T')[0],
-        endDate: payload.endDate || new Date().toISOString().split('T')[0],
-        rooms: [
-          { roomCode: 'executive', available: 5 },
-          { roomCode: 'suite', available: 3 }
-        ]
-      }
-    ]
-  };
+  // payload is already constructed in the route (based on Aiosell spec)
+  const aiosellPayload = payload;
 
   try {
     return await request(`/update/${config.partnerId}`, {
@@ -268,20 +256,8 @@ export const pushInventory = async (payload) => {
 export const pushRates = async (payload) => {
   const config = getConfig();
   
-  // Format based on Aiosell spec
-  const aiosellPayload = {
-    hotelCode: config.hotelCode,
-    updates: [
-      {
-        startDate: payload.startDate || new Date().toISOString().split('T')[0],
-        endDate: payload.endDate || new Date().toISOString().split('T')[0],
-        rates: [
-          { roomCode: 'executive', rate: 1749, rateplanCode: 'executive-s-ep' },
-          { roomCode: 'suite', rate: 2999, rateplanCode: 'suite-d-cp' }
-        ]
-      }
-    ]
-  };
+  // payload is already constructed in the route (based on Aiosell spec)
+  const aiosellPayload = payload;
 
   try {
     return await request(`/update-rates/${config.partnerId}`, {
@@ -345,7 +321,7 @@ export const fetchReservations = async (startDate, endDate) => {
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
-      type: 'reservations',
+      type: 'reservation',
       hotelCode: config.hotelCode,
       startDate,
       endDate,

@@ -1701,12 +1701,17 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
           category={categories.find((c) => c.id === editing.catId)?.name ?? ''}
           ratePlan={ratePlans.find((r) => r.id === editing.ratePlanId)?.plan_name ?? 'Default'}
           onClose={() => setEditing(null)}
-          onSave={async (aiosellRoom, aiosellRate) => {
+          onSave={async (aiosellRoom, aiosellRate, aiosellRoomName, aiosellRateName) => {
             await saveChannelRateMapping({
               room_category_id: editing.catId,
               rate_plan_id: editing.ratePlanId || null,
               channex_room_type_id: aiosellRoom || null,
               channex_rate_plan_id: aiosellRate || null,
+              external_room_code: aiosellRoom || null,
+              external_room_name: aiosellRoomName || null,
+              external_rate_plan_code: aiosellRate || null,
+              external_rate_plan_name: aiosellRateName || null,
+              provider: 'aiosell',
               status: (aiosellRoom && aiosellRate) ? 'mapped' : 'unmapped',
               is_active: true,
               mapping_error: null,
@@ -1732,7 +1737,7 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
   category: string;
   ratePlan: string;
   onClose: () => void;
-  onSave: (aiosellRoom: string, aiosellRate: string) => Promise<void>;
+  onSave: (aiosellRoom: string, aiosellRate: string, aiosellRoomName: string, aiosellRateName: string) => Promise<void>;
   onDelete?: () => Promise<void>;
   aiosellMapping?: any;
 }) => {
@@ -1973,9 +1978,6 @@ const SettingsTab = ({ settings, onChanged }: {
   onChanged: () => void;
 }) => {
   const [enabled, setEnabled] = useState(settings?.channel_manager_enabled ?? false);
-  const [aiosellHotel, setAiosellHotel] = useState(settings?.aiosell_hotel_code ?? '');
-  const [aiosellPartner, setAiosellPartner] = useState(settings?.aiosell_partner_id ?? '');
-  const [aiosellEnv, setAiosellEnv] = useState<'test' | 'production'>(settings?.aiosell_environment ?? 'test');
   const [aiosellTesting, setAiosellTesting] = useState(false);
   const [aiosellTestResult, setAiosellTestResult] = useState<{
     ok: boolean;
@@ -1984,6 +1986,8 @@ const SettingsTab = ({ settings, onChanged }: {
       status: number;
       responseTimeMs: number;
       hotelCode: string;
+      partnerId: string;
+      environment: string;
       roomsCount: number;
       ratePlansCount: number;
     }
@@ -2018,13 +2022,32 @@ const SettingsTab = ({ settings, onChanged }: {
             status: res.status,
             responseTimeMs: res.responseTimeMs,
             hotelCode: res.hotelCode,
+            partnerId: res.partnerId,
+            environment: res.environment,
             roomsCount: res.mapping?.rooms?.length || 0,
             ratePlansCount: res.mapping?.ratePlans?.length || 0,
           }
         });
-        onChanged();
+        // Save success status automatically
+        if (settings) {
+          await saveChannelSettings({
+            ...settings,
+            aiosell_status: 'connected',
+            aiosell_environment: res.environment as 'test' | 'production',
+            aiosell_hotel_code: res.hotelCode,
+            aiosell_partner_id: res.partnerId,
+          });
+          onChanged();
+        }
       } else {
         setAiosellTestResult({ ok: false, message: res.error?.message || "Failed to connect to Aiosell sandbox." });
+        if (settings) {
+          await saveChannelSettings({
+            ...settings,
+            aiosell_status: 'error',
+          });
+          onChanged();
+        }
       }
     } catch (err: any) {
       const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
@@ -2032,6 +2055,13 @@ const SettingsTab = ({ settings, onChanged }: {
         ok: false, 
         message: isAuthError ? "✕ Aiosell Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
       });
+      if (settings) {
+        await saveChannelSettings({
+          ...settings,
+          aiosell_status: 'error',
+        });
+        onChanged();
+      }
     } finally {
       setAiosellTesting(false);
     }
@@ -2077,38 +2107,33 @@ const SettingsTab = ({ settings, onChanged }: {
             <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Aiosell Hotel Code</label>
             <input
               type="text"
-              value={aiosellHotel}
-              onChange={(e) => setAiosellHotel(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              placeholder="hotel-code"
+              value={settings?.aiosell_hotel_code || 'sandbox-pms'}
+              readOnly
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-500 focus:outline-none"
+              title="Configured in backend environment"
             />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> Aiosell Partner ID</label>
             <input
               type="text"
-              value={aiosellPartner}
-              onChange={(e) => setAiosellPartner(e.target.value)}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              placeholder="partner-id"
+              value={settings?.aiosell_partner_id || 'sample-pms'}
+              readOnly
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-500 focus:outline-none"
+              title="Configured in backend environment"
             />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Environment</label>
             <div className="flex gap-2 mt-1">
               <button
-                onClick={() => setAiosellEnv('test')}
-                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${aiosellEnv === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200'}`}
+                disabled
+                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${settings?.aiosell_environment === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200'}`}
               >
                 Test / Sandbox
               </button>
-              <button
-                onClick={() => setAiosellEnv('production')}
-                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${aiosellEnv === 'production' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200'}`}
-              >
-                Production
-              </button>
             </div>
+            <p className="text-[10px] text-slate-400 mt-1">Credentials and environment are securely managed on the backend.</p>
           </div>
         </div>
 
