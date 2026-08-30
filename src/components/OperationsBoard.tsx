@@ -21,7 +21,7 @@ import {
 } from '@/lib/api';
 import {
   getReservationsForDateRange, saveReservation, deleteReservation,
-  updateReservationStatus, checkRoomAvailability,
+  updateReservationStatus, checkRoomAvailability, extendReservation,
 } from '@/lib/api-reservations';
 import { extendStay } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
@@ -156,7 +156,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
 
   // Drag-to-resize state
-  const [stretchingEntry, setStretchingEntry] = useState<RoomChartEntry | null>(null);
+  const [stretchingBooking, setStretchingBooking] = useState<BoardBooking | null>(null);
   const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
 
   const { role: authRole } = useAuth();
@@ -363,17 +363,25 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     }
   };
 
-  const handleSaveReservation = async (input: ReservationInput, id?: string) => {
+  const handleSaveReservation = async (input: ReservationInput | ReservationInput[], id?: string) => {
     setSaving(true);
     try {
-      const available = await checkRoomAvailability(
-        input.room_no, input.check_in_date, input.check_out_date, id,
-      );
-      if (!available) {
-        setError('Room is already booked for the selected dates. Please choose different dates or room.');
-        return;
+      const inputs = Array.isArray(input) ? input : [input];
+      
+      for (const i of inputs) {
+        const available = await checkRoomAvailability(
+          i.room_no, i.check_in_date, i.check_out_date, id,
+        );
+        if (!available) {
+          setError(`Room ${i.room_no} is already booked for the selected dates. Please adjust your selection.`);
+          return;
+        }
       }
-      await saveReservation(input, id);
+      
+      for (const i of inputs) {
+        await saveReservation(i, id);
+      }
+      
       await load();
       onSaved();
     } catch (e) {
@@ -447,44 +455,71 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     onSaved();
   };
 
-  const commitStretch = useCallback(async (entry: RoomChartEntry, targetDate: string) => {
+  const commitStretch = useCallback(async (booking: BoardBooking, targetDate: string) => {
     const newCheckOut = new Date(targetDate + 'T00:00:00');
     newCheckOut.setDate(newCheckOut.getDate() + 1);
     const newCheckOutStr = newCheckOut.toISOString().slice(0, 10);
-    const currentCheckOut = entry.departure ?? entry.report_date;
+    const currentCheckOut = booking.checkOut;
     
     if (newCheckOutStr === currentCheckOut) {
-      setStretchingEntry(null);
+      setStretchingBooking(null);
       setStretchTargetDate(null);
       return;
     }
     
+    // Local validation
+    if (newCheckOutStr > currentCheckOut) {
+      const roomKey = booking.roomNo.trim().toLowerCase();
+      const hasEntryOverlap = entries.some(e => 
+        e.id !== booking.id && e.room_no.trim().toLowerCase() === roomKey &&
+        !e.checked_out_at &&
+        (e.arrival ?? e.report_date) < newCheckOutStr &&
+        (e.departure ?? e.report_date) > currentCheckOut
+      );
+      const hasResOverlap = reservations.some(r => 
+        r.id !== booking.id && r.room_no.trim().toLowerCase() === roomKey &&
+        (r.status === 'confirmed' || r.status === 'checked_in') &&
+        r.check_in_date < newCheckOutStr &&
+        r.check_out_date > currentCheckOut
+      );
+      if (hasEntryOverlap || hasResOverlap) {
+        alert('Room unavailable for the selected dates.');
+        setStretchingBooking(null);
+        setStretchTargetDate(null);
+        return;
+      }
+    }
+    
     setSaving(true);
     try {
-      await extendStay({ entryId: entry.id, newCheckOut: newCheckOutStr });
+      if (booking.type === 'entry') {
+        await extendStay({ entryId: booking.id, newCheckOut: newCheckOutStr });
+      } else {
+        await extendReservation({ reservationId: booking.id, newCheckOut: newCheckOutStr });
+      }
       await load();
       onSaved?.();
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Failed to resize stay');
     } finally {
       setSaving(false);
-      setStretchingEntry(null);
+      setStretchingBooking(null);
       setStretchTargetDate(null);
     }
-  }, [load, onSaved]);
+  }, [load, onSaved, entries, reservations]);
 
   useEffect(() => {
     const handleGlobalMouseUp = () => {
-      if (stretchingEntry && stretchTargetDate) {
-        commitStretch(stretchingEntry, stretchTargetDate);
+      if (stretchingBooking && stretchTargetDate) {
+        commitStretch(stretchingBooking, stretchTargetDate);
       } else {
-        setStretchingEntry(null);
+        setStretchingBooking(null);
         setStretchTargetDate(null);
       }
     };
     window.addEventListener('mouseup', handleGlobalMouseUp);
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [stretchingEntry, stretchTargetDate, commitStretch]);
+  }, [stretchingBooking, stretchTargetDate, commitStretch]);
 
   const shiftTimeline = (delta: number) => {
     setCenterDate((d) => addDays(d, delta));
@@ -770,42 +805,58 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                         </div>
                         {/* Timeline cells */}
                         {timelineDates.map((d) => {
-                          const dayBookings = roomBookings.filter(
-                            (b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut),
-                          );
+                          let dayBookings = roomBookings.filter((b) => {
+                            if (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) {
+                              const newCheckOutStr = addDays(stretchTargetDate, 1);
+                              return (d >= b.checkIn && d < newCheckOutStr) || (d === b.checkIn && b.checkIn === newCheckOutStr);
+                            }
+                            return (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut);
+                          });
                           const isToday = d === date;
                           const isHot = isHotSeasonDate(d, hotSeasons);
                           
                           const isStretchPreview = Boolean(
-                            stretchingEntry &&
-                            stretchingEntry.room_no === room.room_no &&
+                            stretchingBooking &&
+                            stretchingBooking.roomNo === room.room_no &&
                             stretchTargetDate &&
-                            d > addDays(stretchingEntry.departure ?? stretchingEntry.report_date, -1) &&
+                            d > addDays(stretchingBooking.checkOut, -1) &&
                             d <= stretchTargetDate
                           );
                           
+                          let isStretchInvalid = false;
+                          if (isStretchPreview && stretchingBooking && stretchTargetDate) {
+                            const newCheckOutStr = addDays(stretchTargetDate, 1);
+                            const currentCheckOut = stretchingBooking.checkOut;
+                            const currentRoomBookings = bookingByRoom.get(room.room_no.trim().toLowerCase()) ?? [];
+                            isStretchInvalid = currentRoomBookings.some(b => 
+                              b.id !== stretchingBooking.id &&
+                              b.checkIn < newCheckOutStr && b.checkOut > currentCheckOut
+                            );
+                          }
+
                           const isStretchShrinkPreview = Boolean(
-                            stretchingEntry &&
-                            stretchingEntry.room_no === room.room_no &&
+                            stretchingBooking &&
+                            stretchingBooking.roomNo === room.room_no &&
                             stretchTargetDate &&
                             d > stretchTargetDate &&
-                            d <= addDays(stretchingEntry.departure ?? stretchingEntry.report_date, -1)
+                            d <= addDays(stretchingBooking.checkOut, -1)
                           );
                           
                           return (
                             <div
                               key={d}
+                              title={isStretchInvalid ? 'Room unavailable' : undefined}
                               onMouseEnter={() => {
-                                if (stretchingEntry && stretchingEntry.room_no === room.room_no) {
-                                  const checkIn = stretchingEntry.arrival ?? stretchingEntry.report_date;
-                                  if (d >= checkIn) {
+                                if (stretchingBooking && stretchingBooking.roomNo === room.room_no) {
+                                  if (d >= stretchingBooking.checkIn) {
                                     setStretchTargetDate(d);
                                   }
                                 }
                               }}
                               className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 transition-colors ${
+                                isStretchInvalid ? 'bg-red-50/80 ring-1 ring-red-400 z-10 cursor-not-allowed' :
                                 isStretchPreview ? 'bg-emerald-100/80 ring-1 ring-emerald-400 z-10' :
-                                isStretchShrinkPreview ? 'bg-red-50/80 ring-1 ring-red-400 opacity-60 z-10' :
+                                isStretchShrinkPreview ? 'bg-rose-50/80 ring-1 ring-rose-400 opacity-60 z-10' :
                                 isHot
                                   ? 'bg-rose-50/20'
                                   : isToday
@@ -827,8 +878,11 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                                 </button>
                               ) : (
                                 dayBookings.map((b) => {
-                                  const isEnd = addDays(b.checkOut, -1) === d;
-                                  const isStretching = stretchingEntry?.id === b.id;
+                                  const effectiveCheckOut = (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) 
+                                    ? addDays(stretchTargetDate, 1) 
+                                    : b.checkOut;
+                                  const isEnd = addDays(effectiveCheckOut, -1) === d;
+                                  const isStretching = stretchingBooking?.id === b.id;
                                   return (
                                     <BookingBar 
                                       key={b.id} 
@@ -836,14 +890,12 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                                       onClick={() => setSelectedBooking(b)} 
                                       isEnd={isEnd}
                                       isStretching={isStretching}
-                                      onMouseDownStretch={
-                                        b.type === 'entry' ? (e) => {
-                                          e.stopPropagation();
-                                          e.preventDefault();
-                                          setStretchingEntry(b.raw as RoomChartEntry);
-                                          setStretchTargetDate(d);
-                                        } : undefined
-                                      }
+                                      onMouseDownStretch={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        setStretchingBooking(b);
+                                        setStretchTargetDate(d);
+                                      }}
                                     />
                                   );
                                 })
@@ -857,6 +909,85 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 </div>
               ));
             })()}
+            
+            {/* Daily Summary Footer */}
+            <div className="border-t-2 border-slate-200 bg-slate-50/90 flex flex-col text-xs sticky bottom-0 z-[15]">
+              {/* Occupied Row */}
+              <div className="flex border-b border-slate-200/80">
+                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                  Occupied
+                </div>
+                {timelineDates.map((d) => {
+                  const occCount = activeRooms.filter((r) => {
+                    const roomKey = r.room_no.trim().toLowerCase();
+                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                  }).length;
+                  return (
+                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-slate-900 border-r border-slate-200/80 tabular-nums">
+                      {occCount}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Available Row */}
+              <div className="flex border-b border-slate-200/80">
+                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                  Available
+                </div>
+                {timelineDates.map((d) => {
+                  const occCount = activeRooms.filter((r) => {
+                    const roomKey = r.room_no.trim().toLowerCase();
+                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                  }).length;
+                  const availCount = Math.max(0, activeRooms.length - occCount);
+                  return (
+                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
+                      {availCount}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Occupancy % Row */}
+              <div className="flex border-b border-slate-200/80">
+                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                  Occupancy %
+                </div>
+                {timelineDates.map((d) => {
+                  const occCount = activeRooms.filter((r) => {
+                    const roomKey = r.room_no.trim().toLowerCase();
+                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                  }).length;
+                  const pct = activeRooms.length > 0 ? Math.round((occCount / activeRooms.length) * 100) : 0;
+                  return (
+                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-brand-600 border-r border-slate-200/80 tabular-nums">
+                      {pct}%
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Daily Tariff Row */}
+              <div className="flex">
+                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                  Daily Tariff
+                </div>
+                {timelineDates.map((d) => {
+                  const rev = activeRooms.reduce((sum, r) => {
+                    const roomKey = r.room_no.trim().toLowerCase();
+                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                    const activeBooking = roomBookings.find((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                    return sum + (activeBooking ? activeBooking.rate : 0);
+                  }, 0);
+                  return (
+                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-emerald-700 border-r border-slate-200/80 tabular-nums">
+                      {`₹${Math.round(rev).toLocaleString('en-IN')}`}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
       </div>

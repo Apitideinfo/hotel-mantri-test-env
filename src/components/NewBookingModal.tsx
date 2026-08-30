@@ -25,7 +25,7 @@ interface NewBookingModalProps {
   preselectCheckOut?: string;
   saving: boolean;
   onClose: () => void;
-  onSave: (input: ReservationInput) => void;
+  onSave: (input: ReservationInput | ReservationInput[]) => void;
 }
 
 const addDays = (dateStr: string, n: number): string => {
@@ -42,7 +42,7 @@ export const NewBookingModal = ({
   saving, onClose, onSave,
 }: NewBookingModalProps) => {
   const [step, setStep] = useState<Step>(0);
-  const [roomNo, setRoomNo] = useState(preselectRoom ?? '');
+  const [roomNos, setRoomNos] = useState<string[]>(preselectRoom ? [preselectRoom] : []);
   const [guestName, setGuestName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -71,15 +71,15 @@ export const NewBookingModal = ({
   const [createdBy, setCreatedBy] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<ReservationInput | null>(null);
+  const [success, setSuccess] = useState<ReservationInput[] | null>(null);
 
-  const selectedRoom = useMemo(
-    () => rooms.find((r) => r.room_no.trim().toLowerCase() === roomNo.trim().toLowerCase()),
-    [rooms, roomNo],
+  const selectedRooms = useMemo(
+    () => rooms.filter((r) => roomNos.includes(r.room_no.trim())),
+    [rooms, roomNos],
   );
   const category = useMemo(
-    () => categories.find((c) => c.id === selectedRoom?.category_id),
-    [categories, selectedRoom],
+    () => selectedRooms.length > 0 ? categories.find((c) => c.id === selectedRooms[0].category_id) : undefined,
+    [categories, selectedRooms],
   );
 
   const nights = useMemo(() => {
@@ -88,19 +88,24 @@ export const NewBookingModal = ({
     return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
   }, [checkIn, checkOut]);
 
-  const subtotal = toNum(rate) * nights;
+  const subtotal = toNum(rate) * nights * Math.max(1, roomNos.length);
   const afterDiscount = Math.max(0, subtotal - toNum(discount));
   const { taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, gstType, gstSlab);
   const totalReceived = toNum(payCash) + toNum(payUpi) + toNum(payCard) + toNum(payBank);
   const balance = Math.max(0, invoiceTotal - totalReceived);
 
-  const handleRoomSelect = (no: string) => {
-    setRoomNo(no);
-    const r = rooms.find((rm) => rm.room_no === no);
-    if (r && rate === 0) {
-      const cat = categories.find((c) => c.id === r.category_id);
-      setRate(cat?.default_tariff ?? r.default_tariff ?? 0);
-    }
+  const toggleRoom = (no: string) => {
+    setRoomNos(prev => {
+      const newNos = prev.includes(no) ? prev.filter(n => n !== no) : [...prev, no];
+      if (newNos.length > 0 && rate === '' && newNos.length > prev.length) {
+        const r = rooms.find((rm) => rm.room_no === no);
+        if (r) {
+          const cat = categories.find((c) => c.id === r.category_id);
+          setRate(cat?.default_tariff ?? r.default_tariff ?? 0);
+        }
+      }
+      return newNos;
+    });
   };
 
   const groupedRooms = useMemo(() => {
@@ -112,7 +117,7 @@ export const NewBookingModal = ({
   const validateStep = (s: Step): boolean => {
     setError(null);
     if (s === 0) {
-      if (!roomNo) { setError('Please select a room.'); return false; }
+      if (roomNos.length === 0) { setError('Please select at least one room.'); return false; }
       if (!checkIn || !checkOut) { setError('Please select check-in and check-out dates.'); return false; }
       if (new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
         setError('Check-out must be after check-in.'); return false;
@@ -129,50 +134,70 @@ export const NewBookingModal = ({
   };
   const prev = () => setStep((s) => Math.max(0, s - 1) as Step);
 
-  const buildInput = (): ReservationInput => ({
-    room_id: selectedRoom?.id ?? null,
-    room_no: roomNo,
-    guest_name: guestName.trim(),
-    guest_phone: phone.trim(),
-    guest_email: email.trim(),
-    guest_address: guestAddress.trim(),
-    guest_type: guestType.trim(),
-    company_gst: companyGst.trim(),
-    check_in_date: checkIn,
-    check_out_date: checkOut,
-    rate: toNum(rate),
-    source_category: sourceCat,
-    source_name: sourceName.trim(),
-    payment_mode: payMode,
-    advance_paid: totalReceived,
-    pay_cash: toNum(payCash),
-    pay_upi: toNum(payUpi),
-    pay_card: toNum(payCard),
-    pay_bank: toNum(payBank),
-    payment_ref: paymentRef.trim(),
-    discount: toNum(discount),
-    meal_plan: mealPlan,
-    gst_type: gstType,
-    gst_slab: gstSlab,
-    gst_amount: gst,
-    taxable_amount: taxable,
-    invoice_total: invoiceTotal,
-    adults: toNum(adults),
-    children: toNum(children),
-    remarks: remarks.trim(),
-    internal_note: internalNote.trim(),
-    created_by: createdBy.trim(),
-    status: 'confirmed',
-  });
+  const buildInputs = (): ReservationInput[] => {
+    const groupId = roomNos.length > 1 ? crypto.randomUUID() : undefined;
+    
+    return roomNos.map((no, idx) => {
+      const room = rooms.find(r => r.room_no === no);
+      
+      const advancePaid = idx === 0 ? totalReceived : 0;
+      const rPayCash = idx === 0 ? toNum(payCash) : 0;
+      const rPayUpi = idx === 0 ? toNum(payUpi) : 0;
+      const rPayCard = idx === 0 ? toNum(payCard) : 0;
+      const rPayBank = idx === 0 ? toNum(payBank) : 0;
+      
+      const roomSubtotal = toNum(rate) * nights;
+      const roomDiscount = toNum(discount) / roomNos.length;
+      const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
+      const { taxable: rTaxable, gst: rGst, invoiceTotal: rInvoiceTotal } = calcGstFull(roomAfterDiscount, gstType, gstSlab);
+      
+      return {
+        room_id: room?.id ?? null,
+        room_no: no,
+        guest_name: guestName.trim(),
+        guest_phone: phone.trim(),
+        guest_email: email.trim(),
+        guest_address: guestAddress.trim(),
+        guest_type: guestType.trim(),
+        company_gst: companyGst.trim(),
+        check_in_date: checkIn,
+        check_out_date: checkOut,
+        rate: toNum(rate),
+        source_category: sourceCat,
+        source_name: sourceName.trim(),
+        payment_mode: payMode,
+        advance_paid: advancePaid,
+        pay_cash: rPayCash,
+        pay_upi: rPayUpi,
+        pay_card: rPayCard,
+        pay_bank: rPayBank,
+        payment_ref: paymentRef.trim(),
+        discount: roomDiscount,
+        meal_plan: mealPlan,
+        gst_type: gstType,
+        gst_slab: gstSlab,
+        gst_amount: rGst,
+        taxable_amount: rTaxable,
+        invoice_total: rInvoiceTotal,
+        adults: toNum(adults),
+        children: toNum(children),
+        remarks: remarks.trim(),
+        internal_note: internalNote.trim(),
+        created_by: createdBy.trim(),
+        status: 'confirmed',
+        group_id: groupId,
+      };
+    });
+  };
 
   const handleConfirm = () => {
     setError(null);
     if (new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
       setError('Check-out must be after check-in.'); return;
     }
-    const input = buildInput();
-    onSave(input);
-    setSuccess(input);
+    const inputs = buildInputs();
+    onSave(inputs);
+    setSuccess(inputs);
   };
 
   const stepLabels = ['Stay & Rooms', 'Guest Details', 'Payment', 'Confirm'];
@@ -190,15 +215,15 @@ export const NewBookingModal = ({
               </div>
               <h2 className="text-lg font-bold text-slate-800">Booking Confirmed!</h2>
               <p className="text-sm text-slate-400 mt-1">
-                Reservation for {success.guest_name} · Room {success.room_no}
+                Reservation for {success[0].guest_name} · Rooms {success.map(s => s.room_no).join(', ')}
               </p>
               <div className="mt-4 bg-slate-50 rounded-xl p-3 text-left space-y-1.5">
-                <SuccessRow label="Check-in" value={success.check_in_date} />
-                <SuccessRow label="Check-out" value={success.check_out_date} />
-                <SuccessRow label="Nights" value={String(success.nights ?? nights)} />
-                <SuccessRow label="Rate" value={`₹${fmtMoney(success.rate ?? rate)}/night`} />
-                <SuccessRow label="Total" value={`₹${fmtMoney(success.invoice_total ?? invoiceTotal)}`} />
-                <SuccessRow label="Received" value={`₹${fmtMoney(success.advance_paid ?? totalReceived)}`} />
+                <SuccessRow label="Check-in" value={success[0].check_in_date} />
+                <SuccessRow label="Check-out" value={success[0].check_out_date} />
+                <SuccessRow label="Nights" value={String(success[0].nights ?? nights)} />
+                <SuccessRow label="Rate (per room)" value={`₹${fmtMoney(toNum(success[0].rate ?? rate))}/night`} />
+                <SuccessRow label="Total" value={`₹${fmtMoney(success.reduce((acc, s) => acc + (s.invoice_total ?? invoiceTotal), 0))}`} />
+                <SuccessRow label="Received" value={`₹${fmtMoney(toNum(success[0].advance_paid ?? totalReceived))}`} />
                 <SuccessRow label="Balance" value={`₹${fmtMoney(balance)}`} />
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2">
@@ -303,8 +328,9 @@ export const NewBookingModal = ({
                 </div>
 
                 <div>
-                  <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center gap-1.5">
-                    <BedDouble className="w-3.5 h-3.5" /> Select Room *
+                  <p className="text-xs font-semibold text-slate-500 mb-2 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5"><BedDouble className="w-3.5 h-3.5" /> Select Rooms *</span>
+                    {roomNos.length > 0 && <span className="text-[10px] text-brand-600 font-bold bg-brand-50 px-2 py-0.5 rounded-full">{roomNos.length} Selected</span>}
                   </p>
                   {rooms.length === 0 ? (
                     <p className="text-sm text-slate-400 py-2">No rooms configured. Add rooms in Property Master.</p>
@@ -321,9 +347,9 @@ export const NewBookingModal = ({
                           </div>
                           <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
                             {group.rooms.map((r) => {
-                              const isSelected = roomNo === r.room_no;
+                              const isSelected = roomNos.includes(r.room_no);
                               return (
-                                <button key={r.id} onClick={() => handleRoomSelect(r.room_no)}
+                                <button key={r.id} onClick={() => toggleRoom(r.room_no)}
                                   className={`px-2 py-2 text-xs rounded-lg border transition font-semibold ${
                                     isSelected
                                       ? 'bg-brand-600 text-white border-brand-600 shadow-soft-blue'
@@ -340,9 +366,9 @@ export const NewBookingModal = ({
                   )}
                 </div>
 
-                {selectedRoom && (
+                {roomNos.length > 0 && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <Field label="Rate / Night">
+                    <Field label="Rate / Night (Per Room)">
                       <input type="number" value={rate} onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
                         className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                     </Field>
@@ -383,13 +409,13 @@ export const NewBookingModal = ({
                 {/* Summary */}
                 <div className="bg-brand-50 rounded-xl p-3 border border-brand-100">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-600">Subtotal ({nights} × ₹{fmtMoney(rate)})</span>
+                    <span className="text-slate-600">Subtotal ({nights} × ₹{fmtMoney(toNum(rate))})</span>
                     <span className="font-semibold text-slate-800">₹{fmtMoney(subtotal)}</span>
                   </div>
                   {toNum(discount) > 0 && (
                     <div className="flex items-center justify-between text-sm mt-1">
                       <span className="text-slate-600">Discount</span>
-                      <span className="font-semibold text-red-600">- ₹{fmtMoney(discount)}</span>
+                      <span className="font-semibold text-red-600">- ₹{fmtMoney(toNum(discount))}</span>
                     </div>
                   )}
                   {gstType !== 'No Scope' && gst > 0 && (
@@ -494,7 +520,7 @@ export const NewBookingModal = ({
                 {/* Amount summary */}
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-600">Booking Amount ({nights} × ₹{fmtMoney(rate)})</span>
+                    <span className="text-slate-600">Booking Amount ({nights} × ₹{fmtMoney(toNum(rate))})</span>
                     <span className="font-semibold text-slate-800">₹{fmtMoney(subtotal)}</span>
                   </div>
                   <Field label="Discount">
@@ -586,16 +612,16 @@ export const NewBookingModal = ({
                       <PreviewRow label="Email" value={email || '—'} />
                     </PreviewSection>
                     <PreviewSection title="Rooms & Stay">
-                      <PreviewRow label="Room" value={`${roomNo} ${category ? `· ${category.name}` : ''}`} />
+                      <PreviewRow label="Room" value={`${roomNos.join(', ')} ${category ? `· ${category.name}` : ''}`} />
                       <PreviewRow label="Check-in" value={checkIn} />
                       <PreviewRow label="Check-out" value={checkOut} />
                       <PreviewRow label="Nights" value={String(nights)} />
-                      <PreviewRow label="Rate" value={`₹${fmtMoney(rate)}/night`} />
+                      <PreviewRow label="Rate" value={`₹${fmtMoney(toNum(rate))}/night`} />
                       <PreviewRow label="Meal Plan" value={mealPlan} />
                     </PreviewSection>
                     <PreviewSection title="Payment">
                       <PreviewRow label="Subtotal" value={`₹${fmtMoney(subtotal)}`} />
-                      {toNum(discount) > 0 && <PreviewRow label="Discount" value={`- ₹${fmtMoney(discount)}`} />}
+                      {toNum(discount) > 0 && <PreviewRow label="Discount" value={`- ₹${fmtMoney(toNum(discount))}`} />}
                       {gstType !== 'No Scope' && <PreviewRow label="GST" value={`₹${fmtMoney(gst)}`} />}
                       <PreviewRow label="Total" value={`₹${fmtMoney(invoiceTotal)}`} bold />
                       <PreviewRow label="Received" value={`₹${fmtMoney(totalReceived)}`} />

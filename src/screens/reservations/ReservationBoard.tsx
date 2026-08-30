@@ -9,7 +9,7 @@ import type { Reservation, ReservationStatus, ReservationAlert } from '@/lib/typ
 import {
   getReservationsForDateRange, getActiveRoomChartEntries, moveReservation, quickReservation,
   getReservationAlerts, bulkCheckIn, bulkCheckOut, bulkCancel,
-  getRoomAvailabilityForDate, type RoomAvailability, extendReservation,
+  getRoomAvailabilityForDate, type RoomAvailability,
 } from '@/lib/api-reservations';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
@@ -42,8 +42,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [error, setError] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<ReservationAlert[]>([]);
   const [showQuickRes, setShowQuickRes] = useState<{ roomNo: string; date: string } | null>(null);
-  const [draggedRes, setDraggedRes] = useState<string | null>(null);
-  const [dragOverRoom, setDragOverRoom] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -108,35 +106,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
       (r.status === 'confirmed' || r.status === 'checked_in'),
     );
   };
-
-  // Drag & Drop handlers
-  const handleDragStart = (e: React.DragEvent, reservationId: string) => {
-    setDraggedRes(reservationId);
-    e.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (e: React.DragEvent, roomNo: string) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverRoom(roomNo);
-  };
-
-  const handleDrop = async (e: React.DragEvent, targetRoomNo: string, targetDate: string) => {
-    e.preventDefault();
-    setDragOverRoom(null);
-    if (!draggedRes) return;
-    setBusy(true);
-    try {
-      await moveReservation({ reservationId: draggedRes, newRoomNo: targetRoomNo, newCheckIn: targetDate });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to move reservation');
-    } finally {
-      setBusy(false);
-      setDraggedRes(null);
-    }
-  };
-
   const handleQuickRes = async (params: { roomNo: string; guestName: string; guestPhone?: string; checkIn: string; checkOut: string; rate: number }) => {
     setBusy(true);
     try {
@@ -404,28 +373,18 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                         </td>
                         {dateColumns.map((d) => {
                           const res = getResForRoomDate(room.room_no, d);
-                          const isDragOver = dragOverRoom === room.room_no;
                           const isStart = res?.check_in_date === d;
 
                           return (
                             <td
                               key={d}
-                              onDragOver={(e) => handleDragOver(e, room.room_no)}
-                              onDragLeave={() => setDragOverRoom(null)}
-                              onDrop={(e) => handleDrop(e, room.room_no, d)}
                               onClick={() => !res && setShowQuickRes({ roomNo: room.room_no, date: d })}
-                              className={`px-1.5 py-1.5 text-center border-r border-slate-100 cursor-pointer transition relative ${
-                                isDragOver
-                                  ? 'bg-brand-100'
-                                  : 'hover:bg-slate-50'
-                              }`}
+                              className="px-1.5 py-1.5 text-center border-r border-slate-100 cursor-pointer transition relative hover:bg-slate-50"
                             >
                               {res ? (
                                 <div
-                                  draggable
-                                  onDragStart={(e) => handleDragStart(e, res.id)}
                                   onClick={(e) => { e.stopPropagation(); toggleSelect(res.id); }}
-                                  className={`group relative rounded-xl px-2 py-1.5 text-left cursor-move transition select-none shadow-sm ${
+                                  className={`group relative rounded-xl px-2 py-1.5 text-left cursor-pointer transition select-none shadow-sm ${
                                     selected.has(res.id) ? 'ring-2 ring-brand-500' : ''
                                   } ${
                                     res.status === 'checked_in'
@@ -435,7 +394,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                                 >
                                   <div className="flex items-center justify-between gap-1 min-w-0">
                                     <div className="flex items-center gap-1 min-w-0 flex-1">
-                                      {isStart && <GripVertical className="w-3 h-3 opacity-50 shrink-0" />}
                                       <p className="font-bold text-xs truncate" title={res.guest_name}>
                                         {res.guest_name}
                                       </p>
@@ -457,69 +415,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot className="border-t-2 border-slate-200 bg-slate-50/90 text-xs">
-                    {/* Occupied Row */}
-                    <tr className="border-b border-slate-200/80">
-                      <td className="px-4 py-2.5 sticky left-0 bg-slate-50 z-10 border-r border-slate-200/80 font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                        Occupied
-                      </td>
-                      {dateColumns.map((d) => {
-                        const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
-                        return (
-                          <td key={d} className="px-3 py-2.5 text-center font-bold text-slate-900 border-r border-slate-200/80 tabular-nums">
-                            {occCount}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {/* Available Row */}
-                    <tr className="border-b border-slate-200/80">
-                      <td className="px-4 py-2.5 sticky left-0 bg-slate-50 z-10 border-r border-slate-200/80 font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                        Available
-                      </td>
-                      {dateColumns.map((d) => {
-                        const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
-                        const availCount = Math.max(0, rooms.length - occCount);
-                        return (
-                          <td key={d} className="px-3 py-2.5 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
-                            {availCount}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {/* Occupancy % Row */}
-                    <tr className="border-b border-slate-200/80">
-                      <td className="px-4 py-2.5 sticky left-0 bg-slate-50 z-10 border-r border-slate-200/80 font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                        Occupancy %
-                      </td>
-                      {dateColumns.map((d) => {
-                        const occCount = rooms.filter((r) => getResForRoomDate(r.room_no, d)).length;
-                        const pct = rooms.length > 0 ? Math.round((occCount / rooms.length) * 100) : 0;
-                        return (
-                          <td key={d} className="px-3 py-2.5 text-center font-bold text-brand-600 border-r border-slate-200/80 tabular-nums">
-                            {pct}%
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {/* Daily Tariff Row */}
-                    <tr>
-                      <td className="px-4 py-2.5 sticky left-0 bg-slate-50 z-10 border-r border-slate-200/80 font-bold text-slate-700 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                        Daily Tariff
-                      </td>
-                      {dateColumns.map((d) => {
-                        const rev = rooms.reduce((sum, r) => {
-                          const res = getResForRoomDate(r.room_no, d);
-                          return sum + (res ? (res.rate || 0) : 0);
-                        }, 0);
-                        return (
-                          <td key={d} className="px-3 py-2.5 text-center font-bold text-emerald-700 border-r border-slate-200/80 tabular-nums">
-                            {fmtMoney(rev)}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  </tfoot>
                 </table>
               </div>
 

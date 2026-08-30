@@ -286,18 +286,26 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   }, [searchQuery, allGroups]);
 
   const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => {
-    const showLabels = !collapsed || isMobile;
     return (
       <>
-        {/* Logo header */}
-        <div className={`px-5 py-4 border-b border-white/10 flex items-center ${showLabels ? 'gap-3' : 'justify-center'}`}>
-          <BrandIcon size={36} onDark />
-          {showLabels && (
-            <div className="min-w-0 flex-1">
-              <p className="text-base font-bold text-white truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
-              <p className="text-[10px] font-semibold text-brand-navy-300 uppercase tracking-widest mt-0.5">Management System</p>
-            </div>
-          )}
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <BrandIcon className="w-8 h-8 text-brand-gold-500 shrink-0" />
+            {!isMobile ? (
+              <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+                <div>
+                  <p className="text-base font-bold text-white truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
+                  <p className="text-[10px] font-semibold text-brand-navy-300 uppercase tracking-widest mt-0.5">Management System</p>
+                </div>
+              </div>
+            ) : (
+              <div className="min-w-0 flex-1 overflow-hidden ml-3">
+                <p className="text-base font-bold text-white truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
+                <p className="text-[10px] font-semibold text-brand-navy-300 uppercase tracking-widest mt-0.5">Management System</p>
+              </div>
+            )}
+          </div>
           {isMobile && (
             <button onClick={() => setSidebarOpen(false)} className="text-brand-navy-300 hover:text-white p-1 shrink-0">
               <X className="w-5 h-5" />
@@ -306,9 +314,22 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
         </div>
 
         {/* Search menu */}
-        {showLabels && (
-          <div className="px-3.5 pt-3.5 pb-1">
-            <div className="flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2 border border-white/10 focus-within:border-brand-500/50 transition">
+        {!isMobile ? (
+          <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 py-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[60px] opacity-100 py-3 mb-1 px-3.5'}`}>
+            <div className="flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2 border border-white/10 focus-within:border-brand-500/50 transition-colors">
+              <Search className="w-4 h-4 text-brand-navy-300 shrink-0" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search menu…"
+                className="bg-transparent text-xs text-white placeholder:text-brand-navy-300 focus:outline-none w-full"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="px-3.5 pb-1 pt-3.5">
+            <div className="flex items-center gap-2 bg-white/5 rounded-xl px-3 py-2 border border-white/10 focus-within:border-brand-500/50 transition-colors">
               <Search className="w-4 h-4 text-brand-navy-300 shrink-0" />
               <input
                 type="text"
@@ -327,12 +348,22 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
             const isGroupCollapsed = collapsedGroups.has(group.label) && !searchQuery;
             return (
               <div key={group.label}>
-                {showLabels && (
+                {!isMobile ? (
+                  <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 mt-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[30px] opacity-100 mt-2 mb-1.5 px-3'}`}>
+                    <button
+                      onClick={() => toggleGroup(group.label)}
+                      className="w-full flex items-center justify-between text-[10px] font-bold text-brand-navy-400 uppercase tracking-widest hover:text-brand-navy-200"
+                    >
+                      <span className="whitespace-nowrap">{group.label}</span>
+                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
+                    </button>
+                  </div>
+                ) : (
                   <button
                     onClick={() => toggleGroup(group.label)}
-                    className="w-full flex items-center justify-between px-3 mb-1.5 text-[10px] font-bold text-brand-navy-400 uppercase tracking-widest hover:text-brand-navy-200 transition"
+                    className="w-full flex items-center justify-between px-3 text-[10px] font-bold text-brand-navy-400 uppercase tracking-widest hover:text-brand-navy-200 mb-1.5 mt-2"
                   >
-                    <span>{group.label}</span>
+                    <span className="whitespace-nowrap">{group.label}</span>
                     <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
                   </button>
                 )}
@@ -350,15 +381,21 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
                         key={item.key}
                         onClick={() => go(item.key)}
                         title={collapsed && !isMobile ? item.label : undefined}
-                        className={`group relative w-full flex items-center ${showLabels ? 'gap-3 px-3.5' : 'justify-center px-0'} py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 ${
+                        className={`group relative w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors duration-150 overflow-hidden ${
                           active
                             ? 'bg-brand-600 text-white shadow-soft-blue'
                             : 'text-brand-navy-300 hover:text-white hover:bg-white/5'
                         }`}
                       >
                         {active && <span className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-6 rounded-r-full bg-brand-gold-400" />}
-                        <span className="shrink-0 transition-transform duration-200 group-hover:scale-110">{item.icon}</span>
-                        {showLabels && <span className="truncate">{item.label}</span>}
+                        <span className="shrink-0 transition-transform duration-150 group-hover:translate-x-0.5 flex items-center justify-center w-5">{item.icon}</span>
+                        {!isMobile ? (
+                          <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+                            {item.label}
+                          </div>
+                        ) : (
+                          <span className="ml-3 truncate">{item.label}</span>
+                        )}
                       </button>
                     );
                   })}
@@ -373,10 +410,16 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
           <button
             onClick={onSignOut}
             title={collapsed && !isMobile ? 'Sign Out' : undefined}
-            className={`w-full flex items-center ${showLabels ? 'gap-3 px-3.5' : 'justify-center px-0'} py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-brand-navy-300 hover:text-white hover:bg-rose-900/30 transition-all`}
+            className="w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-semibold text-brand-navy-300 hover:text-white hover:bg-rose-900/30 transition-colors duration-200 overflow-hidden"
           >
-            <LogOut className="w-4 h-4 text-rose-400" />
-            {showLabels && <span>Sign Out</span>}
+            <span className="flex items-center justify-center shrink-0 w-5"><LogOut className="w-4 h-4 text-rose-400" /></span>
+            {!isMobile ? (
+              <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+                Sign Out
+              </div>
+            ) : (
+              <span className="ml-3 truncate">Sign Out</span>
+            )}
           </button>
         </div>
       </>
@@ -385,10 +428,10 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
 
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className={`min-h-screen bg-slate-50 flex app-wrapper ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
       {/* Desktop sidebar */}
       <aside
-        className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 transition-all duration-300 ${sidebarWidthClass}`}
+        className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container transition-all ${collapsed ? 'duration-500 ease-in-out delay-300 lg:w-[72px]' : 'duration-700 ease-out delay-0 lg:w-[280px]'}`}
         style={{ background: brand.navy }}
       >
         <SidebarContent />
@@ -415,7 +458,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
       )}
 
       {/* Main content */}
-      <div className={`flex-1 ${contentMarginClass} min-w-0 flex flex-col transition-all duration-300`}>
+      <div className={`flex-1 ${collapsed ? 'lg:ml-[72px]' : 'lg:ml-[280px]'} min-w-0 flex flex-col main-content transition-all ${collapsed ? 'duration-500 ease-in-out delay-300' : 'duration-700 ease-out delay-0'}`}>
         {/* Top header — premium */}
         <header
           className="sticky top-0 z-20 bg-white/80 backdrop-blur-md border-b border-slate-200 px-4 lg:px-6 flex items-center justify-between gap-3"
