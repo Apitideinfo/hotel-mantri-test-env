@@ -60,6 +60,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const checkDemoUser = useCallback(() => {
     try {
+      if (import.meta.env.PROD) return false;
       const demoUserRaw = localStorage.getItem('hotelmantri_demo_user');
       if (demoUserRaw) {
         const demoData = JSON.parse(demoUserRaw);

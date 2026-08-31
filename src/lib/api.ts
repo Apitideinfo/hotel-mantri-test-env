@@ -17,6 +17,9 @@ let _currentHotelId: string | null = null;
 
 export const setCurrentHotelId = (id: string | null) => { _currentHotelId = id; };
 export const getCurrentHotelId = (): string => {
+  if (import.meta.env.PROD && !_currentHotelId) {
+    throw new Error('Hotel ID is not set. User might not be authenticated or profile is not loaded.');
+  }
   return _currentHotelId || 'demo-hotel-id-101';
 };
 
@@ -185,6 +188,7 @@ export const getRoomCategories = async (): Promise<RoomCategory[]> => {
   } catch {
     // Ignore and fallback
   }
+  if (import.meta.env.PROD) return [];
   return DEMO_CATEGORIES;
 };
 
@@ -255,6 +259,7 @@ export const getRooms = async (): Promise<Room[]> => {
   } catch {
     // Ignore and fallback
   }
+  if (import.meta.env.PROD) return [];
   return DEMO_ROOMS;
 };
 
