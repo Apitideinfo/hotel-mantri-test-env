@@ -39,11 +39,11 @@ const request = async (endpoint: string, options: RequestInit = {}) => {
 };
 
 export const testAiosellConnection = async () => {
-  return request('/test');
+  return request('/status');
 };
 
 export const checkAiosellStatus = async () => {
-  return request('/test');
+  return request('/status');
 };
 
 export const getAiosellMapping = async () => {
