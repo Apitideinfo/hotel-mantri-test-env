@@ -2,8 +2,8 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
-export { testAiosellConnection, checkAiosellStatus } from './api-aiosell';
-export { getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
+import { testAiosellConnection, checkAiosellStatus, getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
+export { testAiosellConnection, checkAiosellStatus, fetchAiosellMapping };
 
 // ── Types ──
 

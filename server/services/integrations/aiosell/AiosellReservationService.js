@@ -210,7 +210,7 @@ export const processAiosellReservation = async (payload, hotelId) => {
   }
 };
 
-import { executeInventoryPush } from '../../routes/aiosell.js';
+import { executeInventoryPush } from '../../../routes/aiosell.js';
 
 export const processWebhook = async (rawPayload) => {
   const supabase = getSupabase();
