@@ -1,0 +1,23 @@
+VITE_SUPABASE_URL=https://mtfycmdoqzzyxhjmfvuv.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10ZnljbWRvcXp6eXhoam1mdnV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2OTI2NDcsImV4cCI6MjEwMjI2ODY0N30.oDelVfbf0DEYi5c5k8jgVBNjyNNwOnVzZYyMybNpfJs
+
+# Backend Port
+PORT=5000
+
+# Razorpay Configuration
+RAZORPAY_KEY_ID=
+RAZORPAY_KEY_SECRET=
+
+# Aiosell Configuration
+AIOSELL_BASE_URL=https://live.aiosell.com/api/v2/cm
+AIOSELL_USERNAME=hotel-mantri-pms
+AIOSELL_PASSWORD=514r1vrb
+AIOSELL_ENVIRONMENT=production
+
+# Aiosell Webhook Authentication (for inbound POST from Aiosell)
+AIOSELL_WEBHOOK_ENABLED=true
+AIOSELL_WEBHOOK_USERNAME=hotel-mantri-webhook
+AIOSELL_WEBHOOK_PASSWORD=HM_wh_8f92a3c74e1d5b6f0a9b8c7d6e5f4a3b
+
+
+

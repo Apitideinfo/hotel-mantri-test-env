@@ -74,23 +74,38 @@ const getHotelAiosellConfig = async (hotelId) => {
   };
 };
 
-router.get('/test', async (req, res) => {
+router.all('/health', async (req, res) => {
+  const start = Date.now();
   try {
     const hotelId = req.headers['x-hotel-id'];
+    if (!hotelId) return res.status(400).json({ connected: false, error: 'x-hotel-id missing' });
     const hotelConfig = await getHotelAiosellConfig(hotelId);
     
     const result = await aiosellService.testConnection(hotelConfig);
-    if (result.success) {
-      res.json(result);
-    } else {
-      res.json({
-        success: false,
-        error: result.error,
-        diagnostic: result.diagnostic
-      });
-    }
+    
+    res.json({
+      connected: result.success,
+      environment: hotelConfig.environment,
+      partnerConfigured: !!hotelConfig.partnerId,
+      hotelConfigured: !!hotelConfig.hotelCode,
+      authentication: result.success ? 'success' : 'failure',
+      hotelMapping: result.mapping ? 'success' : 'failure',
+      latencyMs: Date.now() - start,
+      errorCode: result.error?.code || null,
+      errorMessage: result.error?.message || null
+    });
   } catch (err) {
-    res.json({ success: false, error: { message: err.message, code: err.code } });
+    res.json({
+      connected: false,
+      environment: 'unknown',
+      partnerConfigured: false,
+      hotelConfigured: false,
+      authentication: 'failure',
+      hotelMapping: 'failure',
+      latencyMs: Date.now() - start,
+      errorCode: err.code || 'UNKNOWN_ERROR',
+      errorMessage: err.message
+    });
   }
 });
 
@@ -132,71 +147,61 @@ router.get('/mapping', async (req, res) => {
   }
 });
 
+export const executeInventoryPush = async (hotelId, startDate, endDate) => {
+  const supabase = getSupabase();
+  const hotelConfig = await getHotelAiosellConfig(hotelId);
+
+  // 1. Get active Aiosell mappings
+  const { data: mappings } = await supabase
+    .from('channel_rate_mappings')
+    .select('room_category_id, external_room_code')
+    .eq('hotel_id', hotelId)
+    .eq('provider', 'aiosell')
+    .eq('status', 'mapped');
+
+  if (!mappings || mappings.length === 0) {
+    throw new Error('No active Aiosell mappings found');
+  }
+
+  // 2. Get inventory restrictions
+  const categoryIds = mappings.map(m => m.room_category_id);
+  const { data: restrictions } = await supabase
+    .from('channel_inventory_restrictions')
+    .select('date, room_category_id, availability')
+    .eq('hotel_id', hotelId)
+    .in('room_category_id', categoryIds)
+    .gte('date', startDate)
+    .lte('date', endDate);
+
+  // 3. Build payload
+  const dates = getDates(startDate, endDate);
+  const updates = dates.map(date => {
+    const rooms = [];
+    const uniqueRoomCodes = new Set();
+    
+    for (const mapping of mappings) {
+      if (!mapping.external_room_code || uniqueRoomCodes.has(mapping.external_room_code)) continue;
+      uniqueRoomCodes.add(mapping.external_room_code);
+      
+      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
+      const available = restriction ? (restriction.availability || 0) : 0;
+      
+      rooms.push({ roomCode: mapping.external_room_code, available });
+    }
+    return { startDate: date, endDate: date, rooms };
+  }).filter(u => u.rooms.length > 0);
+
+  const payload = { hotelCode: hotelConfig.hotelCode, updates };
+  const result = await aiosellService.pushInventory(payload, hotelConfig);
+  await logSync(hotelId, 'AIOSELL_INVENTORY_PUSH', 'outbound', 'success', 'Inventory pushed successfully');
+  return result;
+};
+
 router.post('/inventory/push', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
     const hotelId = req.headers['x-hotel-id'];
-    const supabase = getSupabase();
-    
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
-
-    // 1. Get active Aiosell mappings
-    const { data: mappings } = await supabase
-      .from('channel_rate_mappings')
-      .select('room_category_id, external_room_code')
-      .eq('hotel_id', hotelId)
-      .eq('provider', 'aiosell')
-      .eq('status', 'mapped');
-
-    if (!mappings || mappings.length === 0) {
-      throw new Error('No active Aiosell mappings found');
-    }
-
-    // 2. Get inventory restrictions
-    const categoryIds = mappings.map(m => m.room_category_id);
-    const { data: restrictions } = await supabase
-      .from('channel_inventory_restrictions')
-      .select('date, room_category_id, availability')
-      .eq('hotel_id', hotelId)
-      .in('room_category_id', categoryIds)
-      .gte('date', startDate)
-      .lte('date', endDate);
-
-    // 3. Build payload
-    const dates = getDates(startDate, endDate);
-    const updates = dates.map(date => {
-      const rooms = [];
-      
-      // We only want unique external room codes (since multiple rate plans might map to the same room)
-      const uniqueRoomCodes = new Set();
-      
-      for (const mapping of mappings) {
-        if (!mapping.external_room_code || uniqueRoomCodes.has(mapping.external_room_code)) continue;
-        uniqueRoomCodes.add(mapping.external_room_code);
-        
-        const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
-        const available = restriction ? (restriction.availability || 0) : 0; // Default to 0 if no record
-        
-        rooms.push({
-          roomCode: mapping.external_room_code,
-          available: available
-        });
-      }
-      
-      return {
-        startDate: date,
-        endDate: date,
-        rooms
-      };
-    }).filter(u => u.rooms.length > 0);
-
-    const payload = {
-      hotelCode: hotelConfig.hotelCode,
-      updates
-    };
-
-    const result = await aiosellService.pushInventory(payload, hotelConfig);
-    await logSync(hotelId, 'AIOSELL_INVENTORY_PUSH', 'outbound', 'success', 'Inventory pushed successfully');
+    const result = await executeInventoryPush(hotelId, startDate, endDate);
     res.json(result);
   } catch (err) {
     await logSync(req.headers['x-hotel-id'], 'AIOSELL_INVENTORY_PUSH', 'outbound', 'failure', 'Inventory push failed', err.message);
@@ -361,19 +366,24 @@ router.post('/reservations/fetch', async (req, res) => {
     if (reservationsArray.length > 0) {
       const processed = [];
       const errors = [];
+      const stats = { imported: 0, updated: 0, cancelled: 0, mapping_required: 0, failed: 0, skipped: 0 };
       
       for (const rawRes of reservationsArray) {
         try {
           const payload = parseWebhookPayload({ ...rawRes, action: 'book', hotelCode: hotelConfig.hotelCode });
           const resResult = await processAiosellReservation(payload, hotelId);
           processed.push(resResult);
+          if (stats[resResult.status] !== undefined) {
+            stats[resResult.status]++;
+          }
         } catch (err) {
           errors.push(err.message);
+          stats.failed++;
         }
       }
       
-      await logSync(hotelId, 'AIOSELL_RESERVATION_FETCH', 'inbound', 'success', `Fetched ${reservationsArray.length} reservations`, { processed, errors });
-      res.json({ success: true, processed: processed.length, errors, rawResult: result });
+      await logSync(hotelId, 'AIOSELL_RESERVATION_FETCH', 'inbound', 'success', `Fetched ${reservationsArray.length} reservations`, { processed, errors, stats });
+      res.json({ success: true, fetched: reservationsArray.length, stats, errors });
     } else {
       await logSync(hotelId, 'AIOSELL_RESERVATION_FETCH', 'inbound', 'success', 'No reservations returned or empty response', result);
       res.json({ success: true, processed: 0, errors: [], rawResult: result });

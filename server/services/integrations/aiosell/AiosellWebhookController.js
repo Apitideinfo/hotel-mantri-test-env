@@ -1,5 +1,7 @@
 import express from 'express';
-import { processWebhook } from './AiosellReservationService.js';
+import { processAiosellReservation } from './AiosellReservationService.js';
+import { parseWebhookPayload } from './AiosellPayloadParser.js';
+import { getSupabase } from './HotelMantriReservationService.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -70,7 +72,23 @@ router.get('/webhook-info', (req, res) => {
  */
 router.post('/reservations', webhookAuthMiddleware, async (req, res) => {
   try {
-    const result = await processWebhook(req.body);
+    const parsedPayload = parseWebhookPayload(req.body);
+    const supabase = getSupabase();
+    
+    // Resolve hotelId from channel_settings
+    const { data: config, error } = await supabase
+      .from('channel_settings')
+      .select('hotel_id')
+      .eq('aiosell_hotel_code', parsedPayload.hotelCode)
+      .maybeSingle();
+
+    if (error || !config || !config.hotel_id) {
+      const err = new Error(`Hotel with Aiosell code ${parsedPayload.hotelCode} is not configured.`);
+      err.status = 404;
+      throw err;
+    }
+
+    const result = await processAiosellReservation(parsedPayload, config.hotel_id);
     res.status(200).json(result);
   } catch (error) {
     console.error('Webhook Error:', error);

@@ -3,7 +3,7 @@ import {
   RefreshCw, Plus, X, ChevronLeft, ChevronRight, AlertTriangle,
   CheckCircle2, XCircle, Clock, Zap, Wifi, WifiOff, Pause, Play,
   Settings as SettingsIcon, FileText, Calendar, Building2, Link2,
-  Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter,
+  Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter, Activity,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
   RefreshCcw } from 'lucide-react';
@@ -14,8 +14,9 @@ import {
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
+  checkAiosellHealth, pushAiosellInventory, pushAiosellRates,
+  testAiosellConnection
 } from '@/lib/api-channel';
-import { testAiosellConnection, getAiosellMapping, pushAiosellInventory, pushAiosellRates } from '@/lib/api-aiosell';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
   ChannelSyncLog, ChannelOtaReservation, ChannelSettings,
@@ -29,7 +30,7 @@ interface ChannelManagerProps {
   onNavigate: (screen: string, payload?: unknown) => void;
 }
 
-type Tab = 'overview' | 'inventory' | 'reservations' | 'channels' | 'mapping' | 'logs' | 'settings';
+type Tab = 'overview' | 'inventory' | 'reservations' | 'channels' | 'mapping' | 'logs' | 'settings' | 'diagnostics';
 
 const TAB_KEY = 'cm_active_tab';
 
@@ -180,6 +181,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
     { key: 'channels', label: 'Channels', icon: <Wifi className="w-4 h-4" /> },
     { key: 'mapping', label: 'Room & Rate Mapping', icon: <Link2 className="w-4 h-4" /> },
     { key: 'logs', label: 'Sync Logs', icon: <Zap className="w-4 h-4" /> },
+    { key: 'diagnostics', label: 'Diagnostics', icon: <Activity className="w-4 h-4" /> },
     { key: 'settings', label: 'Connection Settings', icon: <SettingsIcon className="w-4 h-4" /> },
   ];
 
@@ -251,6 +253,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
           {tab === 'channels' && <ChannelsTab isLiveMode={overview.isLiveMode} />}
           {tab === 'mapping' && <MappingTab categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
           {tab === 'logs' && <LogsTab logs={overview.syncLogs} connections={overview.connections} />}
+          {tab === 'diagnostics' && <DiagnosticsTab />}
           {tab === 'settings' && <SettingsTab settings={overview.settings} onChanged={load} />}
         </>
       ) : null}
@@ -463,10 +466,10 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
     setIsSyncing(true);
     setSyncProgress("Pushing Inventory...");
     try {
-      await pushAiosellInventory({ startDate, endDate });
+      await pushAiosellInventory(startDate, endDate);
 
       setSyncProgress("Pushing Rates...");
-      await pushAiosellRates({ startDate, endDate });
+      await pushAiosellRates(startDate, endDate);
 
       alert('Successfully synced Inventory & Rates with Aiosell!');
     } catch (err: any) {
@@ -1275,7 +1278,24 @@ const ReservationsTab = ({ reservations, onChanged }: {
       const { fetchAiosellReservations } = await import('../../lib/api-aiosell');
       const endDate = new Date().toISOString().split('T')[0];
       const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
-      await fetchAiosellReservations(startDate, endDate);
+      const result = await fetchAiosellReservations(startDate, endDate);
+      
+      let msg = 'Sync Complete!\n';
+      if (result.stats) {
+        msg += `Fetched: ${result.fetched}\n`;
+        msg += `Imported: ${result.stats.imported}\n`;
+        msg += `Updated: ${result.stats.updated}\n`;
+        msg += `Mapping Required: ${result.stats.mapping_required}\n`;
+        msg += `Failed: ${result.stats.failed}\n`;
+        msg += `Skipped: ${result.stats.skipped}\n`;
+      } else {
+        msg += `Processed: ${result.processed || 0}\n`;
+      }
+      if (result.errors?.length > 0) {
+         msg += `\nErrors: ${result.errors.length}`;
+      }
+      alert(msg);
+      
       onChanged();
     } catch (err) {
       console.error('Sync failed', err);
@@ -2167,3 +2187,132 @@ const SettingsTab = ({ settings, onChanged }: {
     </div>
   );
 };
+
+
+// ══════════════════════════════════════════════════════════════════
+// DIAGNOSTICS TAB
+// ══════════════════════════════════════════════════════════════════
+
+const DiagnosticsTab = () => {
+  const [health, setHealth] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+
+  const runHealthCheck = async () => {
+    setLoading(true);
+    try {
+      const data = await checkAiosellHealth();
+      setHealth(data);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePushInventory = async () => {
+    setActionLoading('inventory');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+      await pushAiosellInventory(today, nextMonth);
+      alert('Inventory push successful!');
+    } catch (err: any) {
+      alert(`Inventory push failed: ${err.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handlePushRates = async () => {
+    setActionLoading('rates');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+      await pushAiosellRates(today, nextMonth);
+      alert('Rates push successful!');
+    } catch (err: any) {
+      alert(`Rates push failed: ${err.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  useEffect(() => {
+    runHealthCheck();
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-2xl border border-slate-200 p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+            <Activity className="w-5 h-5 text-brand-600" /> System Diagnostics
+          </h2>
+          <button 
+            onClick={runHealthCheck} 
+            disabled={loading}
+            className="px-4 py-2 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-brand-100"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Run Diagnostics
+          </button>
+        </div>
+
+        {health ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <DiagnosticItem label="API Connection" status={health.connected ? 'pass' : 'fail'} value={health.connected ? 'Connected' : 'Failed'} />
+            <DiagnosticItem label="Authentication" status={health.authentication === 'success' ? 'pass' : 'fail'} value={health.authentication} />
+            <DiagnosticItem label="Partner ID" status={health.partnerConfigured ? 'pass' : 'fail'} value={health.partnerConfigured ? 'Configured' : 'Missing'} />
+            <DiagnosticItem label="Hotel Code" status={health.hotelConfigured ? 'pass' : 'fail'} value={health.hotelConfigured ? 'Configured' : 'Missing'} />
+            <DiagnosticItem label="Hotel Mapping" status={health.hotelMapping === 'success' ? 'pass' : 'fail'} value={health.hotelMapping} />
+            <DiagnosticItem label="Environment" status="info" value={health.environment} />
+            <DiagnosticItem label="Latency" status="info" value={`${health.latencyMs} ms`} />
+            {health.errorMessage && (
+               <div className="col-span-full mt-2 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
+                 <strong>Error:</strong> {health.errorMessage}
+               </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-center py-10 text-slate-500 text-sm">Loading health check...</div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-6">
+        <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-6">
+          <Server className="w-5 h-5 text-brand-600" /> Manual Sync Triggers
+        </h2>
+        <div className="flex gap-4">
+          <button 
+            onClick={handlePushInventory}
+            disabled={!!actionLoading}
+            className="px-5 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-brand-700"
+          >
+            {actionLoading === 'inventory' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
+            Push Inventory (30 Days)
+          </button>
+          <button 
+            onClick={handlePushRates}
+            disabled={!!actionLoading}
+            className="px-5 py-2.5 border border-brand-600 text-brand-700 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-brand-50"
+          >
+            {actionLoading === 'rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />}
+            Push Rates (30 Days)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DiagnosticItem = ({ label, status, value }: { label: string, status: 'pass'|'fail'|'info', value: string }) => (
+  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
+    <span className="text-sm font-medium text-slate-600">{label}</span>
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-semibold text-slate-900 capitalize">{value}</span>
+      {status === 'pass' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+      {status === 'fail' && <XCircle className="w-4 h-4 text-red-500" />}
+      {status === 'info' && <AlertCircle className="w-4 h-4 text-brand-500" />}
+    </div>
+  </div>
+);

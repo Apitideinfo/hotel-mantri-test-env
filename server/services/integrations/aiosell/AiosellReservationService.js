@@ -210,6 +210,8 @@ export const processAiosellReservation = async (payload, hotelId) => {
   }
 };
 
+import { executeInventoryPush } from '../../routes/aiosell.js';
+
 export const processWebhook = async (rawPayload) => {
   const supabase = getSupabase();
   const payload = parseWebhookPayload(rawPayload);
@@ -231,6 +233,16 @@ export const processWebhook = async (rawPayload) => {
 
   const result = await processAiosellReservation(payload, hotelId);
   await logSync(hotelId, `AIOSELL_WEBHOOK_${payload.action.toUpperCase()}`, 'inbound', result.success ? 'success' : 'failure', result.message, payload.raw);
+  
+  // Trigger background inventory sync unawaited
+  if (result.success) {
+    const today = new Date().toISOString().split('T')[0];
+    const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    executeInventoryPush(hotelId, today, nextMonth).catch(err => {
+      console.error(`[AIOSSELL] Background inventory push failed for hotel ${hotelId}:`, err.message);
+    });
+  }
+
   return result;
 };
 

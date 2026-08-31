@@ -17,8 +17,16 @@ const request = async (endpoint: string, options: RequestInit = {}) => {
   const contentType = response.headers.get('content-type');
   if (!contentType || !contentType.includes('application/json')) {
     const text = await response.text();
-    console.error('Non-JSON response from API:', text.substring(0, 200));
-    throw new Error('API returned non-JSON response');
+    console.error(`Non-JSON response from API (${response.status}):`, text.substring(0, 200));
+    
+    if (response.status === 404) {
+      throw { message: 'Backend route missing or not deployed on Vercel.', status: 404 };
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw { message: 'Aiosell authentication failed or unauthorized.', status: response.status };
+    }
+    
+    throw { message: `API returned non-JSON response (HTTP ${response.status})`, status: response.status };
   }
 
   const data = await response.json();

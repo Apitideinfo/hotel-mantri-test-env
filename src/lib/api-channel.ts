@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
-import { testAiosellConnection, checkAiosellStatus } from './api-aiosell';
+export { testAiosellConnection, checkAiosellStatus } from './api-aiosell';
 export { getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
 
 // ── Types ──
@@ -431,6 +431,39 @@ export const updateChannelSettingsStatus = async (
   if (testResult !== undefined) payload.last_test_result = testResult;
   const { error } = await supabase.from('channel_settings').update(payload).eq('id', existing.id);
   if (error) throw error;
+};
+
+// ── Aiosell Endpoints (Proxy to Backend) ──
+
+export const checkAiosellHealth = async (): Promise<any> => {
+  const res = await fetch('/api/aiosell/health', {
+    method: 'GET',
+    headers: { 'x-hotel-id': getCurrentHotelId() }
+  });
+  if (!res.ok) throw new Error('Failed to reach backend health endpoint');
+  return res.json();
+};
+
+export const pushAiosellInventory = async (startDate: string, endDate: string): Promise<any> => {
+  const res = await fetch('/api/aiosell/inventory/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-hotel-id': getCurrentHotelId() },
+    body: JSON.stringify({ startDate, endDate })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || data.error || 'Inventory push failed');
+  return data;
+};
+
+export const pushAiosellRates = async (startDate: string, endDate: string): Promise<any> => {
+  const res = await fetch('/api/aiosell/rates/push', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-hotel-id': getCurrentHotelId() },
+    body: JSON.stringify({ startDate, endDate })
+  });
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error?.message || data.error || 'Rates push failed');
+  return data;
 };
 
 // ── Composite fetch for Channel Manager overview ──
