@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
+import { testAiosellConnection, checkAiosellStatus } from './api-aiosell';
 export { getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
 
 // ── Types ──
@@ -397,10 +398,6 @@ export const saveChannelSettings = async (
 ): Promise<ChannelSettings> => {
   const existing = await getChannelSettings();
   const payload = { ...input, hotel_id: getCurrentHotelId() };
-  delete payload.aiosell_status;
-  delete payload.aiosell_environment;
-  delete payload.aiosell_hotel_code;
-  delete payload.aiosell_partner_id;
   if (existing) {
     const { data, error } = await supabase
       .from('channel_settings')
@@ -480,17 +477,26 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
 
   let isLiveMode = false;
   try {
-    const aiosellTest = await fetch('http://localhost:5000/api/aiosell/test', {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    if (aiosellTest.ok) {
-      const data = await aiosellTest.json();
-      isLiveMode = data.success === true;
-    }
+    const data = await checkAiosellStatus();
+    isLiveMode = data.status === 'connected';
   } catch (err) {
     console.error('Failed to check aiosell status', err);
+  }
+
+  if (settings && settings.aiosell_status) {
+    connections.unshift({
+      id: 'aiosell-virtual-conn',
+      hotel_id: getCurrentHotelId(),
+      channel_type: 'aiosell',
+      channel_name: 'Aiosell (Channel Manager)',
+      status: settings.aiosell_status,
+      provider: 'aiosell',
+      last_sync_at: settings.updated_at,
+      last_sync_status: 'success',
+      last_error: null,
+      created_at: settings.created_at,
+      updated_at: settings.updated_at,
+    });
   }
 
   return {

@@ -141,6 +141,14 @@ export default defineConfig(({ mode }) => {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
     },
+    server: {
+      proxy: {
+        '/api': {
+          target: process.env.VITE_API_URL || 'http://localhost:5000',
+          changeOrigin: true,
+        },
+      },
+    },
     optimizeDeps: {
       include: ['react', 'react-dom', 'lucide-react', 'jspdf', 'jspdf-autotable', 'xlsx'],
     },

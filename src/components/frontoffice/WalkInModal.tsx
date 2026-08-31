@@ -318,7 +318,7 @@ export const WalkInModal = ({
               <div className="space-y-4">
                 <div className="bg-slate-50 rounded-xl p-4 space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-600">Room Charges ({nights} × ₹{fmtMoney(rate)})</span>
+                    <span className="text-slate-600">Room Charges ({nights} × ₹{fmtMoney(Number(rate))})</span>
                     <span className="font-semibold text-slate-800">₹{fmtMoney(subtotal)}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm pt-2 border-t border-slate-200">
@@ -367,7 +367,7 @@ export const WalkInModal = ({
                     <Row label="Check-in" value={`${checkIn} ${arrivalTime}`} />
                     <Row label="Check-out" value={checkOut} />
                     <Row label="Nights" value={String(nights)} />
-                    <Row label="Rate" value={`₹${fmtMoney(rate)}/night`} />
+                    <Row label="Rate" value={`₹${fmtMoney(Number(rate))}/night`} />
                     <Row label="Total" value={`₹${fmtMoney(invoiceTotal)}`} bold />
                     <Row label="Received" value={`₹${fmtMoney(totalReceived)}`} />
                     <Row label="Balance" value={`₹${fmtMoney(balance)}`} />

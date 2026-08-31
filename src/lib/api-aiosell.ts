@@ -1,6 +1,6 @@
 import { getCurrentHotelId } from './api';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 const request = async (endpoint: string, options: RequestInit = {}) => {
   const hotelId = getCurrentHotelId();
@@ -13,6 +13,14 @@ const request = async (endpoint: string, options: RequestInit = {}) => {
   };
 
   const response = await fetch(url, { ...options, headers });
+  
+  const contentType = response.headers.get('content-type');
+  if (!contentType || !contentType.includes('application/json')) {
+    const text = await response.text();
+    console.error('Non-JSON response from API:', text.substring(0, 200));
+    throw new Error('API returned non-JSON response');
+  }
+
   const data = await response.json();
   
   if (!response.ok) {
@@ -23,6 +31,10 @@ const request = async (endpoint: string, options: RequestInit = {}) => {
 };
 
 export const testAiosellConnection = async () => {
+  return request('/test');
+};
+
+export const checkAiosellStatus = async () => {
   return request('/test');
 };
 

@@ -15,7 +15,7 @@ import {
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
 } from '@/lib/api-channel';
-import { testAiosellConnection, getAiosellMapping } from '@/lib/api-aiosell';
+import { testAiosellConnection, getAiosellMapping, pushAiosellInventory, pushAiosellRates } from '@/lib/api-aiosell';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
   ChannelSyncLog, ChannelOtaReservation, ChannelSettings,
@@ -93,6 +93,7 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-red-100 text-red-700 border-red-300',
   pending: 'bg-amber-100 text-amber-700 border-amber-300',
   needs_attention: 'bg-orange-100 text-orange-700 border-orange-300',
+  mapping_required: 'bg-orange-100 text-orange-700 border-orange-300',
   success: 'bg-emerald-100 text-emerald-700 border-emerald-300',
   retry: 'bg-amber-100 text-amber-700 border-amber-300',
   failure: 'bg-red-100 text-red-700 border-red-300',
@@ -247,7 +248,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
           {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} />}
           {tab === 'inventory' && <InventoryTab categories={overview.categories} isLiveMode={overview.isLiveMode} />}
           {tab === 'reservations' && <ReservationsTab reservations={overview.otaReservations} onChanged={load} />}
-          {tab === 'channels' && <ChannelsTab connections={overview.connections} onChanged={load} isLiveMode={overview.isLiveMode} />}
+          {tab === 'channels' && <ChannelsTab isLiveMode={overview.isLiveMode} />}
           {tab === 'mapping' && <MappingTab categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
           {tab === 'logs' && <LogsTab logs={overview.syncLogs} connections={overview.connections} />}
           {tab === 'settings' && <SettingsTab settings={overview.settings} onChanged={load} />}
@@ -462,26 +463,10 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
     setIsSyncing(true);
     setSyncProgress("Pushing Inventory...");
     try {
-      const invRes = await fetch('http://localhost:5000/api/aiosell/inventory/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startDate, endDate })
-      });
-      if (!invRes.ok) {
-        const error = await invRes.json();
-        throw new Error(error.error || 'Failed to push inventory');
-      }
+      await pushAiosellInventory({ startDate, endDate });
 
       setSyncProgress("Pushing Rates...");
-      const ratesRes = await fetch('http://localhost:5000/api/aiosell/rates/push', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ startDate, endDate })
-      });
-      if (!ratesRes.ok) {
-        const error = await ratesRes.json();
-        throw new Error(error.error || 'Failed to push rates');
-      }
+      await pushAiosellRates({ startDate, endDate });
 
       alert('Successfully synced Inventory & Rates with Aiosell!');
     } catch (err: any) {
@@ -1267,6 +1252,7 @@ const ReservationsTab = ({ reservations, onChanged }: {
   onChanged: () => void;
 }) => {
   const [viewing, setViewing] = useState<ChannelOtaReservation | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const handleAction = async (r: ChannelOtaReservation, action: string) => {
     try {
@@ -1283,12 +1269,38 @@ const ReservationsTab = ({ reservations, onChanged }: {
     }
   };
 
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      const { fetchAiosellReservations } = await import('../../lib/api-aiosell');
+      const endDate = new Date().toISOString().split('T')[0];
+      const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
+      await fetchAiosellReservations(startDate, endDate);
+      onChanged();
+    } catch (err) {
+      console.error('Sync failed', err);
+      alert('Failed to sync reservations from Aiosell');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-brand-navy-800">OTA Reservations</h3>
-          <p className="text-xs text-slate-400 mt-0.5">Bookings received from connected OTA channels</p>
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-brand-navy-800">OTA Reservations</h3>
+            <p className="text-xs text-slate-400 mt-0.5">Bookings received from connected OTA channels</p>
+          </div>
+          <button 
+            onClick={handleSync} 
+            disabled={syncing}
+            className="flex items-center gap-2 bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+          >
+            {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCw className="w-4 h-4" />}
+            Sync (7 Days)
+          </button>
         </div>
         {reservations.length > 0 ? (
           <div className="overflow-x-auto">
@@ -1392,9 +1404,7 @@ const ReservationsTab = ({ reservations, onChanged }: {
 // CHANNELS TAB
 // ══════════════════════════════════════════════════════════════════
 
-const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
-  connections: ChannelConnection[];
-  onChanged: () => void;
+const ChannelsTab = ({ isLiveMode }: {
   isLiveMode: boolean;
 }) => {
   const [showAdd, setShowAdd] = useState(false);
@@ -1404,61 +1414,44 @@ const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h3 className="text-sm font-bold text-brand-navy-800">Connected Channels</h3>
         <button onClick={() => setShowAdd(true)} className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue hover:shadow-md transition">
-          <Plus className="w-4 h-4" /> Add Channel
+          <Plus className="w-4 h-4" /> Add OTA Channel
         </button>
       </div>
 
-      {connections.length > 0 ? (
+      {isLiveMode ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {connections.map((c) => (
-            <div key={c.id} className="bg-white rounded-2xl border border-slate-200 shadow-card hover:shadow-card-hover transition-all p-4">
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-card hover:shadow-card-hover transition-all p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-11 h-11 rounded-xl bg-brand-navy-50 flex items-center justify-center text-xl">
-                    {getChannelMetadata(c.channel_type).short}
+                  <div className="w-11 h-11 rounded-xl bg-brand-navy-50 flex items-center justify-center text-brand-600">
+                    <Wifi className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-800">{c.channel_name}</p>
-                    <p className="text-[10px] text-slate-400">{c.channel_type}</p>
+                    <p className="text-sm font-bold text-slate-800">Aiosell Channel Manager</p>
+                    <p className="text-[10px] text-slate-400">Unified API Distribution</p>
                   </div>
                 </div>
-                <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[c.status] ?? STATUS_STYLES.disconnected}`}>{c.status}</span>
+                <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES.connected}`}>Connected</span>
               </div>
               <div className="space-y-1 text-xs text-slate-500 mb-3">
-                <p>Last Sync: {c.last_sync_at ? fmtDateTime(c.last_sync_at) : 'Never'}</p>
-                <p>External ID: {c.external_hotel_code ?? 'Not set'}</p>
-                {c.last_error && <p className="text-red-500">Error: {c.last_error}</p>}
+                <p>Status: Live Sync Active</p>
+                <p>Managed OTAs: See Aiosell Extranet</p>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={async () => {
-                    await saveChannelConnection({
-                      channel_type: c.channel_type, channel_name: c.channel_name,
-                      status: c.status === 'paused' ? 'connected' : 'paused',
-                      last_sync_at: c.last_sync_at, last_sync_status: c.last_sync_status, last_error: c.last_error,
-                    }, c.id);
-                    onChanged();
-                  }}
+                <a
+                  href="https://extranet.aiosell.com" target="_blank" rel="noreferrer"
                   className="flex-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg py-2 transition flex items-center justify-center gap-1.5"
                 >
-                  {c.status === 'paused' ? <><Play className="w-3 h-3" /> Resume</> : <><Pause className="w-3 h-3" /> Pause</>}
-                </button>
-                <button
-                  onClick={async () => { await deleteChannelConnection(c.id); onChanged(); }}
-                  className="text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-lg py-2 px-3 transition flex items-center gap-1.5"
-                >
-                  <Trash2 className="w-3 h-3" /> Remove
-                </button>
+                  <SettingsIcon className="w-3 h-3" /> Manage in Aiosell
+                </a>
               </div>
             </div>
-          ))}
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-8 text-center">
           <WifiOff className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-500 mb-1">No channels connected.</p>
-          <p className="text-xs text-slate-400 mb-3">Add a channel to start syncing inventory and rates via Aiosell.</p>
-          <button onClick={() => setShowAdd(true)} className="text-sm font-semibold text-brand-600 hover:text-brand-700">Add a channel</button>
+          <p className="text-sm text-slate-500 mb-1">Aiosell is not configured.</p>
+          <p className="text-xs text-slate-400 mb-3">Configure your API credentials in Connection Settings to enable distribution.</p>
         </div>
       )}
 
@@ -1466,78 +1459,48 @@ const ChannelsTab = ({ connections, onChanged, isLiveMode }: {
         <AddChannelModal
           isLiveMode={isLiveMode}
           onClose={() => setShowAdd(false)}
-          onAdded={() => { setShowAdd(false); onChanged(); }}
         />
       )}
     </div>
   );
 };
 
-const AddChannelModal = ({ isLiveMode, onClose, onAdded }: {
+const AddChannelModal = ({ isLiveMode, onClose }: {
   isLiveMode: boolean;
   onClose: () => void;
-  onAdded: () => void;
 }) => {
-  const [channelType, setChannelType] = useState(CHANNEL_TYPES[0].type);
-  const [channelName, setChannelName] = useState(CHANNEL_TYPES[0].label);
-  const [saving, setSaving] = useState(false);
-
-  const handleAdd = async () => {
-    setSaving(true);
-    try {
-      await saveChannelConnection({
-        channel_type: channelType,
-        channel_name: channelName,
-        status: 'disconnected',
-        last_sync_status: null,
-        last_sync_at: null,
-        last_error: null,
-      });
-      onAdded();
-    } catch {
-      setSaving(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-5 animate-scale-in">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-bold text-brand-navy-800">Add Channel</h3>
+          <h3 className="text-sm font-bold text-brand-navy-800">Add OTA Channel</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
         </div>
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs font-semibold text-slate-500">Channel Type</label>
-            <select
-              value={channelType}
-              onChange={(e) => {
-                setChannelType(e.target.value);
-                setChannelName(CHANNEL_TYPES.find((t) => t.type === e.target.value)?.label ?? e.target.value);
-              }}
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-            >
-              {CHANNEL_TYPES.map((t) => <option key={t.type} value={t.type}>{t.short} · {t.label}</option>)}
-            </select>
+        <div className="space-y-4">
+          <div className="bg-brand-50 border border-brand-200 rounded-xl p-4">
+            <h4 className="text-sm font-semibold text-brand-800 mb-2">Aiosell Unified Channel Manager</h4>
+            <p className="text-xs text-brand-700 leading-relaxed">
+              Your PMS is connected to the Aiosell Channel Manager. Aiosell handles all distribution to OTAs (Booking.com, Expedia, Agoda, etc.) automatically.
+            </p>
+            <p className="text-xs text-brand-700 leading-relaxed mt-2">
+              Because Aiosell does not expose a public API for remotely adding OTAs, you must manage your OTA channels directly within your Aiosell Extranet.
+            </p>
           </div>
-          <div>
-            <label className="text-xs font-semibold text-slate-500">Display Name</label>
-            <input type="text" value={channelName} onChange={(e) => setChannelName(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-          </div>
+          
           {!isLiveMode && (
-            <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
-              Channel will be added in <span className="font-semibold">disconnected</span> state. {isLiveMode ? 'Activate it after adding the channel.' : 'Connect Aiosell in Connection Settings to activate.'}
+            <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-3">
+              <span className="font-semibold">Not Connected:</span> You must configure your Aiosell API credentials in the Connection Settings tab first.
             </p>
           )}
         </div>
-        <button
-          onClick={handleAdd}
-          disabled={saving}
-          className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-3 mt-4 transition"
-        >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Add Channel
-        </button>
+        
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button onClick={onClose} className="text-sm font-semibold text-slate-500 hover:text-slate-700">Close</button>
+          <a href="https://extranet.aiosell.com" target="_blank" rel="noreferrer" className="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue transition">
+            Open Aiosell Extranet
+          </a>
+        </div>
       </div>
     </div>
   );
@@ -1796,7 +1759,13 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
           )}
           <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-2.5 transition">Cancel</button>
           <button
-            onClick={async () => { setSaving(true); await onSave(aiosellRoomCode, aiosellRatePlan); setSaving(false); }}
+            onClick={async () => { 
+              setSaving(true); 
+              const rName = aiosellMapping?.rooms?.find((r:any) => r.room_id === aiosellRoomCode)?.room_name || '';
+              const rpName = aiosellMapping?.ratePlans?.find((rp:any) => rp.rate_plan_id === aiosellRatePlan)?.rate_plan_name || '';
+              await onSave(aiosellRoomCode, aiosellRatePlan, rName, rpName); 
+              setSaving(false); 
+            }}
             disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-2.5 transition"
           >
@@ -1978,6 +1947,9 @@ const SettingsTab = ({ settings, onChanged }: {
   onChanged: () => void;
 }) => {
   const [enabled, setEnabled] = useState(settings?.channel_manager_enabled ?? false);
+  const [hotelCode, setHotelCode] = useState(settings?.aiosell_hotel_code || '');
+  const [partnerId, setPartnerId] = useState(settings?.aiosell_partner_id || '');
+  const [environment, setEnvironment] = useState<'production' | 'test'>(settings?.aiosell_environment || 'production');
   const [aiosellTesting, setAiosellTesting] = useState(false);
   const [aiosellTestResult, setAiosellTestResult] = useState<{
     ok: boolean;
@@ -2000,6 +1972,9 @@ const SettingsTab = ({ settings, onChanged }: {
       await saveChannelSettings({
         ...settings!,
         channel_manager_enabled: enabled,
+        aiosell_hotel_code: hotelCode,
+        aiosell_partner_id: partnerId,
+        aiosell_environment: environment,
       });
       onChanged();
     } catch (e) {
@@ -2017,7 +1992,7 @@ const SettingsTab = ({ settings, onChanged }: {
       if (res.success) {
         setAiosellTestResult({ 
           ok: true, 
-          message: "✓ Aiosell Sandbox Connected",
+          message: "✓ Aiosell Connected",
           details: {
             status: res.status,
             responseTimeMs: res.responseTimeMs,
@@ -2040,7 +2015,8 @@ const SettingsTab = ({ settings, onChanged }: {
           onChanged();
         }
       } else {
-        setAiosellTestResult({ ok: false, message: res.error?.message || "Failed to connect to Aiosell sandbox." });
+        const errMsg = typeof res.error === 'string' ? res.error : res.error?.message;
+        setAiosellTestResult({ ok: false, message: errMsg || "Failed to connect to Aiosell." });
         if (settings) {
           await saveChannelSettings({
             ...settings,
@@ -2083,7 +2059,7 @@ const SettingsTab = ({ settings, onChanged }: {
         <div className="flex items-center gap-2 mb-1">
           <KeyRound className="w-4 h-4 text-brand-600" />
           <h3 className="text-sm font-bold text-brand-navy-800">Aiosell Connection Settings</h3>
-          {settings?.aiosell_environment === 'test' && (
+          {environment === 'test' && (
             <span className="ml-auto text-xs font-bold px-2.5 py-1 rounded bg-amber-100 text-amber-700">
               AIOSELL SANDBOX / TEST
             </span>
@@ -2107,33 +2083,39 @@ const SettingsTab = ({ settings, onChanged }: {
             <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Aiosell Hotel Code</label>
             <input
               type="text"
-              value={settings?.aiosell_hotel_code || 'sandbox-pms'}
-              readOnly
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-500 focus:outline-none"
-              title="Configured in backend environment"
+              value={hotelCode}
+              onChange={(e) => setHotelCode(e.target.value)}
+              placeholder="Enter AIOSell hotel code"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
             />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> Aiosell Partner ID</label>
             <input
               type="text"
-              value={settings?.aiosell_partner_id || 'sample-pms'}
-              readOnly
-              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 text-slate-500 focus:outline-none"
-              title="Configured in backend environment"
+              value={partnerId}
+              onChange={(e) => setPartnerId(e.target.value)}
+              placeholder="Enter AIOSell partner ID"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
             />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500">Environment</label>
             <div className="flex gap-2 mt-1">
               <button
-                disabled
-                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${settings?.aiosell_environment === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200'}`}
+                onClick={() => setEnvironment('production')}
+                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${environment === 'production' ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+              >
+                Production
+              </button>
+              <button
+                onClick={() => setEnvironment('test')}
+                className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${environment === 'test' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
               >
                 Test / Sandbox
               </button>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">Credentials and environment are securely managed on the backend.</p>
+            <p className="text-[10px] text-slate-400 mt-1">Credentials (username/password) are securely managed on the backend.</p>
           </div>
         </div>
 

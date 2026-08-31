@@ -2,14 +2,14 @@ import crypto from 'crypto';
 
 
 // Configuration helper
-const getConfig = () => {
+const getConfig = (hotelConfig = {}) => {
   return {
     baseUrl: process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm',
     username: process.env.AIOSELL_USERNAME || '',
     password: process.env.AIOSELL_PASSWORD || '',
-    partnerId: process.env.AIOSELL_PARTNER_ID || 'sample-pms',
-    hotelCode: process.env.AIOSELL_HOTEL_CODE || 'sandbox-pms',
-    environment: process.env.AIOSELL_ENVIRONMENT || 'test',
+    partnerId: hotelConfig.partnerId || process.env.AIOSELL_PARTNER_ID,
+    hotelCode: hotelConfig.hotelCode || process.env.AIOSELL_HOTEL_CODE,
+    environment: hotelConfig.environment || process.env.AIOSELL_ENVIRONMENT || 'test',
   };
 };
 
@@ -46,8 +46,8 @@ const sanitizeAiosellError = (error, status) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const request = async (endpoint, options = {}, retries = 3) => {
-  const config = getConfig();
+const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) => {
+  const config = getConfig(hotelConfig);
   const url = `${config.baseUrl}${endpoint}`;
   const authHeader = buildBasicAuthHeader(config.username, config.password);
 
@@ -113,8 +113,8 @@ const request = async (endpoint, options = {}, retries = 3) => {
   }
 };
 
-export const testConnection = async () => {
-  const config = getConfig();
+export const testConnection = async (hotelConfig) => {
+  const config = getConfig(hotelConfig);
   const start = Date.now();
   
   // Check backend environment variable presence
@@ -136,13 +136,13 @@ export const testConnection = async () => {
   if (!config.username || !config.password || !config.partnerId || !config.hotelCode) {
     return {
       success: false,
-      error: sanitizeAiosellError('Aiosell credentials are not configured on the backend.', 401),
+      error: sanitizeAiosellError('Aiosell credentials (partner ID or hotel code) are not configured for this hotel.', 401),
       diagnostic: debugDiagnostic
     };
   }
 
   try {
-    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`);
+    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, hotelConfig);
     const responseTimeMs = Date.now() - start;
     
     return {
@@ -153,7 +153,7 @@ export const testConnection = async () => {
       partnerId: config.partnerId,
       status: 200,
       responseTimeMs,
-      message: "Aiosell sandbox connection successful",
+      message: "Aiosell connection successful",
       mapping: {
         rooms: data?.rooms || [],
         ratePlans: data?.ratePlans || [],
@@ -171,15 +171,15 @@ export const testConnection = async () => {
   }
 };
 
-export const getPropertyMapping = async () => {
-  const config = getConfig();
+export const getPropertyMapping = async (hotelConfig) => {
+  const config = getConfig(hotelConfig);
 
   if (!config.username || !config.password || !config.partnerId || !config.hotelCode) {
-    throw sanitizeAiosellError('Aiosell credentials are not configured on the backend.', 401);
+    throw sanitizeAiosellError('Aiosell credentials are not configured for this hotel.', 401);
   }
 
   try {
-    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`);
+    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, hotelConfig);
     
     const rooms = (data.rooms || []).map(r => ({
       room_id: r.room_id || r.roomId || r.roomCode || '',
@@ -223,7 +223,7 @@ export const getPropertyMapping = async () => {
     return {
       hotel: {
         hotel_id: data.hotel_id || data.hotelId || data.hotelCode || config.hotelCode,
-        hotel_name: data.hotel_name || data.hotelName || 'Sandbox PMS',
+        hotel_name: data.hotel_name || data.hotelName || 'Aiosell Property',
       },
       rooms,
       ratePlans,
@@ -234,8 +234,8 @@ export const getPropertyMapping = async () => {
   }
 };
 
-export const pushInventory = async (payload) => {
-  const config = getConfig();
+export const pushInventory = async (payload, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   
   // payload is already constructed in the route (based on Aiosell spec)
   const aiosellPayload = payload;
@@ -244,7 +244,7 @@ export const pushInventory = async (payload) => {
     return await request(`/update/${config.partnerId}`, {
       method: 'POST',
       body: JSON.stringify(aiosellPayload),
-    });
+    }, hotelConfig);
   } catch (err) {
     if (err.message && err.message.includes('Payload Parsing Failed')) {
       throw new Error('Aiosell rejected the inventory format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
@@ -253,8 +253,8 @@ export const pushInventory = async (payload) => {
   }
 };
 
-export const pushRates = async (payload) => {
-  const config = getConfig();
+export const pushRates = async (payload, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   
   // payload is already constructed in the route (based on Aiosell spec)
   const aiosellPayload = payload;
@@ -263,7 +263,7 @@ export const pushRates = async (payload) => {
     return await request(`/update-rates/${config.partnerId}`, {
       method: 'POST',
       body: JSON.stringify(aiosellPayload),
-    });
+    }, hotelConfig);
   } catch (err) {
     if (err.message && err.message.includes('Payload Parsing Failed')) {
       throw new Error('Aiosell rejected the rates format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
@@ -272,26 +272,26 @@ export const pushRates = async (payload) => {
   }
 };
 
-export const pushInventoryRestrictions = async (payload) => {
+export const pushInventoryRestrictions = async (payload, hotelConfig) => {
   // Aiosell uses the same endpoint for inventory and its restrictions
-  const config = getConfig();
+  const config = getConfig(hotelConfig);
   return request(`/update/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  });
+  }, hotelConfig);
 };
 
-export const pushRateRestrictions = async (payload) => {
+export const pushRateRestrictions = async (payload, hotelConfig) => {
   // Aiosell uses the same endpoint for rates and rate restrictions
-  const config = getConfig();
+  const config = getConfig(hotelConfig);
   return request(`/update-rates/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  });
+  }, hotelConfig);
 };
 
-export const fetchInventory = async (startDate, endDate) => {
-  const config = getConfig();
+export const fetchInventory = async (startDate, endDate, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -300,11 +300,11 @@ export const fetchInventory = async (startDate, endDate) => {
       startDate,
       endDate,
     }),
-  });
+  }, hotelConfig);
 };
 
-export const fetchRates = async (startDate, endDate) => {
-  const config = getConfig();
+export const fetchRates = async (startDate, endDate, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -313,11 +313,11 @@ export const fetchRates = async (startDate, endDate) => {
       startDate,
       endDate,
     }),
-  });
+  }, hotelConfig);
 };
 
-export const fetchReservations = async (startDate, endDate) => {
-  const config = getConfig();
+export const fetchReservations = async (startDate, endDate, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -326,32 +326,31 @@ export const fetchReservations = async (startDate, endDate) => {
       startDate,
       endDate,
     }),
-  });
+  }, hotelConfig);
 };
 
-export const markNoShow = async (bookingId) => {
-  const config = getConfig();
+export const markNoShow = async (bookingId, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   return request(`/no-show/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
       hotelCode: config.hotelCode,
       bookingId,
     }),
-  });
+  }, hotelConfig);
 };
 
-export const channelMultiplier = async (payload) => {
-  const config = getConfig();
-  // Using an endpoint structure assuming typical Aiosell pattern, but isolated
+export const channelMultiplier = async (payload, hotelConfig) => {
+  const config = getConfig(hotelConfig);
   return request(`/channel-multiplier/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  });
+  }, hotelConfig);
 };
 
 // --- Webhook Validation ---
 export const validateWebhookAuth = (authHeader) => {
-  const config = getConfig();
+  const config = getConfig(); // Webhooks rely on global env user/pass generally
   const expectedHeader = buildBasicAuthHeader(config.username, config.password);
   return authHeader && expectedHeader && authHeader === expectedHeader;
 };
