@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Building2, Users, CreditCard, Shield, ToggleLeft,
   Bell, ScrollText, Ticket, Settings as SettingsIcon, LogOut,
   Menu, X, Search, ChevronDown, Hotel, Zap, ArrowLeft, AlertTriangle,
-  FileText, Receipt, RefreshCw,
+  FileText, Receipt, RefreshCw, Radio,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { BrandLogo, BrandIcon } from '@/components/BrandLogo';
@@ -32,10 +32,11 @@ import { InvoiceCreateScreen } from './screens/InvoiceCreateScreen';
 import { InvoicePreviewDrawer } from './screens/InvoicePreviewDrawer';
 import { BillingSettings } from './screens/BillingSettings';
 import { RenewalDashboardScreen } from './screens/RenewalDashboardScreen';
+import { ChannelManagerScreen } from './screens/ChannelManagerScreen';
 
 type Page =
   | 'dashboard' | 'hotels' | 'hotel-detail' | 'onboarding'
-  | 'users' | 'subscriptions' | 'features'
+  | 'users' | 'subscriptions' | 'features' | 'channel-manager'
   | 'crm' | 'support' | 'audit' | 'notifications' | 'settings'
   | 'invoices' | 'invoice-detail' | 'invoice-create' | 'billing-settings' | 'renewals';
 
@@ -50,6 +51,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, perm: 'dashboard', group: 'Overview' },
   { key: 'hotels', label: 'Hotels', icon: <Building2 className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
+  { key: 'channel-manager', label: 'Channel Manager', icon: <Radio className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
   { key: 'subscriptions', label: 'Subscriptions', icon: <CreditCard className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },
   { key: 'invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, perm: 'invoices.read', group: 'Management' },
   { key: 'renewals', label: 'Renewals', icon: <RefreshCw className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },
@@ -191,7 +193,8 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
     }
     switch (page) {
       case 'dashboard': return <DashboardScreen onNavigateHotels={() => navigateHq('hotels')} onNavigateLeads={() => navigateHq('crm')} onNavigateTickets={() => navigateHq('support')} />;
-      case 'hotels': return <HotelsScreen onViewHotel={navigateToHotel} onNewHotel={() => setShowOnboarding(true)} onImpersonate={startImpersonationSession} />;
+      case 'hotels': return <HotelsScreen onViewHotel={navigateToHotel} onNewHotel={() => setShowOnboarding(true)} onImpersonate={startImpersonationSession} onConfigureChannelManager={(id) => { setSelectedHotelId(id); navigateHq('channel-manager'); }} />;
+      case 'channel-manager': return <ChannelManagerScreen initialHotelId={selectedHotelId} onBack={() => navigateHq('hotels')} />;
       case 'hotel-detail': return selectedHotelId ? <HotelDetailScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotels')} onImpersonate={startImpersonationSession} onViewInvoice={(id) => setDrawerInvoiceId(id)} onCreateInvoice={() => { navigateHq('invoice-create'); }} /> : null;
       case 'users': return <CompanyUsersScreen />;
       case 'subscriptions': return <SubscriptionsScreen onViewHotel={navigateToHotel} />;
@@ -218,41 +221,45 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
       {/* Mobile backdrop */}
       {sidebarOpen && <div className="fixed inset-0 bg-slate-900/50 z-30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
 
-      <aside className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-slate-900 text-slate-300 z-40 transform transition-transform duration-200 ${
+      <aside className={`fixed lg:sticky top-0 left-0 h-screen w-64 bg-white border-r border-amber-200/70 text-slate-800 z-40 transform transition-transform duration-200 ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
-      } flex flex-col`}>
+      } flex flex-col shadow-card`}>
         {/* Logo */}
-        <div className="px-5 py-5 flex items-center gap-2.5 border-b border-slate-800">
-          <BrandIcon size={36} onDark />
-          <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-sm leading-tight">Hotel Mantri</p>
-            <p className="text-amber-400 text-[10px] font-medium uppercase tracking-wider">Enterprise HQ</p>
+        <div className="px-5 py-5 flex items-center gap-2.5 border-b border-amber-200/70 bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-white">
+          <div className="p-1.5 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-white shadow-gold-glow">
+            <BrandIcon size={30} />
           </div>
-          <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-slate-400 hover:text-white">
+          <div className="flex-1 min-w-0">
+            <p className="text-slate-900 font-extrabold text-sm leading-tight">Hotel Mantri</p>
+            <p className="text-amber-700 text-[10px] font-extrabold uppercase tracking-widest">Enterprise HQ</p>
+          </div>
+          <button onClick={() => setSidebarOpen(false)} className="lg:hidden text-amber-800 hover:text-slate-900">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-4">
+        <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-4 sidebar-scroll">
           {navGroups.map((group) => (
             <div key={group}>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-3 mb-1.5">{group}</p>
-              <div className="space-y-0.5">
+              <p className="text-[10px] font-extrabold uppercase tracking-widest text-amber-800 px-3 mb-1.5">{group}</p>
+              <div className="space-y-1">
                 {visibleNav.filter((n) => n.group === group).map((item) => (
                   <button
                     key={item.key}
                     onClick={() => { navigateHq(item.key); setSidebarOpen(false); }}
-                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition ${
+                    className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                       page === item.key
-                        ? 'bg-sky-600 text-white shadow-sm'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                        ? 'bg-gradient-to-r from-amber-100/90 via-amber-50/90 to-amber-100/40 text-amber-950 font-extrabold border-r-4 border-amber-500 shadow-sm shadow-amber-500/10'
+                        : 'text-slate-700 hover:text-amber-900 hover:bg-amber-50/60 font-semibold'
                     }`}
                   >
-                    {item.icon}
+                    <span className={page === item.key ? 'text-amber-600 font-bold' : 'text-slate-400 group-hover:text-amber-600'}>
+                      {item.icon}
+                    </span>
                     {item.label}
                     {item.key === 'notifications' && unreadCount > 0 && (
-                      <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">{unreadCount}</span>
+                      <span className="ml-auto bg-gradient-to-r from-rose-500 to-red-600 text-white text-[10px] font-extrabold px-2 py-0.5 rounded-full shadow-xs">{unreadCount}</span>
                     )}
                   </button>
                 ))}
@@ -262,13 +269,13 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
 
           {/* Coming Soon section */}
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-3 mb-1.5">Coming Soon</p>
-            <div className="space-y-0.5">
+            <p className="text-[10px] font-extrabold uppercase tracking-widest text-amber-800 px-3 mb-1.5">Coming Soon</p>
+            <div className="space-y-1">
               {['Restaurant POS', 'AI Insights'].map((label) => (
-                <div key={label} className="flex items-center gap-2.5 px-3 py-2 text-sm text-slate-600 cursor-not-allowed">
+                <div key={label} className="flex items-center gap-2.5 px-3 py-2 text-xs text-slate-400 cursor-not-allowed">
                   <div className="w-4 h-4" />
                   <span className="flex-1">{label}</span>
-                  <span className="text-[9px] font-bold uppercase bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded">Soon</span>
+                  <span className="text-[9px] font-bold uppercase bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200">Soon</span>
                 </div>
               ))}
             </div>
@@ -276,16 +283,16 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
         </nav>
 
         {/* User footer */}
-        <div className="px-3 py-3 border-t border-slate-800">
+        <div className="px-3 py-3 border-t border-amber-200/70 bg-amber-50/40">
           <div className="flex items-center gap-2.5 px-2">
-            <div className="w-8 h-8 bg-slate-700 rounded-full flex items-center justify-center text-white text-xs font-bold">
+            <div className="w-8 h-8 bg-gradient-to-tr from-amber-500 to-amber-400 text-white shadow-gold-glow rounded-full flex items-center justify-center text-xs font-extrabold">
               {user?.email?.[0]?.toUpperCase() ?? '?'}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-white text-xs font-semibold truncate">{user?.email}</p>
-              <p className="text-slate-500 text-[10px]">{role ? ROLE_LABELS[role] : ''}</p>
+              <p className="text-slate-900 text-xs font-extrabold truncate">{user?.email}</p>
+              <p className="text-amber-700 text-[10px] font-semibold">{role ? ROLE_LABELS[role] : ''}</p>
             </div>
-            <button onClick={handleSignOut} className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition" title="Sign Out">
+            <button onClick={handleSignOut} className="text-slate-400 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 transition" title="Sign Out">
               <LogOut className="w-4 h-4" />
             </button>
           </div>

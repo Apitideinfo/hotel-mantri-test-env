@@ -5,47 +5,52 @@
  */
 
 export const brand = {
-  // Primary electric / royal blue
-  primary: '#2563eb',
-  primaryHover: '#1d4ed8',
-  primaryLight: '#3b82f6',
-  primarySoft: '#eff6ff',
+  // Primary electric / royal blue & sky blue
+  primary: '#0284c7',
+  primaryHover: '#0369a1',
+  primaryLight: '#38bdf8',
+  primarySoft: '#f0f9ff',
 
-  // Deep navy
-  navy: '#0f1c30',
-  navyHover: '#162842',
-  navyLight: '#1f3559',
-  navyText: '#0a1628',
+  // Light theme navy / slate
+  navy: '#ffffff',
+  navyHover: '#f8fafc',
+  navyLight: '#f1f5f9',
+  navyText: '#0f172a',
 
-  // Gold accent
-  gold: '#f59e0b',
-  goldHover: '#d97706',
+  // Warm Gold accent
+  gold: '#d97706',
+  goldHover: '#b45309',
   goldLight: '#fde68a',
   goldSoft: '#fffbeb',
 
+  // Light Sky / Ice Blue accent
+  sky: '#0284c7',
+  skyLight: '#e0f2fe',
+  skySoft: '#f0f9ff',
+
   // Neutrals
-  bg: '#f1f5f9',
+  bg: '#f8fafc',
   surface: '#ffffff',
-  surfaceAlt: '#f8fafc',
+  surfaceAlt: '#f1f5f9',
   border: '#e2e8f0',
   borderStrong: '#cbd5e1',
 
   // Text
   textPrimary: '#0f172a',
-  textSecondary: '#475569',
-  textMuted: '#94a3b8',
-  textOnNavy: '#e2e8f0',
-  textOnNavyMuted: '#94a3b8',
+  textSecondary: '#334155',
+  textMuted: '#64748b',
+  textOnNavy: '#0f172a',
+  textOnNavyMuted: '#64748b',
 
   // Status
-  success: '#16a34a',
-  successBg: '#f0fdf4',
-  warning: '#d97706',
+  success: '#10b981',
+  successBg: '#ecfdf5',
+  warning: '#f59e0b',
   warningBg: '#fffbeb',
-  error: '#dc2626',
+  error: '#ef4444',
   errorBg: '#fef2f2',
-  info: '#2563eb',
-  infoBg: '#eff6ff',
+  info: '#0284c7',
+  infoBg: '#f0f9ff',
   disabled: '#94a3b8',
 } as const;
 

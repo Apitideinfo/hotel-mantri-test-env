@@ -26,13 +26,16 @@ import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
 
 interface ChannelManagerProps {
-  onBack: () => void;
-  onNavigate: (screen: string, payload?: unknown) => void;
+  onBack?: () => void;
+  onNavigate?: (screen: string, payload?: unknown) => void;
+  mode?: 'hotel_owner' | 'super_admin';
 }
 
 type Tab = 'overview' | 'inventory' | 'reservations' | 'channels' | 'mapping' | 'logs' | 'settings' | 'diagnostics';
 
 const TAB_KEY = 'cm_active_tab';
+
+const HOTEL_OWNER_TABS: Tab[] = ['overview', 'inventory', 'mapping'];
 
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
@@ -112,10 +115,14 @@ const availColor = (avail: number, total: number, stopSell: boolean): string => 
 // MAIN COMPONENT
 // ══════════════════════════════════════════════════════════════════
 
-export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
+export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: ChannelManagerProps) => {
+  const isHotelOwner = mode === 'hotel_owner';
+
   const [tab, setTab] = useState<Tab>(() => {
     const saved = typeof window !== 'undefined' ? sessionStorage.getItem(TAB_KEY) : null;
-    return (saved as Tab) ?? 'overview';
+    const initial = (saved as Tab) ?? 'overview';
+    if (isHotelOwner && !HOTEL_OWNER_TABS.includes(initial)) return 'overview';
+    return initial;
   });
   const [overview, setOverview] = useState<ChannelManagerOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -152,11 +159,14 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
     const match = hash.match(/^#cm-(\w+)$/);
     if (match) {
       const t = match[1] as Tab;
-      if (['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings'].includes(t)) {
+      const validTabs: Tab[] = isHotelOwner
+        ? HOTEL_OWNER_TABS
+        : ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics'];
+      if (validTabs.includes(t)) {
         setTab(t);
       }
     }
-  }, []);
+  }, [isHotelOwner]);
 
   // Browser back/forward
   useEffect(() => {
@@ -165,16 +175,19 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
       const match = hash.match(/^#cm-(\w+)$/);
       if (match) {
         const t = match[1] as Tab;
-        if (['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings'].includes(t)) {
+        const validTabs: Tab[] = isHotelOwner
+          ? HOTEL_OWNER_TABS
+          : ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics'];
+        if (validTabs.includes(t)) {
           setTab(t);
         }
       }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, []);
+  }, [isHotelOwner]);
 
-  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  const allTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Radio className="w-4 h-4" /> },
     { key: 'inventory', label: 'Inventory & Rates', icon: <Calendar className="w-4 h-4" /> },
     { key: 'reservations', label: 'OTA Reservations', icon: <FileText className="w-4 h-4" /> },
@@ -185,13 +198,28 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
     { key: 'settings', label: 'Connection Settings', icon: <SettingsIcon className="w-4 h-4" /> },
   ];
 
+  const tabs = isHotelOwner
+    ? allTabs.filter((t) => HOTEL_OWNER_TABS.includes(t.key))
+    : allTabs;
+
   return (
     <div className="px-4 lg:px-6 py-5 w-full max-w-[1600px] mx-auto space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
-          <p className="text-sm text-slate-400 mt-0.5">Aiosell integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}</p>
+        <div className="flex items-center gap-3">
+          {onBack && (
+            <button onClick={onBack} className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition" title="Back">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+          )}
+          <div>
+            <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
+            <p className="text-sm text-slate-400 mt-0.5">
+              Aiosell integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
+              {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
+              {!isHotelOwner && <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Superadmin View</span>}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${overview?.isLiveMode ? STATUS_STYLES.connected : 'bg-amber-100 text-amber-700 border-amber-300'}`}>
@@ -208,7 +236,9 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">Mock/Test Mode:</span> Aiosell credentials are not yet configured. Connect Aiosell in Connection Settings to enable live OTA sync.
+            <span className="font-semibold">Mock/Test Mode:</span> {isHotelOwner
+              ? 'Aiosell credentials are not yet configured. Please contact Superadmin to configure Channel Manager integration.'
+              : 'Aiosell credentials are not yet configured. Connect Aiosell in Connection Settings below to enable live OTA sync.'}
           </p>
         </div>
       )}
@@ -224,18 +254,18 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
       )}
 
       {/* Tabs — horizontally scrollable on mobile */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 pb-px -mx-1 px-1">
+      <div className="flex items-center gap-1.5 overflow-x-auto border-b-2 border-amber-200/80 pb-px -mx-1 px-1">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-semibold whitespace-nowrap border-b-2 transition-all rounded-t-lg ${
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-extrabold whitespace-nowrap border-b-2 transition-all rounded-t-xl ${
               tab === t.key
-                ? 'border-brand-600 text-brand-600 bg-brand-50/50'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+                ? 'border-amber-500 text-amber-950 bg-gradient-to-r from-amber-100/90 via-amber-50 to-amber-100/60 shadow-sm shadow-amber-500/20'
+                : 'border-transparent text-slate-600 hover:text-amber-900 hover:bg-amber-50/50 font-bold'
             }`}
           >
-            {t.icon} {t.label}
+            <span className={tab === t.key ? 'text-amber-600 font-bold' : 'text-slate-400 group-hover:text-amber-600'}>{t.icon}</span> {t.label}
           </button>
         ))}
       </div>
@@ -247,7 +277,7 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
         </div>
       ) : overview ? (
         <>
-          {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} />}
+          {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
           {tab === 'inventory' && <InventoryTab categories={overview.categories} isLiveMode={overview.isLiveMode} />}
           {tab === 'reservations' && <ReservationsTab reservations={overview.otaReservations} onChanged={load} />}
           {tab === 'channels' && <ChannelsTab isLiveMode={overview.isLiveMode} />}
@@ -265,11 +295,13 @@ export const ChannelManager = ({ onBack, onNavigate }: ChannelManagerProps) => {
 // OVERVIEW TAB
 // ══════════════════════════════════════════════════════════════════
 
-const OverviewTab = ({ overview, onNavigate, onTab }: {
+const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
   overview: ChannelManagerOverview;
-  onNavigate: (s: string, p?: unknown) => void;
+  onNavigate?: (s: string, p?: unknown) => void;
   onTab: (t: Tab) => void;
+  mode?: 'hotel_owner' | 'super_admin';
 }) => {
+  const isHotelOwner = mode === 'hotel_owner';
   const connected = overview.connections.filter((c) => c.status === 'connected').length;
   const today = todayStr();
   const todayOtaBookings = overview.otaReservations.filter((r) => r.created_at?.slice(0, 10) === today).length;
@@ -292,11 +324,11 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
 
   // Setup checklist
   const checklist = [
-    { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
-    { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
+    { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => (!isHotelOwner ? onTab('settings') : null) },
+    { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => (!isHotelOwner ? onTab('settings') : null) },
     { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_room_code), action: () => onTab('mapping') },
     { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_rate_plan_code), action: () => onTab('mapping') },
-    { label: 'At least one channel connected', done: connected > 0, action: () => onTab('channels') },
+    { label: 'At least one channel connected', done: connected > 0, action: () => (!isHotelOwner ? onTab('channels') : null) },
     { label: 'First inventory sync completed', done: overview.syncLogs.some((l) => l.log_type === 'inventory' && l.status === 'success'), action: () => onTab('inventory') },
   ];
   const doneCount = checklist.filter((c) => c.done).length;
@@ -304,7 +336,7 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
   return (
     <div className="space-y-5">
       {/* KPI cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 lg:gap-4">
+      <div className="grid grid-grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 lg:gap-4">
         {cards.map((c, i) => (
           <div key={i} className="bg-white rounded-2xl border border-slate-200 shadow-card hover:shadow-card-hover transition-all p-4 animate-kpi" style={{ animationDelay: `${i * 50}ms` }}>
             <div className="flex items-center justify-between mb-3">
@@ -322,27 +354,35 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h3 className="text-sm font-bold text-brand-navy-800">Channel Status</h3>
-            <button onClick={() => onTab('channels')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
-              View All <ArrowRight className="w-3 h-3" />
-            </button>
+            {!isHotelOwner && (
+              <button onClick={() => onTab('channels')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                View All <ArrowRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
           <div className="p-4 space-y-2">
             {overview.connections.length > 0 ? (
               overview.connections.map((c) => (
-                <div key={c.id} className="flex items-center gap-3 py-2 border-b border-slate-50 last:border-0">
-                  <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${c.status === 'connected' ? 'bg-emerald-500' : c.status === 'paused' ? 'bg-amber-500' : c.status === 'error' ? 'bg-red-500' : 'bg-slate-300'}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{c.channel_name}</p>
-                    <p className="text-[10px] text-slate-400">Last sync: {c.last_sync_at ? fmtDateTime(c.last_sync_at) : 'Never'}</p>
+                <div key={c.id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2.5 h-2.5 rounded-full ${c.status === 'connected' ? 'bg-emerald-500' : c.status === 'paused' ? 'bg-amber-500' : 'bg-slate-300'}`} />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">{c.channel_name}</p>
+                      <p className="text-[10px] text-slate-400">Last sync: {c.last_sync_at ? fmtDateTime(c.last_sync_at) : 'Never'}</p>
+                    </div>
                   </div>
-                  <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[c.status] ?? STATUS_STYLES.disconnected}`}>{c.status}</span>
+                  <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[c.status] ?? STATUS_STYLES.disconnected}`}>
+                    {c.status}
+                  </span>
                 </div>
               ))
             ) : (
               <div className="text-center py-4">
                 <WifiOff className="w-8 h-8 text-slate-300 mx-auto mb-2" />
                 <p className="text-sm text-slate-400 mb-2">No channels connected yet.</p>
-                <button onClick={() => onTab('channels')} className="text-sm font-semibold text-brand-600 hover:text-brand-700">Add a channel</button>
+                {!isHotelOwner && (
+                  <button onClick={() => onTab('channels')} className="text-sm font-semibold text-brand-600 hover:text-brand-700">Add a channel</button>
+                )}
               </div>
             )}
           </div>
@@ -359,7 +399,8 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
               <button
                 key={i}
                 onClick={item.action}
-                className="w-full flex items-center gap-3 py-2 border-b border-slate-50 last:border-0 hover:bg-slate-50/50 rounded-lg px-2 -mx-2 transition text-left"
+                disabled={isHotelOwner && (i === 0 || i === 1 || i === 4)}
+                className="w-full flex items-center gap-3 py-2 border-b border-slate-50 last:border-0 hover:bg-slate-50/50 rounded-lg px-2 -mx-2 transition text-left disabled:cursor-default"
               >
                 {item.done ? (
                   <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -367,7 +408,11 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
                   <div className="w-5 h-5 rounded-full border-2 border-slate-300 shrink-0" />
                 )}
                 <span className={`text-sm flex-1 ${item.done ? 'text-slate-400 line-through' : 'text-slate-700 font-medium'}`}>{item.label}</span>
-                {!item.done && <ArrowRight className="w-4 h-4 text-slate-300" />}
+                {isHotelOwner && (i === 0 || i === 1 || i === 4) && !item.done ? (
+                  <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">Superadmin Setup</span>
+                ) : !item.done ? (
+                  <ArrowRight className="w-4 h-4 text-slate-300" />
+                ) : null}
               </button>
             ))}
           </div>
@@ -379,9 +424,11 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h3 className="text-sm font-bold text-brand-navy-800">Recent OTA Reservations</h3>
-            <button onClick={() => onTab('reservations')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
-              View All <ArrowRight className="w-3 h-3" />
-            </button>
+            {!isHotelOwner && (
+              <button onClick={() => onTab('reservations')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                View All <ArrowRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
           <div className="p-4 space-y-2">
             {overview.otaReservations.length > 0 ? (
@@ -405,9 +452,11 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <h3 className="text-sm font-bold text-brand-navy-800">Recent Sync Activity</h3>
-            <button onClick={() => onTab('logs')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
-              View All <ArrowRight className="w-3 h-3" />
-            </button>
+            {!isHotelOwner && (
+              <button onClick={() => onTab('logs')} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+                View All <ArrowRight className="w-3 h-3" />
+              </button>
+            )}
           </div>
           <div className="p-4 space-y-2">
             {overview.syncLogs.length > 0 ? (
@@ -422,7 +471,7 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
                 </div>
               ))
             ) : (
-              <p className="text-sm text-slate-400 text-center py-4">No sync activity yet.</p>
+              <p className="text-sm text-slate-400 text-center py-4">No sync logs recorded yet.</p>
             )}
           </div>
         </div>

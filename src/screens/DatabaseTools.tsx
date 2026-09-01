@@ -77,17 +77,17 @@ export const DatabaseTools = ({ onBack, onSignOut }: DatabaseToolsProps) => {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="sticky top-0 z-10 bg-slate-900 text-white px-4 py-3 flex items-center gap-3 shadow-md">
-        <button onClick={onBack} className="p-1.5 text-slate-300 hover:text-white transition">
+      <header className="sticky top-0 z-10 bg-white/90 backdrop-blur-md border-b border-slate-200 text-slate-900 px-4 py-3 flex items-center gap-3 shadow-xs">
+        <button onClick={onBack} className="p-1.5 text-slate-500 hover:text-slate-900 transition">
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <Shield className="w-5 h-5 text-sky-400" />
+        <Shield className="w-5 h-5 text-sky-600" />
         <div className="flex-1">
-          <h1 className="text-base font-bold leading-tight">Database Tools</h1>
+          <h1 className="text-base font-bold leading-tight text-slate-900">Database Tools</h1>
           <p className="text-slate-400 text-xs">{user?.email}</p>
         </div>
-        <button onClick={onSignOut} className="flex items-center gap-1.5 text-sm text-slate-300 hover:text-white transition">
-          <LogOut className="w-4 h-4" /> Sign Out
+        <button onClick={onSignOut} className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-rose-600 transition">
+          <LogOut className="w-4 h-4 text-rose-500" /> Sign Out
         </button>
       </header>
 

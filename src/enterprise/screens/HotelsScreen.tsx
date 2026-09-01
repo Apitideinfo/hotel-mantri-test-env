@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Building2, Plus, Search, Pencil, Power, KeyRound, Archive,
   RefreshCw, Eye, MapPin, ChevronLeft, ChevronRight, LogIn,
-  CalendarClock, CreditCard, ArrowUpDown, Hotel as HotelIcon,
+  CalendarClock, CreditCard, ArrowUpDown, Hotel as HotelIcon, Radio,
 } from 'lucide-react';
 import { getEnterpriseHotels, getChannelManagerHotelStatuses, updateEnterpriseHotel, resetHotelPassword, getPlans, startImpersonation, logAudit } from '../api';
 import type { ChannelManagerHotelStatus, EnterpriseHotel, SubscriptionPlan } from '../types';
@@ -16,6 +16,7 @@ interface Props {
   onViewHotel: (id: string) => void;
   onNewHotel: () => void;
   onImpersonate: (hotelId: string, hotelName: string) => void;
+  onConfigureChannelManager?: (hotelId: string) => void;
 }
 
 type SortKey = 'hotel_name' | 'city' | 'subscription_expiry' | 'created_at';
@@ -23,7 +24,7 @@ type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 10;
 
-export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate }: Props) => {
+export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate, onConfigureChannelManager }: Props) => {
   const [hotels, setHotels] = useState<EnterpriseHotel[]>([]);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<Record<string, ChannelManagerHotelStatus>>({});
@@ -284,7 +285,18 @@ export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate }: Props) 
                       <td className="px-4 py-3 text-slate-600">{planName(h.plan_id)}</td>
                       <td className="px-4 py-3"><Badge color={statusColor(h.subscription_status)}>{h.subscription_status}</Badge></td>
                       <td className="px-4 py-3">
-                        <ChannelStatusCell status={channelStatuses[h.id]} />
+                        <div className="flex items-center justify-between gap-2">
+                          <ChannelStatusCell status={channelStatuses[h.id]} />
+                          {onConfigureChannelManager && (
+                            <button
+                              onClick={() => onConfigureChannelManager(h.id)}
+                              className="p-1.5 text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded-lg border border-purple-200 transition shrink-0"
+                              title="Configure Channel Manager"
+                            >
+                              <Radio className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-slate-600">{fmtDate(h.subscription_expiry)}</td>
                       <td className="px-4 py-3 text-slate-500">{fmtDate(h.last_login_at)}</td>
