@@ -1,5 +1,4 @@
-const fs = require('fs');
-const path = require('path');
+// Test script for Aiosell integration
 
 // Simulate the steps for E2E testing
 const runTests = async () => {
@@ -8,7 +7,7 @@ const runTests = async () => {
   console.log("==========================================\n");
 
   const baseUrl = process.env.API_URL || 'http://localhost:5000';
-  const hotelId = process.env.TEST_HOTEL_ID || '00000000-0000-0000-0000-000000000000'; // Replace with real test hotel
+  const hotelId = process.env.TEST_HOTEL_ID || '07605ab9-2c65-4710-95c8-01f839b685c3';
 
   const headers = {
     'Content-Type': 'application/json',
