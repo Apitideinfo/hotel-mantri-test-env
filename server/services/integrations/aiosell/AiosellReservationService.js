@@ -27,13 +27,14 @@ export const processAiosellReservation = async (payload, hotelId) => {
   if (payload.roomCode) {
     const { data: mapping } = await supabase
       .from('channel_rate_mappings')
-      .select('room_category_id, rate_plan_id, channex_rate_plan_id')
-      .eq('channex_room_type_id', payload.roomCode)
+      .select('room_category_id, rate_plan_id, external_rate_plan_code')
+      .eq('external_room_code', payload.roomCode)
+      .eq('provider', 'aiosell')
       .maybeSingle();
 
     if (mapping) {
       roomCategoryId = mapping.room_category_id;
-      if (mapping.channex_rate_plan_id) internalRatePlan = mapping.channex_rate_plan_id;
+      if (mapping.external_rate_plan_code) internalRatePlan = mapping.external_rate_plan_code;
       
       const { data: cat } = await supabase.from('room_categories').select('name').eq('id', roomCategoryId).maybeSingle();
       if (cat) roomCategoryName = cat.name;
@@ -64,9 +65,9 @@ export const processAiosellReservation = async (payload, hotelId) => {
     .eq('ota_booking_id', idempotencyKey)
     .maybeSingle();
 
-  if (existingOta && existingOta.import_status !== 'pending' && payload.action === 'book') {
-    // If it's a fetch/book and already exists, we skip it
-    return { success: true, message: 'Idempotent: Already imported', status: 'skipped' };
+  if (existingOta && payload.action === 'book') {
+    // If it's a book but already exists, treat as modify to handle resyncs gracefully
+    payload.action = 'modify';
   }
 
   const ci = payload.checkIn ? new Date(payload.checkIn) : new Date();

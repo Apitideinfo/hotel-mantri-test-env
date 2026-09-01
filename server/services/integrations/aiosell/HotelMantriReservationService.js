@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import { executeInventoryPush } from '../../../routes/aiosell.js';
 dotenv.config();
 
 let supabaseInstance = null;
@@ -50,24 +51,29 @@ export const createOrUpdateReservation = async (reservationData, externalId) => 
       .select('*')
       .single();
       
-    if (error) throw new Error(`Failed to update reservation: ${error.message}`);
-    return data;
-  } else {
-    // Create new
-    const internalNote = reservationData.internal_note ? 
-      `${reservationData.internal_note}\n${idempotencyMarker}` : idempotencyMarker;
+      if (error) throw new Error(`Failed to update reservation: ${error.message}`);
       
-    const payload = { ...reservationData, internal_note: internalNote };
-    const { data, error } = await supabase
-      .from('reservations')
-      .insert(payload)
-      .select('*')
-      .single();
+      triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
+      return data;
+    } else {
+      // Create new
+      const internalNote = reservationData.internal_note ? 
+        `${reservationData.internal_note}\n${idempotencyMarker}` : idempotencyMarker;
+        
+      const payload = { ...reservationData, internal_note: internalNote };
+      const { data, error } = await supabase
+        .from('reservations')
+        .insert(payload)
+        .select('*')
+        .single();
+        
+      if (error) throw new Error(`Failed to create reservation: ${error.message}`);
       
-    if (error) throw new Error(`Failed to create reservation: ${error.message}`);
-    return data;
-  }
-};
+      triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
+      return data;
+    }
+  };
+
 
 export const cancelReservation = async (hotelId, externalId) => {
   const supabase = getSupabase();
@@ -93,7 +99,18 @@ export const cancelReservation = async (hotelId, externalId) => {
     .single();
     
   if (error) throw new Error(`Failed to cancel reservation: ${error.message}`);
+  
+  triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
   return data;
+};
+
+const triggerBackgroundSync = (hotelId, startDate, endDate) => {
+  if (!hotelId || !startDate || !endDate) return;
+  const start = startDate.split('T')[0];
+  const end = endDate.split('T')[0];
+  // Fire and forget inventory push
+  executeInventoryPush(hotelId, start, end)
+    .catch(err => console.error(`[AIOSSELL] Auto-sync failed for hotel ${hotelId}:`, err.message));
 };
 
 export default {

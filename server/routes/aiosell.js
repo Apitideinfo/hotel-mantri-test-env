@@ -163,30 +163,73 @@ export const executeInventoryPush = async (hotelId, startDate, endDate) => {
     throw new Error('No active Aiosell mappings found');
   }
 
-  // 2. Get inventory restrictions
+  // 2. Get physical rooms
+  const { data: physicalRooms } = await supabase
+    .from('rooms')
+    .select('room_category_id')
+    .eq('hotel_id', hotelId);
+
+  const physicalCounts = {};
+  (physicalRooms || []).forEach(r => {
+    physicalCounts[r.room_category_id] = (physicalCounts[r.room_category_id] || 0) + 1;
+  });
+
+  // 3. Get active overlapping reservations
+  const { data: reservations } = await supabase
+    .from('reservations')
+    .select('room_categories!inner(id), check_in_date, check_out_date, status')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .lte('check_in_date', endDate + 'T23:59:59')
+    .gte('check_out_date', startDate + 'T00:00:00');
+
+  // 4. Get inventory restrictions
   const categoryIds = mappings.map(m => m.room_category_id);
   const { data: restrictions } = await supabase
     .from('channel_inventory_restrictions')
-    .select('date, room_category_id, availability')
+    .select('date, room_category_id, availability, stop_sell')
     .eq('hotel_id', hotelId)
     .in('room_category_id', categoryIds)
     .gte('date', startDate)
     .lte('date', endDate);
 
-  // 3. Build payload
+  // 5. Build payload
   const dates = getDates(startDate, endDate);
   const updates = dates.map(date => {
     const rooms = [];
     const uniqueRoomCodes = new Set();
+    const currentDate = new Date(date + 'T12:00:00'); // Midday to avoid timezone edge cases
     
     for (const mapping of mappings) {
       if (!mapping.external_room_code || uniqueRoomCodes.has(mapping.external_room_code)) continue;
       uniqueRoomCodes.add(mapping.external_room_code);
       
-      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
-      const available = restriction ? (restriction.availability || 0) : 0;
+      const physical = physicalCounts[mapping.room_category_id] || 0;
       
-      rooms.push({ roomCode: mapping.external_room_code, available });
+      // Calculate occupied for this date
+      let occupied = 0;
+      (reservations || []).forEach(res => {
+        const ci = new Date(res.check_in_date);
+        const co = new Date(res.check_out_date);
+        // Reservation occupies room if ci <= date < co
+        if (res.room_categories?.id === mapping.room_category_id && currentDate >= ci && currentDate < co) {
+          occupied++;
+        }
+      });
+      
+      let sellable = Math.max(0, physical - occupied);
+      
+      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
+      
+      if (restriction) {
+        if (restriction.stop_sell) {
+          sellable = 0;
+        } else if (restriction.availability !== undefined && restriction.availability !== null) {
+          sellable = Math.min(sellable, restriction.availability);
+        }
+      }
+      
+      rooms.push({ roomCode: mapping.external_room_code, available: sellable });
     }
     return { startDate: date, endDate: date, rooms };
   }).filter(u => u.rooms.length > 0);

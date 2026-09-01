@@ -55,9 +55,20 @@ const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) =>
     throw sanitizeAiosellError('Aiosell credentials are required', 401);
   }
 
-  // Hide credentials from logs but confirm header is present
-  console.log(`[Aiosell API] Outgoing ${options.method || 'GET'} to ${url}`);
-  console.log(`[Aiosell API] Authorization header attached: Basic <base64_hidden>`);
+  const reqId = crypto.randomUUID().slice(0, 8);
+  const startTime = Date.now();
+  
+  console.log(`[Aiosell API - ${reqId}] ${options.method || 'GET'} ${url} | Hotel: ${config.hotelCode} | Partner: ${config.partnerId}`);
+  console.log(`[Aiosell API - ${reqId}] Authorization header attached: Basic <base64_hidden>`);
+  
+  if (options.body) {
+    try {
+      const parsed = JSON.parse(options.body);
+      console.log(`[Aiosell API - ${reqId}] Payload:`, JSON.stringify(parsed));
+    } catch (e) {
+      console.log(`[Aiosell API - ${reqId}] Payload (raw):`, options.body);
+    }
+  }
 
   const defaultHeaders = {
     'Content-Type': 'application/json',
@@ -78,35 +89,45 @@ const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) =>
   while (attempt <= retries) {
     try {
       const response = await fetch(url, fetchOptions);
-
-      if (response.ok) {
-        return await response.json();
-      }
-
+      const duration = Date.now() - startTime;
       const status = response.status;
-      const responseText = await response.text();
-      let errorData;
+      
+      let responseText = await response.text();
+      let responseData;
+      
       try {
-        errorData = JSON.parse(responseText);
+        responseData = JSON.parse(responseText);
       } catch (e) {
-        errorData = responseText;
+        responseData = responseText; // It might be HTML
       }
+
+      console.log(`[Aiosell API - ${reqId}] Status: ${status} | Duration: ${duration}ms`);
+      
+      if (response.ok) {
+        console.log(`[Aiosell API - ${reqId}] Success Response:`, JSON.stringify(responseData).substring(0, 500));
+        return responseData;
+      }
+
+      console.error(`[Aiosell API - ${reqId}] Failure Response:`, typeof responseData === 'string' ? responseData.substring(0, 500) : JSON.stringify(responseData));
 
       if ([401, 403, 400].includes(status) || attempt === retries) {
-        throw sanitizeAiosellError(errorData, status);
+        throw sanitizeAiosellError(responseData, status);
       }
 
       if ([429, 500, 502, 503, 504].includes(status)) {
+        console.log(`[Aiosell API - ${reqId}] Retrying in ${backoffs[attempt]}ms...`);
         await sleep(backoffs[attempt] || 10000);
         attempt++;
       } else {
-        throw sanitizeAiosellError(errorData, status);
+        throw sanitizeAiosellError(responseData, status);
       }
     } catch (error) {
       if (error.provider === 'aiosell') throw error;
       if (attempt === retries) {
+        console.error(`[Aiosell API - ${reqId}] Final Error:`, error.message);
         throw sanitizeAiosellError(error.message, 500);
       }
+      console.log(`[Aiosell API - ${reqId}] Retrying in ${backoffs[attempt]}ms due to network error: ${error.message}`);
       await sleep(backoffs[attempt] || 10000);
       attempt++;
     }

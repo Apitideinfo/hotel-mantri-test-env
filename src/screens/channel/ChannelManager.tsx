@@ -294,8 +294,8 @@ const OverviewTab = ({ overview, onNavigate, onTab }: {
   const checklist = [
     { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
     { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => onTab('settings') },
-    { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_room_type_id), action: () => onTab('mapping') },
-    { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.channex_rate_plan_id), action: () => onTab('mapping') },
+    { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_room_code), action: () => onTab('mapping') },
+    { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_rate_plan_code), action: () => onTab('mapping') },
     { label: 'At least one channel connected', done: connected > 0, action: () => onTab('channels') },
     { label: 'First inventory sync completed', done: overview.syncLogs.some((l) => l.log_type === 'inventory' && l.status === 'success'), action: () => onTab('inventory') },
   ];
@@ -1459,7 +1459,7 @@ const ChannelsTab = ({ isLiveMode }: {
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href="https://extranet.aiosell.com" target="_blank" rel="noreferrer"
+                  href="https://app.aiosell.com" target="_blank" rel="noreferrer"
                   className="flex-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg py-2 transition flex items-center justify-center gap-1.5"
                 >
                   <SettingsIcon className="w-3 h-3" /> Manage in Aiosell
@@ -1650,8 +1650,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                     <tr key={`${cat.id}-${rp.id ?? 'default'}-${idx}`} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
                       <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">{idx === 0 ? cat.name : ''}</td>
                       <td className="px-4 py-2.5 text-sm text-slate-600">{rp.plan_name}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.channex_room_type_id ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.channex_rate_plan_id ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.external_room_code ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-sm text-slate-600">{mapping?.external_rate_plan_code ?? '—'}</td>
                       <td className="px-4 py-2.5 text-center">
                         <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${mapping ? STATUS_STYLES[mapping.status] : STATUS_STYLES.unmapped}`}>{mapping?.status ?? 'unmapped'}</span>
                       </td>
@@ -1660,8 +1660,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                           onClick={() => setEditing({
                             catId: cat.id,
                             ratePlanId: rp.id,
-                            aiosellRoomCode: mapping?.channex_room_type_id ?? '',
-                            aiosellRatePlan: mapping?.channex_rate_plan_id ?? '',
+                            aiosellRoomCode: mapping?.external_room_code ?? '',
+                            aiosellRatePlan: mapping?.external_rate_plan_code ?? '',
                             mappingId: mapping?.id,
                           })}
                           className="text-xs font-semibold text-brand-600 hover:text-brand-700"
@@ -1688,11 +1688,9 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             await saveChannelRateMapping({
               room_category_id: editing.catId,
               rate_plan_id: editing.ratePlanId || null,
-              channex_room_type_id: aiosellRoom || null,
-              channex_rate_plan_id: aiosellRate || null,
               external_room_code: aiosellRoom || null,
-              external_room_name: aiosellRoomName || null,
               external_rate_plan_code: aiosellRate || null,
+              external_room_name: aiosellRoomName || null,
               external_rate_plan_name: aiosellRateName || null,
               provider: 'aiosell',
               status: (aiosellRoom && aiosellRate) ? 'mapped' : 'unmapped',
