@@ -4,7 +4,7 @@ import {
   RefreshCw, Eye, MapPin, ChevronLeft, ChevronRight, LogIn,
   CalendarClock, CreditCard, ArrowUpDown, Hotel as HotelIcon, Radio, Trash2,
 } from 'lucide-react';
-import { getEnterpriseHotels, getChannelManagerHotelStatuses, updateEnterpriseHotel, resetHotelPassword, getPlans, startImpersonation, logAudit } from '../api';
+import { getEnterpriseHotels, getChannelManagerHotelStatuses, updateEnterpriseHotel, deactivateEnterpriseHotel, resetHotelPassword, getPlans, startImpersonation, logAudit } from '../api';
 import type { ChannelManagerHotelStatus, EnterpriseHotel, SubscriptionPlan } from '../types';
 import { ChannelStatusCell } from './ChannelStatusCell';
 import {
@@ -113,9 +113,7 @@ export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate, onConfigu
       else if (action === 'suspend') await updateEnterpriseHotel(hotel.id, { subscription_status: 'Suspended', is_active: false }, hotel);
       else if (action === 'archive') await updateEnterpriseHotel(hotel.id, { archived_at: new Date().toISOString() }, hotel);
       else if (action === 'remove') {
-        await updateEnterpriseHotel(hotel.id, { subscription_status: 'Suspended', is_active: false }, hotel);
-        // Also deactivate the admin's company_users/hotel_admins if needed. 
-        // For now, since Enterprise uses CompanyUsers, we can just suspend the hotel.
+        await deactivateEnterpriseHotel(hotel.id);
       }
       await load();
     } catch (e) {
@@ -315,7 +313,7 @@ export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate, onConfigu
                           <IconBtn title="Reset Password" onClick={() => { setResetTarget(h); setNewPassword(''); }}><KeyRound className="w-3.5 h-3.5" /></IconBtn>
                           <IconBtn title="Suspend/Activate" onClick={() => setConfirm({ hotel: h, action: h.subscription_status === 'Active' ? 'suspend' : 'activate' })}><Power className="w-3.5 h-3.5" /></IconBtn>
                           <IconBtn title="Archive" onClick={() => setConfirm({ hotel: h, action: 'archive' })}><Archive className="w-3.5 h-3.5" /></IconBtn>
-                          <IconBtn title="Remove" onClick={() => setConfirm({ hotel: h, action: 'remove' })}><Trash2 className="w-3.5 h-3.5 text-rose-500" /></IconBtn>
+                          <IconBtn title="Delete Data" onClick={() => setConfirm({ hotel: h, action: 'remove' })}><Trash2 className="w-3.5 h-3.5 text-rose-500" /></IconBtn>
                         </div>
                       </td>
                     </tr>
@@ -354,7 +352,7 @@ export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate, onConfigu
                   <IconBtn title="Reset" onClick={() => { setResetTarget(h); setNewPassword(''); }}><KeyRound className="w-3.5 h-3.5" /></IconBtn>
                   <IconBtn title="Suspend" onClick={() => setConfirm({ hotel: h, action: h.subscription_status === 'Active' ? 'suspend' : 'activate' })}><Power className="w-3.5 h-3.5" /></IconBtn>
                   <IconBtn title="Archive" onClick={() => setConfirm({ hotel: h, action: 'archive' })}><Archive className="w-3.5 h-3.5" /></IconBtn>
-                  <IconBtn title="Remove" onClick={() => setConfirm({ hotel: h, action: 'remove' })}><Trash2 className="w-3.5 h-3.5 text-rose-500" /></IconBtn>
+                  <IconBtn title="Delete Data" onClick={() => setConfirm({ hotel: h, action: 'remove' })}><Trash2 className="w-3.5 h-3.5 text-rose-500" /></IconBtn>
                 </div>
               </Card>
             ))}
@@ -382,14 +380,14 @@ export const HotelsScreen = ({ onViewHotel, onNewHotel, onImpersonate, onConfigu
       {/* Confirm dialog (activate/suspend/archive/remove) */}
       {confirm && (
         <ConfirmDialog
-          title={confirm.action === 'remove' ? 'Remove Hotel' : confirm.action === 'suspend' ? 'Suspend Hotel' : confirm.action === 'activate' ? 'Activate Hotel' : 'Archive Hotel'}
+          title={confirm.action === 'remove' ? 'Delete Hotel Data' : confirm.action === 'suspend' ? 'Suspend Hotel' : confirm.action === 'activate' ? 'Activate Hotel' : 'Archive Hotel'}
           message={
-            confirm.action === 'remove' ? `Remove "${confirm.hotel.hotel_name}"? This will suspend the hotel and deactivate access.`
+            confirm.action === 'remove' ? `Permanently delete "${confirm.hotel.hotel_name}" and ALL its associated data? This action CANNOT be undone.`
             : confirm.action === 'suspend' ? `Suspend "${confirm.hotel.hotel_name}"? The hotel will lose access immediately.`
             : confirm.action === 'activate' ? `Activate "${confirm.hotel.hotel_name}"? The hotel will regain access.`
             : `Archive "${confirm.hotel.hotel_name}"? It will be hidden from the main list but not deleted.`
           }
-          confirmLabel={confirm.action === 'remove' ? 'Remove' : confirm.action === 'archive' ? 'Archive' : confirm.action === 'suspend' ? 'Suspend' : 'Activate'}
+          confirmLabel={confirm.action === 'remove' ? 'Delete Permanently' : confirm.action === 'archive' ? 'Archive' : confirm.action === 'suspend' ? 'Suspend' : 'Activate'}
           danger={confirm.action === 'suspend' || confirm.action === 'archive' || confirm.action === 'remove'}
           onConfirm={handleAction}
           onCancel={() => setConfirm(null)}

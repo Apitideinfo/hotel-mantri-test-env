@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   Building2, Plus, Pencil, Power, Check, X, Mail, Users, AlertCircle,
-  Shield, LogOut, RefreshCw, KeyRound, CheckCircle2, Database, LayoutDashboard, Eye,
+  Shield, LogOut, RefreshCw, KeyRound, CheckCircle2, Database, LayoutDashboard, Eye, EyeOff, Trash2, AlertTriangle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
@@ -41,7 +41,7 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const emptyForm = {
-  hotel_name: '', owner_name: '', admin_email: '', admin_password: '', mobile: '', address: '',
+  hotel_name: '', owner_name: '', admin_email: '', admin_password: '', confirm_password: '', mobile: '', address: '',
   total_rooms: 1, plan_id: '', subscription_start: today(),
   subscription_expiry: '', subscription_status: 'Active' as string,
 };
@@ -57,6 +57,13 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(emptyForm);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // For the "Remove Hotel" modal
+  const [removeHotel, setRemoveHotel] = useState<HotelRow | null>(null);
+  const [removeConfirmName, setRemoveConfirmName] = useState('');
+  const [removing, setRemoving] = useState(false);
 
   // For the "Invite/Reset" modal on existing hotels
   const [resetHotel, setResetHotel] = useState<HotelRow | null>(null);
@@ -97,19 +104,13 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
   };
 
   const callEdgeFunction = async (payload: Record<string, unknown>) => {
-    const res = await fetch(`${SUPABASE_URL}/functions/v1/setup-super-admin`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${ANON_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+    const { data, error } = await supabase.functions.invoke('setup-super-admin', {
+      body: payload
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || `Request failed (${res.status})`);
+    if (error) {
+      throw new Error(error.message || 'Function invocation failed');
     }
-    return res.json();
+    return data;
   };
 
   const handleSave = async () => {
@@ -119,9 +120,15 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
     if (!form.admin_email.trim()) { setError('Enter admin email.'); return; }
 
     const isCreating = !editingId;
-    if (isCreating && (!form.admin_password || form.admin_password.length < 6)) {
-      setError('Enter a password of at least 6 characters for the hotel admin.');
-      return;
+    if (isCreating) {
+      if (!form.admin_password || form.admin_password.length < 6) {
+        setError('Enter a password of at least 6 characters for the hotel admin.');
+        return;
+      }
+      if (form.admin_password !== form.confirm_password) {
+        setError('Passwords do not match.');
+        return;
+      }
     }
 
     try {
@@ -258,10 +265,50 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
     }
   };
 
+  const handleRemoveHotelClick = (h: HotelRow) => {
+    setRemoveHotel(h);
+    setRemoveConfirmName('');
+    setError(null);
+    setSuccess(null);
+  };
+
+  const handleRemoveSubmit = async () => {
+    if (!removeHotel) return;
+    if (removeConfirmName.trim() !== removeHotel.hotel_name) {
+      setError('Hotel name does not match.');
+      return;
+    }
+    try {
+      setRemoving(true);
+      
+      const { error: hErr } = await supabase.from('hotels').update({ 
+        subscription_status: 'Suspended', 
+        is_active: false 
+      }).eq('id', removeHotel.id);
+      if (hErr) throw hErr;
+
+      const { error: aErr } = await supabase.from('hotel_admins').update({ 
+        status: 'Inactive' 
+      }).eq('hotel_id', removeHotel.id);
+      if (aErr) throw aErr;
+
+      setSuccess(`Hotel "${removeHotel.hotel_name}" successfully removed and deactivated.`);
+      setRemoveHotel(null);
+      setRemoveConfirmName('');
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove hotel');
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   const handleCancel = () => {
     setShowForm(false);
     setEditingId(null);
     setForm(emptyForm);
+    setShowPassword(false);
+    setShowConfirmPassword(false);
   };
 
   return (
@@ -328,7 +375,26 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
               <Input label="Owner Name" value={form.owner_name} onChange={(v) => setForm({ ...form, owner_name: v })} />
               <Input label="Admin Email" value={form.admin_email} onChange={(v) => setForm({ ...form, admin_email: v })} type="email" />
               {!editingId && (
-                <Input label="Admin Password" value={form.admin_password} onChange={(v) => setForm({ ...form, admin_password: v })} type="password" placeholder="Min 6 characters" />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="block relative">
+                    <span className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">Admin Password</span>
+                    <div className="relative">
+                      <input type={showPassword ? 'text' : 'password'} value={form.admin_password} onChange={(e) => setForm({ ...form, admin_password: e.target.value })} placeholder="Min 6 characters" className="w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 pr-10" />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </label>
+                  <label className="block relative">
+                    <span className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">Confirm Password</span>
+                    <div className="relative">
+                      <input type={showConfirmPassword ? 'text' : 'password'} value={form.confirm_password} onChange={(e) => setForm({ ...form, confirm_password: e.target.value })} placeholder="Re-enter password" className="w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 pr-10" />
+                      <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </label>
+                </div>
               )}
               <Input label="Mobile" value={form.mobile} onChange={(v) => setForm({ ...form, mobile: v })} />
               <div className="grid grid-cols-2 gap-3">
@@ -420,6 +486,10 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
                       className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-900 transition px-2 py-1">
                       <Mail className="w-3 h-3" /> Invite / Reset
                     </button>
+                    <button onClick={() => handleRemoveHotelClick(h)}
+                      className="flex items-center gap-1 text-xs text-rose-700 hover:text-rose-900 transition px-2 py-1">
+                      <Trash2 className="w-3 h-3" /> Remove
+                    </button>
                   </div>
                 </div>
               ))
@@ -447,6 +517,32 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
                 {resetting ? 'Creating…' : 'Create / Reset Account'}
               </button>
               <button onClick={() => { setResetHotel(null); setResetPassword(''); }}
+                className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 px-4 rounded-xl transition">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Remove Hotel modal */}
+      {removeHotel && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5 space-y-4 border-2 border-rose-500/20">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-rose-600" />
+              <h3 className="text-base font-bold text-slate-900">Remove Hotel</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              Are you sure you want to remove <span className="font-bold text-slate-900">{removeHotel.hotel_name}</span>?
+              This will suspend the hotel and deactivate access for all admins.
+            </p>
+            <Input label="Type hotel name to confirm" value={removeConfirmName} onChange={setRemoveConfirmName} placeholder={removeHotel.hotel_name} />
+            <div className="flex gap-2">
+              <button onClick={handleRemoveSubmit} disabled={removing || removeConfirmName !== removeHotel.hotel_name}
+                className="flex-1 flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-xl transition">
+                {removing ? 'Removing…' : 'Remove Hotel'}
+              </button>
+              <button onClick={() => { setRemoveHotel(null); setRemoveConfirmName(''); }}
                 className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-3 px-4 rounded-xl transition">
                 Cancel
               </button>

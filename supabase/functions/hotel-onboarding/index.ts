@@ -40,10 +40,32 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const body: OnboardingPayload = await req.json();
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ success: false, error: "Missing Authorization header" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    const jwt = authHeader.replace("Bearer ", "").trim();
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+    // ── Auth Verification ──
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+    });
+    
+    const { data: { user }, error: authError } = await userClient.auth.getUser(jwt);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ success: false, error: "Invalid token" }), { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const { data: isSuperAdmin } = await userClient.rpc("is_super_admin");
+    if (!isSuperAdmin) {
+      return new Response(JSON.stringify({ success: false, error: "Forbidden: Not a Super Admin" }), { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const body: OnboardingPayload = await req.json();
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
@@ -200,12 +222,12 @@ Deno.serve(async (req: Request) => {
 
         const { data: newCat, error: catError } = await adminClient
           .from("room_categories")
-          .insert({
+          .upsert({
             hotel_id: hotelId,
             name: trimmedName,
             default_tariff: cat.tariff,
             extra_bed_charge: cat.extra_bed,
-          })
+          }, { onConflict: "hotel_id,name" })
           .select("id")
           .single();
 
@@ -283,16 +305,14 @@ Deno.serve(async (req: Request) => {
       let userId: string;
 
       if (existing) {
-        userId = existing.id;
-        const { error: updateError } = await adminClient.auth.admin.updateUserById(userId, {
-          password: body.password,
-          email_confirm: true,
-        });
-        if (updateError) {
-          await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "owner_auth", updateError.message);
+        // Check if they are already linked to this hotel from a previous step
+        const { data: existingLink } = await adminClient.from("hotel_admins").select("id").eq("user_id", existing.id).eq("hotel_id", hotelId).maybeSingle();
+        if (existingLink) {
+          userId = existing.id; // Resume
+        } else {
           return new Response(
-            JSON.stringify({ success: false, error: formatError(updateError), failed_step: "owner_auth", attempt_id: attemptId, hotel_id: hotelId }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            JSON.stringify({ success: false, error: "A user with this email already exists. Please use a different email.", failed_step: "owner_auth", attempt_id: attemptId, hotel_id: hotelId }),
+            { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
       } else {

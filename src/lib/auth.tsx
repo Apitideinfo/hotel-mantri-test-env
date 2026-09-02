@@ -29,6 +29,8 @@ export interface AuthContext {
   changePassword: (password: string) => Promise<void>;
   updateUserProfile: (details: { name: string; mobile: string; email: string }) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  recoveryMode: boolean;
+  clearRecoveryMode: () => void;
 }
 
 const Ctx = createContext<AuthContext | undefined>(undefined);
@@ -56,7 +58,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [subscriptionStatus, setSubscriptionStatus] = useState<AuthContext['subscriptionStatus']>(null);
   const [profileLoaded, setProfileLoaded] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const profileLoadedRef = useRef<string | null>(null);
+
+  const clearRecoveryMode = useCallback(() => setRecoveryMode(false), []);
 
   const checkDemoUser = useCallback(() => {
     try {
@@ -247,8 +252,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     });
 
 
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, sess) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, sess) => {
       if (!isMounted) return;
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryMode(true);
+      }
       (async () => {
         if (!sess) {
           const ok = checkDemoUser();
@@ -311,7 +319,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
 
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
     if (error) throw error;
   };
 
@@ -329,7 +339,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <Ctx.Provider value={{ user, session, loading, profileLoaded, profileError, role, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile }}>
+    <Ctx.Provider value={{ user, session, loading, profileLoaded, profileError, role, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile, recoveryMode, clearRecoveryMode }}>
       {children}
     </Ctx.Provider>
   );

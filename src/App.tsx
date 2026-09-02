@@ -16,6 +16,7 @@ const LoginScreen = lazy(() => import('@/screens/LoginScreen').then(m => ({ defa
 const SignupScreen = lazy(() => import('@/screens/SignupScreen').then(m => ({ default: m.SignupScreen })));
 const OtpVerificationScreen = lazy(() => import('@/screens/OtpVerificationScreen').then(m => ({ default: m.OtpVerificationScreen })));
 const HotelOnboardingScreen = lazy(() => import('@/screens/HotelOnboardingScreen').then(m => ({ default: m.HotelOnboardingScreen })));
+const RecoveryScreen = lazy(() => import('@/screens/RecoveryScreen').then(m => ({ default: m.RecoveryScreen })));
 const LandingPage = lazy(() => import('@/screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const CheckoutScreen = lazy(() => import('@/screens/CheckoutScreen').then(m => ({ default: m.CheckoutScreen })));
 const PaymentSuccessScreen = lazy(() => import('@/screens/PaymentSuccessScreen').then(m => ({ default: m.PaymentSuccessScreen })));
@@ -143,7 +144,7 @@ function ScreenLoader() {
 
 
 function AppInner() {
-  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile } = useAuth();
+  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile, recoveryMode } = useAuth();
   const [nav, setNav] = useState<NavState>(() => {
     try {
       const st = window.history.state;
@@ -212,6 +213,15 @@ function AppInner() {
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Intercept normal flow if user is in password recovery mode
+  if (recoveryMode) {
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        <RecoveryScreen />
+      </Suspense>
     );
   }
 
@@ -305,9 +315,10 @@ function AppInner() {
 
   // Subscription expired / suspended / non-active (bypassed for Super Admin)
   if (role !== 'super_admin' && subscriptionStatus && subscriptionStatus !== 'Active' && subscriptionStatus !== 'Trial' && subscriptionStatus !== 'Grace Period') {
+    const isSuspended = subscriptionStatus === 'Suspended';
     return (
       <SubscriptionExpiredScreen
-        message={`Subscription is currently ${subscriptionStatus}. Please contact support to renew.`}
+        message={isSuspended ? "This property is inactive. Please contact your administrator." : `Subscription is currently ${subscriptionStatus}. Please contact support to renew.`}
         onSignOut={signOut}
       />
     );

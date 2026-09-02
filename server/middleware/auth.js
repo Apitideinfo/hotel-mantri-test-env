@@ -39,8 +39,8 @@ export const requireHotelAccess = async (req, res, next) => {
       }
     });
 
-    // Verify token and get user (we still use the global client here just to validate, or scoped is fine)
-    const { data: { user }, error: authError } = await scopedSupabase.auth.getUser();
+    // Verify token and get user by explicitly passing the token
+    const { data: { user }, error: authError } = await scopedSupabase.auth.getUser(token);
 
     if (authError || !user) {
       console.error('Supabase Auth Error:', authError);

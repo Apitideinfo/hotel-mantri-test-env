@@ -152,6 +152,26 @@ export const updateEnterpriseHotel = async (
   return data as EnterpriseHotel;
 };
 
+export const deactivateEnterpriseHotel = async (hotelId: string) => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
+  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/setup-super-admin`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ action: 'deactivate_hotel', hotel_id: hotelId })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(`Edge Function Error: ${JSON.stringify(data)}`);
+  }
+  return data;
+};
+
 export const createEnterpriseHotel = async (
   payload: Record<string, unknown>,
 ) => {
@@ -813,106 +833,18 @@ export const onboardHotelAtomically = async (payload: {
         completed_steps: result.completed_steps,
       };
     }
-  } catch {
-    // Edge function not deployed / fetch failed — fallback to direct DB onboarding
-  }
-
-  try {
-    const attemptId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `att-${Date.now()}`;
-    // 1. Insert hotel
-    const { data: hotel, error: hotelErr } = await supabase
-      .from('hotels')
-      .insert({
-        hotel_name: payload.hotel_name,
-        owner_name: payload.owner_name,
-        admin_email: payload.admin_email,
-        mobile: payload.mobile,
-        address: payload.address,
-        total_rooms: payload.total_rooms,
-        city: payload.city,
-        state: payload.state,
-        property_code: payload.property_code,
-        subscription_status: 'Active',
-        is_active: true,
-        onboarding_status: 'completed',
-      })
-      .select('*')
-      .single();
-
-    if (hotelErr) {
-      return { success: false, error: hotelErr.message, failed_step: 'hotel_record', attempt_id: attemptId };
-    }
-
-    const hotelId = hotel.id;
-
-    // 2. Insert hotel settings
-    await supabase.from('hotel_settings').upsert({
-      id: hotelId,
-      hotel_name: payload.hotel_name,
-      total_rooms: payload.total_rooms,
-    });
-
-    // 3. Insert categories
-    const categoryMap = new Map<string, string>();
-    if (payload.categories && payload.categories.length > 0) {
-      const catInserts = payload.categories.map((c) => ({
-        hotel_id: hotelId,
-        name: c.name,
-        default_tariff: c.tariff,
-        extra_bed_charge: c.extra_bed,
-      }));
-      const { data: catRows } = await supabase.from('room_categories').insert(catInserts).select('id, name');
-      for (const row of catRows ?? []) {
-        categoryMap.set(row.name.trim().toLowerCase(), row.id);
-      }
-    }
-
-    // 4. Insert rooms
-    if (payload.rooms && payload.rooms.length > 0) {
-      const roomInserts = payload.rooms.map((r) => ({
-        hotel_id: hotelId,
-        room_no: r.room_no,
-        category_id: r.category_name ? (categoryMap.get(r.category_name.trim().toLowerCase()) ?? null) : null,
-        floor: r.floor,
-        default_tariff: r.tariff,
-        extra_bed_charge: r.extra_bed,
-        is_active: r.is_active,
-        housekeeping_status: 'Vacant Clean',
-      }));
-      await supabase.from('rooms').insert(roomInserts);
-    }
-
-    // 5. Link hotel admin
-    await supabase.from('hotel_admins').upsert({
-      hotel_id: hotelId,
-      email: payload.admin_email,
-      role: 'hotel_admin',
-      status: 'Active',
-    });
-
-    // 6. Features
-    if (payload.features) {
-      const featInserts = Object.entries(payload.features).map(([key, val]) => ({
-        hotel_id: hotelId,
-        module_key: key,
-        is_enabled: val,
-      }));
-      if (featInserts.length > 0) {
-        await supabase.from('hotel_features').upsert(featInserts);
-      }
-    }
 
     return {
-      success: true,
-      hotel_id: hotelId,
-      attempt_id: attemptId,
-      completed_steps: ['hotel_record', 'hotel_settings', 'room_categories', 'room_inventory', 'owner_auth', 'features', 'activate'],
+      success: false,
+      error: result.error || 'Onboarding failed',
+      failed_step: result.failed_step || 'unknown',
+      attempt_id: result.attempt_id || 'N/A',
     };
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : 'Direct onboarding failed',
-      failed_step: 'hotel_record',
+      error: err instanceof Error ? err.message : 'Network error during onboarding',
+      failed_step: 'network',
       attempt_id: 'N/A',
     };
   }
@@ -924,9 +856,12 @@ export const discardOnboardingAttempt = async (attemptId: string, hotelId: strin
 };
 
 export const createHotelAdminAccount = async (email: string, password: string, hotelId: string) => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
   const res = await fetch(`${SUPABASE_URL}/functions/v1/setup-super-admin`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'create_hotel_admin', email, password, hotel_id: hotelId, role: 'hotel_admin' }),
   });
   if (!res.ok) {
@@ -937,9 +872,12 @@ export const createHotelAdminAccount = async (email: string, password: string, h
 };
 
 export const resetHotelPassword = async (email: string, password: string) => {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Not authenticated');
+
   const res = await fetch(`${SUPABASE_URL}/functions/v1/setup-super-admin`, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'reset_password', email, password }),
   });
   if (!res.ok) {
