@@ -6,7 +6,7 @@ import {
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter, Activity,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-  RefreshCcw } from 'lucide-react';
+  RefreshCcw, Download } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
   bulkUpdateInventory, saveChannelConnection, deleteChannelConnection,
@@ -15,7 +15,7 @@ import {
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
   checkAiosellStatus, pushAiosellInventory, pushAiosellRates,
-  testAiosellConnection
+  testAiosellConnection, fetchAiosellFutureBookings
 } from '@/lib/api-channel';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
@@ -1477,6 +1477,7 @@ const ChannelsTab = ({ isLiveMode }: {
   isLiveMode: boolean;
 }) => {
   const [showAdd, setShowAdd] = useState(false);
+  const [showFutureBookings, setShowFutureBookings] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -1513,6 +1514,12 @@ const ChannelsTab = ({ isLiveMode }: {
                 >
                   <SettingsIcon className="w-3 h-3" /> Manage in Aiosell
                 </a>
+                <button
+                  onClick={() => setShowFutureBookings(true)}
+                  className="flex-1 text-xs font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 rounded-lg py-2 transition flex items-center justify-center gap-1.5"
+                >
+                  <Download className="w-3 h-3" /> Pull Future Bookings
+                </button>
               </div>
             </div>
         </div>
@@ -1530,6 +1537,112 @@ const ChannelsTab = ({ isLiveMode }: {
           onClose={() => setShowAdd(false)}
         />
       )}
+      {showFutureBookings && (
+        <FutureBookingsModal
+          onClose={() => setShowFutureBookings(false)}
+        />
+      )}
+    </div>
+  );
+};
+
+const FutureBookingsModal = ({ onClose }: { onClose: () => void }) => {
+  const [loading, setLoading] = useState(false);
+  const [range, setRange] = useState<'30' | '60' | '90'>('30');
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFetch = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const today = new Date();
+      const end = new Date();
+      end.setDate(today.getDate() + parseInt(range, 10));
+      
+      const startDate = today.toISOString().split('T')[0];
+      const endDate = end.toISOString().split('T')[0];
+      
+      const data = await fetchAiosellFutureBookings(startDate, endDate);
+      setResult(data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch future bookings');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={!loading ? onClose : undefined} />
+      <div className="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-5 animate-scale-in">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold text-brand-navy-800">Pull Future Bookings</h3>
+          {!loading && <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>}
+        </div>
+        
+        <div className="space-y-4">
+          <p className="text-xs text-slate-500">
+            Select a date range to fetch and import future reservations from Aiosell into your PMS.
+          </p>
+          
+          <div className="flex flex-col gap-2">
+            {[
+              { id: '30', label: 'Next 30 Days' },
+              { id: '60', label: 'Next 60 Days' },
+              { id: '90', label: 'Next 90 Days' },
+            ].map((option) => (
+              <label key={option.id} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition ${range === option.id ? 'border-brand-600 bg-brand-50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                <div className={`w-4 h-4 rounded-full flex items-center justify-center border ${range === option.id ? 'border-brand-600 bg-brand-600' : 'border-slate-300'}`}>
+                  {range === option.id && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                </div>
+                <span className={`text-sm font-medium ${range === option.id ? 'text-brand-900' : 'text-slate-700'}`}>{option.label}</span>
+              </label>
+            ))}
+          </div>
+
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-lg flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {result && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-lg space-y-1">
+              <div className="flex items-center gap-2 font-semibold">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                Fetch Complete
+              </div>
+              <p>Fetched: {result.fetched} reservations</p>
+              {result.stats && (
+                <ul className="list-disc pl-5 mt-1 opacity-80">
+                  <li>Imported: {result.stats.imported || 0}</li>
+                  <li>Updated: {result.stats.updated || 0}</li>
+                  <li>Mapping Required: {result.stats.mapping_required || 0}</li>
+                  <li>Failed: {result.stats.failed || 0}</li>
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+        
+        <div className="mt-6 flex items-center justify-end gap-3">
+          <button onClick={onClose} disabled={loading} className="text-sm font-semibold text-slate-500 hover:text-slate-700 disabled:opacity-50">
+            {result ? 'Close' : 'Cancel'}
+          </button>
+          {!result && (
+            <button 
+              onClick={handleFetch} 
+              disabled={loading}
+              className="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue transition disabled:opacity-70 flex items-center gap-2"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              {loading ? 'Fetching...' : 'Start Import'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

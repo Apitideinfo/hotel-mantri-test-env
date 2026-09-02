@@ -448,6 +448,13 @@ export const pushAiosellInventory = async (startDate: string, endDate: string): 
   });
 };
 
+export const fetchAiosellFutureBookings = async (startDate: string, endDate: string): Promise<any> => {
+  return apiFetch('/api/aiosell/reservations/fetch', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate })
+  });
+};
+
 export const pushAiosellRates = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/rates/push', {
     method: 'POST',
