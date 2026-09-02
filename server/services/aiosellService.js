@@ -339,15 +339,46 @@ export const fetchRates = async (startDate, endDate, hotelConfig) => {
 
 export const fetchReservations = async (startDate, endDate, hotelConfig) => {
   const config = getConfig(hotelConfig);
-  return request(`/data/${config.partnerId}`, {
-    method: 'POST',
-    body: JSON.stringify({
-      type: 'reservation',
-      hotelCode: config.hotelCode,
-      startDate,
-      endDate,
-    }),
-  }, hotelConfig);
+  let allReservations = [];
+  let page = 1;
+  const limit = 50;
+  let hasMore = true;
+
+  while (hasMore) {
+    const result = await request(`/data/${config.partnerId}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        type: 'reservation',
+        hotelCode: config.hotelCode,
+        startDate,
+        endDate,
+        page,
+        limit,
+      }),
+    }, hotelConfig);
+
+    let reservationsArray = [];
+    if (Array.isArray(result)) {
+      reservationsArray = result;
+    } else if (result && Array.isArray(result.data)) {
+      reservationsArray = result.data;
+    } else if (result && Array.isArray(result.reservations)) {
+      reservationsArray = result.reservations;
+    } else if (result && typeof result === 'object' && !result.success) {
+      if (page === 1) throw result; // Only throw if it fails on the first page
+      break;
+    }
+
+    allReservations = allReservations.concat(reservationsArray);
+
+    if (reservationsArray.length < limit) {
+      hasMore = false;
+    } else {
+      page++;
+    }
+  }
+
+  return allReservations;
 };
 
 export const markNoShow = async (bookingId, hotelConfig) => {

@@ -435,35 +435,24 @@ export const updateChannelSettingsStatus = async (
 
 // ── Aiosell Endpoints (Proxy to Backend) ──
 
+import { apiFetch } from './api-fetch';
+
 export const checkAiosellHealth = async (): Promise<any> => {
-  const res = await fetch('/api/aiosell/health', {
-    method: 'GET',
-    headers: { 'x-hotel-id': getCurrentHotelId() }
-  });
-  if (!res.ok) throw new Error('Failed to reach backend health endpoint');
-  return res.json();
+  return apiFetch('/api/aiosell/health');
 };
 
 export const pushAiosellInventory = async (startDate: string, endDate: string): Promise<any> => {
-  const res = await fetch('/api/aiosell/inventory/push', {
+  return apiFetch('/api/aiosell/inventory/push', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-hotel-id': getCurrentHotelId() },
     body: JSON.stringify({ startDate, endDate })
   });
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error?.message || data.error || 'Inventory push failed');
-  return data;
 };
 
 export const pushAiosellRates = async (startDate: string, endDate: string): Promise<any> => {
-  const res = await fetch('/api/aiosell/rates/push', {
+  return apiFetch('/api/aiosell/rates/push', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-hotel-id': getCurrentHotelId() },
     body: JSON.stringify({ startDate, endDate })
   });
-  const data = await res.json();
-  if (!res.ok || data.error) throw new Error(data.error?.message || data.error || 'Rates push failed');
-  return data;
 };
 
 // ── Composite fetch for Channel Manager overview ──
@@ -510,10 +499,10 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
 
   let isLiveMode = false;
   try {
-    const data = await checkAiosellStatus();
-    isLiveMode = data.status === 'connected';
+    const data = await checkAiosellHealth();
+    isLiveMode = data.connected === true;
   } catch (err) {
-    console.error('Failed to check aiosell status', err);
+    console.error('Failed to check aiosell health', err);
   }
 
   if (settings && settings.aiosell_status) {

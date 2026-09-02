@@ -3,7 +3,12 @@ import aiosellService from '../services/aiosellService.js';
 import { createClient } from '@supabase/supabase-js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
+import { requireHotelAccess } from '../middleware/auth.js';
+
 const router = express.Router();
+
+// Apply auth middleware to all routes in this file
+router.use(requireHotelAccess);
 
 // Helper to get dates array
 const getDates = (start, end) => {

@@ -101,6 +101,25 @@ app.post('/api/verify-payment', (req, res) => {
   }
 });
 
+// Global 404 handler for API routes
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'API_ROUTE_NOT_FOUND',
+    message: 'The requested API route does not exist.'
+  });
+});
+
+// Global Error handler
+app.use((err, req, res, next) => {
+  console.error('Unhandled Server Error:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    error: err.code || 'SERVER_ERROR',
+    message: err.message || 'An unexpected internal server error occurred.'
+  });
+});
+
 if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);
