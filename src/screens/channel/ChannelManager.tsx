@@ -13,9 +13,9 @@ import {
   saveChannelRateMapping, deleteChannelRateMapping, insertSyncLog,
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
-  CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
-  checkAiosellStatus, pushAiosellInventory, pushAiosellRates,
-  testAiosellConnection, fetchAiosellFutureBookings
+  CHANNEL_TYPES, getChannelMetadata, fetchChannelMapping,
+  checkChannelStatus, pushChannelInventory, pushChannelRates,
+  testChannelConnection, fetchChannelFutureBookings
 } from '@/lib/api-channel';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
@@ -215,7 +215,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           <div>
             <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
             <p className="text-sm text-slate-400 mt-0.5">
-              Aiosell integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
+              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
               {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
               {!isHotelOwner && <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Superadmin View</span>}
             </p>
@@ -237,8 +237,8 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
             <span className="font-semibold">Mock/Test Mode:</span> {isHotelOwner
-              ? 'Aiosell credentials are not yet configured. Please contact Superadmin to configure Channel Manager integration.'
-              : 'Aiosell credentials are not yet configured. Connect Aiosell in Connection Settings below to enable live OTA sync.'}
+              ? 'Channel Manager credentials are not yet configured. Please contact Superadmin to configure integration.'
+              : 'Channel Manager credentials are not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.'}
           </p>
         </div>
       )}
@@ -324,7 +324,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
 
   // Setup checklist
   const checklist = [
-    { label: 'Aiosell credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => (!isHotelOwner ? onTab('settings') : null) },
+    { label: 'Channel credentials configured', done: overview.settings?.aiosell_status === 'connected', action: () => (!isHotelOwner ? onTab('settings') : null) },
     { label: 'Property connection established', done: overview.settings?.aiosell_status === 'connected', action: () => (!isHotelOwner ? onTab('settings') : null) },
     { label: 'Room categories mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_room_code), action: () => onTab('mapping') },
     { label: 'Rate plans mapped', done: overview.mappings.some((m) => m.status === 'mapped' && m.external_rate_plan_code), action: () => onTab('mapping') },
@@ -511,18 +511,18 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   };
 
   
-  const handlePushToAiosell = async () => {
+  const handlePushToChannel = async () => {
     setIsSyncing(true);
     setSyncProgress("Pushing Inventory...");
     try {
-      await pushAiosellInventory(startDate, endDate);
+      await pushChannelInventory(startDate, endDate);
 
       setSyncProgress("Pushing Rates...");
-      await pushAiosellRates(startDate, endDate);
+      await pushChannelRates(startDate, endDate);
 
-      alert('Successfully synced Inventory & Rates with Aiosell!');
+      alert('Successfully synced Inventory & Rates with channels!');
     } catch (err: any) {
-      alert(err.message || 'Error syncing with Aiosell');
+      alert(err.message || 'Error syncing with channels');
     } finally {
       setIsSyncing(false);
       setSyncProgress("");
@@ -616,7 +616,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             <Zap className="w-4 h-4" /> Bulk Update
           </button>
             <button
-              onClick={handlePushToAiosell}
+              onClick={handlePushToChannel}
               disabled={isSyncing}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue hover:shadow-md transition-all active:scale-[0.98] ml-2 disabled:opacity-50"
             >
@@ -1324,10 +1324,10 @@ const ReservationsTab = ({ reservations, onChanged }: {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const { fetchAiosellReservations } = await import('../../lib/api-aiosell');
+      const { fetchChannelReservations } = await import('../../lib/api-aiosell');
       const endDate = new Date().toISOString().split('T')[0];
       const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
-      const result = await fetchAiosellReservations(startDate, endDate);
+      const result = await fetchChannelReservations(startDate, endDate);
       
       let msg = 'Sync Complete!\n';
       if (result.stats) {
@@ -1348,7 +1348,7 @@ const ReservationsTab = ({ reservations, onChanged }: {
       onChanged();
     } catch (err) {
       console.error('Sync failed', err);
-      alert('Failed to sync reservations from Aiosell');
+      alert('Failed to sync reservations from channels');
     } finally {
       setSyncing(false);
     }
@@ -1497,7 +1497,7 @@ const ChannelsTab = ({ isLiveMode }: {
                     <Wifi className="w-5 h-5" />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-800">Aiosell Channel Manager</p>
+                    <p className="text-sm font-bold text-slate-800">Connected Channels</p>
                     <p className="text-[10px] text-slate-400">Unified API Distribution</p>
                   </div>
                 </div>
@@ -1505,14 +1505,14 @@ const ChannelsTab = ({ isLiveMode }: {
               </div>
               <div className="space-y-1 text-xs text-slate-500 mb-3">
                 <p>Status: Live Sync Active</p>
-                <p>Managed OTAs: See Aiosell Extranet</p>
+                <p>Managed OTAs: See Channel Extranet</p>
               </div>
               <div className="flex items-center gap-2">
                 <a
-                  href="https://app.aiosell.com" target="_blank" rel="noreferrer"
+                  onClick={() => alert("Channel Discovery API coming soon.")}
                   className="flex-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg py-2 transition flex items-center justify-center gap-1.5"
                 >
-                  <SettingsIcon className="w-3 h-3" /> Manage in Aiosell
+                  <SettingsIcon className="w-3 h-3" /> Manage Channels
                 </a>
                 <button
                   onClick={() => setShowFutureBookings(true)}
@@ -1526,7 +1526,7 @@ const ChannelsTab = ({ isLiveMode }: {
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-8 text-center">
           <WifiOff className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-500 mb-1">Aiosell is not configured.</p>
+          <p className="text-sm text-slate-500 mb-1">Channel Manager is not configured.</p>
           <p className="text-xs text-slate-400 mb-3">Configure your API credentials in Connection Settings to enable distribution.</p>
         </div>
       )}
@@ -1563,7 +1563,7 @@ const FutureBookingsModal = ({ onClose }: { onClose: () => void }) => {
       const startDate = today.toISOString().split('T')[0];
       const endDate = end.toISOString().split('T')[0];
       
-      const data = await fetchAiosellFutureBookings(startDate, endDate);
+      const data = await fetchChannelFutureBookings(startDate, endDate);
       setResult(data);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch future bookings');
@@ -1583,7 +1583,7 @@ const FutureBookingsModal = ({ onClose }: { onClose: () => void }) => {
         
         <div className="space-y-4">
           <p className="text-xs text-slate-500">
-            Select a date range to fetch and import future reservations from Aiosell into your PMS.
+            Select a date range to fetch and import future reservations from channels into your PMS.
           </p>
           
           <div className="flex flex-col gap-2">
@@ -1661,26 +1661,26 @@ const AddChannelModal = ({ isLiveMode, onClose }: {
         </div>
         <div className="space-y-4">
           <div className="bg-brand-50 border border-brand-200 rounded-xl p-4">
-            <h4 className="text-sm font-semibold text-brand-800 mb-2">Aiosell Unified Channel Manager</h4>
+            <h4 className="text-sm font-semibold text-brand-800 mb-2">Unified Channel Manager</h4>
             <p className="text-xs text-brand-700 leading-relaxed">
-              Your PMS is connected to the Aiosell Channel Manager. Aiosell handles all distribution to OTAs (Booking.com, Expedia, Agoda, etc.) automatically.
+              Your PMS is connected to the Connected Channels. Provider handles all distribution to OTAs (Booking.com, Expedia, Agoda, etc.) automatically.
             </p>
             <p className="text-xs text-brand-700 leading-relaxed mt-2">
-              Because Aiosell does not expose a public API for remotely adding OTAs, you must manage your OTA channels directly within your Aiosell Extranet.
+              Connect and manage your OTAs seamlessly.
             </p>
           </div>
           
           {!isLiveMode && (
             <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-3">
-              <span className="font-semibold">Not Connected:</span> You must configure your Aiosell API credentials in the Connection Settings tab first.
+              <span className="font-semibold">Not Connected:</span> You must configure your Provider API credentials in the Connection Settings tab first.
             </p>
           )}
         </div>
         
         <div className="mt-6 flex items-center justify-end gap-3">
           <button onClick={onClose} className="text-sm font-semibold text-slate-500 hover:text-slate-700">Close</button>
-          <a href="https://extranet.aiosell.com" target="_blank" rel="noreferrer" className="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue transition">
-            Open Aiosell Extranet
+          <a onClick={() => alert("Channel Discovery API coming soon.")} className="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue transition">
+            Refresh Channels
           </a>
         </div>
       </div>
@@ -1698,8 +1698,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
   mappings: ChannelManagerOverview['mappings'];
   onChanged: () => void;
 }) => {
-  const [editing, setEditing] = useState<{ catId: string; ratePlanId: string; aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string } | null>(null);
-  const [aiosellMapping, setAiosellMapping] = useState<any>(null);
+  const [editing, setEditing] = useState<{ catId: string; ratePlanId: string; externalRoomCode: string; externalRatePlan: string; mappingId?: string } | null>(null);
+  const [channelMapping, setChannelMapping] = useState<any>(null);
   const [fetchingMapping, setFetchingMapping] = useState(false);
   const [mappingError, setMappingError] = useState<string | null>(null);
   const [mappingSuccess, setMappingSuccess] = useState(false);
@@ -1709,8 +1709,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
     setMappingError(null);
     setMappingSuccess(false);
     try {
-      const data = await fetchAiosellMapping();
-      setAiosellMapping(data);
+      const data = await fetchChannelMapping();
+      setChannelMapping(data);
       setMappingSuccess(true);
       setTimeout(() => setMappingSuccess(false), 3000);
     } catch (err: any) {
@@ -1744,7 +1744,7 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
       {mappingSuccess && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2 animate-fade-in">
           <CheckCircle2 className="w-4 h-4" />
-          Aiosell mapping fetched successfully
+          Provider mapping fetched successfully
         </div>
       )}
 
@@ -1769,7 +1769,7 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
           <div>
             <h3 className="text-sm font-bold text-brand-navy-800">Room & Rate Plan Mapping</h3>
-            <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Aiosell room types and rate plans</p>
+            <p className="text-xs text-slate-400 mt-0.5">Map Hotel Mantri categories and rate plans to Provider room types and rate plans</p>
           </div>
           <button 
             onClick={handleFetchMapping}
@@ -1784,7 +1784,7 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             ) : (
               <>
                 <RefreshCw className="w-3.5 h-3.5" />
-                Fetch Aiosell Mapping
+                Fetch Provider Mapping
               </>
             )}
           </button>
@@ -1795,8 +1795,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
               <tr className="border-b border-slate-200 bg-slate-50">
                 <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Hotel Category</th>
                 <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Rate Plan</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Aiosell Room</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Aiosell Rate</th>
+                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">External Room</th>
+                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">External Rate</th>
                 <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Status</th>
                 <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Actions</th>
               </tr>
@@ -1822,8 +1822,8 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
                           onClick={() => setEditing({
                             catId: cat.id,
                             ratePlanId: rp.id,
-                            aiosellRoomCode: mapping?.external_room_code ?? '',
-                            aiosellRatePlan: mapping?.external_rate_plan_code ?? '',
+                            externalRoomCode: mapping?.external_room_code ?? '',
+                            externalRatePlan: mapping?.external_rate_plan_code ?? '',
                             mappingId: mapping?.id,
                           })}
                           className="text-xs font-semibold text-brand-600 hover:text-brand-700"
@@ -1868,24 +1868,24 @@ const MappingTab = ({ categories, ratePlans, mappings, onChanged }: {
             setEditing(null);
             onChanged();
           } : undefined}
-          aiosellMapping={aiosellMapping}
+          channelMapping={channelMapping}
         />
       )}
     </div>
   );
 };
 
-const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete, aiosellMapping }: {
-  data: { aiosellRoomCode: string; aiosellRatePlan: string; mappingId?: string };
+const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete, channelMapping }: {
+  data: { externalRoomCode: string; externalRatePlan: string; mappingId?: string };
   category: string;
   ratePlan: string;
   onClose: () => void;
   onSave: (aiosellRoom: string, aiosellRate: string, aiosellRoomName: string, aiosellRateName: string) => Promise<void>;
   onDelete?: () => Promise<void>;
-  aiosellMapping?: any;
+  channelMapping?: any;
 }) => {
-  const [aiosellRoomCode, setAiosellRoomCode] = useState(data.aiosellRoomCode);
-  const [aiosellRatePlan, setAiosellRatePlan] = useState(data.aiosellRatePlan);
+  const [externalRoomCode, setExternalRoomCode] = useState(data.externalRoomCode);
+  const [externalRatePlan, setExternalRatePlan] = useState(data.externalRatePlan);
   const [saving, setSaving] = useState(false);
 
   return (
@@ -1905,31 +1905,31 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-slate-500">Aiosell Room Code</label>
-            {aiosellMapping && aiosellMapping.rooms ? (
-              <select value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+            <label className="text-xs font-semibold text-slate-500">External Room Code</label>
+            {channelMapping && channelMapping.rooms ? (
+              <select value={externalRoomCode} onChange={(e) => setExternalRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
                 <option value="">Select a room...</option>
-                {aiosellMapping.rooms.map((r: any) => (
+                {channelMapping.rooms.map((r: any) => (
                   <option key={r.room_id} value={r.room_id}>{r.room_name} ({r.room_id})</option>
                 ))}
               </select>
             ) : (
-              <input type="text" value={aiosellRoomCode} onChange={(e) => setAiosellRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell room code (or Fetch Mapping first)" />
+              <input type="text" value={externalRoomCode} onChange={(e) => setExternalRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Provider room code (or Fetch Mapping first)" />
             )}
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500">Aiosell Rate Plan Code</label>
-            {aiosellMapping && aiosellMapping.ratePlans ? (
-              <select value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
+            <label className="text-xs font-semibold text-slate-500">External Rate Plan Code</label>
+            {channelMapping && channelMapping.ratePlans ? (
+              <select value={externalRatePlan} onChange={(e) => setExternalRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
                 <option value="">Select a rate plan...</option>
-                {aiosellMapping.ratePlans
-                  .filter((rp: any) => !aiosellRoomCode || rp.room_id === aiosellRoomCode)
+                {channelMapping.ratePlans
+                  .filter((rp: any) => !externalRoomCode || rp.room_id === externalRoomCode)
                   .map((rp: any) => (
                   <option key={rp.rate_plan_id} value={rp.rate_plan_id}>{rp.rate_plan_name} ({rp.rate_plan_id})</option>
                 ))}
               </select>
             ) : (
-              <input type="text" value={aiosellRatePlan} onChange={(e) => setAiosellRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Aiosell rate plan code" />
+              <input type="text" value={externalRatePlan} onChange={(e) => setExternalRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Provider rate plan code" />
             )}
           </div>
         </div>
@@ -1941,9 +1941,9 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
           <button
             onClick={async () => { 
               setSaving(true); 
-              const rName = aiosellMapping?.rooms?.find((r:any) => r.room_id === aiosellRoomCode)?.room_name || '';
-              const rpName = aiosellMapping?.ratePlans?.find((rp:any) => rp.rate_plan_id === aiosellRatePlan)?.rate_plan_name || '';
-              await onSave(aiosellRoomCode, aiosellRatePlan, rName, rpName); 
+              const rName = channelMapping?.rooms?.find((r:any) => r.room_id === externalRoomCode)?.room_name || '';
+              const rpName = channelMapping?.ratePlans?.find((rp:any) => rp.rate_plan_id === externalRatePlan)?.rate_plan_name || '';
+              await onSave(externalRoomCode, externalRatePlan, rName, rpName); 
               setSaving(false); 
             }}
             disabled={saving}
@@ -2130,8 +2130,8 @@ const SettingsTab = ({ settings, onChanged }: {
   const [hotelCode, setHotelCode] = useState(settings?.aiosell_hotel_code || '');
   const [partnerId, setPartnerId] = useState(settings?.aiosell_partner_id || '');
   const [environment, setEnvironment] = useState<'production' | 'test'>(settings?.aiosell_environment || 'production');
-  const [aiosellTesting, setAiosellTesting] = useState(false);
-  const [aiosellTestResult, setAiosellTestResult] = useState<{
+  const [providerTesting, setProviderTesting] = useState(false);
+  const [providerTestResult, setProviderTestResult] = useState<{
     ok: boolean;
     message: string;
     details?: {
@@ -2164,15 +2164,15 @@ const SettingsTab = ({ settings, onChanged }: {
     }
   };
 
-  const handleTestAiosell = async () => {
-    setAiosellTesting(true);
-    setAiosellTestResult(null);
+  const handleTestProvider = async () => {
+    setProviderTesting(true);
+    setProviderTestResult(null);
     try {
-      const res = await testAiosellConnection();
+      const res = await testChannelConnection();
       if (res.success) {
-        setAiosellTestResult({ 
+        setProviderTestResult({ 
           ok: true, 
-          message: "✓ Aiosell Connected",
+          message: "✓ Provider Connected",
           details: {
             status: res.status,
             responseTimeMs: res.responseTimeMs,
@@ -2196,7 +2196,7 @@ const SettingsTab = ({ settings, onChanged }: {
         }
       } else {
         const errMsg = typeof res.error === 'string' ? res.error : res.error?.message;
-        setAiosellTestResult({ ok: false, message: errMsg || "Failed to connect to Aiosell." });
+        setProviderTestResult({ ok: false, message: errMsg || "Failed to connect to Provider." });
         if (settings) {
           await saveChannelSettings({
             ...settings,
@@ -2207,9 +2207,9 @@ const SettingsTab = ({ settings, onChanged }: {
       }
     } catch (err: any) {
       const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
-      setAiosellTestResult({ 
+      setProviderTestResult({ 
         ok: false, 
-        message: isAuthError ? "✕ Aiosell Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
+        message: isAuthError ? "✕ Provider Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
       });
       if (settings) {
         await saveChannelSettings({
@@ -2219,7 +2219,7 @@ const SettingsTab = ({ settings, onChanged }: {
         onChanged();
       }
     } finally {
-      setAiosellTesting(false);
+      setProviderTesting(false);
     }
   };
 
@@ -2238,14 +2238,14 @@ const SettingsTab = ({ settings, onChanged }: {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-5">
         <div className="flex items-center gap-2 mb-1">
           <KeyRound className="w-4 h-4 text-brand-600" />
-          <h3 className="text-sm font-bold text-brand-navy-800">Aiosell Connection Settings</h3>
+          <h3 className="text-sm font-bold text-brand-navy-800">Channel Connection Settings</h3>
           {environment === 'test' && (
             <span className="ml-auto text-xs font-bold px-2.5 py-1 rounded bg-amber-100 text-amber-700">
-              AIOSELL SANDBOX / TEST
+              CHANNEL SANDBOX / TEST
             </span>
           )}
         </div>
-        <p className="text-xs text-slate-400 mb-4">Configure your Aiosell PMS integration parameters.</p>
+        <p className="text-xs text-slate-400 mb-4">Configure your PMS integration parameters.</p>
 
         <div className="mb-4">
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${settings?.aiosell_status === 'connected' ? STATUS_STYLES.connected : settings?.aiosell_status === 'error' ? STATUS_STYLES.error : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
@@ -2260,22 +2260,22 @@ const SettingsTab = ({ settings, onChanged }: {
           </label>
 
           <div>
-            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> Aiosell Hotel Code</label>
+            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Building2 className="w-3 h-3" /> External Hotel Code</label>
             <input
               type="text"
               value={hotelCode}
               onChange={(e) => setHotelCode(e.target.value)}
-              placeholder="Enter AIOSell hotel code"
+              placeholder="Enter external hotel code"
               className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
             />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> Aiosell Partner ID</label>
+            <label className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> External Partner ID</label>
             <input
               type="text"
               value={partnerId}
               onChange={(e) => setPartnerId(e.target.value)}
-              placeholder="Enter AIOSell partner ID"
+              placeholder="Enter external partner ID"
               className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 text-slate-700 focus:border-brand-500 focus:ring-1 focus:ring-brand-500 focus:outline-none"
             />
           </div>
@@ -2299,19 +2299,19 @@ const SettingsTab = ({ settings, onChanged }: {
           </div>
         </div>
 
-        {aiosellTestResult && (
-          <div className={`mt-4 rounded-lg p-3 flex flex-col gap-2 animate-fade-in ${aiosellTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
+        {providerTestResult && (
+          <div className={`mt-4 rounded-lg p-3 flex flex-col gap-2 animate-fade-in ${providerTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
             <div className="flex items-center gap-2">
-              {aiosellTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
-              <p className={`text-sm font-semibold ${aiosellTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{aiosellTestResult.message}</p>
+              {providerTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
+              <p className={`text-sm font-semibold ${providerTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{providerTestResult.message}</p>
             </div>
-            {aiosellTestResult.details && (
+            {providerTestResult.details && (
               <div className="text-xs text-emerald-700 ml-6 space-y-1">
-                <p>HTTP Status: {aiosellTestResult.details.status}</p>
-                <p>Response Time: {aiosellTestResult.details.responseTimeMs} ms</p>
-                <p>Hotel: {aiosellTestResult.details.hotelCode}</p>
-                <p>Rooms: {aiosellTestResult.details.roomsCount}</p>
-                <p>Rate Plans: {aiosellTestResult.details.ratePlansCount}</p>
+                <p>HTTP Status: {providerTestResult.details.status}</p>
+                <p>Response Time: {providerTestResult.details.responseTimeMs} ms</p>
+                <p>Hotel: {providerTestResult.details.hotelCode}</p>
+                <p>Rooms: {providerTestResult.details.roomsCount}</p>
+                <p>Rate Plans: {providerTestResult.details.ratePlansCount}</p>
               </div>
             )}
           </div>
@@ -2319,11 +2319,11 @@ const SettingsTab = ({ settings, onChanged }: {
 
         <div className="grid grid-cols-2 gap-2 mt-4">
           <button
-            onClick={handleTestAiosell}
-            disabled={aiosellTesting}
+            onClick={handleTestProvider}
+            disabled={providerTesting}
             className="flex items-center justify-center gap-2 text-sm font-semibold text-brand-600 bg-brand-50 hover:bg-brand-100 disabled:opacity-50 rounded-xl py-3 transition border border-brand-200"
           >
-            {aiosellTesting ? <><Loader2 className="w-4 h-4 animate-spin" /> Testing Aiosell Sandbox...</> : <><Plug className="w-4 h-4" /> Test Connection</>}
+            {providerTesting ? <><Loader2 className="w-4 h-4 animate-spin" /> Testing Channel Sandbox...</> : <><Plug className="w-4 h-4" /> Test Connection</>}
           </button>
           <button
             onClick={handleSave}
@@ -2361,7 +2361,7 @@ const DiagnosticsTab = () => {
   const runHealthCheck = async () => {
     setLoading(true);
     try {
-      const data = await checkAiosellStatus();
+      const data = await checkChannelStatus();
       setHealth(data);
     } catch (err) {
       console.error(err);
@@ -2375,7 +2375,7 @@ const DiagnosticsTab = () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      await pushAiosellInventory(today, nextMonth);
+      await pushChannelInventory(today, nextMonth);
       alert('Inventory push successful!');
     } catch (err: any) {
       alert(`Inventory push failed: ${err.message}`);
@@ -2389,7 +2389,7 @@ const DiagnosticsTab = () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      await pushAiosellRates(today, nextMonth);
+      await pushChannelRates(today, nextMonth);
       alert('Rates push successful!');
     } catch (err: any) {
       alert(`Rates push failed: ${err.message}`);

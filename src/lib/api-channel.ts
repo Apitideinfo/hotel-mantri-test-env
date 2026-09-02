@@ -2,8 +2,8 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
-import { testAiosellConnection, checkAiosellStatus, getAiosellMapping as fetchAiosellMapping } from './api-aiosell';
-export { testAiosellConnection, checkAiosellStatus, fetchAiosellMapping };
+import { testChannelConnection, checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
+export { testChannelConnection, checkChannelStatus, fetchChannelMapping };
 
 // ── Types ──
 
@@ -432,21 +432,21 @@ import { apiFetch } from './api-fetch';
 
 
 
-export const pushAiosellInventory = async (startDate: string, endDate: string): Promise<any> => {
+export const pushChannelInventory = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/inventory/push', {
     method: 'POST',
     body: JSON.stringify({ startDate, endDate })
   });
 };
 
-export const fetchAiosellFutureBookings = async (startDate: string, endDate: string): Promise<any> => {
+export const fetchChannelFutureBookings = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/reservations/fetch', {
     method: 'POST',
     body: JSON.stringify({ startDate, endDate })
   });
 };
 
-export const pushAiosellRates = async (startDate: string, endDate: string): Promise<any> => {
+export const pushChannelRates = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/rates/push', {
     method: 'POST',
     body: JSON.stringify({ startDate, endDate })
@@ -497,7 +497,7 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
 
   let isLiveMode = false;
   try {
-    const data = await checkAiosellStatus();
+    const data = await checkChannelStatus();
     isLiveMode = data.connected === true;
   } catch (err) {
     console.error('Failed to check aiosell status', err);
