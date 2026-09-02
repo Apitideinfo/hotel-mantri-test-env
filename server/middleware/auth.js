@@ -61,15 +61,10 @@ export const requireHotelAccess = async (req, res, next) => {
     }
 
     if (!adminRecord) {
-      // Check if user is a super admin
-      const { data: superAdminRecord } = await scopedSupabase
-        .from('hotel_admins')
-        .select('role')
-        .eq('user_id', user.id)
-        .eq('role', 'super_admin')
-        .maybeSingle();
+      // Check if user is a super admin using the definitive RPC used by the frontend
+      const { data: isSuperAdmin } = await scopedSupabase.rpc('is_super_admin');
 
-      if (!superAdminRecord) {
+      if (!isSuperAdmin) {
         return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'User does not have access to this hotel' });
       }
     }
