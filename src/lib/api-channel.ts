@@ -439,9 +439,7 @@ export const updateChannelSettingsStatus = async (
 
 import { apiFetch } from './api-fetch';
 
-export const checkAiosellHealth = async (): Promise<any> => {
-  return apiFetch('/api/aiosell/health');
-};
+
 
 export const pushAiosellInventory = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/inventory/push', {
@@ -502,7 +500,7 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
   let isLiveMode = false;
   try {
     const data = await checkAiosellStatus();
-    isLiveMode = data.success === true && data.status === 'connected';
+    isLiveMode = data.connected === true;
   } catch (err) {
     console.error('Failed to check aiosell status', err);
   }

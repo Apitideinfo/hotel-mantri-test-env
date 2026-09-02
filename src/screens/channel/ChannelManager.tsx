@@ -14,7 +14,7 @@ import {
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchAiosellMapping,
-  checkAiosellHealth, pushAiosellInventory, pushAiosellRates,
+  checkAiosellStatus, pushAiosellInventory, pushAiosellRates,
   testAiosellConnection
 } from '@/lib/api-channel';
 import type {
@@ -2248,7 +2248,7 @@ const DiagnosticsTab = () => {
   const runHealthCheck = async () => {
     setLoading(true);
     try {
-      const data = await checkAiosellHealth();
+      const data = await checkAiosellStatus();
       setHealth(data);
     } catch (err) {
       console.error(err);
@@ -2308,12 +2308,12 @@ const DiagnosticsTab = () => {
         {health ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <DiagnosticItem label="API Connection" status={health.connected ? 'pass' : 'fail'} value={health.connected ? 'Connected' : 'Failed'} />
-            <DiagnosticItem label="Authentication" status={health.authentication === 'success' ? 'pass' : 'fail'} value={health.authentication} />
-            <DiagnosticItem label="Partner ID" status={health.partnerConfigured ? 'pass' : 'fail'} value={health.partnerConfigured ? 'Configured' : 'Missing'} />
-            <DiagnosticItem label="Hotel Code" status={health.hotelConfigured ? 'pass' : 'fail'} value={health.hotelConfigured ? 'Configured' : 'Missing'} />
-            <DiagnosticItem label="Hotel Mapping" status={health.hotelMapping === 'success' ? 'pass' : 'fail'} value={health.hotelMapping} />
-            <DiagnosticItem label="Environment" status="info" value={health.environment} />
-            <DiagnosticItem label="Latency" status="info" value={`${health.latencyMs} ms`} />
+            <DiagnosticItem label="Authentication" status={health.authentication === 'success' ? 'pass' : 'fail'} value={health.authentication === 'success' ? 'Successful' : 'Failed'} />
+            <DiagnosticItem label="Partner ID" status={health.partnerId ? 'pass' : 'fail'} value={health.partnerId || 'Missing'} />
+            <DiagnosticItem label="Hotel Code" status={health.hotelCode ? 'pass' : 'fail'} value={health.hotelCode || 'Missing'} />
+            <DiagnosticItem label="Hotel Mapping" status={health.mappingConfigured ? 'pass' : 'fail'} value={health.mappingConfigured ? 'Configured' : 'Failed'} />
+            <DiagnosticItem label="Environment" status="info" value={health.environment || 'Production'} />
+            <DiagnosticItem label="Latency" status="info" value={health.latencyMs != null ? `${health.latencyMs} ms` : 'N/A'} />
             {health.errorMessage && (
                <div className="col-span-full mt-2 p-3 bg-red-50 text-red-700 text-sm rounded-lg border border-red-200">
                  <strong>Error:</strong> {health.errorMessage}

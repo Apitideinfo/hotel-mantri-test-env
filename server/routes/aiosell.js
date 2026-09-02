@@ -98,17 +98,54 @@ router.get('/status', async (req, res) => {
     const hotelConfig = await getHotelAiosellConfig(hotelId);
     
     const result = await aiosellService.testConnection(hotelConfig);
+    
     if (result.success) {
-      res.json({ success: true, status: 'connected', hotelCode: hotelConfig.hotelCode });
+      res.json({
+        success: true,
+        status: 'connected',
+        connected: true,
+        hotelId: hotelId,
+        environment: result.environment || hotelConfig.environment,
+        hotelCode: result.hotelCode || hotelConfig.hotelCode,
+        partnerId: result.partnerId || hotelConfig.partnerId,
+        mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        latencyMs: result.responseTimeMs,
+        authentication: 'success',
+        errorMessage: null
+      });
     } else {
+      const isAuthError = result.error?.status === 401 || result.error?.code === 'AUTHENTICATION_ERROR';
       res.json({
         success: false,
         status: 'error',
+        connected: false,
+        hotelId: hotelId,
+        environment: result.diagnostic?.environment || hotelConfig.environment,
+        hotelCode: result.diagnostic?.hotelCode || hotelConfig.hotelCode,
+        partnerId: result.diagnostic?.partnerId || hotelConfig.partnerId,
+        mappingConfigured: false,
+        latencyMs: null,
+        authentication: isAuthError ? 'failed' : 'success',
+        errorMessage: result.error?.message || 'Connection failed',
         error: result.error
       });
     }
   } catch (err) {
-    res.json({ success: false, status: 'not_configured', error: { message: err.message, code: err.code } });
+    const isMissingConfig = err.code === 'AIOSELL_NOT_CONFIGURED';
+    res.json({ 
+      success: false, 
+      status: 'not_configured', 
+      connected: false,
+      hotelId: req.headers['x-hotel-id'],
+      environment: 'production',
+      hotelCode: null,
+      partnerId: null,
+      mappingConfigured: false,
+      latencyMs: null,
+      authentication: 'failed',
+      errorMessage: err.message,
+      error: { message: err.message, code: err.code } 
+    });
   }
 });
 
