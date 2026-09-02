@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Check, Building2, User, MapPin, Layers, BedDouble, CreditCard, ToggleLeft, KeyRound, Plus, Trash2, X, AlertTriangle, RotateCcw, Trash } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Building2, User, MapPin, Layers, BedDouble, CreditCard, ToggleLeft, KeyRound, Plus, Trash2, X, AlertTriangle, RotateCcw, Trash, Eye, EyeOff } from 'lucide-react';
 import {
   checkExistingOnboarding, onboardHotelAtomically, discardOnboardingAttempt,
 } from '../api';
@@ -75,6 +75,9 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
 
   // Step 8: Owner login
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const canProceed = () => {
     switch (step) {
@@ -85,7 +88,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
       case 4: return true;
       case 5: return true;
       case 6: return true;
-      case 7: return !!password.trim() && password.length >= 6;
+      case 7: return !!password.trim() && password.length >= 6 && password === confirmPassword;
       default: return true;
     }
   };
@@ -454,7 +457,29 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
           <div className="space-y-3">
             <h2 className="text-base font-bold text-slate-800 flex items-center gap-2"><KeyRound className="w-4 h-4" /> Create Owner Login</h2>
             <p className="text-sm text-slate-500">Set a temporary password for the owner. They can change it after first login.</p>
-            <TextInput label="Temporary Password" value={password} onChange={setPassword} type="password" placeholder="Min 6 characters" />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="block relative">
+                <span className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">Temporary Password</span>
+                <div className="relative">
+                  <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Min 6 characters" className="w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 pr-10" />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </label>
+              <label className="block relative">
+                <span className="block text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">Confirm Password</span>
+                <div className="relative">
+                  <input type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Re-enter password" className="w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 pr-10" />
+                  <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </label>
+            </div>
+            {password && confirmPassword && password !== confirmPassword && (
+              <p className="text-xs text-rose-500 font-medium">Passwords do not match</p>
+            )}
           </div>
         )}
       </Card>

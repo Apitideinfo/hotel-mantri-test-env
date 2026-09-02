@@ -301,16 +301,12 @@ export const saveCompanyUser = async (
   }
   // Create auth user first via edge function
   if (!input.password || input.password.length < 6) throw new Error('Password must be at least 6 characters');
-  const res = await fetch(`${SUPABASE_URL}/functions/v1/setup-super-admin`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${ANON_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'create_company_user', email: input.email, password: input.password, name: input.name, role: input.role }),
+  const { data: result, error: fetchErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'create_company_user', email: input.email, password: input.password, name: input.name, role: input.role },
   });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to create user account');
+  if (fetchErr) {
+    throw new Error(fetchErr.message || 'Failed to create user account');
   }
-  const result = await res.json();
   const userId = result.userId as string;
   const { password, ...insertPayload } = input;
   void password;
