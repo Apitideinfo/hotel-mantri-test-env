@@ -154,10 +154,23 @@ export const testConnection = async (hotelConfig) => {
     environment: config.environment
   };
 
-  if (!config.username || !config.password || !config.partnerId || !config.hotelCode) {
+  if (!config.partnerId || !config.hotelCode) {
     return {
       success: false,
       error: sanitizeAiosellError('Aiosell credentials (partner ID or hotel code) are not configured for this hotel.', 401),
+      diagnostic: debugDiagnostic
+    };
+  }
+
+  if (!config.username || !config.password) {
+    return {
+      success: false,
+      error: {
+        provider: 'aiosell',
+        status: 401,
+        code: 'BACKEND_CREDENTIALS_MISSING',
+        message: 'Configuration exists, but backend Aiosell credentials are unavailable.'
+      },
       diagnostic: debugDiagnostic
     };
   }

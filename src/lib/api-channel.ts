@@ -396,25 +396,16 @@ export const getChannelSettings = async (): Promise<ChannelSettings | null> => {
 export const saveChannelSettings = async (
   input: Omit<ChannelSettings, 'id' | 'hotel_id' | 'created_at' | 'updated_at' | 'last_tested_at' | 'last_test_result'>
 ): Promise<ChannelSettings> => {
-  const existing = await getChannelSettings();
   // Extract and omit `id` if it was accidentally passed in through spread
   const { id, ...cleanInput } = input as any;
-  const payload = { ...cleanInput, hotel_id: getCurrentHotelId() };
-  if (existing) {
-    const { data, error } = await supabase
-      .from('channel_settings')
-      .update({ ...payload, updated_at: new Date().toISOString() })
-      .eq('id', existing.id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    return data as ChannelSettings;
-  }
+  const payload = { ...cleanInput, hotel_id: getCurrentHotelId(), updated_at: new Date().toISOString() };
+  
   const { data, error } = await supabase
     .from('channel_settings')
-    .insert(payload)
+    .upsert(payload, { onConflict: 'hotel_id' })
     .select('*')
     .single();
+    
   if (error) throw error;
   return data as ChannelSettings;
 };

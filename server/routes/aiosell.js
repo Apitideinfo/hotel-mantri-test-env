@@ -37,9 +37,9 @@ let supabaseInstance = null;
 const getSupabase = () => {
   if (!supabaseInstance) {
     const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://mtfycmdoqzzyxhjmfvuv.supabase.co';
-    const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
     if (!supabaseKey) {
-      throw new Error("VITE_SUPABASE_ANON_KEY is not set in environment variables");
+      throw new Error("Supabase key is not set in environment variables");
     }
     supabaseInstance = createClient(supabaseUrl, supabaseKey);
   }
