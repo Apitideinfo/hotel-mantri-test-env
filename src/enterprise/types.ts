@@ -43,6 +43,7 @@ export interface ChannelManagerHotelStatus {
   hotel_id: string;
   enabled: boolean;
   connected: boolean;
+  aiosell_hotel_code?: string | null;
   mapping_complete: boolean;
   last_sync: string | null;
   sync_error: string | null;

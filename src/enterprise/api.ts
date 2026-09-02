@@ -87,7 +87,7 @@ export const getEnterpriseHotels = async (): Promise<EnterpriseHotel[]> => {
 export const getChannelManagerHotelStatuses = async (): Promise<ChannelManagerHotelStatus[]> => {
   try {
     const [settingsResult, connectionsResult, mappingsResult] = await Promise.all([
-      supabase.from('channel_settings').select('hotel_id, status, last_tested_at, last_test_result'),
+      supabase.from('channel_settings').select('hotel_id, status, last_tested_at, last_test_result, aiosell_status, aiosell_hotel_code'),
       supabase.from('channel_connections').select('hotel_id, status, last_sync_at, last_error'),
       supabase.from('channel_rate_mappings').select('hotel_id, status'),
     ]);
@@ -103,10 +103,14 @@ export const getChannelManagerHotelStatuses = async (): Promise<ChannelManagerHo
       const connections = connectionsData.filter((row) => row.hotel_id === hotelId);
       const mappings = mappingsData.filter((row) => row.hotel_id === hotelId);
       const lastSyncs = [settings?.last_tested_at, ...connections.map((row) => row.last_sync_at)].filter((value): value is string => Boolean(value)).sort().reverse();
+      
+      const isConnected = settings?.status === 'connected' || settings?.aiosell_status === 'connected' || connections.some((row) => row.status === 'connected');
+      
       return {
         hotel_id: hotelId,
-        enabled: settings?.status === 'connected',
-        connected: settings?.status === 'connected' || connections.some((row) => row.status === 'connected'),
+        enabled: settings?.status === 'connected' || settings?.aiosell_status === 'connected' || settings?.aiosell_status === 'paused',
+        connected: isConnected,
+        aiosell_hotel_code: settings?.aiosell_hotel_code ?? null,
         mapping_complete: mappings.length > 0 && mappings.every((row) => row.status === 'mapped'),
         last_sync: lastSyncs[0] ?? null,
         sync_error: settings?.last_test_result ?? connections.find((row) => row.last_error)?.last_error ?? null,

@@ -256,7 +256,7 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
                         {hotel.hotel_name}
                       </h3>
                       <p className="text-xs font-medium text-amber-900/60">
-                        {hotel.city}, {hotel.state} {hotel.property_code ? `· Code: ${hotel.property_code}` : ''}
+                        {hotel.city}, {hotel.state} {st?.aiosell_hotel_code ? `· Code: ${st.aiosell_hotel_code}` : hotel.property_code ? `· Code: ${hotel.property_code}` : ''}
                       </p>
                     </div>
                     <span
