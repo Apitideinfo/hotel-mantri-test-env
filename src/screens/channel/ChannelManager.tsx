@@ -15,7 +15,7 @@ import {
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchChannelMapping,
   checkChannelStatus, pushChannelInventory, pushChannelRates,
-  testChannelConnection, fetchChannelFutureBookings
+  testChannelConnection, fetchChannelFutureBookings, addChannel
 } from '@/lib/api-channel';
 import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
@@ -24,6 +24,7 @@ import type {
 import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
+import { ChannelsDashboard } from './components/ChannelsDashboard';
 
 interface ChannelManagerProps {
   onBack?: () => void;
@@ -31,11 +32,11 @@ interface ChannelManagerProps {
   mode?: 'hotel_owner' | 'super_admin';
 }
 
-type Tab = 'overview' | 'inventory' | 'reservations' | 'channels' | 'mapping' | 'logs' | 'settings' | 'diagnostics';
+type Tab = 'overview' | 'channels' | 'inventory' | 'reservations' | 'mapping' | 'logs' | 'settings' | 'diagnostics';
 
 const TAB_KEY = 'cm_active_tab';
 
-const HOTEL_OWNER_TABS: Tab[] = ['overview', 'inventory', 'mapping'];
+const HOTEL_OWNER_TABS: Tab[] = ['overview', 'channels', 'inventory', 'reservations', 'mapping', 'logs'];
 
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
@@ -189,9 +190,9 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
 
   const allTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Radio className="w-4 h-4" /> },
+    { key: 'channels', label: 'Channels', icon: <Wifi className="w-4 h-4" /> },
     { key: 'inventory', label: 'Inventory & Rates', icon: <Calendar className="w-4 h-4" /> },
     { key: 'reservations', label: 'OTA Reservations', icon: <FileText className="w-4 h-4" /> },
-    { key: 'channels', label: 'Channels', icon: <Wifi className="w-4 h-4" /> },
     { key: 'mapping', label: 'Room & Rate Mapping', icon: <Link2 className="w-4 h-4" /> },
     { key: 'logs', label: 'Sync Logs', icon: <Zap className="w-4 h-4" /> },
     { key: 'diagnostics', label: 'Diagnostics', icon: <Activity className="w-4 h-4" /> },
@@ -278,9 +279,20 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       ) : overview ? (
         <>
           {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
+          {tab === 'channels' && (
+            <ChannelsDashboard
+              connections={overview.connections}
+              categories={overview.categories}
+              ratePlans={overview.ratePlans}
+              mappings={overview.mappings}
+              reservations={overview.otaReservations}
+              syncLogs={overview.syncLogs}
+              onRefresh={load}
+              loading={loading}
+            />
+          )}
           {tab === 'inventory' && <InventoryTab categories={overview.categories} isLiveMode={overview.isLiveMode} />}
           {tab === 'reservations' && <ReservationsTab reservations={overview.otaReservations} onChanged={load} />}
-          {tab === 'channels' && <ChannelsTab isLiveMode={overview.isLiveMode} />}
           {tab === 'mapping' && <MappingTab categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
           {tab === 'logs' && <LogsTab logs={overview.syncLogs} connections={overview.connections} />}
           {tab === 'diagnostics' && <DiagnosticsTab />}
@@ -1324,10 +1336,10 @@ const ReservationsTab = ({ reservations, onChanged }: {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const { fetchChannelReservations } = await import('../../lib/api-aiosell');
+      const { fetchAiosellReservations } = await import('../../lib/api-aiosell');
       const endDate = new Date().toISOString().split('T')[0];
       const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
-      const result = await fetchChannelReservations(startDate, endDate);
+      const result = await fetchAiosellReservations(startDate, endDate);
       
       let msg = 'Sync Complete!\n';
       if (result.stats) {
@@ -1473,8 +1485,9 @@ const ReservationsTab = ({ reservations, onChanged }: {
 // CHANNELS TAB
 // ══════════════════════════════════════════════════════════════════
 
-const ChannelsTab = ({ isLiveMode }: {
+const ChannelsTab = ({ isLiveMode, onRefresh }: {
   isLiveMode: boolean;
+  onRefresh: () => void;
 }) => {
   const [showAdd, setShowAdd] = useState(false);
   const [showFutureBookings, setShowFutureBookings] = useState(false);
@@ -1535,6 +1548,10 @@ const ChannelsTab = ({ isLiveMode }: {
         <AddChannelModal
           isLiveMode={isLiveMode}
           onClose={() => setShowAdd(false)}
+          onSuccess={() => {
+            setShowAdd(false);
+            onRefresh();
+          }}
         />
       )}
       {showFutureBookings && (
@@ -1542,6 +1559,116 @@ const ChannelsTab = ({ isLiveMode }: {
           onClose={() => setShowFutureBookings(false)}
         />
       )}
+    </div>
+  );
+};
+
+const AddChannelModal = ({ isLiveMode, onClose, onSuccess }: { isLiveMode: boolean; onClose: () => void; onSuccess: () => void; }) => {
+  const [channelType, setChannelType] = useState('');
+  const [externalPropertyId, setExternalPropertyId] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!channelType) return;
+    const channelMeta = getChannelMetadata(channelType);
+    
+    setLoading(true);
+    setError(null);
+    try {
+      await addChannel(channelType, channelMeta.label, externalPropertyId);
+      onSuccess();
+    } catch (err: any) {
+      setError(err.message || 'Failed to add channel.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const availableChannels = CHANNEL_TYPES.filter(c => c.type !== 'aiosell');
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-slate-900">Add Channel</h2>
+          <button onClick={onClose} disabled={loading} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6">
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-100 text-red-600 rounded-lg text-sm flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Channel / OTA
+              </label>
+              <select
+                value={channelType}
+                onChange={(e) => setChannelType(e.target.value)}
+                disabled={loading}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                required
+              >
+                <option value="" disabled>Select channel ▼</option>
+                {availableChannels.map(c => (
+                  <option key={c.type} value={c.type}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                External Property ID
+              </label>
+              <input
+                type="text"
+                value={externalPropertyId}
+                onChange={(e) => setExternalPropertyId(e.target.value)}
+                disabled={loading}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="e.g. 123456"
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Connection / Activation Status
+              </label>
+              <div className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-lg text-slate-600 text-sm flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-yellow-400"></span>
+                Awaiting activation
+              </div>
+            </div>
+          </div>
+          
+          <div className="flex justify-end gap-3 mt-8">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={loading}
+              className="px-5 py-2.5 text-slate-600 font-semibold hover:bg-slate-100 rounded-xl transition disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-5 py-2.5 bg-blue-600 text-white font-semibold hover:bg-blue-700 rounded-xl transition flex items-center gap-2 disabled:opacity-50"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              Add Channel
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 };
@@ -1647,46 +1774,7 @@ const FutureBookingsModal = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-const AddChannelModal = ({ isLiveMode, onClose }: {
-  isLiveMode: boolean;
-  onClose: () => void;
-}) => {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-md w-full p-5 animate-scale-in">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-bold text-brand-navy-800">Add OTA Channel</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="space-y-4">
-          <div className="bg-brand-50 border border-brand-200 rounded-xl p-4">
-            <h4 className="text-sm font-semibold text-brand-800 mb-2">Unified Channel Manager</h4>
-            <p className="text-xs text-brand-700 leading-relaxed">
-              Your PMS is connected to the Connected Channels. Provider handles all distribution to OTAs (Booking.com, Expedia, Agoda, etc.) automatically.
-            </p>
-            <p className="text-xs text-brand-700 leading-relaxed mt-2">
-              Connect and manage your OTAs seamlessly.
-            </p>
-          </div>
-          
-          {!isLiveMode && (
-            <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-3">
-              <span className="font-semibold">Not Connected:</span> You must configure your Provider API credentials in the Connection Settings tab first.
-            </p>
-          )}
-        </div>
-        
-        <div className="mt-6 flex items-center justify-end gap-3">
-          <button onClick={onClose} className="text-sm font-semibold text-slate-500 hover:text-slate-700">Close</button>
-          <a onClick={() => alert("Channel Discovery API coming soon.")} className="bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue transition">
-            Refresh Channels
-          </a>
-        </div>
-      </div>
-    </div>
-  );
-};
+
 
 // ══════════════════════════════════════════════════════════════════
 // MAPPING TAB

@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
-import { testChannelConnection, checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
+import { testAiosellConnection as testChannelConnection, checkAiosellStatus as checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
 export { testChannelConnection, checkChannelStatus, fetchChannelMapping };
 
 // ── Types ──
@@ -12,11 +12,16 @@ export interface ChannelConnection {
   hotel_id: string;
   channel_type: string;
   channel_name: string;
-  status: 'connected' | 'disconnected' | 'paused' | 'error';
+  status: 'connected' | 'disconnected' | 'paused' | 'error' | 'awaiting_activation';
+  connection_status?: string | null;
+  mapping_status?: string | null;
+  is_enabled?: boolean;
+  external_channel_id?: string | null;
   provider?: string;
   external_hotel_code?: string | null;
   external_partner_id?: string | null;
   last_sync_at: string | null;
+  last_successful_sync_at?: string | null;
   last_sync_status: string | null;
   last_error: string | null;
   created_at: string;
@@ -26,6 +31,7 @@ export interface ChannelConnection {
 export interface ChannelRateMapping {
   id: string;
   hotel_id: string;
+  channel_connection_id?: string | null;
   room_category_id: string | null;
   rate_plan_id: string | null;
   provider?: string;
@@ -147,7 +153,7 @@ export const CHANNEL_TYPES: { type: string; label: string; short: string }[] = [
   { type: 'easemytrip', label: 'EaseMyTrip', short: 'EMT' },
   { type: 'hotels_com', label: 'Hotels.com', short: 'H' },
   { type: 'trip_com', label: 'Trip.com', short: 'T' },
-  { type: 'aiosell', label: 'Aiosell', short: 'AS' },
+  { type: 'yatra', label: 'Yatra / Travelguru', short: 'Y' },
 ];
 
 export const getChannelMetadata = (type: string): { label: string; short: string } =>
@@ -500,23 +506,7 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     const data = await checkChannelStatus();
     isLiveMode = data.connected === true;
   } catch (err) {
-    console.error('Failed to check aiosell status', err);
-  }
-
-  if (settings && settings.aiosell_status) {
-    connections.unshift({
-      id: 'aiosell-virtual-conn',
-      hotel_id: getCurrentHotelId(),
-      channel_type: 'aiosell',
-      channel_name: 'Aiosell (Channel Manager)',
-      status: settings.aiosell_status,
-      provider: 'aiosell',
-      last_sync_at: settings.updated_at,
-      last_sync_status: 'success',
-      last_error: null,
-      created_at: settings.created_at,
-      updated_at: settings.updated_at,
-    });
+    console.error('Failed to check channel status', err);
   }
 
   return {
@@ -530,3 +520,78 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     isLiveMode,
   };
 };
+
+export async function fetchChannels() {
+  return apiFetch('/api/channels');
+}
+
+export async function fetchChannelDetails(channelId: string) {
+  return apiFetch(`/api/channels/${channelId}`);
+}
+
+export async function updateChannel(channelId: string, updates: Record<string, any>) {
+  return apiFetch(`/api/channels/${channelId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteChannel(channelId: string) {
+  return apiFetch(`/api/channels/${channelId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchChannelMappings(channelId: string) {
+  return apiFetch(`/api/channels/${channelId}/mappings`);
+}
+
+export async function saveChannelMappings(channelId: string, mappings: any[]) {
+  return apiFetch(`/api/channels/${channelId}/mappings`, {
+    method: 'POST',
+    body: JSON.stringify({ mappings }),
+  });
+}
+
+export async function syncChannelInventory(channelId: string, startDate?: string, endDate?: string) {
+  return apiFetch(`/api/channels/${channelId}/sync/inventory`, {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate }),
+  });
+}
+
+export async function syncChannelRates(channelId: string, startDate?: string, endDate?: string) {
+  return apiFetch(`/api/channels/${channelId}/sync/rates`, {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate }),
+  });
+}
+
+export async function pullChannelFutureBookings(channelId: string, startDate?: string, endDate?: string) {
+  return apiFetch(`/api/channels/${channelId}/future-bookings`, {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate }),
+  });
+}
+
+export async function fetchChannelReservations(channelId: string) {
+  return apiFetch(`/api/channels/${channelId}/reservations`);
+}
+
+export async function fetchChannelLogs(channelId: string) {
+  return apiFetch(`/api/channels/${channelId}/logs`);
+}
+
+export async function discoverChannels() {
+  return apiFetch('/api/channels/discover', {
+    method: 'POST'
+  });
+}
+
+export async function addChannel(channelType: string, displayName: string, externalChannelId?: string) {
+  return apiFetch('/api/channels', {
+    method: 'POST',
+    body: JSON.stringify({ channelType, displayName, externalChannelId })
+  });
+}
+

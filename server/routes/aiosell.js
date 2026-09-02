@@ -285,79 +285,82 @@ router.post('/inventory/fetch', async (req, res) => {
   }
 });
 
+export const executeRatePush = async (hotelId, startDate, endDate) => {
+  const supabase = getSupabase();
+  const hotelConfig = await getHotelAiosellConfig(hotelId);
+
+  // 1. Get mappings
+  const { data: mappings } = await supabase
+    .from('channel_rate_mappings')
+    .select('room_category_id, rate_plan_id, external_room_code, external_rate_plan_code')
+    .eq('hotel_id', hotelId)
+    .eq('provider', 'aiosell')
+    .eq('status', 'mapped');
+
+  if (!mappings || mappings.length === 0) {
+    throw new Error('No active room and rate mappings found for this channel. Please configure mapping first.');
+  }
+
+  // 2. Get categories and rate plans to find default tariffs
+  const categoryIds = [...new Set(mappings.map(m => m.room_category_id))];
+  const { data: categories } = await supabase.from('room_categories').select('id, default_tariff').in('id', categoryIds);
+  
+  // 3. Get inventory restrictions (which store overridden rates)
+  const { data: restrictions } = await supabase
+    .from('channel_inventory_restrictions')
+    .select('date, room_category_id, channel_rate, base_rate')
+    .eq('hotel_id', hotelId)
+    .in('room_category_id', categoryIds)
+    .gte('date', startDate)
+    .lte('date', endDate);
+
+  // 4. Build Payload
+  const dates = getDates(startDate, endDate);
+  const updates = dates.map(date => {
+    const rates = [];
+    
+    for (const mapping of mappings) {
+      if (!mapping.external_room_code || !mapping.external_rate_plan_code) continue;
+      
+      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
+      const category = (categories || []).find(c => c.id === mapping.room_category_id);
+      
+      let rateValue = category ? (category.default_tariff || 0) : 0;
+      if (restriction && restriction.channel_rate > 0) rateValue = restriction.channel_rate;
+      else if (restriction && restriction.base_rate > 0) rateValue = restriction.base_rate;
+      
+      rates.push({
+        roomCode: mapping.external_room_code,
+        rateplanCode: mapping.external_rate_plan_code,
+        rate: rateValue
+      });
+    }
+    
+    return {
+      startDate: date,
+      endDate: date,
+      rates
+    };
+  }).filter(u => u.rates.length > 0);
+
+  const payload = {
+    hotelCode: hotelConfig.hotelCode,
+    updates
+  };
+
+  const result = await aiosellService.pushRates(payload, hotelConfig);
+  await logSync(hotelId, 'RATE_PUSH', 'outbound', 'success', 'Rates pushed successfully');
+  return result;
+};
+
 router.post('/rates/push', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
     const hotelId = req.headers['x-hotel-id'];
-    const supabase = getSupabase();
-    
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
-
-    // 1. Get mappings
-    const { data: mappings } = await supabase
-      .from('channel_rate_mappings')
-      .select('room_category_id, rate_plan_id, external_room_code, external_rate_plan_code')
-      .eq('hotel_id', hotelId)
-      .eq('provider', 'aiosell')
-      .eq('status', 'mapped');
-
-    if (!mappings || mappings.length === 0) {
-      throw new Error('No active Aiosell mappings found');
-    }
-
-    // 2. Get categories and rate plans to find default tariffs
-    const categoryIds = [...new Set(mappings.map(m => m.room_category_id))];
-    const { data: categories } = await supabase.from('room_categories').select('id, default_tariff').in('id', categoryIds);
-    
-    // 3. Get inventory restrictions (which store overridden rates)
-    const { data: restrictions } = await supabase
-      .from('channel_inventory_restrictions')
-      .select('date, room_category_id, channel_rate, base_rate')
-      .eq('hotel_id', hotelId)
-      .in('room_category_id', categoryIds)
-      .gte('date', startDate)
-      .lte('date', endDate);
-
-    // 4. Build Payload
-    const dates = getDates(startDate, endDate);
-    const updates = dates.map(date => {
-      const rates = [];
-      
-      for (const mapping of mappings) {
-        if (!mapping.external_room_code || !mapping.external_rate_plan_code) continue;
-        
-        const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
-        const category = (categories || []).find(c => c.id === mapping.room_category_id);
-        
-        // If channel_rate is set, use it. Otherwise use base_rate. Otherwise fallback to category default_tariff.
-        let rateValue = category ? (category.default_tariff || 0) : 0;
-        if (restriction && restriction.channel_rate > 0) rateValue = restriction.channel_rate;
-        else if (restriction && restriction.base_rate > 0) rateValue = restriction.base_rate;
-        
-        rates.push({
-          roomCode: mapping.external_room_code,
-          rateplanCode: mapping.external_rate_plan_code,
-          rate: rateValue
-        });
-      }
-      
-      return {
-        startDate: date,
-        endDate: date,
-        rates
-      };
-    }).filter(u => u.rates.length > 0);
-
-    const payload = {
-      hotelCode: hotelConfig.hotelCode,
-      updates
-    };
-
-    const result = await aiosellService.pushRates(payload, hotelConfig);
-    await logSync(hotelId, 'AIOSELL_RATE_PUSH', 'outbound', 'success', 'Rates pushed successfully');
+    const result = await executeRatePush(hotelId, startDate, endDate);
     res.json(result);
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_RATE_PUSH', 'outbound', 'failure', 'Rates push failed', err.message);
+    await logSync(req.headers['x-hotel-id'], 'RATE_PUSH', 'outbound', 'failure', 'Rates push failed', err.message);
     res.status(err.status || 500).json({ error: err.message, code: err.code });
   }
 });

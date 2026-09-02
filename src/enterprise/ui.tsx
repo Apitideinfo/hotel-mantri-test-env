@@ -22,11 +22,14 @@ export const EmptyState = ({ title, subtitle }: { title: string; subtitle?: stri
   </div>
 );
 
-export const PageHeader = ({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) => (
+export const PageHeader = ({ title, subtitle, action, icon }: { title: string; subtitle?: string; action?: React.ReactNode; icon?: React.ReactNode }) => (
   <div className="flex items-start justify-between mb-5">
-    <div>
-      <h1 className="text-xl lg:text-2xl font-bold text-slate-900">{title}</h1>
-      {subtitle && <p className="text-sm text-slate-500 mt-0.5">{subtitle}</p>}
+    <div className="flex items-start gap-3">
+      {icon && <div className="mt-1 shrink-0">{icon}</div>}
+      <div>
+        <h1 className="text-xl lg:text-2xl font-bold text-slate-900">{title}</h1>
+        {subtitle && <p className="text-sm text-slate-500 mt-0.5">{subtitle}</p>}
+      </div>
     </div>
     {action}
   </div>

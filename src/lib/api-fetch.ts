@@ -25,7 +25,13 @@ export const apiFetch = async (
   const hotelId = getCurrentHotelId();
   
   // Get Supabase session token for backend verification
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  
+  if (sessionError) {
+    console.error('Session error detected, signing out gracefully:', sessionError);
+    await supabase.auth.signOut();
+  }
+  
   const token = session?.access_token;
   
   // Ensure the endpoint starts with a slash

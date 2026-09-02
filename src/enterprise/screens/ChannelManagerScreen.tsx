@@ -84,11 +84,11 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
   const needsAttentionCount = Object.values(channelStatuses).filter((s) => s.enabled && (!s.mapping_complete || s.sync_error)).length;
 
   if (loading && hotels.length === 0) {
-    return <LoadingState message="Loading Channel Manager status..." />;
+    return <LoadingState label="Loading Channel Manager status..." />;
   }
 
   if (error && hotels.length === 0) {
-    return <ErrorState message={error} onRetry={loadData} />;
+    return <ErrorState message={error} />;
   }
 
   // If a hotel is selected, render Superadmin configuration view for that hotel
@@ -163,7 +163,7 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
     <div className="space-y-6">
       <PageHeader
         title="Channel Manager Administration"
-        subtitle="Configure, monitor, and manage OTA integrations & Aiosell credentials across enterprise properties."
+        subtitle="Configure, monitor, and manage OTA integrations & distribution credentials across enterprise properties."
         icon={<Radio className="w-6 h-6 text-purple-600" />}
         action={
           <button
