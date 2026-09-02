@@ -397,7 +397,9 @@ export const saveChannelSettings = async (
   input: Omit<ChannelSettings, 'id' | 'hotel_id' | 'created_at' | 'updated_at' | 'last_tested_at' | 'last_test_result'>
 ): Promise<ChannelSettings> => {
   const existing = await getChannelSettings();
-  const payload = { ...input, hotel_id: getCurrentHotelId() };
+  // Extract and omit `id` if it was accidentally passed in through spread
+  const { id, ...cleanInput } = input as any;
+  const payload = { ...cleanInput, hotel_id: getCurrentHotelId() };
   if (existing) {
     const { data, error } = await supabase
       .from('channel_settings')

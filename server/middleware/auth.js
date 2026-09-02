@@ -29,16 +29,26 @@ export const requireHotelAccess = async (req, res, next) => {
 
     const token = authHeader.split(' ')[1];
 
-    // Verify token and get user
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    // Create a request-scoped Supabase client that uses the user's token
+    // This is required so RLS policies can evaluate auth.uid() correctly
+    const scopedSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      }
+    });
+
+    // Verify token and get user (we still use the global client here just to validate, or scoped is fine)
+    const { data: { user }, error: authError } = await scopedSupabase.auth.getUser();
 
     if (authError || !user) {
       console.error('Supabase Auth Error:', authError);
       return res.status(401).json({ success: false, error: 'UNAUTHORIZED', message: 'Invalid or expired token' });
     }
 
-    // Check if user is associated with the requested hotel
-    const { data: adminRecord, error: dbError } = await supabase
+    // Check if user is associated with the requested hotel using the scoped client!
+    const { data: adminRecord, error: dbError } = await scopedSupabase
       .from('hotel_admins')
       .select('role')
       .eq('user_id', user.id)
@@ -52,7 +62,7 @@ export const requireHotelAccess = async (req, res, next) => {
 
     if (!adminRecord) {
       // Check if user is a super admin
-      const { data: superAdminRecord } = await supabase
+      const { data: superAdminRecord } = await scopedSupabase
         .from('hotel_admins')
         .select('role')
         .eq('user_id', user.id)
