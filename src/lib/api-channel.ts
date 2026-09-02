@@ -499,10 +499,10 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
 
   let isLiveMode = false;
   try {
-    const data = await checkAiosellHealth();
-    isLiveMode = data.connected === true;
+    const data = await checkAiosellStatus();
+    isLiveMode = data.success === true && data.status === 'connected';
   } catch (err) {
-    console.error('Failed to check aiosell health', err);
+    console.error('Failed to check aiosell status', err);
   }
 
   if (settings && settings.aiosell_status) {

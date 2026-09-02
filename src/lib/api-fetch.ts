@@ -36,7 +36,7 @@ export const apiFetch = async (
 
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
-    'x-hotel-id': hotelId,
+    ...(hotelId ? { 'x-hotel-id': hotelId } : {}),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...options.headers,
   };

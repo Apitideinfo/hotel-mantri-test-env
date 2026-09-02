@@ -7,7 +7,18 @@ import { requireHotelAccess } from '../middleware/auth.js';
 
 const router = express.Router();
 
-// Apply auth middleware to all routes in this file
+// Public Health Endpoint (Phase 4 fix)
+router.all('/health', (req, res) => {
+  res.json({
+    success: true,
+    status: 'ok',
+    service: 'aiosell',
+    environment: process.env.AIOSELL_ENVIRONMENT || 'production',
+    message: 'Hotel Mantri integration backend is operational'
+  });
+});
+
+// Apply auth middleware to all remaining routes in this file
 router.use(requireHotelAccess);
 
 // Helper to get dates array
@@ -79,40 +90,7 @@ const getHotelAiosellConfig = async (hotelId) => {
   };
 };
 
-router.all('/health', async (req, res) => {
-  const start = Date.now();
-  try {
-    const hotelId = req.headers['x-hotel-id'];
-    if (!hotelId) return res.status(400).json({ connected: false, error: 'x-hotel-id missing' });
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
-    
-    const result = await aiosellService.testConnection(hotelConfig);
-    
-    res.json({
-      connected: result.success,
-      environment: hotelConfig.environment,
-      partnerConfigured: !!hotelConfig.partnerId,
-      hotelConfigured: !!hotelConfig.hotelCode,
-      authentication: result.success ? 'success' : 'failure',
-      hotelMapping: result.mapping ? 'success' : 'failure',
-      latencyMs: Date.now() - start,
-      errorCode: result.error?.code || null,
-      errorMessage: result.error?.message || null
-    });
-  } catch (err) {
-    res.json({
-      connected: false,
-      environment: 'unknown',
-      partnerConfigured: false,
-      hotelConfigured: false,
-      authentication: 'failure',
-      hotelMapping: 'failure',
-      latencyMs: Date.now() - start,
-      errorCode: err.code || 'UNKNOWN_ERROR',
-      errorMessage: err.message
-    });
-  }
-});
+// Removed old health route. Use public /health at the top instead.
 
 router.get('/status', async (req, res) => {
   try {
