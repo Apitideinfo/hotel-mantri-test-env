@@ -15,12 +15,23 @@ import type { ExpenseEntry, RevenueEntry } from './types-finance';
 // profileLoaded so getCurrentHotelId() is never called before this is set.
 let _currentHotelId: string | null = null;
 
-export const setCurrentHotelId = (id: string | null) => { _currentHotelId = id; };
+export const setCurrentHotelId = (id: string | null) => {
+  _currentHotelId = id;
+};
+
 export const getCurrentHotelId = (): string => {
-  if (import.meta.env.PROD && !_currentHotelId) {
-    throw new Error('Hotel ID is not set. User might not be authenticated or profile is not loaded.');
+  if (_currentHotelId) return _currentHotelId;
+
+  // Fallback to validated stored selection if available
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem('hotel_mantri_selected_hotel_id');
+    if (stored) {
+      _currentHotelId = stored;
+      return stored;
+    }
   }
-  return _currentHotelId || 'demo-hotel-id-101';
+
+  throw new Error('Hotel context is not initialized. Please ensure an active hotel is selected or assigned.');
 };
 
 
@@ -127,56 +138,6 @@ export const deleteCompanySource = async (id: string): Promise<void> => {
 
 // ---- Room categories ----
 
-const DEMO_CATEGORIES: RoomCategory[] = [
-  { id: 'cat-deluxe', hotel_id: 'demo-hotel-id-101', name: 'Deluxe Suite', default_tariff: 2500, extra_bed_charge: 500, sort_order: 1, is_active: true, created_at: new Date().toISOString() },
-  { id: 'cat-exec', hotel_id: 'demo-hotel-id-101', name: 'Executive Room', default_tariff: 1800, extra_bed_charge: 400, sort_order: 2, is_active: true, created_at: new Date().toISOString() },
-];
-
-const DEMO_ROOMS: Room[] = [
-  ...Array.from({ length: 10 }, (_, i) => ({
-    id: `room-10${i+1}`,
-    hotel_id: 'demo-hotel-id-101',
-    category_id: 'cat-deluxe',
-    room_no: `10${i+1}`,
-    floor: 'Floor 1',
-    default_tariff: 2500,
-    extra_bed_charge: 500,
-    is_active: true,
-    sort_order: i + 1,
-    created_at: new Date().toISOString(),
-    housekeeping_status: 'Vacant Clean' as const,
-    housekeeping_note: '',
-    housekeeping_updated_at: null,
-    cleaning_priority: 'Normal' as const,
-    assigned_staff_id: null,
-    last_cleaned_at: null,
-    last_inspected_at: null,
-    last_guest_name: '',
-    last_departure_time: '',
-  })),
-  ...Array.from({ length: 10 }, (_, i) => ({
-    id: `room-20${i+1}`,
-    hotel_id: 'demo-hotel-id-101',
-    category_id: 'cat-exec',
-    room_no: `20${i+1}`,
-    floor: 'Floor 2',
-    default_tariff: 1800,
-    extra_bed_charge: 400,
-    is_active: true,
-    sort_order: i + 11,
-    created_at: new Date().toISOString(),
-    housekeeping_status: 'Vacant Clean' as const,
-    housekeeping_note: '',
-    housekeeping_updated_at: null,
-    cleaning_priority: 'Normal' as const,
-    assigned_staff_id: null,
-    last_cleaned_at: null,
-    last_inspected_at: null,
-    last_guest_name: '',
-    last_departure_time: '',
-  })),
-];
-
 export const getRoomCategories = async (): Promise<RoomCategory[]> => {
   try {
     const { data, error } = await supabase
@@ -184,12 +145,12 @@ export const getRoomCategories = async (): Promise<RoomCategory[]> => {
       .select('*')
       .eq('hotel_id', getCurrentHotelId())
       .order('sort_order', { ascending: true });
-    if (!error && data && data.length > 0) return data as RoomCategory[];
-  } catch {
-    // Ignore and fallback
+    if (!error && data) return data as RoomCategory[];
+    if (error) console.warn('Error fetching room categories:', error.message);
+  } catch (err: any) {
+    console.warn('Failed to load room categories:', err?.message || err);
   }
-  if (import.meta.env.PROD) return [];
-  return DEMO_CATEGORIES;
+  return [];
 };
 
 export const upsertRoomCategory = async (
@@ -255,12 +216,12 @@ export const getRooms = async (): Promise<Room[]> => {
       .select('*')
       .eq('hotel_id', getCurrentHotelId())
       .order('sort_order', { ascending: true });
-    if (!error && data && data.length > 0) return data as Room[];
-  } catch {
-    // Ignore and fallback
+    if (!error && data) return data as Room[];
+    if (error) console.warn('Error fetching rooms:', error.message);
+  } catch (err: any) {
+    console.warn('Failed to load rooms:', err?.message || err);
   }
-  if (import.meta.env.PROD) return [];
-  return DEMO_ROOMS;
+  return [];
 };
 
 
@@ -981,20 +942,27 @@ const getMockDashboardSummary = (s: HotelSettings, todayStr: string): DashboardS
 
 export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
   const todayStr = getTodayLocal();
+  let hotelId = '';
+  try {
+    hotelId = getCurrentHotelId();
+  } catch {
+    // If hotel context is not yet loaded
+  }
+
   const s = await getSettings().catch(() => null) ?? {
-    id: 'demo-hotel-id-101',
-    hotel_name: 'Hotel Mantri Royal',
-    legal_name: 'Hotel Mantri Pvt Ltd',
-    total_rooms: 20,
-    opening_cash_balance: 10000,
-    financial_year: 2026,
+    id: hotelId,
+    hotel_name: 'Hotel Property',
+    legal_name: '',
+    total_rooms: 0,
+    opening_cash_balance: 0,
+    financial_year: new Date().getFullYear(),
     logo_url: '',
     address: '', city: '', state_name: '', pin_code: '', phone: '', whatsapp_number: '', email: '', website: '',
     created_at: '', updated_at: '',
     gst_number: '', pan_number: '', hotel_reg_number: '', cin_number: '',
     manager_name: '', manager_mobile: '', admin_name: '',
     bank_name: '', account_name: '', account_number: '', ifsc_code: '',
-    gst_registered: true, gst_mode: 'Exclusive' as const, default_gst_slab: 12 as const,
+    gst_registered: false, gst_mode: 'Exclusive' as const, default_gst_slab: 12 as const,
     restaurant_pos_enabled: false,
   };
 

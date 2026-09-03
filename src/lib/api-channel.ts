@@ -595,3 +595,10 @@ export async function addChannel(channelType: string, displayName: string, exter
   });
 }
 
+export async function testChannelConnectionDirect() {
+  return apiFetch('/api/channels/test-connection', {
+    method: 'POST'
+  });
+}
+
+

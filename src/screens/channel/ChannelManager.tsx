@@ -25,6 +25,8 @@ import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
 import { ChannelsDashboard } from './components/ChannelsDashboard';
+import { useHotel } from '@/lib/hotel-context';
+import { HotelSelectorModal } from '@/components/HotelSelectorModal';
 
 interface ChannelManagerProps {
   onBack?: () => void;
@@ -118,6 +120,8 @@ const availColor = (avail: number, total: number, stopSell: boolean): string => 
 
 export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: ChannelManagerProps) => {
   const isHotelOwner = mode === 'hotel_owner';
+  const { hotelId, hotel, isSuperAdmin: isSuperAdminUser, status: hotelStatus, error: hotelError, refreshHotelContext } = useHotel();
+  const [showHotelSelector, setShowHotelSelector] = useState(false);
 
   const [tab, setTab] = useState<Tab>(() => {
     const saved = typeof window !== 'undefined' ? sessionStorage.getItem(TAB_KEY) : null;
@@ -130,6 +134,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!hotelId) {
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       setError(null);
@@ -140,9 +148,15 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [hotelId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (hotelId) {
+      load();
+    } else {
+      setLoading(false);
+    }
+  }, [hotelId, load]);
 
   // Persist tab to sessionStorage + sync with URL hash
   useEffect(() => {
@@ -203,6 +217,60 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     ? allTabs.filter((t) => HOTEL_OWNER_TABS.includes(t.key))
     : allTabs;
 
+  if (hotelStatus === 'HOTEL_CONTEXT_LOADING') {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3">
+        <Loader2 className="w-8 h-8 text-brand-600 animate-spin" />
+        <p className="text-slate-500 font-medium text-sm">Resolving hotel context...</p>
+      </div>
+    );
+  }
+
+  if (hotelStatus === 'HOTEL_CONTEXT_ERROR') {
+    return (
+      <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
+        <div className="w-16 h-16 rounded-3xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto shadow-sm">
+          <AlertTriangle className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900">Hotel Context Required</h2>
+        <p className="text-sm text-slate-500 leading-relaxed">
+          {hotelError || 'Unable to resolve your authorized hotel property.'}
+        </p>
+        <button
+          onClick={() => refreshHotelContext()}
+          className="bg-slate-900 hover:bg-slate-800 text-white font-bold px-6 py-2.5 rounded-xl shadow transition inline-flex items-center gap-2 text-sm"
+        >
+          <RefreshCw className="w-4 h-4" /> Retry Authorization
+        </button>
+      </div>
+    );
+  }
+
+  if (!hotelId || hotelStatus === 'HOTEL_CONTEXT_EMPTY') {
+    return (
+      <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
+        <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1a68fb] flex items-center justify-center mx-auto shadow-sm">
+          <Building2 className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900">Select a Hotel Property</h2>
+        <p className="text-sm text-slate-500 leading-relaxed">
+          Channel Manager requires an active hotel context to manage OTA channels, sync rates, and process reservations.
+        </p>
+        <button
+          onClick={() => setShowHotelSelector(true)}
+          className="bg-[#1a68fb] hover:bg-blue-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 text-sm"
+        >
+          <Building2 className="w-4 h-4" /> Select Hotel Property
+        </button>
+        <HotelSelectorModal
+          isOpen={showHotelSelector}
+          onClose={() => setShowHotelSelector(false)}
+          isMandatory={false}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="px-4 lg:px-6 py-5 w-full max-w-[1600px] mx-auto space-y-5">
       {/* Header */}
@@ -214,7 +282,23 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
             </button>
           )}
           <div>
-            <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl font-bold text-brand-navy-800">Channel Manager</h1>
+              {hotel && (
+                <span className="text-xs font-bold text-slate-700 bg-slate-100 px-2.5 py-0.5 rounded-full border border-slate-200">
+                  {hotel.hotel_name}
+                </span>
+              )}
+              {isSuperAdminUser && (
+                <button
+                  onClick={() => setShowHotelSelector(true)}
+                  className="text-xs font-semibold text-blue-600 hover:text-blue-800 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-md border border-blue-200 flex items-center gap-1 transition"
+                  title="Switch hotel property"
+                >
+                  <Building2 className="w-3 h-3" /> Switch Hotel
+                </button>
+              )}
+            </div>
             <p className="text-sm text-slate-400 mt-0.5">
               Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
               {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
@@ -299,6 +383,12 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           {tab === 'settings' && <SettingsTab settings={overview.settings} onChanged={load} />}
         </>
       ) : null}
+
+      <HotelSelectorModal
+        isOpen={showHotelSelector}
+        onClose={() => setShowHotelSelector(false)}
+        isMandatory={false}
+      />
     </div>
   );
 };
@@ -1336,10 +1426,10 @@ const ReservationsTab = ({ reservations, onChanged }: {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const { fetchAiosellReservations } = await import('../../lib/api-aiosell');
+      const { fetchChannelFutureBookings } = await import('../../lib/api-channel');
       const endDate = new Date().toISOString().split('T')[0];
       const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
-      const result = await fetchAiosellReservations(startDate, endDate);
+      const result = await fetchChannelFutureBookings(startDate, endDate);
       
       let msg = 'Sync Complete!\n';
       if (result.stats) {
@@ -2002,7 +2092,7 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
                 ))}
               </select>
             ) : (
-              <input type="text" value={externalRoomCode} onChange={(e) => setExternalRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Provider room code (or Fetch Mapping first)" />
+              <input type="text" value={externalRoomCode} onChange={(e) => setExternalRoomCode(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Channel room code (or Fetch Mapping first)" />
             )}
           </div>
           <div>
@@ -2017,7 +2107,7 @@ const EditMappingModal = ({ data, category, ratePlan, onClose, onSave, onDelete,
                 ))}
               </select>
             ) : (
-              <input type="text" value={externalRatePlan} onChange={(e) => setExternalRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Provider rate plan code" />
+              <input type="text" value={externalRatePlan} onChange={(e) => setExternalRatePlan(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" placeholder="Enter Channel rate plan code" />
             )}
           </div>
         </div>

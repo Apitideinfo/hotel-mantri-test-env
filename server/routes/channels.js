@@ -2,6 +2,10 @@ import express from 'express';
 import { supabaseServiceRole } from '../supabaseClient.js';
 import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
 import * as aiosellService from '../services/aiosellService.js';
+import { getChannelProviderConfig } from '../services/providerConfig.js';
+import { executeInventoryPush, executeRatePush } from './aiosell.js';
+import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
+import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
 
 const router = express.Router();
 
@@ -11,17 +15,20 @@ const router = express.Router();
  */
 router.get('/', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    }
 
     const { data: channels, error } = await supabaseServiceRole
       .from('channel_connections')
       .select('*')
-      .eq('hotel_id', hotelId);
+      .eq('hotel_id', hotelId)
+      .order('created_at', { ascending: true });
       
     if (error) throw error;
 
-    const normalized = channels.map(c => ({
+    const normalized = (channels || []).map(c => ({
       id: c.id,
       hotelId: c.hotel_id,
       channelType: c.channel_type,
@@ -39,54 +46,110 @@ router.get('/', checkAuth, async (req, res) => {
     res.json(normalized);
   } catch (err) {
     console.error('Error fetching channels:', err);
-    res.status(500).json({ error: 'Failed to fetch channels' });
+    res.status(500).json({ success: false, code: 'CHANNEL_FETCH_FAILED', message: 'Failed to fetch channels', requestId: req.requestId });
   }
 });
 
 /**
  * POST /api/channels/discover
- * Attempt to discover channels from the upstream provider.
+ * Honest response: upstream integration does not support dynamic OTA discovery.
  */
 router.post('/discover', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
-
-    const { data: settings } = await supabaseServiceRole
-      .from('channel_settings')
-      .select('*')
-      .eq('hotel_id', hotelId)
-      .single();
-
-    if (!settings || !settings.aiosell_hotel_code) {
-      return res.status(400).json({ error: 'Property configuration could not be verified.' });
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
     }
 
-    // Attempt to verify property
-    try {
-      await aiosellService.getPropertyMapping(settings);
-    } catch (e) {
-      return res.status(401).json({ error: 'Channel connection could not be verified.' });
-    }
+    // Verify hotel configuration exists
+    await getChannelProviderConfig(hotelId, req.requestId);
 
-    // STRICT COMPLIANCE: The official Aiosell API documentation does NOT expose a "Connected OTAs" endpoint.
-    // Probing endpoints like /channels and /connected_channels returns 404.
-    // The prompt dictates: "If the connected-channel API does not expose enough data to implement a specific UI feature: STOP and document the exact limitation. Do NOT fabricate data. DO NOT invent an external API endpoint."
-    
     res.status(501).json({ 
-      error: 'Channel discovery is not currently supported by the upstream provider integration.',
-      discovered: []
+      success: false,
+      code: 'DISCOVERY_NOT_SUPPORTED',
+      message: 'Automatic OTA discovery is not supported for this integration account. Please use Add Channel to connect your distribution channels.',
+      discovered: [],
+      requestId: req.requestId
     });
-
   } catch (err) {
-    console.error('Error discovering channels:', err);
-    res.status(500).json({ error: 'Failed to discover channels' });
+    res.status(err.status || 500).json({ 
+      success: false, 
+      code: err.code || 'DISCOVERY_FAILED', 
+      message: err.message || 'Failed to check channel discovery',
+      requestId: req.requestId 
+    });
   }
 });
 
-import { executeInventoryPush, executeRatePush } from './aiosell.js';
-import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
-import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
+/**
+ * POST /api/channels/test-connection
+ * Real server-side connection test for current hotel.
+ */
+router.post('/test-connection', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    }
+
+    const config = await getChannelProviderConfig(hotelId, req.requestId);
+    const result = await aiosellService.testConnection(config);
+
+    if (result.success) {
+      return res.json({
+        success: true,
+        status: 'connected',
+        connected: true,
+        hotelId,
+        environment: result.environment,
+        hotelCode: result.hotelCode,
+        partnerId: result.partnerId,
+        mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        latencyMs: result.responseTimeMs,
+        message: 'Channel integration connection verified successfully',
+        requestId: req.requestId
+      });
+    } else {
+      return res.status(result.status || 502).json({
+        success: false,
+        status: 'error',
+        connected: false,
+        code: result.error?.code || 'CONNECTION_TEST_FAILED',
+        message: result.error?.message || 'Channel integration test failed',
+        details: result.diagnostic,
+        requestId: req.requestId
+      });
+    }
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false,
+      code: err.code || 'CONNECTION_TEST_ERROR',
+      message: err.message || 'Failed to execute connection test',
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * GET /api/channels/catalog
+ * Returns list of supported distribution channels.
+ */
+router.get('/catalog', checkAuth, async (req, res) => {
+  const catalog = [
+    { type: 'mmt', label: 'MakeMyTrip', short: 'MMT' },
+    { type: 'goibibo', label: 'Goibibo', short: 'G' },
+    { type: 'booking_com', label: 'Booking.com', short: 'B' },
+    { type: 'agoda', label: 'Agoda', short: 'A' },
+    { type: 'expedia', label: 'Expedia', short: 'E' },
+    { type: 'airbnb', label: 'Airbnb', short: 'AB' },
+    { type: 'cleartrip', label: 'Cleartrip', short: 'C' },
+    { type: 'easemytrip', label: 'EaseMyTrip', short: 'EMT' },
+    { type: 'hotels_com', label: 'Hotels.com', short: 'H' },
+    { type: 'trip_com', label: 'Trip.com', short: 'T' },
+    { type: 'yatra', label: 'Yatra / Travelguru', short: 'Y' },
+  ];
+  res.json(catalog);
+});
 
 /**
  * GET /api/channels/:channelId
@@ -94,9 +157,9 @@ import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPay
  */
 router.get('/:channelId', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const { data: channel, error } = await supabaseServiceRole
       .from('channel_connections')
@@ -106,7 +169,7 @@ router.get('/:channelId', checkAuth, async (req, res) => {
       .single();
 
     if (error || !channel) {
-      return res.status(404).json({ error: 'Channel connection not found' });
+      return res.status(404).json({ success: false, code: 'CHANNEL_NOT_FOUND', message: 'Channel connection not found', requestId: req.requestId });
     }
 
     // Fetch mappings count
@@ -130,7 +193,6 @@ router.get('/:channelId', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId)
       .eq('is_active', true);
 
-    // Count mapped
     const mappedRooms = new Set((mappings || []).filter(m => m.status === 'mapped' && m.room_category_id).map(m => m.room_category_id)).size;
     const mappedRates = new Set((mappings || []).filter(m => m.status === 'mapped' && m.rate_plan_id).map(m => m.rate_plan_id)).size;
 
@@ -169,11 +231,12 @@ router.get('/:channelId', checkAuth, async (req, res) => {
         mappedRates,
         futureReservations: futureReservationsCount || 0,
         syncErrors: syncErrorsCount || 0,
-      }
+      },
+      requestId: req.requestId
     });
   } catch (err) {
     console.error('Error fetching channel details:', err);
-    res.status(500).json({ error: 'Failed to fetch channel details' });
+    res.status(500).json({ success: false, code: 'CHANNEL_DETAILS_FAILED', message: 'Failed to fetch channel details', requestId: req.requestId });
   }
 });
 
@@ -183,10 +246,10 @@ router.get('/:channelId', checkAuth, async (req, res) => {
  */
 router.patch('/:channelId', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
     const { externalChannelId, isEnabled, connectionStatus, mappingStatus, status } = req.body;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const updates = { updated_at: new Date().toISOString() };
     if (externalChannelId !== undefined) updates.external_channel_id = externalChannelId || null;
@@ -207,7 +270,7 @@ router.patch('/:channelId', checkAuth, async (req, res) => {
     res.json(data);
   } catch (err) {
     console.error('Error updating channel:', err);
-    res.status(500).json({ error: 'Failed to update channel' });
+    res.status(500).json({ success: false, code: 'CHANNEL_UPDATE_FAILED', message: 'Failed to update channel', requestId: req.requestId });
   }
 });
 
@@ -217,11 +280,11 @@ router.patch('/:channelId', checkAuth, async (req, res) => {
  */
 router.delete('/:channelId', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
-    // Delete mappings first to be clean
+    // Delete mappings for this channel connection
     await supabaseServiceRole
       .from('channel_rate_mappings')
       .delete()
@@ -235,10 +298,10 @@ router.delete('/:channelId', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId);
 
     if (error) throw error;
-    res.json({ success: true, message: 'Channel connection removed successfully' });
+    res.json({ success: true, message: 'Channel connection removed successfully', requestId: req.requestId });
   } catch (err) {
     console.error('Error removing channel:', err);
-    res.status(500).json({ error: 'Failed to remove channel' });
+    res.status(500).json({ success: false, code: 'CHANNEL_DELETE_FAILED', message: 'Failed to remove channel', requestId: req.requestId });
   }
 });
 
@@ -248,9 +311,9 @@ router.delete('/:channelId', checkAuth, async (req, res) => {
  */
 router.get('/:channelId/mappings', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const { data, error } = await supabaseServiceRole
       .from('channel_rate_mappings')
@@ -263,7 +326,7 @@ router.get('/:channelId/mappings', checkAuth, async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error('Error fetching channel mappings:', err);
-    res.status(500).json({ error: 'Failed to fetch channel mappings' });
+    res.status(500).json({ success: false, code: 'MAPPINGS_FETCH_FAILED', message: 'Failed to fetch channel mappings', requestId: req.requestId });
   }
 });
 
@@ -273,11 +336,11 @@ router.get('/:channelId/mappings', checkAuth, async (req, res) => {
  */
 router.post('/:channelId/mappings', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
     const { mappings } = req.body;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
-    if (!Array.isArray(mappings)) return res.status(400).json({ error: 'mappings array required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    if (!Array.isArray(mappings)) return res.status(400).json({ success: false, code: 'INVALID_MAPPINGS_PAYLOAD', message: 'mappings array required', requestId: req.requestId });
 
     const now = new Date().toISOString();
     const records = mappings.map(m => ({
@@ -290,6 +353,7 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
       external_room_name: m.externalRoomName || m.external_room_name || null,
       external_rate_plan_code: m.externalRatePlanCode || m.external_rate_plan_code || null,
       external_rate_plan_name: m.externalRatePlanName || m.external_rate_plan_name || null,
+      provider: 'aiosell',
       status: m.status || ((m.externalRoomCode && m.externalRatePlanCode) ? 'mapped' : (m.externalRoomCode || m.externalRatePlanCode) ? 'mapped' : 'unmapped'),
       is_active: m.isActive !== undefined ? m.isActive : true,
       updated_at: now
@@ -313,10 +377,10 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
       .eq('id', channelId)
       .eq('hotel_id', hotelId);
 
-    res.json({ success: true, count: data?.length || 0, mappings: data });
+    res.json({ success: true, count: data?.length || 0, mappings: data, requestId: req.requestId });
   } catch (err) {
     console.error('Error saving channel mappings:', err);
-    res.status(500).json({ error: err.message || 'Failed to save mappings' });
+    res.status(500).json({ success: false, code: 'MAPPINGS_SAVE_FAILED', message: err.message || 'Failed to save mappings', requestId: req.requestId });
   }
 });
 
@@ -326,17 +390,45 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
  */
 router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
   const startTime = Date.now();
-  const hotelId = req.headers['x-hotel-id'];
+  const hotelId = (req.hotelId || req.auth?.hotelId);
   const { channelId } = req.params;
   const { startDate, endDate } = req.body;
 
   try {
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
 
-    const result = await executeInventoryPush(hotelId, sDate, eDate);
+    // Validate dates
+    if (new Date(sDate) > new Date(eDate)) {
+      return res.status(400).json({ success: false, code: 'INVALID_DATE_RANGE', message: 'Start date cannot be after end date.', requestId: req.requestId });
+    }
+    const diffDays = Math.round((new Date(eDate) - new Date(sDate)) / (1000 * 60 * 60 * 24));
+    if (diffDays > 90) {
+      return res.status(400).json({ success: false, code: 'DATE_RANGE_EXCEEDED', message: 'Date range cannot exceed 90 days for inventory sync.', requestId: req.requestId });
+    }
+
+    // Check active mappings for this channel connection
+    const { data: mappings } = await supabaseServiceRole
+      .from('channel_rate_mappings')
+      .select('id, room_category_id, external_room_code, status')
+      .eq('hotel_id', hotelId)
+      .eq('status', 'mapped')
+      .not('external_room_code', 'is', null)
+      .or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
+
+    if (!mappings || mappings.length === 0) {
+      return res.status(422).json({
+        success: false,
+        code: 'MAPPING_REQUIRED',
+        message: 'Room mappings are required before inventory can be synchronized for this channel.',
+        channelId,
+        requestId: req.requestId
+      });
+    }
+
+    const result = await executeInventoryPush(hotelId, channelId, sDate, eDate);
 
     // Update channel connection last sync
     const now = new Date().toISOString();
@@ -365,7 +457,7 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
       retry_count: 0
     });
 
-    res.json({ success: true, durationMs: Date.now() - startTime, result });
+    res.json({ success: true, durationMs: Date.now() - startTime, result, requestId: req.requestId });
   } catch (err) {
     console.error('Inventory sync error:', err);
     const now = new Date().toISOString();
@@ -393,7 +485,13 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
       retry_count: 0
     });
 
-    res.status(500).json({ error: err.message || 'Inventory sync failed' });
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({
+      success: false,
+      code: err.code || 'INVENTORY_SYNC_FAILED',
+      message: err.message || 'Inventory sync failed',
+      requestId: req.requestId
+    });
   }
 });
 
@@ -403,17 +501,45 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
  */
 router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
   const startTime = Date.now();
-  const hotelId = req.headers['x-hotel-id'];
+  const hotelId = (req.hotelId || req.auth?.hotelId);
   const { channelId } = req.params;
   const { startDate, endDate } = req.body;
 
   try {
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
 
-    const result = await executeRatePush(hotelId, sDate, eDate);
+    // Validate dates
+    if (new Date(sDate) > new Date(eDate)) {
+      return res.status(400).json({ success: false, code: 'INVALID_DATE_RANGE', message: 'Start date cannot be after end date.', requestId: req.requestId });
+    }
+    const diffDays = Math.round((new Date(eDate) - new Date(sDate)) / (1000 * 60 * 60 * 24));
+    if (diffDays > 90) {
+      return res.status(400).json({ success: false, code: 'DATE_RANGE_EXCEEDED', message: 'Date range cannot exceed 90 days for rate sync.', requestId: req.requestId });
+    }
+
+    // Check active rate mappings for this channel connection
+    const { data: mappings } = await supabaseServiceRole
+      .from('channel_rate_mappings')
+      .select('id, room_category_id, rate_plan_id, status')
+      .eq('hotel_id', hotelId)
+      .eq('status', 'mapped')
+      .not('external_rate_plan_code', 'is', null)
+      .or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
+
+    if (!mappings || mappings.length === 0) {
+      return res.status(422).json({
+        success: false,
+        code: 'RATE_MAPPING_REQUIRED',
+        message: 'Rate mappings are required before rates can be synchronized for this channel.',
+        channelId,
+        requestId: req.requestId
+      });
+    }
+
+    const result = await executeRatePush(hotelId, channelId, sDate, eDate);
 
     // Update channel connection last sync
     const now = new Date().toISOString();
@@ -442,7 +568,7 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
       retry_count: 0
     });
 
-    res.json({ success: true, durationMs: Date.now() - startTime, result });
+    res.json({ success: true, durationMs: Date.now() - startTime, result, requestId: req.requestId });
   } catch (err) {
     console.error('Rate sync error:', err);
     const now = new Date().toISOString();
@@ -470,7 +596,13 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
       retry_count: 0
     });
 
-    res.status(500).json({ error: err.message || 'Rate sync failed' });
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({
+      success: false,
+      code: err.code || 'RATE_SYNC_FAILED',
+      message: err.message || 'Rate sync failed',
+      requestId: req.requestId
+    });
   }
 });
 
@@ -480,23 +612,25 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
  */
 router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
     const { startDate, endDate } = req.body;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
-    const { data: settings } = await supabaseServiceRole
-      .from('channel_settings')
-      .select('*')
-      .eq('hotel_id', hotelId)
-      .single();
-      
-    if (!settings || !settings.aiosell_hotel_code) {
-      return res.status(400).json({ error: 'Property configuration could not be verified.' });
-    }
-
+    // Validate date range
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+
+    if (new Date(sDate) > new Date(eDate)) {
+      return res.status(400).json({ success: false, code: 'INVALID_DATE_RANGE', message: 'Start date cannot be after end date.', requestId: req.requestId });
+    }
+    const diffDays = Math.round((new Date(eDate) - new Date(sDate)) / (1000 * 60 * 60 * 24));
+    if (diffDays > 180) {
+      return res.status(400).json({ success: false, code: 'DATE_RANGE_EXCEEDED', message: 'Future booking pull date range cannot exceed 180 days.', requestId: req.requestId });
+    }
+
+    // Resolve provider config properly using the centralized resolver
+    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId);
 
     // Fetch channel details to know channel_name
     const { data: connection } = await supabaseServiceRole
@@ -506,7 +640,7 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId)
       .maybeSingle();
 
-    const rawReservations = await aiosellService.fetchReservations(sDate, eDate, settings);
+    const rawReservations = await aiosellService.fetchReservations(sDate, eDate, providerConfig);
     
     let list = [];
     if (Array.isArray(rawReservations)) list = rawReservations;
@@ -527,13 +661,13 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
         const payload = parseWebhookPayload({
           ...raw,
           action: raw.action || 'book',
-          hotelCode: settings.aiosell_hotel_code,
+          hotelCode: providerConfig.hotelCode,
           channelName: connection?.channel_name || raw.channel || 'OTA'
         });
 
         const resResult = await processAiosellReservation(payload, hotelId);
         
-        // Scope channel_connection_id on the record if it was saved to channel_ota_reservations
+        // Scope channel_connection_id on the record in channel_ota_reservations
         if (payload.bookingId) {
           await supabaseServiceRole
             .from('channel_ota_reservations')
@@ -570,63 +704,55 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
       success: true,
       totalFetched: list.length,
       stats,
-      errors
+      errors,
+      requestId: req.requestId
     });
   } catch (err) {
     console.error('Error fetching future bookings:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch future bookings' });
+    res.status(err.status || 500).json({
+      success: false,
+      code: err.code || 'FUTURE_BOOKINGS_FAILED',
+      message: err.message || 'Failed to fetch future bookings',
+      requestId: req.requestId
+    });
   }
 });
 
 /**
  * GET /api/channels/:channelId/reservations
- * Fetch reservations associated with this channel connection.
+ * Fetch reservations for a channel.
  */
 router.get('/:channelId/reservations', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
-    // Fetch channel to know channel name
-    const { data: connection } = await supabaseServiceRole
-      .from('channel_connections')
-      .select('channel_name')
-      .eq('id', channelId)
-      .eq('hotel_id', hotelId)
-      .maybeSingle();
-
-    let query = supabaseServiceRole
+    const { data, error } = await supabaseServiceRole
       .from('channel_ota_reservations')
       .select('*')
       .eq('hotel_id', hotelId)
+      .eq('channel_connection_id', channelId)
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (connection?.channel_name) {
-      query = query.or(`channel_connection_id.eq.${channelId},channel_name.ilike.%${connection.channel_name}%`);
-    } else {
-      query = query.eq('channel_connection_id', channelId);
-    }
-
-    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (err) {
     console.error('Error fetching channel reservations:', err);
-    res.status(500).json({ error: 'Failed to fetch reservations' });
+    res.status(500).json({ success: false, code: 'RESERVATIONS_FETCH_FAILED', message: 'Failed to fetch reservations', requestId: req.requestId });
   }
 });
 
 /**
  * GET /api/channels/:channelId/logs
- * Fetch sync logs for this channel.
+ * Fetch sync logs for a channel.
  */
 router.get('/:channelId/logs', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const { data, error } = await supabaseServiceRole
       .from('channel_sync_logs')
@@ -640,10 +766,9 @@ router.get('/:channelId/logs', checkAuth, async (req, res) => {
     res.json(data || []);
   } catch (err) {
     console.error('Error fetching channel logs:', err);
-    res.status(500).json({ error: 'Failed to fetch logs' });
+    res.status(500).json({ success: false, code: 'LOGS_FETCH_FAILED', message: 'Failed to fetch logs', requestId: req.requestId });
   }
 });
-
 
 /**
  * POST /api/channels
@@ -651,21 +776,13 @@ router.get('/:channelId/logs', checkAuth, async (req, res) => {
  */
 router.post('/', checkAuth, async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
+    const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelType, displayName, externalChannelId } = req.body;
-    if (!hotelId) return res.status(400).json({ error: 'x-hotel-id required' });
-    if (!channelType || !displayName) return res.status(400).json({ error: 'channelType and displayName required' });
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    if (!channelType || !displayName) return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'channelType and displayName required', requestId: req.requestId });
 
     // Validate that integration is setup
-    const { data: settings } = await supabaseServiceRole
-      .from('channel_settings')
-      .select('*')
-      .eq('hotel_id', hotelId)
-      .single();
-
-    if (!settings || !settings.aiosell_hotel_code) {
-      return res.status(400).json({ error: 'Property configuration could not be verified.' });
-    }
+    await getChannelProviderConfig(hotelId, req.requestId);
 
     // Check for duplicate channel
     const { data: existingChannel } = await supabaseServiceRole
@@ -677,8 +794,11 @@ router.post('/', checkAuth, async (req, res) => {
 
     if (existingChannel) {
       return res.status(409).json({
-        error: 'CHANNEL_ALREADY_EXISTS',
-        message: 'This channel is already added for this hotel.'
+        success: false,
+        code: 'CHANNEL_ALREADY_EXISTS',
+        channelId: existingChannel.id,
+        message: 'This channel is already added for this hotel.',
+        requestId: req.requestId
       });
     }
 
@@ -692,46 +812,45 @@ router.post('/', checkAuth, async (req, res) => {
         external_channel_id: externalChannelId || null,
         status: 'awaiting_external_activation',
         connection_status: 'pending',
-        mapping_status: 'unmapped'
+        mapping_status: 'unmapped',
+        is_enabled: true
       })
       .select()
       .single();
 
     if (error) {
       if (error.code === '23505') {
+        const { data: dup } = await supabaseServiceRole
+          .from('channel_connections')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .eq('channel_type', channelType)
+          .maybeSingle();
+
         return res.status(409).json({
-          error: 'CHANNEL_ALREADY_EXISTS',
-          message: 'This channel is already added for this hotel.'
+          success: false,
+          code: 'CHANNEL_ALREADY_EXISTS',
+          channelId: dup?.id,
+          message: 'This channel is already added for this hotel.',
+          requestId: req.requestId
         });
       }
       throw error;
     }
-    res.json(data);
-  } catch (err) {
-    const errorId = `CHANNEL_ADD_ERROR_${Date.now()}`;
-    console.error(`[${errorId}] Error adding channel:`, {
-      message: err.message,
-      code: err.code,
-      details: err.details,
-      hint: err.hint,
-      stack: err.stack,
-      body: req.body
+
+    res.status(201).json({
+      success: true,
+      channel: data,
+      requestId: req.requestId
     });
-    
-    if (process.env.NODE_ENV !== 'production') {
-      res.status(500).json({ 
-        error: 'Failed to add channel',
-        errorId,
-        debug: {
-          message: err.message,
-          code: err.code,
-          details: err.details,
-          hint: err.hint
-        }
-      });
-    } else {
-      res.status(500).json({ error: 'Failed to add channel', errorId });
-    }
+  } catch (err) {
+    console.error(`Error adding channel:`, err);
+    res.status(err.status || 500).json({
+      success: false,
+      code: err.code || 'CHANNEL_ADD_FAILED',
+      message: err.message || 'Failed to add channel',
+      requestId: req.requestId
+    });
   }
 });
 

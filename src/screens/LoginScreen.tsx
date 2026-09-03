@@ -20,46 +20,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthSuccess: _onAuth
       await signIn(email, pass);
       setSuccess(true);
       _onAuthSuccess();
-    } catch (err) {
+    } catch (err: any) {
       const msg = err instanceof Error ? err.message : 'Login failed';
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
-        console.warn('Supabase login network request failed, logging in with demo session fallback:', err);
-        try {
-          localStorage.setItem(
-            'hotelmantri_demo_user',
-            JSON.stringify({
-              email: email.trim(),
-              fullName: email.split('@')[0] || 'Hotel Admin',
-              hotelName: 'Hotel Mantri Palace',
-            }),
-          );
-        } catch {
-          // Ignore localStorage error
-        }
-        setSuccess(true);
-        setTimeout(() => {
-          _onAuthSuccess();
-        }, 600);
-        return;
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
+        setError('Unable to reach authentication server. Please check your internet connection and try again.');
+      } else {
+        setError(msg);
       }
-      setError(msg.includes('Invalid login') ? 'Invalid email or password.' : msg);
     } finally {
       setLoading(false);
     }
   };
-
 
   const handleForgot = async (email: string) => {
     setError(null);
     try {
       setLoading(true);
       await resetPassword(email);
-    } catch (err) {
+    } catch (err: any) {
       const msg = err instanceof Error ? err.message : 'Failed to send reset email';
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
-        console.warn('Supabase reset password network request failed, simulating in demo mode.');
-        return;
-      }
       setError(msg);
       throw err;
     } finally {

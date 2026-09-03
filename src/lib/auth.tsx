@@ -43,6 +43,7 @@ interface ProfileRow {
 }
 
 interface HotelRow {
+  id?: string;
   hotel_name: string;
   subscription_status: string;
 }
@@ -63,69 +64,66 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const clearRecoveryMode = useCallback(() => setRecoveryMode(false), []);
 
-  const checkDemoUser = useCallback(() => {
-    try {
-      if (import.meta.env.PROD) return false;
-      const demoUserRaw = localStorage.getItem('hotelmantri_demo_user');
-      if (demoUserRaw) {
-        const demoData = JSON.parse(demoUserRaw);
-        const mockUser = {
-          id: 'demo-user-id-101',
-          email: demoData.email || 'admin@hotelmantri.com',
-          user_metadata: { full_name: demoData.fullName || 'Hotel Admin' },
-          app_metadata: {},
-          aud: 'authenticated',
-          created_at: new Date().toISOString(),
-        } as unknown as User;
-
-        setUser(mockUser);
-        setRole('hotel_admin');
-        setHotelId('demo-hotel-id-101');
-        setCurrentHotelId('demo-hotel-id-101');
-        setHotelName(demoData.hotelName || 'Hotel Mantri Royal');
-        setSubscriptionStatus('Active');
-        setProfileLoaded(true);
-        return true;
-      }
-    } catch (e) {
-      console.warn('Error parsing demo user:', e);
-    }
-    return false;
-  }, []);
-
-
   const loadProfile = useCallback(
     async (u: User) => {
       if (profileLoadedRef.current === u.id) return;
       try {
         setProfileError(null);
+
+        // Check if there is an active session before making RPC calls
+        const { data: sessionData } = await supabase.auth.getSession();
+        const activeToken = sessionData.session?.access_token;
+        if (!activeToken) {
+          throw new Error('No active session token available.');
+        }
+
         // Explicitly check RPC is_super_admin() — this ensures Super Admin precedence
+        let isSuper = false;
         try {
-          const { data: isSuper, error: isSuperErr } = await supabase.rpc('is_super_admin');
-          if (isSuperErr) throw isSuperErr;
-          if (isSuper === true) {
-            setRole('super_admin');
-            
-            // Fetch company role if exists to populate companyRole for EnterpriseHQ
-            const { data: cu } = await supabase
-              .from('company_users')
-              .select('role')
-              .eq('user_id', u.id)
-              .eq('status', 'Active')
-              .maybeSingle();
-              
-            setCompanyRole((cu?.role as CompanyRole) || 'founder'); // Default to founder
-            setHotelId(null);
-            setHotelName('Hotel Mantri Royal');
-            setSubscriptionStatus('Active');
-            setCurrentHotelId(null);
-            setProfileLoaded(true);
-            profileLoadedRef.current = u.id;
-            return;
+          const { data, error: isSuperErr } = await supabase.rpc('is_super_admin');
+          if (isSuperErr) {
+            // Check for JWT expiration / invalid token errors
+            if (isSuperErr.code === 'PGRST301' || isSuperErr.message?.includes('JWT')) {
+              console.warn('JWT token invalid or expired when checking is_super_admin, attempting session refresh');
+              const { data: refreshData, error: refreshErr } = await supabase.auth.refreshSession();
+              if (refreshErr || !refreshData.session) {
+                throw new Error('TOKEN_EXPIRED');
+              }
+              // Retry with refreshed session
+              const { data: retryData, error: retryErr } = await supabase.rpc('is_super_admin');
+              if (retryErr) throw retryErr;
+              isSuper = retryData === true;
+            } else {
+              throw isSuperErr;
+            }
+          } else {
+            isSuper = data === true;
           }
-        } catch (rpcErr) {
-          console.error('is_super_admin RPC failed:', rpcErr);
-          // Don't fail completely, try the fallback just in case
+        } catch (rpcErr: any) {
+          if (rpcErr?.message === 'TOKEN_EXPIRED') throw rpcErr;
+          console.warn('is_super_admin RPC check returned error:', rpcErr?.message || rpcErr);
+          isSuper = false;
+        }
+
+        if (isSuper === true) {
+          setRole('super_admin');
+          
+          // Fetch company role if exists to populate companyRole for EnterpriseHQ
+          const { data: cu } = await supabase
+            .from('company_users')
+            .select('role')
+            .eq('user_id', u.id)
+            .eq('status', 'Active')
+            .maybeSingle();
+            
+          setCompanyRole((cu?.role as CompanyRole) || 'founder');
+          setHotelId(null);
+          setHotelName(null);
+          setSubscriptionStatus('Active');
+          setCurrentHotelId(null);
+          setProfileLoaded(true);
+          profileLoadedRef.current = u.id;
+          return;
         }
 
         // Check for company-level role next
@@ -152,18 +150,42 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           return;
         }
 
-        // Fallback to hotel_admins lookup
+        // Hotel Admin / Staff lookup from hotel_admins
         const { data: adminRows, error } = await supabase
           .from('hotel_admins')
           .select('role, hotel_id, status, email')
-          .eq('user_id', u.id);
+          .eq('user_id', u.id)
+          .eq('status', 'Active');
 
         if (error) throw error;
 
         const rows = (adminRows ?? []) as { role: string; hotel_id: string | null; status: string; email: string }[];
-        const adminRow = rows.find((r) => r.role === 'super_admin') ?? rows[0] ?? null;
+        const adminRow = rows[0] ?? null;
 
         if (!adminRow) {
+          // If no hotel_admins record exists for user_id, check if user's verified email matches hotels.admin_email
+          if (u.email) {
+            const { data: matchedHotel } = await supabase
+              .from('hotels')
+              .select('id, hotel_name, subscription_status')
+              .ilike('admin_email', u.email.trim())
+              .eq('is_active', true)
+              .maybeSingle();
+
+            if (matchedHotel) {
+              const h = matchedHotel as HotelRow;
+              setRole('hotel_admin');
+              setCompanyRole(null);
+              setHotelId(h.id || null);
+              setCurrentHotelId(h.id || null);
+              setHotelName(h.hotel_name);
+              setSubscriptionStatus((h.subscription_status as AuthContext['subscriptionStatus']) || 'Active');
+              setProfileLoaded(true);
+              profileLoadedRef.current = u.id;
+              return;
+            }
+          }
+
           // No role found — do NOT silently assume hotel_admin. Surface as no-role.
           setRole(null);
           setCompanyRole(null);
@@ -181,9 +203,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setRole(profile.role as UserRole);
         setCompanyRole(null);
         setHotelId(profile.hotel_id || null);
-        setCurrentHotelId(profile.role === 'super_admin' ? null : profile.hotel_id || null);
+        setCurrentHotelId(profile.hotel_id || null);
 
-        if (profile.hotel_id && profile.role !== 'super_admin') {
+        if (profile.hotel_id) {
           const { data: hotelData } = await supabase
             .from('hotels')
             .select('hotel_name, subscription_status')
@@ -195,18 +217,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setHotelName(h.hotel_name);
             setSubscriptionStatus((h.subscription_status as AuthContext['subscriptionStatus']) || 'Active');
           } else {
-            setHotelName('Hotel Mantri Royal');
+            setHotelName('Hotel');
             setSubscriptionStatus('Active');
           }
-        } else {
-          setHotelName('Hotel Mantri Royal');
-          setSubscriptionStatus('Active');
         }
         setProfileLoaded(true);
         profileLoadedRef.current = u.id;
-      } catch (err) {
-        console.error('Failed to load user profile:', err);
-        setProfileError(err instanceof Error ? err.message : String(err));
+      } catch (err: any) {
+        console.error('Failed to load user profile:', err?.message || err);
+        if (err?.message === 'TOKEN_EXPIRED') {
+          setProfileError('Your session has expired. Please sign in again.');
+        } else {
+          setProfileError(err instanceof Error ? err.message : String(err));
+        }
         setRole(null);
         setCompanyRole(null);
         setHotelId(null);
@@ -222,86 +245,153 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     let isMounted = true;
-    const hasDemo = checkDemoUser();
-    if (hasDemo || isPlaceholderSupabase) {
+
+    if (isPlaceholderSupabase) {
       setLoading(false);
       return;
     }
 
-    const sessionPromise = supabase.auth.getSession().then(({ data }) => data.session).catch(() => null);
-    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000));
-
-    Promise.race([sessionPromise, timeoutPromise]).then((sess) => {
+    // Initialize session reliably
+    supabase.auth.getSession().then(async ({ data, error: sessionErr }) => {
       if (!isMounted) return;
-      (async () => {
-        setSession(sess);
-        const u = sess?.user ?? null;
-        setUser(u);
-        if (u) {
-          await loadProfile(u);
-        } else {
-          checkDemoUser();
-        }
+      if (sessionErr) {
+        console.warn('Session retrieval warning:', sessionErr.message);
         setLoading(false);
-      })();
-    }).catch(() => {
-      if (isMounted) {
-        checkDemoUser();
-        setLoading(false);
+        return;
       }
+
+      const sess = data?.session ?? null;
+      setSession(sess);
+      const u = sess?.user ?? null;
+      setUser(u);
+      if (u) {
+        await loadProfile(u);
+      } else {
+        setProfileLoaded(true);
+      }
+      setLoading(false);
+    }).catch((err) => {
+      if (!isMounted) return;
+      console.error('Auth session initialization failed:', err);
+      setLoading(false);
     });
 
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((event, sess) => {
+    const { data: subscription } = supabase.auth.onAuthStateChange(async (event, sess) => {
       if (!isMounted) return;
       if (event === 'PASSWORD_RECOVERY') {
         setRecoveryMode(true);
       }
-      (async () => {
-        if (!sess) {
-          const ok = checkDemoUser();
-          if (!ok) {
-            setUser(null);
-            setRole(null);
-            setProfileLoaded(false);
-          }
-        } else {
-          setSession(sess);
-          setUser(sess.user);
-          await loadProfile(sess.user);
-        }
+
+      if ((event as string) === 'TOKEN_REFRESH_FAILED') {
+        console.warn('Supabase session token refresh failed.');
+        await supabase.auth.signOut().catch(() => {});
+        setUser(null);
+        setSession(null);
+        setRole(null);
+        setHotelId(null);
+        setCurrentHotelId(null);
+        setProfileLoaded(true);
+        setProfileError('Your session has expired. Please sign in again.');
         setLoading(false);
-      })();
+        return;
+      }
+
+      if (!sess) {
+        setUser(null);
+        setSession(null);
+        setRole(null);
+        setCompanyRole(null);
+        setHotelId(null);
+        setHotelName(null);
+        setSubscriptionStatus(null);
+        setCurrentHotelId(null);
+        setProfileLoaded(false);
+        profileLoadedRef.current = null;
+      } else {
+        setSession(sess);
+        setUser(sess.user);
+        await loadProfile(sess.user);
+      }
+      setLoading(false);
     });
 
     return () => {
       isMounted = false;
       subscription.subscription.unsubscribe();
     };
-  }, [checkDemoUser, loadProfile]);
+  }, [loadProfile]);
 
   const refreshProfile = useCallback(async () => {
-    const hasDemo = checkDemoUser();
-    if (hasDemo) return;
-
     if (user) {
       profileLoadedRef.current = null;
       await loadProfile(user);
     }
-  }, [checkDemoUser, user, loadProfile]);
+  }, [user, loadProfile]);
 
+  const signIn = async (email: string, pass: string) => {
+    const cleanEmail = email.trim().toLowerCase().replace(/,/g, '.');
+    if (!cleanEmail || !pass) {
+      const err = new Error('Please enter both email and password.');
+      (err as any).code = 'AUTH_REQUEST_INVALID';
+      throw err;
+    }
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      const err = new Error('Please enter a valid email address.');
+      (err as any).code = 'AUTH_REQUEST_INVALID';
+      throw err;
+    }
 
-  const signIn = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) throw error;
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password: pass,
+    });
+
+    if (error) {
+      // Safe structured diagnostics (NEVER log actual password)
+      console.warn('Login attempt failed:', {
+        status: error.status,
+        code: error.code,
+        hasEmail: !!cleanEmail,
+        hasPassword: !!pass,
+      });
+
+      if (error.status === 400 || error.code === 'invalid_credentials' || error.message?.toLowerCase().includes('invalid login')) {
+        const err = new Error('Invalid email or password. Please verify your credentials and try again.');
+        (err as any).code = 'INVALID_CREDENTIALS';
+        throw err;
+      }
+      if (error.message?.toLowerCase().includes('email not confirmed')) {
+        const err = new Error('Your email address has not been confirmed. Please check your inbox.');
+        (err as any).code = 'EMAIL_NOT_CONFIRMED';
+        throw err;
+      }
+      if (error.message?.toLowerCase().includes('user not found')) {
+        const err = new Error('No account found with this email address.');
+        (err as any).code = 'AUTH_USER_NOT_FOUND';
+        throw err;
+      }
+      if (error.status === 422) {
+        const err = new Error('Invalid login request format.');
+        (err as any).code = 'AUTH_REQUEST_INVALID';
+        throw err;
+      }
+      throw error;
+    }
+
+    if (data.session) {
+      setSession(data.session);
+      setUser(data.user);
+      await loadProfile(data.user);
+    }
   };
 
   const signOut = async () => {
     try {
+      localStorage.removeItem('hotel_mantri_selected_hotel_id');
       localStorage.removeItem('hotelmantri_demo_user');
     } catch {
-      // Ignore
+      // Ignore localStorage error
     }
     await supabase.auth.signOut().catch(() => {});
     setUser(null);
@@ -318,8 +408,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
 
+
   const resetPassword = async (email: string) => {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    const cleanEmail = email.trim().toLowerCase().replace(/,/g, '.');
+    const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
       redirectTo: window.location.origin,
     });
     if (error) throw error;

@@ -35,20 +35,30 @@ export const AuthCard: React.FC<AuthCardProps> = ({
 
   const handleSubmitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim() || !password) {
+    const cleanEmail = email.trim().toLowerCase().replace(/,/g, '.');
+    if (!cleanEmail || !password) {
       setError('Please enter your email address and password.');
       return;
     }
-    await onLogin(email.trim(), password);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Please enter a valid email address (e.g. name@domain.com).');
+      return;
+    }
+    await onLogin(cleanEmail, password);
   };
 
   const handleSubmitForgot = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) {
+    const cleanEmail = email.trim().toLowerCase().replace(/,/g, '.');
+    if (!cleanEmail) {
       setError('Please enter your email address.');
       return;
     }
-    await onForgot(email.trim());
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError('Please enter a valid email address (e.g. name@domain.com).');
+      return;
+    }
+    await onForgot(cleanEmail);
     setResetSent(true);
   };
 
@@ -93,7 +103,10 @@ export const AuthCard: React.FC<AuthCardProps> = ({
                       ref={emailRef}
                       type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
+                      onChange={(e) => {
+                        setEmail(e.target.value.replace(/,/g, '.'));
+                        if (error) setError(null);
+                      }}
                       placeholder="admin@gmail.com"
                       required
                       autoComplete="email"

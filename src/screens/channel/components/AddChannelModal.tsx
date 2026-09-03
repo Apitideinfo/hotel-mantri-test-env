@@ -25,6 +25,7 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
   const [externalPropertyId, setExternalPropertyId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [conflictChannelId, setConflictChannelId] = useState<string | null>(null);
 
   // Filter out any internal/deprecated types from catalog
   const availableChannels = CHANNEL_TYPES.filter(c => c.type !== 'aiosell');
@@ -47,16 +48,20 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
     const meta = getChannelMetadata(channelType);
     setLoading(true);
     setError(null);
+    setConflictChannelId(null);
 
     try {
       const result = await addChannel(channelType, meta.label, externalPropertyId.trim() || undefined);
-      onSuccess(result);
+      onSuccess(result?.channel || result);
     } catch (err: any) {
       // Handle structured 409 conflict
-      if (err?.message && err.message.includes('already added')) {
+      const conflictId = err?.channelId || err?.details?.channelId;
+      if (err?.code === 'CHANNEL_ALREADY_EXISTS' || (err?.message && err.message.includes('already added'))) {
         setError('This channel is already configured for this hotel.');
+        if (conflictId) setConflictChannelId(conflictId);
       } else {
         setError(err.message || 'Failed to add channel connection. Please try again.');
+        setConflictChannelId(null);
       }
     } finally {
       setLoading(false);
@@ -88,11 +93,26 @@ export const AddChannelModal: React.FC<AddChannelModalProps> = ({
         {/* Modal Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
           {error && (
-            <div className="p-3.5 bg-red-50 border border-red-100 text-red-700 rounded-xl text-xs flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold">Unable to add channel</p>
-                <p className="mt-0.5 text-red-600">{error}</p>
+            <div className={`p-3.5 rounded-xl text-xs flex items-start gap-2.5 ${
+              conflictChannelId ? 'bg-amber-50 border border-amber-200 text-amber-900' : 'bg-red-50 border border-red-100 text-red-700'
+            }`}>
+              <AlertCircle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${conflictChannelId ? 'text-amber-600' : 'text-red-600'}`} />
+              <div className="flex-1">
+                <p className="font-semibold">{conflictChannelId ? 'Channel Already Added' : 'Unable to add channel'}</p>
+                <p className={`mt-0.5 ${conflictChannelId ? 'text-amber-700' : 'text-red-600'}`}>{error}</p>
+                {conflictChannelId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenExisting(conflictChannelId);
+                    }}
+                    className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700 text-white rounded-lg font-semibold text-[11px] transition shadow-sm"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Existing Channel
+                  </button>
+                )}
               </div>
             </div>
           )}

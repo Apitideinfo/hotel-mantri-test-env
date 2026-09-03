@@ -98,7 +98,7 @@ export const HotelOnboardingScreen: React.FC<HotelOnboardingScreenProps> = ({
           }
 
           if (currentSession) {
-            await supabase.rpc('register_new_hotel', {
+            const { error: rpcError } = await supabase.rpc('register_new_hotel', {
               p_hotel_name: hotelName.trim(),
               p_owner_name: ownerName.trim(),
               p_mobile: ownerMobile.replace(/\D/g, ''),
@@ -106,32 +106,11 @@ export const HotelOnboardingScreen: React.FC<HotelOnboardingScreenProps> = ({
               p_total_rooms: parseInt(totalRooms, 10),
               p_number_of_floors: floors.trim() ? parseInt(floors, 10) : 1,
             });
+            if (rpcError) throw rpcError;
           }
         }
-      } catch (backendErr) {
-        console.warn('Supabase registration fallback to local demo session:', backendErr);
-      }
-
-      // Store local demo user registration info matching Hotel Onboarding schema
-      try {
-        localStorage.setItem(
-          'hotelmantri_demo_user',
-          JSON.stringify({
-            email: ownerEmail.trim(),
-            fullName: ownerName.trim(),
-            hotelName: hotelName.trim(),
-            propertyCode: propertyCode.trim() || 'HM-101',
-            city: city.trim(),
-            stateName: stateName.trim(),
-            address: fullAddress || address.trim(),
-            pincode: pincode.trim(),
-            mobile: ownerMobile.replace(/\D/g, ''),
-            totalRooms: parseInt(totalRooms, 10),
-            floors: floors.trim() ? parseInt(floors, 10) : 1,
-          }),
-        );
-      } catch {
-        // Ignore localStorage error
+      } catch (backendErr: any) {
+        throw new Error(backendErr?.message || 'Hotel property registration failed.');
       }
 
       setLoading(false);

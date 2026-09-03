@@ -9,6 +9,7 @@ interface FutureBookingsModalProps {
   channel: ChannelConnection;
   onClose: () => void;
   onComplete?: () => void;
+  onOpenMapping?: () => void;
 }
 
 type DateRangePreset = '30' | '60' | '90' | 'custom';
@@ -16,7 +17,8 @@ type DateRangePreset = '30' | '60' | '90' | 'custom';
 export const FutureBookingsModal: React.FC<FutureBookingsModalProps> = ({
   channel,
   onClose,
-  onComplete
+  onComplete,
+  onOpenMapping
 }) => {
   const [preset, setPreset] = useState<DateRangePreset>('30');
   const [customStart, setCustomStart] = useState(() => new Date().toISOString().split('T')[0]);
@@ -44,6 +46,9 @@ export const FutureBookingsModal: React.FC<FutureBookingsModalProps> = ({
     const today = new Date();
     const startDate = today.toISOString().split('T')[0];
     if (preset === 'custom') {
+      if (customStart > customEnd) {
+        throw new Error('Start date cannot be after end date.');
+      }
       return { startDate: customStart, endDate: customEnd };
     }
     const days = parseInt(preset, 10);
@@ -52,9 +57,17 @@ export const FutureBookingsModal: React.FC<FutureBookingsModalProps> = ({
   };
 
   const handlePull = async () => {
-    const { startDate, endDate } = calculateDates();
     setError(null);
     setResults(null);
+
+    let dates: { startDate: string; endDate: string };
+    try {
+      dates = calculateDates();
+    } catch (err: any) {
+      setError(err.message || 'Invalid date range.');
+      return;
+    }
+    const { startDate, endDate } = dates;
 
     try {
       // 1. Fetching
@@ -255,6 +268,27 @@ export const FutureBookingsModal: React.FC<FutureBookingsModalProps> = ({
                   <span className="text-[11px] font-medium text-slate-500">Needs Mapping</span>
                 </div>
               </div>
+
+              {results.stats.mapping_required > 0 && (
+                <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl text-xs text-orange-900 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">{results.stats.mapping_required} booking(s) require room/rate mapping</p>
+                    <p className="text-[11px] text-orange-700 mt-0.5">These reservations are imported into OTA records but need mapping to link with PMS categories.</p>
+                  </div>
+                  {onOpenMapping && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenMapping();
+                      }}
+                      className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg font-semibold text-[11px] whitespace-nowrap shadow-sm transition"
+                    >
+                      View Mappings
+                    </button>
+                  )}
+                </div>
+              )}
 
               {results.stats.failed > 0 && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">

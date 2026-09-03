@@ -18,21 +18,31 @@ export interface ApiError {
   status: number;
 }
 
+export interface ApiFetchOptions extends RequestInit {
+  _isRetry?: boolean;
+}
+
 export const apiFetch = async (
   endpoint: string, 
-  options: RequestInit = {}
+  options: ApiFetchOptions = {}
 ): Promise<any> => {
-  const hotelId = getCurrentHotelId();
-  
-  // Get Supabase session token for backend verification
-  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-  
-  if (sessionError) {
-    console.error('Session error detected, signing out gracefully:', sessionError);
-    await supabase.auth.signOut();
+  let hotelId: string | null = null;
+  try {
+    hotelId = getCurrentHotelId();
+  } catch {
+    // If hotel context is not yet loaded, do not crash here; backend will validate if route requires it
   }
   
-  const token = session?.access_token;
+  // Get Supabase session token for backend verification
+  let token: string | undefined;
+  try {
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (!sessionError && session) {
+      token = session.access_token;
+    }
+  } catch (e) {
+    console.warn('Unable to get session for apiFetch:', e);
+  }
   
   // Ensure the endpoint starts with a slash
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -58,6 +68,21 @@ export const apiFetch = async (
       message: error.message || 'Failed to fetch (Network error)',
       status: 0
     } as ApiError;
+  }
+
+  // Handle 401 token expiry with single retry
+  if (response.status === 401 && !options._isRetry) {
+    try {
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (!refreshError && refreshData.session?.access_token) {
+        return apiFetch(endpoint, {
+          ...options,
+          _isRetry: true,
+        });
+      }
+    } catch {
+      // Fall through to standard error handling
+    }
   }
 
   const contentType = response.headers.get('content-type');

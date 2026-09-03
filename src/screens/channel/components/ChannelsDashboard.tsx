@@ -283,6 +283,11 @@ export const ChannelsDashboard: React.FC<ChannelsDashboardProps> = ({
           channel={futureBookingsChannel}
           onClose={() => setFutureBookingsChannel(null)}
           onComplete={onRefresh}
+          onOpenMapping={() => {
+            const ch = futureBookingsChannel;
+            setFutureBookingsChannel(null);
+            setSelectedChannel(ch);
+          }}
         />
       )}
     </div>

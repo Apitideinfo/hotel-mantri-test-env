@@ -4,15 +4,16 @@ import { createClient } from '@supabase/supabase-js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
 import { requireHotelAccess } from '../middleware/auth.js';
+import { getChannelProviderConfig } from '../services/providerConfig.js';
 
 const router = express.Router();
 
-// Public Health Endpoint (Phase 4 fix)
+// Public Health Endpoint
 router.all('/health', (req, res) => {
   res.json({
     success: true,
     status: 'ok',
-    service: 'aiosell',
+    service: 'channel_integration',
     environment: process.env.AIOSELL_ENVIRONMENT || 'production',
     message: 'Hotel Mantri integration backend is operational'
   });
@@ -47,16 +48,17 @@ const getSupabase = () => {
 };
 
 // Helper to log to Supabase channel_sync_logs
-const logSync = async (hotelId, operation, direction, status, message, errorDetail = null, roomCategory = null) => {
+const logSync = async (hotelId, operation, direction, status, message, errorDetail = null, roomCategory = null, channelConnectionId = null, requestId = null) => {
   try {
     const supabase = getSupabase();
     await supabase.from('channel_sync_logs').insert({
-      hotel_id: hotelId || '00000000-0000-0000-0000-000000000000', // Default fallback
+      hotel_id: hotelId,
+      channel_connection_id: channelConnectionId,
       log_type: operation,
       direction,
       status,
       message,
-      error_detail: errorDetail,
+      error_detail: typeof errorDetail === 'object' ? JSON.stringify(errorDetail) : errorDetail,
       room_category_id: roomCategory,
       retry_status: 'not_retried',
       retry_count: 0
@@ -66,37 +68,19 @@ const logSync = async (hotelId, operation, direction, status, message, errorDeta
   }
 };
 
-// Helper to fetch hotel-specific aiosell configuration
-const getHotelAiosellConfig = async (hotelId) => {
-  if (!hotelId) throw new Error("x-hotel-id header is required");
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from('channel_settings')
-    .select('aiosell_hotel_code, aiosell_partner_id, aiosell_environment')
-    .eq('hotel_id', hotelId)
-    .single();
-
-  if (error || !data || !data.aiosell_hotel_code || !data.aiosell_partner_id) {
-    const err = new Error("Aiosell credentials (partner ID or hotel code) are not configured for this hotel.");
-    err.status = 400;
-    err.code = 'AIOSELL_NOT_CONFIGURED';
-    throw err;
-  }
-  
-  return {
-    hotelCode: data.aiosell_hotel_code,
-    partnerId: data.aiosell_partner_id,
-    environment: data.aiosell_environment || 'production'
-  };
+// Helper to fetch hotel-specific channel configuration
+const getHotelAiosellConfig = async (hotelId, requestId = null) => {
+  return getChannelProviderConfig(hotelId, requestId);
 };
-
-// Removed old health route. Use public /health at the top instead.
 
 router.get('/status', async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
-    
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    }
+
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     const result = await aiosellService.testConnection(hotelConfig);
     
     if (result.success) {
@@ -111,11 +95,11 @@ router.get('/status', async (req, res) => {
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
         latencyMs: result.responseTimeMs,
         authentication: 'success',
-        errorMessage: null
+        errorMessage: null,
+        requestId: req.requestId
       });
     } else {
-      const isAuthError = result.error?.status === 401 || result.error?.code === 'AUTHENTICATION_ERROR';
-      res.json({
+      res.status(result.status || 500).json({
         success: false,
         status: 'error',
         connected: false,
@@ -123,64 +107,97 @@ router.get('/status', async (req, res) => {
         environment: result.diagnostic?.environment || hotelConfig.environment,
         hotelCode: result.diagnostic?.hotelCode || hotelConfig.hotelCode,
         partnerId: result.diagnostic?.partnerId || hotelConfig.partnerId,
-        mappingConfigured: false,
-        latencyMs: null,
-        authentication: isAuthError ? 'failed' : 'success',
-        errorMessage: result.error?.message || 'Connection failed',
-        error: result.error
+        code: result.error?.code || 'API_ERROR',
+        message: result.error?.message || 'Channel integration connection failed',
+        errorMessage: result.error?.message || 'Channel integration connection failed',
+        requestId: req.requestId
       });
     }
   } catch (err) {
-    const isMissingConfig = err.code === 'AIOSELL_NOT_CONFIGURED';
-    res.json({ 
-      success: false, 
-      status: 'not_configured', 
-      connected: false,
-      hotelId: req.headers['x-hotel-id'],
-      environment: 'production',
-      hotelCode: null,
-      partnerId: null,
-      mappingConfigured: false,
-      latencyMs: null,
-      authentication: 'failed',
-      errorMessage: err.message,
-      error: { message: err.message, code: err.code } 
+    res.status(err.status || 500).json({
+      success: false,
+      code: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to verify channel integration status',
+      requestId: req.requestId
     });
   }
 });
 
 router.get('/mapping', async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+    }
+
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     
     const result = await aiosellService.getPropertyMapping(hotelConfig);
-    await logSync(hotelId, 'AIOSELL_FETCH_MAPPING', 'inbound', 'success', 'Successfully fetched property mapping from Aiosell');
+    await logSync(hotelId, 'AIOSELL_FETCH_MAPPING', 'inbound', 'success', 'Successfully fetched property mapping', null, null, null, req.requestId);
     res.json(result);
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_FETCH_MAPPING', 'inbound', 'failure', 'Failed to fetch mapping', err.message || err.error?.message);
-    res.status(err.status || 500).json({ error: err.message || err.error?.message, code: err.code || err.error?.code });
+    await logSync((req.hotelId || req.auth?.hotelId), 'AIOSELL_FETCH_MAPPING', 'inbound', 'failure', 'Failed to fetch mapping', err.message, null, null, req.requestId);
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message || 'Failed to fetch mapping',
+      message: err.message || 'Failed to fetch mapping',
+      code: err.code || 'API_ERROR',
+      requestId: req.requestId
+    });
   }
 });
 
-export const executeInventoryPush = async (hotelId, startDate, endDate) => {
+/**
+ * Executes inventory push for a hotel.
+ * Supports signature:
+ *   executeInventoryPush(hotelId, channelId, startDate, endDate)
+ *   executeInventoryPush(hotelId, startDate, endDate)
+ */
+export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
+  let channelId = null;
+  let startDate = null;
+  let endDate = null;
+
+  if (arg4 !== undefined) {
+    channelId = arg2;
+    startDate = arg3;
+    endDate = arg4;
+  } else {
+    // 3 args: hotelId, startDate, endDate
+    startDate = arg2;
+    endDate = arg3;
+  }
+
   const supabase = getSupabase();
   const hotelConfig = await getHotelAiosellConfig(hotelId);
 
-  // 1. Get active Aiosell mappings
-  const { data: mappings } = await supabase
+  // 1. Get active room mappings
+  let mappingQuery = supabase
     .from('channel_rate_mappings')
-    .select('room_category_id, external_room_code')
+    .select('room_category_id, external_room_code, channel_connection_id, status')
     .eq('hotel_id', hotelId)
-    .eq('provider', 'aiosell')
-    .eq('status', 'mapped');
+    .eq('status', 'mapped')
+    .not('external_room_code', 'is', null);
+
+  if (channelId) {
+    mappingQuery = mappingQuery.or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
+  }
+
+  const { data: mappings, error: mappingError } = await mappingQuery;
+
+  if (mappingError) {
+    console.error('[executeInventoryPush] Error querying mappings:', mappingError);
+  }
 
   if (!mappings || mappings.length === 0) {
-    throw new Error('No active Aiosell mappings found');
+    const err = new Error('No active room mappings found for this channel. Please configure room mapping first.');
+    err.status = 422;
+    err.code = 'MAPPING_REQUIRED';
+    throw err;
   }
 
   // 2. Get physical rooms
@@ -204,7 +221,7 @@ export const executeInventoryPush = async (hotelId, startDate, endDate) => {
     .gte('check_out_date', startDate + 'T00:00:00');
 
   // 4. Get inventory restrictions
-  const categoryIds = mappings.map(m => m.room_category_id);
+  const categoryIds = [...new Set(mappings.map(m => m.room_category_id).filter(Boolean))];
   const { data: restrictions } = await supabase
     .from('channel_inventory_restrictions')
     .select('date, room_category_id, availability, stop_sell')
@@ -218,7 +235,7 @@ export const executeInventoryPush = async (hotelId, startDate, endDate) => {
   const updates = dates.map(date => {
     const rooms = [];
     const uniqueRoomCodes = new Set();
-    const currentDate = new Date(date + 'T12:00:00'); // Midday to avoid timezone edge cases
+    const currentDate = new Date(date + 'T12:00:00');
     
     for (const mapping of mappings) {
       if (!mapping.external_room_code || uniqueRoomCodes.has(mapping.external_room_code)) continue;
@@ -226,19 +243,16 @@ export const executeInventoryPush = async (hotelId, startDate, endDate) => {
       
       const physical = physicalCounts[mapping.room_category_id] || 0;
       
-      // Calculate occupied for this date
       let occupied = 0;
       (reservations || []).forEach(res => {
         const ci = new Date(res.check_in_date);
         const co = new Date(res.check_out_date);
-        // Reservation occupies room if ci <= date < co
         if (res.room_categories?.id === mapping.room_category_id && currentDate >= ci && currentDate < co) {
           occupied++;
         }
       });
       
       let sellable = Math.max(0, physical - occupied);
-      
       const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
       
       if (restriction) {
@@ -256,53 +270,86 @@ export const executeInventoryPush = async (hotelId, startDate, endDate) => {
 
   const payload = { hotelCode: hotelConfig.hotelCode, updates };
   const result = await aiosellService.pushInventory(payload, hotelConfig);
-  await logSync(hotelId, 'AIOSELL_INVENTORY_PUSH', 'outbound', 'success', 'Inventory pushed successfully');
+  await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', 'success', 'Inventory pushed successfully', null, null, channelId);
   return result;
 };
 
 router.post('/inventory/push', async (req, res) => {
   try {
-    const { startDate, endDate } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const result = await executeInventoryPush(hotelId, startDate, endDate);
-    res.json(result);
+    const { startDate, endDate, channelId } = req.body;
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const result = await executeInventoryPush(hotelId, channelId, startDate, endDate);
+    res.json({ success: true, result });
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_INVENTORY_PUSH', 'outbound', 'failure', 'Inventory push failed', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    await logSync((req.hotelId || req.auth?.hotelId), 'INVENTORY_PUSH', 'outbound', 'failure', 'Inventory push failed', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/inventory/fetch', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     
     const result = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
-    res.json(result);
+    res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
-export const executeRatePush = async (hotelId, startDate, endDate) => {
+/**
+ * Executes rate push for a hotel.
+ * Supports signature:
+ *   executeRatePush(hotelId, channelId, startDate, endDate)
+ *   executeRatePush(hotelId, startDate, endDate)
+ */
+export const executeRatePush = async (hotelId, arg2, arg3, arg4) => {
+  let channelId = null;
+  let startDate = null;
+  let endDate = null;
+
+  if (arg4 !== undefined) {
+    channelId = arg2;
+    startDate = arg3;
+    endDate = arg4;
+  } else {
+    startDate = arg2;
+    endDate = arg3;
+  }
+
   const supabase = getSupabase();
   const hotelConfig = await getHotelAiosellConfig(hotelId);
 
-  // 1. Get mappings
-  const { data: mappings } = await supabase
+  // 1. Get active rate mappings
+  let mappingQuery = supabase
     .from('channel_rate_mappings')
-    .select('room_category_id, rate_plan_id, external_room_code, external_rate_plan_code')
+    .select('room_category_id, rate_plan_id, external_room_code, external_rate_plan_code, channel_connection_id, status')
     .eq('hotel_id', hotelId)
-    .eq('provider', 'aiosell')
-    .eq('status', 'mapped');
+    .eq('status', 'mapped')
+    .not('external_room_code', 'is', null)
+    .not('external_rate_plan_code', 'is', null);
+
+  if (channelId) {
+    mappingQuery = mappingQuery.or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
+  }
+
+  const { data: mappings, error: mappingError } = await mappingQuery;
+
+  if (mappingError) {
+    console.error('[executeRatePush] Error querying mappings:', mappingError);
+  }
 
   if (!mappings || mappings.length === 0) {
-    throw new Error('No active room and rate mappings found for this channel. Please configure mapping first.');
+    const err = new Error('No active room and rate mappings found for this channel. Please configure rate mapping first.');
+    err.status = 422;
+    err.code = 'RATE_MAPPING_REQUIRED';
+    throw err;
   }
 
   // 2. Get categories and rate plans to find default tariffs
-  const categoryIds = [...new Set(mappings.map(m => m.room_category_id))];
+  const categoryIds = [...new Set(mappings.map(m => m.room_category_id).filter(Boolean))];
   const { data: categories } = await supabase.from('room_categories').select('id, default_tariff').in('id', categoryIds);
   
   // 3. Get inventory restrictions (which store overridden rates)
@@ -349,73 +396,70 @@ export const executeRatePush = async (hotelId, startDate, endDate) => {
   };
 
   const result = await aiosellService.pushRates(payload, hotelConfig);
-  await logSync(hotelId, 'RATE_PUSH', 'outbound', 'success', 'Rates pushed successfully');
+  await logSync(hotelId, 'RATE_PUSH', 'outbound', 'success', 'Rates pushed successfully', null, null, channelId);
   return result;
 };
 
 router.post('/rates/push', async (req, res) => {
   try {
-    const { startDate, endDate } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const result = await executeRatePush(hotelId, startDate, endDate);
-    res.json(result);
+    const { startDate, endDate, channelId } = req.body;
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const result = await executeRatePush(hotelId, channelId, startDate, endDate);
+    res.json({ success: true, result });
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'RATE_PUSH', 'outbound', 'failure', 'Rates push failed', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    await logSync((req.hotelId || req.auth?.hotelId), 'RATE_PUSH', 'outbound', 'failure', 'Rates push failed', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/rates/fetch', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     
     const result = await aiosellService.fetchRates(startDate, endDate, hotelConfig);
-    res.json(result);
+    res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/inventory-restrictions/push', async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     const result = await aiosellService.pushInventoryRestrictions(req.body, hotelConfig);
-    await logSync(hotelId, 'AIOSELL_INVENTORY_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
-    res.json(result);
+    await logSync(hotelId, 'INVENTORY_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
+    res.json({ success: true, result });
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_INVENTORY_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    await logSync((req.hotelId || req.auth?.hotelId), 'INVENTORY_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/rate-restrictions/push', async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     const result = await aiosellService.pushRateRestrictions(req.body, hotelConfig);
-    await logSync(hotelId, 'AIOSELL_RATE_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
-    res.json(result);
+    await logSync(hotelId, 'RATE_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
+    res.json({ success: true, result });
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_RATE_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    await logSync((req.hotelId || req.auth?.hotelId), 'RATE_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/reservations/fetch', async (req, res) => {
   try {
-    const { startDate, endDate } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const { startDate, endDate, channelId } = req.body;
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     
-    console.log(`[AIOSSELL] Fetch started... Hotel: ${hotelConfig.hotelCode}, Partner: ${hotelConfig.partnerId}`);
-    
-    // 1. Fetch raw reservations from Aiosell
+    // 1. Fetch raw reservations from provider
     const result = await aiosellService.fetchReservations(startDate, endDate, hotelConfig);
     
-    // Extrapolate reservations array from Aiosell payload
     let reservationsArray = [];
     if (Array.isArray(result)) {
       reservationsArray = result;
@@ -423,9 +467,6 @@ router.post('/reservations/fetch', async (req, res) => {
       reservationsArray = result.data;
     } else if (result && Array.isArray(result.reservations)) {
       reservationsArray = result.reservations;
-    } else if (result && typeof result === 'object' && !result.success) {
-      // It's likely an error from Aiosell (e.g. { success: false, message: 'Partner is disabled' })
-      throw { status: 400, message: result.message || 'Aiosell rejected the fetch request.' };
     }
     
     // 2. Unify processing logic for each fetched reservation
@@ -448,38 +489,38 @@ router.post('/reservations/fetch', async (req, res) => {
         }
       }
       
-      await logSync(hotelId, 'AIOSELL_RESERVATION_FETCH', 'inbound', 'success', `Fetched ${reservationsArray.length} reservations`, { processed, errors, stats });
-      res.json({ success: true, fetched: reservationsArray.length, stats, errors });
+      await logSync(hotelId, 'RESERVATION_FETCH', 'inbound', 'success', `Fetched ${reservationsArray.length} reservations`, { processed, errors, stats }, null, channelId);
+      res.json({ success: true, fetched: reservationsArray.length, stats, errors, requestId: req.requestId });
     } else {
-      await logSync(hotelId, 'AIOSELL_RESERVATION_FETCH', 'inbound', 'success', 'No reservations returned or empty response', result);
-      res.json({ success: true, processed: 0, errors: [], rawResult: result });
+      await logSync(hotelId, 'RESERVATION_FETCH', 'inbound', 'success', 'No reservations returned', result, null, channelId);
+      res.json({ success: true, processed: 0, errors: [], rawResult: result, stats: { imported: 0, updated: 0, cancelled: 0, mapping_required: 0, failed: 0, skipped: 0 }, requestId: req.requestId });
     }
   } catch (err) {
-    await logSync(req.headers['x-hotel-id'], 'AIOSELL_RESERVATION_FETCH', 'inbound', 'failure', 'Fetch failed', err.message);
-    res.status(err.status || 500).json({ error: err.message, code: err.code || 'API_ERROR' });
+    await logSync((req.hotelId || req.auth?.hotelId), 'RESERVATION_FETCH', 'inbound', 'failure', 'Fetch failed', err.message);
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/reservation/no-show', async (req, res) => {
   try {
     const { bookingId } = req.body;
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     const result = await aiosellService.markNoShow(bookingId, hotelConfig);
-    res.json(result);
+    res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
 router.post('/channel-multiplier', async (req, res) => {
   try {
-    const hotelId = req.headers['x-hotel-id'];
-    const hotelConfig = await getHotelAiosellConfig(hotelId);
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     const result = await aiosellService.channelMultiplier(req.body, hotelConfig);
-    res.json(result);
+    res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message, code: err.code });
+    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 

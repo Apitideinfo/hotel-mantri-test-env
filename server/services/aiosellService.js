@@ -1,73 +1,162 @@
 import crypto from 'crypto';
+import dotenv from 'dotenv';
+import { 
+  getChannelProviderConfig, 
+  logProviderDiagnostic, 
+  createProviderError 
+} from './providerConfig.js';
 
+dotenv.config();
 
-// Configuration helper
-const getConfig = (hotelConfig = {}) => {
+/**
+ * Resolves configuration from either hotelId or hotelConfig object.
+ */
+export const resolveConfig = async (hotelConfig = {}) => {
+  if (typeof hotelConfig === 'string') {
+    return getChannelProviderConfig(hotelConfig);
+  }
+  if (hotelConfig?.hotelId && (!hotelConfig.hotelCode || !hotelConfig.partnerId || !hotelConfig.username || !hotelConfig.password)) {
+    return getChannelProviderConfig(hotelConfig.hotelId);
+  }
+
+  const partnerId = hotelConfig.partnerId || hotelConfig.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
+  const hotelCode = hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || process.env.AIOSELL_HOTEL_CODE;
+  const environment = hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
+  const username = hotelConfig.username || process.env.AIOSELL_USERNAME || '';
+  const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '';
+  const baseUrl = (hotelConfig.baseUrl || process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm').replace(/\/+$/, '');
+
   return {
-    baseUrl: process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm',
-    username: process.env.AIOSELL_USERNAME || '',
-    password: process.env.AIOSELL_PASSWORD || '',
-    partnerId: hotelConfig.partnerId || process.env.AIOSELL_PARTNER_ID,
-    hotelCode: hotelConfig.hotelCode || process.env.AIOSELL_HOTEL_CODE,
-    environment: hotelConfig.environment || process.env.AIOSELL_ENVIRONMENT || 'test',
+    hotelId: hotelConfig.hotelId || null,
+    hotelCode,
+    partnerId,
+    environment,
+    username,
+    password,
+    baseUrl,
+    credentialPresent: Boolean(username && password)
   };
 };
 
-// Build Basic Auth header
-const buildBasicAuthHeader = (username, password) => {
+export const getConfig = (hotelConfig = {}) => {
+  return {
+    baseUrl: (hotelConfig.baseUrl || process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm').replace(/\/+$/, ''),
+    username: hotelConfig.username || process.env.AIOSELL_USERNAME || '',
+    password: hotelConfig.password || process.env.AIOSELL_PASSWORD || '',
+    partnerId: hotelConfig.partnerId || hotelConfig.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms',
+    hotelCode: hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || process.env.AIOSELL_HOTEL_CODE,
+    environment: hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production',
+  };
+};
+
+export const buildBasicAuthHeader = (username, password) => {
   if (!username || !password) return null;
   const token = Buffer.from(`${username}:${password}`).toString('base64');
   return `Basic ${token}`;
 };
 
-const sanitizeAiosellError = (error, status) => {
-  let message = error?.message || error || 'Aiosell Server Error';
-  
-  const isAuthError = status === 401 || status === 403 || (status === 400 && String(message).toLowerCase().includes('authentication'));
-  
+export const sanitizeAiosellError = (error, status, reqId = null) => {
+  const rawMessage = typeof error === 'string' 
+    ? error 
+    : (error?.message || error?.error || error?.msg || (typeof error === 'object' ? JSON.stringify(error) : ''));
+
+  const msgLower = String(rawMessage).toLowerCase();
+
+  // 1. Partner is disabled detection
+  if (msgLower.includes('partner is disabled') || msgLower.includes('partner disabled')) {
+    return {
+      provider: 'channel_integration',
+      status: 502,
+      code: 'PROVIDER_PARTNER_DISABLED',
+      message: 'The channel integration partner account is disabled. Please contact the channel provider to activate the partner account.',
+      requestId: reqId,
+      retryable: false
+    };
+  }
+
+  // 2. Authentication failure
+  const isAuthError = status === 401 || status === 403 || msgLower.includes('authentication') || msgLower.includes('unauthorized') || msgLower.includes('invalid credentials');
   if (isAuthError) {
-    message = "Aiosell authentication failed. Verify the sandbox username and password.";
-  } else if (status === 404) {
-    message = "Aiosell API endpoint not found.";
-  } else if (status >= 500) {
-    message = "Aiosell server error.";
-  } else if (!status) {
-    message = "Hotel Mantri backend could not reach Aiosell.";
+    return {
+      provider: 'channel_integration',
+      status: 401,
+      code: 'PROVIDER_AUTHENTICATION_FAILED',
+      message: 'Channel integration authentication failed. Verify the server-side integration credentials.',
+      requestId: reqId,
+      retryable: false
+    };
+  }
+
+  // 3. Not Found
+  if (status === 404 || msgLower.includes('not found')) {
+    return {
+      provider: 'channel_integration',
+      status: 404,
+      code: 'PROVIDER_PROPERTY_NOT_FOUND',
+      message: 'External property or endpoint could not be found.',
+      requestId: reqId,
+      retryable: false
+    };
+  }
+
+  // 4. Rate limit
+  if (status === 429) {
+    return {
+      provider: 'channel_integration',
+      status: 429,
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Channel integration rate limit reached. Please wait before retrying.',
+      requestId: reqId,
+      retryable: true
+    };
+  }
+
+  // 5. Upstream server error / network error
+  if (status >= 500 || !status || msgLower.includes('fetch failed')) {
+    return {
+      provider: 'channel_integration',
+      status: status && status >= 500 ? status : 503,
+      code: 'PROVIDER_UNAVAILABLE',
+      message: 'The channel distribution provider is temporarily unavailable. Please retry shortly.',
+      requestId: reqId,
+      retryable: true
+    };
   }
 
   return {
-    provider: 'aiosell',
-    status: isAuthError ? 401 : (status || 500),
-    code: isAuthError ? 'AUTHENTICATION_ERROR' : status === 429 ? 'RATE_LIMIT_EXCEEDED' : 'API_ERROR',
-    message: message,
-    retryable: [429, 500, 502, 503, 504].includes(status),
+    provider: 'channel_integration',
+    status: status || 500,
+    code: 'API_ERROR',
+    message: rawMessage || 'An error occurred while communicating with the channel integration provider.',
+    requestId: reqId,
+    retryable: false
   };
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) => {
-  const config = getConfig(hotelConfig);
+export const request = async (endpoint, options = {}, hotelConfig = {}, retries = 2) => {
+  const config = await resolveConfig(hotelConfig);
   const url = `${config.baseUrl}${endpoint}`;
   const authHeader = buildBasicAuthHeader(config.username, config.password);
 
-  if (!authHeader) {
-    throw sanitizeAiosellError('Aiosell credentials are required', 401);
-  }
+  const reqId = options.requestId || `HM-CH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
-  const reqId = crypto.randomUUID().slice(0, 8);
-  const startTime = Date.now();
-  
-  console.log(`[Aiosell API - ${reqId}] ${options.method || 'GET'} ${url} | Hotel: ${config.hotelCode} | Partner: ${config.partnerId}`);
-  console.log(`[Aiosell API - ${reqId}] Authorization header attached: Basic <base64_hidden>`);
-  
-  if (options.body) {
-    try {
-      const parsed = JSON.parse(options.body);
-      console.log(`[Aiosell API - ${reqId}] Payload:`, JSON.stringify(parsed));
-    } catch (e) {
-      console.log(`[Aiosell API - ${reqId}] Payload (raw):`, options.body);
-    }
+  if (!authHeader) {
+    logProviderDiagnostic({
+      operation: 'AUTH_CHECK',
+      hotelId: config.hotelId,
+      hotelCode: config.hotelCode,
+      partnerId: config.partnerId,
+      endpoint: url,
+      method: options.method || 'GET',
+      status: 401,
+      credentialPresent: false,
+      environment: config.environment,
+      requestId: reqId,
+      message: 'Missing server-side credentials'
+    });
+    throw sanitizeAiosellError('Server credentials are missing', 401, reqId);
   }
 
   const defaultHeaders = {
@@ -83,13 +172,26 @@ const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) =>
     },
   };
 
+  logProviderDiagnostic({
+    operation: 'OUTBOUND_REQUEST',
+    hotelId: config.hotelId,
+    hotelCode: config.hotelCode,
+    partnerId: config.partnerId,
+    endpoint: url,
+    method: options.method || 'GET',
+    status: null,
+    credentialPresent: true,
+    environment: config.environment,
+    requestId: reqId,
+    message: options.body ? `Payload size: ${options.body.length} bytes` : 'No payload'
+  });
+
   let attempt = 0;
-  const backoffs = [2000, 5000, 10000];
+  const backoffs = [1500, 3500];
 
   while (attempt <= retries) {
     try {
       const response = await fetch(url, fetchOptions);
-      const duration = Date.now() - startTime;
       const status = response.status;
       
       let responseText = await response.text();
@@ -98,52 +200,57 @@ const request = async (endpoint, options = {}, hotelConfig = {}, retries = 3) =>
       try {
         responseData = JSON.parse(responseText);
       } catch (e) {
-        responseData = responseText; // It might be HTML
+        responseData = responseText;
       }
 
-      console.log(`[Aiosell API - ${reqId}] Status: ${status} | Duration: ${duration}ms`);
-      
+      logProviderDiagnostic({
+        operation: 'OUTBOUND_RESPONSE',
+        hotelId: config.hotelId,
+        hotelCode: config.hotelCode,
+        partnerId: config.partnerId,
+        endpoint: url,
+        method: options.method || 'GET',
+        status,
+        credentialPresent: true,
+        environment: config.environment,
+        requestId: reqId,
+        message: `Attempt ${attempt + 1}/${retries + 1}`
+      });
+
+      // Check if upstream response payload itself reports failure (e.g. { success: false, message: 'Partner is disabled!' })
+      if (responseData && typeof responseData === 'object' && responseData.success === false) {
+        const sanitized = sanitizeAiosellError(responseData, status || 400, reqId);
+        throw sanitized;
+      }
+
       if (response.ok) {
-        console.log(`[Aiosell API - ${reqId}] Success Response:`, JSON.stringify(responseData).substring(0, 500));
         return responseData;
       }
 
-      console.error(`[Aiosell API - ${reqId}] Failure Response:`, typeof responseData === 'string' ? responseData.substring(0, 500) : JSON.stringify(responseData));
-
-      if ([401, 403, 400].includes(status) || attempt === retries) {
-        throw sanitizeAiosellError(responseData, status);
+      if ([401, 403, 400, 404].includes(status) || attempt === retries) {
+        throw sanitizeAiosellError(responseData, status, reqId);
       }
 
       if ([429, 500, 502, 503, 504].includes(status)) {
-        console.log(`[Aiosell API - ${reqId}] Retrying in ${backoffs[attempt]}ms...`);
-        await sleep(backoffs[attempt] || 10000);
+        await sleep(backoffs[attempt] || 5000);
         attempt++;
       } else {
-        throw sanitizeAiosellError(responseData, status);
+        throw sanitizeAiosellError(responseData, status, reqId);
       }
     } catch (error) {
-      if (error.provider === 'aiosell') throw error;
+      if (error.provider === 'channel_integration') throw error;
       if (attempt === retries) {
-        console.error(`[Aiosell API - ${reqId}] Final Error:`, error.message);
-        throw sanitizeAiosellError(error.message, 500);
+        throw sanitizeAiosellError(error.message, 500, reqId);
       }
-      console.log(`[Aiosell API - ${reqId}] Retrying in ${backoffs[attempt]}ms due to network error: ${error.message}`);
-      await sleep(backoffs[attempt] || 10000);
+      await sleep(backoffs[attempt] || 5000);
       attempt++;
     }
   }
 };
 
 export const testConnection = async (hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   const start = Date.now();
-  
-  // Check backend environment variable presence
-  console.log(`AIOSELL_BASE_URL configured: ${!!config.baseUrl}`);
-  console.log(`AIOSELL_USERNAME configured: ${!!config.username}`);
-  console.log(`AIOSELL_PASSWORD configured: ${!!config.password}`);
-  console.log(`AIOSELL_PARTNER_ID configured: ${!!config.partnerId}`);
-  console.log(`AIOSELL_HOTEL_CODE configured: ${!!config.hotelCode}`);
 
   const debugDiagnostic = {
     baseUrlConfigured: !!config.baseUrl,
@@ -157,7 +264,7 @@ export const testConnection = async (hotelConfig) => {
   if (!config.partnerId || !config.hotelCode) {
     return {
       success: false,
-      error: sanitizeAiosellError('Aiosell credentials (partner ID or hotel code) are not configured for this hotel.', 401),
+      error: sanitizeAiosellError('Channel credentials (partner ID or hotel code) are not configured for this hotel.', 400),
       diagnostic: debugDiagnostic
     };
   }
@@ -166,166 +273,132 @@ export const testConnection = async (hotelConfig) => {
     return {
       success: false,
       error: {
-        provider: 'aiosell',
+        provider: 'channel_integration',
         status: 401,
-        code: 'BACKEND_CREDENTIALS_MISSING',
-        message: 'Configuration exists, but backend Aiosell credentials are unavailable.'
+        code: 'PROVIDER_CONFIGURATION_MISSING',
+        message: 'Server integration credentials are unavailable.'
       },
       diagnostic: debugDiagnostic
     };
   }
 
   try {
-    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, hotelConfig);
+    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
     const responseTimeMs = Date.now() - start;
-    
+
     return {
       success: true,
-      provider: 'aiosell',
+      provider: 'channel_integration',
       environment: config.environment,
       hotelCode: config.hotelCode,
       partnerId: config.partnerId,
       status: 200,
       responseTimeMs,
-      message: "Aiosell connection successful",
+      message: 'Channel integration connection successful',
       mapping: {
-        rooms: data?.rooms || [],
-        ratePlans: data?.ratePlans || [],
+        rooms: (data.rooms || []).map(r => ({
+          description: r.description || '',
+          count: parseInt(r.count) || 1,
+          active: r.active !== false,
+          type: r.type || 'primary',
+          rateplans: (r.rateplans || []).map(rp => ({
+            description: rp.description || '',
+            occupancy: rp.occupancy || 1,
+            rateplan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
+            rateplan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || '',
+            no_of_meals: rp.no_of_meals || 0,
+            extra_adult: rp.extra_adult || 0
+          })),
+          room_id: r.room_id || r.roomId || r.roomCode || '',
+          room_name: r.room_name || r.roomName || r.description || '',
+          min_occ: r.min_occ || 1,
+          max_occ: r.max_occ || 3
+        })),
+        ratePlans: []
       }
     };
-  } catch (error) {
-    if (error.provider === 'aiosell') {
-      return { success: false, error, diagnostic: debugDiagnostic };
-    }
-    return { 
-      success: false, 
-      error: sanitizeAiosellError(error.message, 500),
+  } catch (err) {
+    const responseTimeMs = Date.now() - start;
+    return {
+      success: false,
+      status: err.status || 500,
+      responseTimeMs,
+      error: err,
       diagnostic: debugDiagnostic
     };
   }
 };
 
 export const getPropertyMapping = async (hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
 
   if (!config.username || !config.password || !config.partnerId || !config.hotelCode) {
-    throw sanitizeAiosellError('Aiosell credentials are not configured for this hotel.', 401);
+    throw sanitizeAiosellError('Channel credentials are not configured for this hotel.', 401);
   }
 
-  try {
-    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, hotelConfig);
-    
-    const rooms = (data.rooms || []).map(r => ({
-      room_id: r.room_id || r.roomId || r.roomCode || '',
-      room_name: r.room_name || r.roomName || r.roomCode || '',
-      count: parseInt(r.count) || 1,
-    }));
+  const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+  
+  const rooms = (data.rooms || []).map(r => ({
+    room_id: r.room_id || r.roomId || r.roomCode || '',
+    room_name: r.room_name || r.roomName || r.description || r.roomCode || '',
+    count: parseInt(r.count) || 1,
+  }));
 
-    const ratePlans = [];
-    if (Array.isArray(data.rooms)) {
-      data.rooms.forEach(r => {
-        const roomId = r.room_id || r.roomId || r.roomCode || '';
-        if (Array.isArray(r.rateplans)) {
-          r.rateplans.forEach(rp => ratePlans.push({
-            rate_plan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
-            rate_plan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || rp.rateplanCode || '',
-            room_id: roomId
-          }));
-        }
-      });
-    }
-
-    // Fallback if rate plans are top-level
-    if (ratePlans.length === 0) {
-      if (Array.isArray(data.rate_plans)) {
-        data.rate_plans.forEach(rp => ratePlans.push({
-          rate_plan_id: rp.rate_plan_id || rp.ratePlanId || rp.rateplanCode || '',
-          rate_plan_name: rp.rate_plan_name || rp.ratePlanName || rp.rateplanCode || '',
-          room_id: rp.room_id || rp.roomId || rp.roomCode || ''
-        }));
-      } else if (Array.isArray(data.ratePlans)) {
-        data.ratePlans.forEach(rp => ratePlans.push({
-          rate_plan_id: rp.rate_plan_id || rp.ratePlanId || rp.rateplanCode || '',
-          rate_plan_name: rp.rate_plan_name || rp.ratePlanName || rp.rateplanCode || '',
-          room_id: rp.room_id || rp.roomId || rp.roomCode || ''
+  const ratePlans = [];
+  if (Array.isArray(data.rooms)) {
+    data.rooms.forEach(r => {
+      const roomId = r.room_id || r.roomId || r.roomCode || '';
+      if (Array.isArray(r.rateplans)) {
+        r.rateplans.forEach(rp => ratePlans.push({
+          rate_plan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
+          rate_plan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || rp.rateplanCode || '',
+          room_id: roomId
         }));
       }
-    }
-
-    console.log("Parsed rate plans:", JSON.stringify(ratePlans));
-
-    return {
-      hotel: {
-        hotel_id: data.hotel_id || data.hotelId || data.hotelCode || config.hotelCode,
-        hotel_name: data.hotel_name || data.hotelName || 'Aiosell Property',
-      },
-      rooms,
-      ratePlans,
-      rawResponse: data,
-    };
-  } catch (error) {
-    throw error;
+    });
   }
+
+  return {
+    hotelCode: config.hotelCode,
+    rooms,
+    ratePlans
+  };
 };
 
 export const pushInventory = async (payload, hotelConfig) => {
-  const config = getConfig(hotelConfig);
-  
-  // payload is already constructed in the route (based on Aiosell spec)
-  const aiosellPayload = payload;
-
-  try {
-    return await request(`/update/${config.partnerId}`, {
-      method: 'POST',
-      body: JSON.stringify(aiosellPayload),
-    }, hotelConfig);
-  } catch (err) {
-    if (err.message && err.message.includes('Payload Parsing Failed')) {
-      throw new Error('Aiosell rejected the inventory format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
-    }
-    throw err;
-  }
+  const config = await resolveConfig(hotelConfig);
+  return await request(`/update/${config.partnerId}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config);
 };
 
 export const pushRates = async (payload, hotelConfig) => {
-  const config = getConfig(hotelConfig);
-  
-  // payload is already constructed in the route (based on Aiosell spec)
-  const aiosellPayload = payload;
-
-  try {
-    return await request(`/update-rates/${config.partnerId}`, {
-      method: 'POST',
-      body: JSON.stringify(aiosellPayload),
-    }, hotelConfig);
-  } catch (err) {
-    if (err.message && err.message.includes('Payload Parsing Failed')) {
-      throw new Error('Aiosell rejected the rates format. Please provide the exact Aiosell JSON payload specification to finalize this integration.');
-    }
-    throw err;
-  }
+  const config = await resolveConfig(hotelConfig);
+  return await request(`/update-rates/${config.partnerId}`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, config);
 };
 
 export const pushInventoryRestrictions = async (payload, hotelConfig) => {
-  // Aiosell uses the same endpoint for inventory and its restrictions
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/update/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  }, hotelConfig);
+  }, config);
 };
 
 export const pushRateRestrictions = async (payload, hotelConfig) => {
-  // Aiosell uses the same endpoint for rates and rate restrictions
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/update-rates/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  }, hotelConfig);
+  }, config);
 };
 
 export const fetchInventory = async (startDate, endDate, hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -334,11 +407,11 @@ export const fetchInventory = async (startDate, endDate, hotelConfig) => {
       startDate,
       endDate,
     }),
-  }, hotelConfig);
+  }, config);
 };
 
 export const fetchRates = async (startDate, endDate, hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/data/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
@@ -347,11 +420,11 @@ export const fetchRates = async (startDate, endDate, hotelConfig) => {
       startDate,
       endDate,
     }),
-  }, hotelConfig);
+  }, config);
 };
 
 export const fetchReservations = async (startDate, endDate, hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   let allReservations = [];
   let page = 1;
   const limit = 50;
@@ -368,7 +441,7 @@ export const fetchReservations = async (startDate, endDate, hotelConfig) => {
         page,
         limit,
       }),
-    }, hotelConfig);
+    }, config);
 
     let reservationsArray = [];
     if (Array.isArray(result)) {
@@ -378,7 +451,7 @@ export const fetchReservations = async (startDate, endDate, hotelConfig) => {
     } else if (result && Array.isArray(result.reservations)) {
       reservationsArray = result.reservations;
     } else if (result && typeof result === 'object' && !result.success) {
-      if (page === 1) throw result; // Only throw if it fails on the first page
+      if (page === 1) throw sanitizeAiosellError(result, 400);
       break;
     }
 
@@ -395,55 +468,27 @@ export const fetchReservations = async (startDate, endDate, hotelConfig) => {
 };
 
 export const markNoShow = async (bookingId, hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/no-show/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify({
       hotelCode: config.hotelCode,
       bookingId,
     }),
-  }, hotelConfig);
+  }, config);
 };
 
 export const channelMultiplier = async (payload, hotelConfig) => {
-  const config = getConfig(hotelConfig);
+  const config = await resolveConfig(hotelConfig);
   return request(`/channel-multiplier/${config.partnerId}`, {
     method: 'POST',
     body: JSON.stringify(payload),
-  }, hotelConfig);
-};
-
-// --- Webhook Validation ---
-export const validateWebhookAuth = (authHeader) => {
-  const config = getConfig(); // Webhooks rely on global env user/pass generally
-  const expectedHeader = buildBasicAuthHeader(config.username, config.password);
-  return authHeader && expectedHeader && authHeader === expectedHeader;
-};
-
-// We don't implement the DB logic here, just the parsing.
-// The route will handle the database operations using Supabase client.
-export const parseWebhookPayload = (payload) => {
-  if (!payload || !payload.action || !payload.hotelCode || !payload.bookingId) {
-    throw new Error('Invalid webhook payload structure');
-  }
-  return {
-    action: payload.action, // book, modify, cancel
-    hotelCode: payload.hotelCode,
-    bookingId: payload.bookingId,
-    roomCode: payload.roomCode,
-    rateplanCode: payload.rateplanCode,
-    guestName: payload.guestName || 'Aiosell Guest',
-    guestPhone: payload.guestPhone || '',
-    checkIn: payload.checkIn,
-    checkOut: payload.checkOut,
-    roomsCount: payload.roomsCount || 1,
-    amount: payload.amount || 0,
-    paymentStatus: payload.paymentStatus || 'unpaid',
-    raw: payload,
-  };
+  }, config);
 };
 
 export default {
+  resolveConfig,
+  getConfig,
   testConnection,
   getPropertyMapping,
   pushInventory,
@@ -455,7 +500,5 @@ export default {
   fetchReservations,
   markNoShow,
   channelMultiplier,
-  validateWebhookAuth,
-  parseWebhookPayload,
-  getConfig,
+  sanitizeAiosellError,
 };

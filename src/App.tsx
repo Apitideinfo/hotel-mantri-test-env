@@ -1,5 +1,7 @@
 import React, { useState, lazy, Suspense, useEffect, Component } from 'react';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { HotelProvider, useHotel } from '@/lib/hotel-context';
+import { HotelSelectorModal } from '@/components/HotelSelectorModal';
 import { getPosEnabled } from '@/lib/api-pos';
 import { getEnabledHotelFeatures, setCurrentHotelId } from '@/lib/api';
 import { BrandLogo } from '@/components/BrandLogo';
@@ -144,7 +146,9 @@ function ScreenLoader() {
 
 
 function AppInner() {
-  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName, hotelId, signOut, refreshProfile, recoveryMode } = useAuth();
+  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
+  const { hotelId, hotel, isSuperAdmin, status: hotelStatus, error: hotelError, setSelectedHotel } = useHotel();
+  const [showSuperAdminHotelSelector, setShowSuperAdminHotelSelector] = useState(false);
   const [nav, setNav] = useState<NavState>(() => {
     try {
       const st = window.history.state;
@@ -301,12 +305,49 @@ function AppInner() {
       <Suspense fallback={<ScreenLoader />}>
         <EnterpriseHQ
           onSignOut={signOut}
-          onViewDashboard={(selectedHotelId) => {
-            if (selectedHotelId) setCurrentHotelId(selectedHotelId);
+          onViewDashboard={async (selectedHotelId) => {
+            if (selectedHotelId) {
+              await setSelectedHotel(selectedHotelId);
+            }
             setSuperAdminMode('dashboard');
           }}
         />
       </Suspense>
+    );
+  }
+
+  // Hotel Context status gating
+  if (hotelStatus === 'HOTEL_CONTEXT_LOADING') {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="flex flex-col items-center gap-4 bg-slate-800/80 border border-slate-700 p-8 rounded-3xl shadow-2xl">
+          <BrandLogo variant="sidebar" />
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping" />
+            <p className="text-slate-300 text-sm font-semibold tracking-wide">Resolving hotel property…</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (hotelStatus === 'HOTEL_CONTEXT_ERROR') {
+    return (
+      <SubscriptionExpiredScreen
+        message={hotelError || 'Your account is not assigned to any active hotel property.'}
+        onSignOut={signOut}
+      />
+    );
+  }
+
+  // If Super Admin previewing dashboard without a selected hotel
+  if (isSuperAdmin && !hotelId && superAdminMode === 'dashboard') {
+    return (
+      <HotelSelectorModal
+        isOpen={true}
+        onClose={() => setSuperAdminMode('panel')}
+        isMandatory={true}
+      />
     );
   }
 
@@ -394,20 +435,33 @@ function AppInner() {
     <div className="min-h-screen flex flex-col">
       {(role === 'super_admin' || role === 'company_user') && (
         <div className="bg-[#06152F] text-white px-4 py-2 flex items-center justify-between text-xs border-b border-blue-900/40 shadow-sm z-50">
-          <div className="flex items-center gap-2 font-bold">
+          <div className="flex items-center gap-2 font-bold flex-wrap">
             <span className="bg-[#1a68fb] text-white px-2 py-0.5 rounded text-[10px] uppercase tracking-wider">Enterprise HQ Mode</span>
             <span className="text-slate-300">Previewing Hotel Dashboard</span>
+            {hotel && (
+              <span className="ml-2 bg-blue-900/60 border border-blue-700 text-blue-200 px-2 py-0.5 rounded">
+                Property: {hotel.hotel_name}
+              </span>
+            )}
           </div>
-          <button
-            onClick={() => setSuperAdminMode('panel')}
-            className="bg-blue-600/30 hover:bg-blue-600 text-sky-300 hover:text-white border border-blue-400/30 font-bold px-3 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
-          >
-            ← Return to Enterprise HQ
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowSuperAdminHotelSelector(true)}
+              className="bg-blue-950 hover:bg-blue-900 border border-blue-700 text-blue-200 px-2.5 py-1 rounded text-xs transition flex items-center gap-1 cursor-pointer"
+            >
+              Switch Property
+            </button>
+            <button
+              onClick={() => setSuperAdminMode('panel')}
+              className="bg-blue-600/30 hover:bg-blue-600 text-sky-300 hover:text-white border border-blue-400/30 font-bold px-3 py-1 rounded-lg transition flex items-center gap-1 cursor-pointer"
+            >
+              ← Return to Enterprise HQ
+            </button>
+          </div>
         </div>
       )}
       <div className="flex-1">
-        <AppShell currentScreen={nav.screen} onNavigate={(s, payload) => go(s, payload)} onSignOut={signOut} hotelName={hotelName ?? undefined} posEnabled={posEnabled}>
+        <AppShell currentScreen={nav.screen} onNavigate={(s, payload) => go(s, payload)} onSignOut={signOut} hotelName={hotel?.hotel_name || authHotelName || undefined} posEnabled={posEnabled}>
           <div className="px-4 py-4 w-full">
         <Suspense fallback={<ScreenLoader />}>
           {nav.screen === 'dashboard' && (
@@ -598,6 +652,10 @@ function AppInner() {
       </div>
     </AppShell>
   </div>
+  <HotelSelectorModal
+    isOpen={showSuperAdminHotelSelector}
+    onClose={() => setShowSuperAdminHotelSelector(false)}
+  />
 </div>
 );
 }
@@ -654,7 +712,9 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <AuthProvider>
-        <AppInner />
+        <HotelProvider>
+          <AppInner />
+        </HotelProvider>
       </AuthProvider>
     </AppErrorBoundary>
   );
