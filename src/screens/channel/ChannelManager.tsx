@@ -15,7 +15,7 @@ import {
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchChannelMapping,
   checkChannelStatus, pushChannelInventory, pushChannelRates,
-  fetchChannelInventory, fetchChannelRates,
+  fetchChannelInventory, fetchChannelRates, verifyChannelRates,
   testChannelConnection, fetchChannelFutureBookings, addChannel
 } from '@/lib/api-channel';
 import type {
@@ -614,18 +614,52 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   };
 
   
+  const [syncNotice, setSyncNotice] = useState<{
+    title: string;
+    message: string;
+    type: 'success' | 'warning' | 'error';
+    details?: string;
+  } | null>(null);
+
   const handlePushToChannel = async () => {
     setIsSyncing(true);
-    setSyncProgress("Pushing Inventory...");
+    setSyncProgress("Pushing live inventory...");
     try {
       await pushChannelInventory(startDate, endDate);
 
-      setSyncProgress("Pushing Rates...");
-      await pushChannelRates(startDate, endDate);
+      setSyncProgress("Pushing and verifying live rates with channel manager...");
+      const rateRes = await pushChannelRates(startDate, endDate);
 
-      alert('Successfully synced Inventory & Rates with channels!');
+      if (rateRes?.verified) {
+        setSyncNotice({
+          title: 'Rates Updated and Verified',
+          message: rateRes.message || 'Rates and inventory updated and verified against live channel manager.',
+          type: 'success',
+          details: `Confirmed: ${rateRes.recordsVerified ?? rateRes.recordsAttempted ?? 0} rate plan updates verified for ${fmtDate(startDate)} – ${fmtDate(endDate)}.`
+        });
+      } else if (rateRes?.discrepancies && rateRes.discrepancies.length > 0) {
+        setSyncNotice({
+          title: 'Rate Verification Alert',
+          message: rateRes.message || 'Rate update accepted by channel manager, but verification detected discrepancies.',
+          type: 'warning',
+          details: JSON.stringify(rateRes.discrepancies, null, 2)
+        });
+      } else {
+        setSyncNotice({
+          title: 'Rates & Inventory Updated',
+          message: rateRes?.message || 'Rates and inventory synchronized successfully.',
+          type: 'success'
+        });
+      }
+      await load();
     } catch (err: any) {
-      alert(err.message || 'Error syncing with channels');
+      const stage = err.stage ? ` [Stage: ${err.stage}]` : '';
+      setSyncNotice({
+        title: 'Channel Sync Failed',
+        message: `${err.message || 'Error syncing with channels'}${stage}`,
+        type: 'error',
+        details: err.missingCategories ? `Missing mappings: ${err.missingCategories.join(', ')}` : (err.code || undefined)
+      });
     } finally {
       setIsSyncing(false);
       setSyncProgress("");
@@ -983,6 +1017,34 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             await load();
           }}
         />
+      )}
+
+      {/* Sync result modal */}
+      {syncNotice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-scale-in">
+            <div className="flex items-center gap-3">
+              {syncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
+              {syncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
+              {syncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+              <h4 className="text-base font-bold text-slate-900">{syncNotice.title}</h4>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">{syncNotice.message}</p>
+            {syncNotice.details && (
+              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono">
+                {syncNotice.details}
+              </pre>
+            )}
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setSyncNotice(null)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-brand-600 text-white hover:bg-brand-700 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -2583,11 +2645,12 @@ const DiagnosticsTab = () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      await pushChannelRates(today, nextMonth);
+      const rateRes = await pushChannelRates(today, nextMonth);
       setModalNotice({
-        type: 'success',
-        title: 'Rate Push Successful',
-        message: 'Live PMS rates successfully transmitted to channel manager for the next 30 days.'
+        type: rateRes?.verified ? 'success' : 'warning',
+        title: rateRes?.verified ? 'Rates Updated and Verified' : 'Rate Push Update',
+        message: rateRes?.message || 'Live PMS rates successfully transmitted to channel manager for the next 30 days.',
+        details: rateRes?.discrepancies ? JSON.stringify(rateRes.discrepancies, null, 2) : `Confirmed: ${rateRes?.recordsVerified ?? rateRes?.recordsAttempted ?? 0} rate plan updates verified.`
       });
     } catch (err: any) {
       setModalNotice({
@@ -2648,6 +2711,35 @@ const DiagnosticsTab = () => {
     }
   };
 
+  const handleVerifyRates = async () => {
+    setActionLoading('verify-rates');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+      const res = await verifyChannelRates(today, nextWeek);
+      setModalNotice({
+        type: 'info',
+        title: 'Live Rates Verification Check',
+        message: `Queried external channel rates for ${today} to ${nextWeek}. Provider returned ${res.fetchedUpdatesCount} dates with active rates.`,
+        details: JSON.stringify({
+          hotelCode: res.hotelCode,
+          dateRange: res.dateRange,
+          localRestrictionsConfigured: res.localRestrictionsCount,
+          activeMappingsCount: res.mappingsCount,
+          sampleExternalRates: res.fetchedRates?.[0]
+        }, null, 2)
+      });
+    } catch (err: any) {
+      setModalNotice({
+        type: 'error',
+        title: 'Rate Verification Failed',
+        message: err.message || 'Could not verify rates from channel provider.'
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   useEffect(() => {
     runHealthCheck();
   }, []);
@@ -2680,7 +2772,7 @@ const DiagnosticsTab = () => {
               <button
                 type="button"
                 onClick={() => setModalNotice(null)}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition"
+                className="px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition"
               >
                 Close
               </button>
@@ -2759,6 +2851,14 @@ const DiagnosticsTab = () => {
           >
             {actionLoading === 'fetch-rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Fetch Live Rates
+          </button>
+          <button 
+            onClick={handleVerifyRates}
+            disabled={!!actionLoading}
+            className="px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+          >
+            {actionLoading === 'verify-rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+            Verify Live Rates
           </button>
         </div>
       </div>

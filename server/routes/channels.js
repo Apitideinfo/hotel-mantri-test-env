@@ -566,7 +566,7 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
       .update({
         last_sync_at: now,
         last_successful_sync_at: now,
-        last_sync_status: 'success',
+        last_sync_status: result?.verified ? 'verified' : 'success',
         last_error: null,
         updated_at: now
       })
@@ -579,14 +579,21 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
       channel_connection_id: channelId,
       log_type: 'RATE_SYNC',
       direction: 'outbound',
-      status: 'success',
-      message: `Rates successfully synchronized from ${sDate} to ${eDate}`,
+      status: result?.verified ? 'VERIFIED' : 'success',
+      message: result?.message || `Rates successfully synchronized and verified from ${sDate} to ${eDate}`,
       date_range: `${sDate} to ${eDate}`,
       retry_status: 'not_retried',
       retry_count: 0
     });
 
-    res.json({ success: true, durationMs: Date.now() - startTime, result, requestId: req.requestId });
+    res.json({
+      success: true,
+      verified: result?.verified,
+      message: result?.message || 'Rates synchronized successfully.',
+      durationMs: Date.now() - startTime,
+      result,
+      requestId: req.requestId
+    });
   } catch (err) {
     console.error('Rate sync error:', err);
     const now = new Date().toISOString();

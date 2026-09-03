@@ -473,6 +473,13 @@ export const pushChannelRates = async (startDate: string, endDate: string, chann
   });
 };
 
+export const verifyChannelRates = async (startDate: string, endDate: string, channelId?: string): Promise<any> => {
+  return apiFetch('/api/aiosell/rates/verify', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate, channelId })
+  });
+};
+
 // ── Composite fetch for Channel Manager overview ──
 
 export interface ChannelManagerOverview {

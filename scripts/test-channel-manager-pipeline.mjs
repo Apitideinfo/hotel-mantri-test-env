@@ -138,6 +138,34 @@ async function runTests() {
       assert('Fetch rates reports success', fetchRatesData.success === true);
       assert('Fetch rates returns hotelCode fa44d51cc0', fetchRatesData.hotelCode === 'fa44d51cc0');
 
+      console.log('\n--- 5b. Direct Live Rate Push & Post-Push Verification Test ---');
+      const pushRatesRes = await fetch(`http://localhost:${PORT}/api/aiosell/rates/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-03',
+          endDate: '2026-09-09'
+        })
+      });
+      const pushRatesData = await pushRatesRes.json();
+      assert('POST /api/aiosell/rates/push returns 200 OK', pushRatesRes.status === 200);
+      assert('Rate push confirms success', pushRatesData.success === true);
+      assert('Rate push confirms post-push VERIFIED', pushRatesData.verified === true, `(verified: ${pushRatesData.verified})`);
+      assert('Rate push reports verified updates', (pushRatesData.recordsVerified || 0) > 0, `(verified: ${pushRatesData.recordsVerified})`);
+
+      const verifyRatesRes = await fetch(`http://localhost:${PORT}/api/aiosell/rates/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-03',
+          endDate: '2026-09-09'
+        })
+      });
+      const verifyRatesData = await verifyRatesRes.json();
+      assert('POST /api/aiosell/rates/verify returns 200 OK', verifyRatesRes.status === 200);
+      assert('Verify rates reports success', verifyRatesData.success === true);
+      assert('Verify rates returns fetchedUpdatesCount', verifyRatesData.fetchedUpdatesCount === 7);
+
       console.log('\n--- 6. Channel Scoped Fetch Inventory & Rates Tests ---');
       const chFetchInvRes = await fetch(`http://localhost:${PORT}/api/channels/${CHANNEL_ID}/fetch/inventory`, {
         method: 'POST',
