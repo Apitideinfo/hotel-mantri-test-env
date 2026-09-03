@@ -138,6 +138,47 @@ async function runTests() {
       assert('Fetch rates reports success', fetchRatesData.success === true);
       assert('Fetch rates returns hotelCode fa44d51cc0', fetchRatesData.hotelCode === 'fa44d51cc0');
 
+      console.log('\n--- 5a. Direct Live Inventory Push & Post-Push Verification Test ---');
+      const pushInvRes = await fetch(`http://localhost:${PORT}/api/aiosell/inventory/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-03',
+          endDate: '2026-09-12'
+        })
+      });
+      const pushInvData = await pushInvRes.json();
+      assert('POST /api/aiosell/inventory/push returns 200 OK', pushInvRes.status === 200);
+      assert('Inventory push reports success', pushInvData.success === true);
+      assert('Inventory push confirms post-push VERIFIED', pushInvData.verified === true, `(verified: ${pushInvData.verified})`);
+      assert('Inventory push reports 30 verified room dates', pushInvData.recordsVerified === 30, `(verified: ${pushInvData.recordsVerified})`);
+
+      const matrixRes = await fetch(`http://localhost:${PORT}/api/aiosell/inventory/matrix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-03',
+          endDate: '2026-09-05'
+        })
+      });
+      const matrixData = await matrixRes.json();
+      assert('POST /api/aiosell/inventory/matrix returns 200 OK', matrixRes.status === 200);
+      assert('Matrix endpoint reports success', matrixData.success === true);
+      assert('Matrix calculates Deluxe AC physical as 18', matrixData.physicalCounts?.['ca773df6-63e4-43ed-963b-05bbc2494499'] === 18);
+
+      const verifyInvRes = await fetch(`http://localhost:${PORT}/api/aiosell/inventory/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-03',
+          endDate: '2026-09-12'
+        })
+      });
+      const verifyInvData = await verifyInvRes.json();
+      assert('POST /api/aiosell/inventory/verify returns 200 OK', verifyInvRes.status === 200);
+      assert('Verify inventory reports success', verifyInvData.success === true);
+      assert('Verify inventory reports 10 date updates from provider', verifyInvData.fetchedUpdatesCount === 10);
+
       console.log('\n--- 5b. Direct Live Rate Push & Post-Push Verification Test ---');
       const pushRatesRes = await fetch(`http://localhost:${PORT}/api/aiosell/rates/push`, {
         method: 'POST',

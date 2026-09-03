@@ -16,6 +16,7 @@ import {
   CHANNEL_TYPES, getChannelMetadata, fetchChannelMapping,
   checkChannelStatus, pushChannelInventory, pushChannelRates,
   fetchChannelInventory, fetchChannelRates, verifyChannelRates,
+  verifyChannelInventory, getInventoryMatrix,
   testChannelConnection, fetchChannelFutureBookings, addChannel
 } from '@/lib/api-channel';
 import type {
@@ -623,43 +624,60 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
 
   const handlePushToChannel = async () => {
     setIsSyncing(true);
-    setSyncProgress("Pushing live inventory...");
+    setSyncProgress("Pushing and verifying live inventory...");
+    let invRes: any = null;
+    let rateRes: any = null;
+    let invErr: any = null;
+    let rateErr: any = null;
+
     try {
-      await pushChannelInventory(startDate, endDate);
+      try {
+        invRes = await pushChannelInventory(startDate, endDate);
+      } catch (err: any) {
+        invErr = err;
+      }
 
       setSyncProgress("Pushing and verifying live rates with channel manager...");
-      const rateRes = await pushChannelRates(startDate, endDate);
+      try {
+        rateRes = await pushChannelRates(startDate, endDate);
+      } catch (err: any) {
+        rateErr = err;
+      }
 
-      if (rateRes?.verified) {
+      const invSuccess = invRes && invRes.success && invRes.verified;
+      const rateSuccess = rateRes && rateRes.success && rateRes.verified;
+
+      if (invSuccess && rateSuccess) {
         setSyncNotice({
-          title: 'Rates Updated and Verified',
-          message: rateRes.message || 'Rates and inventory updated and verified against live channel manager.',
+          title: 'Inventory & Rates Updated and Verified',
+          message: 'Both inventory availability and room rates have been successfully pushed and verified with the external channel manager.',
           type: 'success',
-          details: `Confirmed: ${rateRes.recordsVerified ?? rateRes.recordsAttempted ?? 0} rate plan updates verified for ${fmtDate(startDate)} – ${fmtDate(endDate)}.`
+          details: `• Inventory: ${invRes.recordsVerified ?? invRes.datesCount} room updates confirmed across all categories.\n• Rates: ${rateRes.recordsVerified ?? rateRes.recordsAttempted} rate plan updates verified for ${fmtDate(startDate)} – ${fmtDate(endDate)}.`
         });
-      } else if (rateRes?.discrepancies && rateRes.discrepancies.length > 0) {
+      } else if (invSuccess && !rateSuccess) {
         setSyncNotice({
-          title: 'Rate Verification Alert',
-          message: rateRes.message || 'Rate update accepted by channel manager, but verification detected discrepancies.',
+          title: 'Inventory Verified, Rates Alert',
+          message: rateErr ? `Rate push failed: ${rateErr.message}` : 'Inventory was verified, but rate verification reported discrepancies.',
           type: 'warning',
-          details: JSON.stringify(rateRes.discrepancies, null, 2)
+          details: `• Inventory: Verified (${invRes.recordsVerified ?? invRes.datesCount} updates confirmed)\n• Rates: ${rateErr ? rateErr.message : 'Discrepancies reported'}`
+        });
+      } else if (!invSuccess && rateSuccess) {
+        setSyncNotice({
+          title: 'Rates Verified, Inventory Alert',
+          message: invErr ? `Inventory push failed: ${invErr.message}` : 'Rates were verified, but inventory verification reported discrepancies.',
+          type: 'warning',
+          details: `• Rates: Verified (${rateRes.recordsVerified ?? rateRes.recordsAttempted} updates confirmed)\n• Inventory: ${invErr ? invErr.message : 'Discrepancies reported'}`
         });
       } else {
         setSyncNotice({
-          title: 'Rates & Inventory Updated',
-          message: rateRes?.message || 'Rates and inventory synchronized successfully.',
-          type: 'success'
+          title: 'Channel Sync Failed',
+          message: `Inventory: ${invErr?.message || 'Failed'}. Rates: ${rateErr?.message || 'Failed'}.`,
+          type: 'error',
+          details: `• Inventory Error: ${invErr?.message || 'Verification discrepancy'}\n• Rates Error: ${rateErr?.message || 'Verification discrepancy'}`
         });
       }
+
       await load();
-    } catch (err: any) {
-      const stage = err.stage ? ` [Stage: ${err.stage}]` : '';
-      setSyncNotice({
-        title: 'Channel Sync Failed',
-        message: `${err.message || 'Error syncing with channels'}${stage}`,
-        type: 'error',
-        details: err.missingCategories ? `Missing mappings: ${err.missingCategories.join(', ')}` : (err.code || undefined)
-      });
     } finally {
       setIsSyncing(false);
       setSyncProgress("");
@@ -675,10 +693,29 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await getInventoryRestrictions(startDate, endDate);
+      const matrixRes = await getInventoryMatrix(startDate, endDate).catch(() => null);
       const map = new Map<string, ChannelInventoryRestriction>();
-      for (const r of data) {
-        map.set(`${r.room_category_id}|${r.date}`, r);
+
+      if (matrixRes && matrixRes.matrix && Array.isArray(matrixRes.matrix)) {
+        for (const item of matrixRes.matrix) {
+          map.set(`${item.room_category_id}|${item.date}`, {
+            room_category_id: item.room_category_id,
+            date: item.date,
+            availability: item.available,
+            base_rate: item.base_rate,
+            channel_rate: 0,
+            min_stay: item.min_stay,
+            max_stay: item.max_stay,
+            stop_sell: item.stop_sell,
+            closed_to_arrival: item.closed_to_arrival,
+            closed_to_departure: item.closed_to_departure
+          } as any);
+        }
+      } else {
+        const data = await getInventoryRestrictions(startDate, endDate);
+        for (const r of data) {
+          map.set(`${r.room_category_id}|${r.date}`, r);
+        }
       }
       setRestrictions(map);
     } catch {
@@ -2623,11 +2660,12 @@ const DiagnosticsTab = () => {
     try {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      await pushChannelInventory(today, nextMonth);
+      const res = await pushChannelInventory(today, nextMonth);
       setModalNotice({
-        type: 'success',
-        title: 'Inventory Push Successful',
-        message: 'Live PMS inventory successfully transmitted to channel manager for the next 30 days.'
+        type: res?.verified ? 'success' : 'warning',
+        title: res?.verified ? 'Inventory Updated and Verified' : 'Inventory Push Update',
+        message: res?.message || 'Live PMS inventory successfully transmitted to channel manager for the next 30 days.',
+        details: res?.discrepancies ? JSON.stringify(res.discrepancies, null, 2) : `Confirmed: ${res?.recordsVerified ?? res?.recordsAttempted ?? 0} room date updates verified.`
       });
     } catch (err: any) {
       setModalNotice({
@@ -2681,6 +2719,34 @@ const DiagnosticsTab = () => {
         type: 'error',
         title: 'Inventory Fetch Failed',
         message: err.message || 'Could not fetch inventory from channel provider.'
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleVerifyInventory = async () => {
+    setActionLoading('verify-inventory');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+      const res = await verifyChannelInventory(today, nextWeek);
+      setModalNotice({
+        type: 'info',
+        title: 'Live Inventory Verification Query',
+        message: `Queried external channel inventory for ${today} to ${nextWeek}. Provider returned ${res.fetchedUpdatesCount} dates with active room inventory.`,
+        details: JSON.stringify({
+          hotelCode: res.hotelCode,
+          dateRange: res.dateRange,
+          datesReturned: res.fetchedUpdatesCount,
+          sampleExternalInventory: res.fetchedUpdates?.[0]
+        }, null, 2)
+      });
+    } catch (err: any) {
+      setModalNotice({
+        type: 'error',
+        title: 'Inventory Verification Failed',
+        message: err.message || 'Could not verify inventory from channel provider.'
       });
     } finally {
       setActionLoading(null);
@@ -2851,6 +2917,14 @@ const DiagnosticsTab = () => {
           >
             {actionLoading === 'fetch-rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             Fetch Live Rates
+          </button>
+          <button 
+            onClick={handleVerifyInventory}
+            disabled={!!actionLoading}
+            className="px-4 py-2.5 bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 rounded-xl text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+          >
+            {actionLoading === 'verify-inventory' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4 text-brand-600" />}
+            Verify Live Inventory
           </button>
           <button 
             onClick={handleVerifyRates}

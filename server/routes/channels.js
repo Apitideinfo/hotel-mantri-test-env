@@ -438,12 +438,13 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
 
     // Update channel connection last sync
     const now = new Date().toISOString();
+    const syncStatus = result.verified ? 'verified' : 'success';
     await supabaseServiceRole
       .from('channel_connections')
       .update({
         last_sync_at: now,
         last_successful_sync_at: now,
-        last_sync_status: 'success',
+        last_sync_status: syncStatus,
         last_error: null,
         updated_at: now
       })
@@ -456,14 +457,21 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
       channel_connection_id: channelId,
       log_type: 'INVENTORY_SYNC',
       direction: 'outbound',
-      status: 'success',
-      message: `Inventory successfully synchronized from ${sDate} to ${eDate}`,
+      status: result.verified ? 'VERIFIED' : 'SUCCESS',
+      message: result.message || `Inventory successfully synchronized from ${sDate} to ${eDate}`,
       date_range: `${sDate} to ${eDate}`,
       retry_status: 'not_retried',
       retry_count: 0
     });
 
-    res.json({ success: true, durationMs: Date.now() - startTime, result, requestId: req.requestId });
+    res.json({
+      success: true,
+      verified: result.verified,
+      message: result.message,
+      durationMs: Date.now() - startTime,
+      result,
+      requestId: req.requestId
+    });
   } catch (err) {
     console.error('Inventory sync error:', err);
     const now = new Date().toISOString();

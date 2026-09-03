@@ -480,6 +480,20 @@ export const verifyChannelRates = async (startDate: string, endDate: string, cha
   });
 };
 
+export const verifyChannelInventory = async (startDate: string, endDate: string, channelId?: string): Promise<any> => {
+  return apiFetch('/api/aiosell/inventory/verify', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate, channelId })
+  });
+};
+
+export const getInventoryMatrix = async (startDate: string, endDate: string): Promise<any> => {
+  return apiFetch('/api/aiosell/inventory/matrix', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate })
+  });
+};
+
 // ── Composite fetch for Channel Manager overview ──
 
 export interface ChannelManagerOverview {

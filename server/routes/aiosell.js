@@ -162,12 +162,182 @@ router.get('/mapping', async (req, res) => {
   }
 });
 
+
 /**
- * Executes inventory push for a hotel.
- * Supports signature:
- *   executeInventoryPush(hotelId, channelId, startDate, endDate)
- *   executeInventoryPush(hotelId, startDate, endDate)
+ * Authoritative Room Availability Calculator for Hotel Mantri PMS
+ * Computes: Available = max(0, physicalActive - occupied - blocked)
+ * Used by both UI grid matrix endpoint and outbound channel push.
  */
+export async function calculateAuthoritativeInventory(hotelId, startDate, endDate, specificCategoryIds = null) {
+  const dates = getDates(startDate, endDate);
+  const supabase = getSupabase();
+
+  // 1. Get physical rooms
+  const { data: physicalRooms, error: roomsError } = await supabase
+    .from('rooms')
+    .select('id, category_id, room_no, is_active')
+    .eq('hotel_id', hotelId);
+
+  if (roomsError) {
+    console.error('[calculateAuthoritativeInventory] Error querying rooms:', roomsError);
+  }
+
+  const roomToCatMap = {};
+  const physicalCounts = {};
+  (physicalRooms || []).forEach(r => {
+    if (r.category_id && r.is_active !== false) {
+      roomToCatMap[r.id] = r.category_id;
+      physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
+    }
+  });
+
+  // Map room_no to category_id
+  const roomNoToCatMap = {};
+  (physicalRooms || []).forEach(r => {
+    if (r.room_no && r.category_id) {
+      roomNoToCatMap[String(r.room_no).trim().toLowerCase()] = r.category_id;
+    }
+  });
+
+  // 2. Get active reservations overlapping the date range
+  const { data: reservations, error: resError } = await supabase
+    .from('reservations')
+    .select('id, room_id, rate_plan, check_in_date, check_out_date, status')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .lte('check_in_date', endDate)
+    .gte('check_out_date', startDate);
+
+  if (resError) {
+    console.error('[calculateAuthoritativeInventory] Error querying reservations:', resError);
+  }
+
+  // 3. Get room blocks / maintenance
+  const { data: roomBlocks } = await supabase
+    .from('room_blocks')
+    .select('room_no, start_date, end_date, block_type')
+    .eq('hotel_id', hotelId)
+    .lte('start_date', endDate)
+    .gte('end_date', startDate);
+
+  // 4. Get channel mappings for rate plan / room code fallback resolution
+  const { data: mappings } = await supabase
+    .from('channel_rate_mappings')
+    .select('room_category_id, external_room_code')
+    .eq('hotel_id', hotelId)
+    .eq('status', 'mapped');
+
+  const extCodeToCatMap = {};
+  (mappings || []).forEach(m => {
+    if (m.external_room_code && m.room_category_id) {
+      extCodeToCatMap[m.external_room_code.toLowerCase()] = m.room_category_id;
+    }
+  });
+
+  // 5. Get inventory restrictions overrides
+  let restrictionsQuery = supabase
+    .from('channel_inventory_restrictions')
+    .select('date, room_category_id, availability, stop_sell, base_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure')
+    .eq('hotel_id', hotelId)
+    .gte('date', startDate)
+    .lte('date', endDate);
+
+  if (specificCategoryIds && specificCategoryIds.length > 0) {
+    restrictionsQuery = restrictionsQuery.in('room_category_id', specificCategoryIds);
+  }
+  const { data: restrictions } = await restrictionsQuery;
+
+  const restrictionMap = new Map();
+  (restrictions || []).forEach(r => {
+    restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
+  });
+
+  // 6. Compute matrix for all dates and room categories
+  const { data: allCategories } = await supabase
+    .from('room_categories')
+    .select('id, name')
+    .eq('hotel_id', hotelId)
+    .neq('is_active', false);
+
+  const categories = (allCategories || []).filter(c => 
+    !specificCategoryIds || specificCategoryIds.includes(c.id)
+  );
+
+  const matrix = [];
+
+  for (const date of dates) {
+    const dTime = new Date(date + 'T12:00:00');
+
+    // Count occupied per category on this date
+    const occupiedCounts = {};
+    (reservations || []).forEach(res => {
+      const ci = new Date(res.check_in_date + 'T12:00:00');
+      const co = new Date(res.check_out_date + 'T12:00:00');
+      // Hotel night: guest occupies room from check_in date noon until check_out date noon
+      if (dTime >= ci && dTime < co) {
+        let catId = res.room_id ? roomToCatMap[res.room_id] : null;
+        if (!catId && res.rate_plan) {
+          const prefix = String(res.rate_plan).split('-').slice(0, 2).join('-').toLowerCase();
+          catId = extCodeToCatMap[prefix];
+        }
+        if (catId) {
+          occupiedCounts[catId] = (occupiedCounts[catId] || 0) + 1;
+        }
+      }
+    });
+
+    // Count blocked per category on this date
+    const blockedCounts = {};
+    (roomBlocks || []).forEach(b => {
+      const bs = new Date(b.start_date + 'T12:00:00');
+      const be = new Date(b.end_date + 'T12:00:00');
+      if (dTime >= bs && dTime <= be) {
+        const catId = roomNoToCatMap[String(b.room_no).trim().toLowerCase()];
+        if (catId) {
+          blockedCounts[catId] = (blockedCounts[catId] || 0) + 1;
+        }
+      }
+    });
+
+    for (const cat of categories) {
+      const physical = physicalCounts[cat.id] || 0;
+      const occupied = occupiedCounts[cat.id] || 0;
+      const blocked = blockedCounts[cat.id] || 0;
+      const calculatedAvailable = Math.max(0, physical - occupied - blocked);
+
+      const r = restrictionMap.get(`${cat.id}|${date}`);
+      let sellable = calculatedAvailable;
+
+      if (r) {
+        if (r.stop_sell) {
+          sellable = 0;
+        } else if (r.availability !== undefined && r.availability !== null && Number(r.availability) > 0) {
+          sellable = Math.min(calculatedAvailable, Number(r.availability));
+        }
+      }
+
+      matrix.push({
+        date,
+        room_category_id: cat.id,
+        category_name: cat.name,
+        physical,
+        occupied,
+        blocked,
+        calculatedAvailable,
+        available: sellable,
+        stop_sell: Boolean(r?.stop_sell),
+        base_rate: r?.base_rate ?? 0,
+        min_stay: r?.min_stay ?? 1,
+        max_stay: r?.max_stay ?? 0,
+        closed_to_arrival: Boolean(r?.closed_to_arrival),
+        closed_to_departure: Boolean(r?.closed_to_departure)
+      });
+    }
+  }
+
+  return { matrix, physicalCounts, categories, mappings: mappings || [] };
+}
+
 export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = {}) => {
   let channelId = null;
   let startDate = null;
@@ -175,40 +345,34 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
   let opts = {};
 
   if (typeof arg4 === 'object' && arg4 !== null) {
-    startDate = arg2;
-    endDate = arg3;
-    opts = arg4;
-  } else if (arg4 !== undefined) {
     channelId = arg2;
     startDate = arg3;
     endDate = arg4;
-    opts = options || {};
+    opts = options;
+  } else if (typeof arg3 === 'string') {
+    if (typeof arg4 === 'string') {
+      channelId = arg2;
+      startDate = arg3;
+      endDate = arg4;
+      opts = options;
+    } else {
+      channelId = null;
+      startDate = arg2;
+      endDate = arg3;
+      opts = arg4 || {};
+    }
   } else {
+    channelId = null;
     startDate = arg2;
     endDate = arg3;
-    opts = options || {};
+    opts = options;
   }
 
   // 1. Validate dates
   if (!startDate || !endDate) {
-    const err = new Error('Both start date and end date are required for inventory synchronization.');
-    err.status = 400;
-    err.code = 'INVALID_DATES';
-    err.stage = 'validation';
-    throw err;
-  }
-  if (new Date(startDate) > new Date(endDate)) {
-    const err = new Error('Start date cannot be after end date.');
+    const err = new Error('Both startDate and endDate are required.');
     err.status = 400;
     err.code = 'INVALID_DATE_RANGE';
-    err.stage = 'validation';
-    throw err;
-  }
-  const diffDays = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24));
-  if (diffDays > 90) {
-    const err = new Error('Date range cannot exceed 90 days for inventory synchronization.');
-    err.status = 400;
-    err.code = 'DATE_RANGE_EXCEEDED';
     err.stage = 'validation';
     throw err;
   }
@@ -216,7 +380,7 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
   const supabase = getSupabase();
   const hotelConfig = await getHotelAiosellConfig(hotelId);
 
-  // 2. Get active room mappings
+  // 2. Query active room mappings
   let mappingQuery = supabase
     .from('channel_rate_mappings')
     .select('id, room_category_id, external_room_code, channel_connection_id, status')
@@ -229,7 +393,6 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
   }
 
   const { data: mappings, error: mappingError } = await mappingQuery;
-
   if (mappingError) {
     console.error('[executeInventoryPush] Error querying mappings:', mappingError);
   }
@@ -237,78 +400,57 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
   if (!mappings || mappings.length === 0) {
     const err = new Error('No active room mappings found for this channel. Please configure room mapping first in Channel Settings.');
     err.status = 422;
-    err.code = 'MAPPING_REQUIRED';
+    err.code = 'ROOM_MAPPING_REQUIRED';
     err.stage = 'mapping';
     throw err;
   }
 
-  // 3. Get physical rooms
-  const { data: physicalRooms } = await supabase
-    .from('rooms')
-    .select('room_category_id')
-    .eq('hotel_id', hotelId);
-
-  const physicalCounts = {};
-  (physicalRooms || []).forEach(r => {
-    physicalCounts[r.room_category_id] = (physicalCounts[r.room_category_id] || 0) + 1;
+  const categoryToExtCode = {};
+  mappings.forEach(m => {
+    if (m.room_category_id && m.external_room_code) {
+      categoryToExtCode[m.room_category_id] = m.external_room_code;
+    }
   });
 
-  // 4. Get active overlapping reservations
-  const { data: reservations } = await supabase
-    .from('reservations')
-    .select('room_categories!inner(id), check_in_date, check_out_date, status')
-    .eq('hotel_id', hotelId)
-    .in('status', ['confirmed', 'checked_in'])
-    .lte('check_in_date', endDate + 'T23:59:59')
-    .gte('check_out_date', startDate + 'T00:00:00');
+  const categoryIds = Object.keys(categoryToExtCode);
 
-  // 5. Get inventory restrictions
-  const categoryIds = [...new Set(mappings.map(m => m.room_category_id).filter(Boolean))];
-  const { data: restrictions } = await supabase
-    .from('channel_inventory_restrictions')
-    .select('date, room_category_id, availability, stop_sell')
-    .eq('hotel_id', hotelId)
-    .in('room_category_id', categoryIds)
-    .gte('date', startDate)
-    .lte('date', endDate);
+  // 3. Compute authoritative inventory matrix
+  const { matrix, categories } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, categoryIds);
 
-  // 6. Build payload
+  // Validate that room categories have physical rooms configured
+  const unmappedCategories = categories.filter(c => !categoryToExtCode[c.id]);
+  if (unmappedCategories.length > 0) {
+    console.warn('[executeInventoryPush] Some categories unmapped:', unmappedCategories.map(c => c.name));
+  }
+
+  // 4. Build updates payload for Aiosell
   const dates = getDates(startDate, endDate);
-  const updates = dates.map(date => {
+  const updates = [];
+
+  for (const date of dates) {
     const rooms = [];
     const uniqueRoomCodes = new Set();
-    const currentDate = new Date(date + 'T12:00:00');
-    
-    for (const mapping of mappings) {
-      if (!mapping.external_room_code || uniqueRoomCodes.has(mapping.external_room_code)) continue;
-      uniqueRoomCodes.add(mapping.external_room_code);
-      
-      const physical = physicalCounts[mapping.room_category_id] || 0;
-      
-      let occupied = 0;
-      (reservations || []).forEach(res => {
-        const ci = new Date(res.check_in_date);
-        const co = new Date(res.check_out_date);
-        if (res.room_categories?.id === mapping.room_category_id && currentDate >= ci && currentDate < co) {
-          occupied++;
-        }
+    const dateEntries = matrix.filter(m => m.date === date);
+
+    for (const entry of dateEntries) {
+      const roomCode = categoryToExtCode[entry.room_category_id];
+      if (!roomCode || uniqueRoomCodes.has(roomCode)) continue;
+      uniqueRoomCodes.add(roomCode);
+
+      rooms.push({
+        roomCode,
+        available: Math.max(0, Math.round(Number(entry.available) || 0))
       });
-      
-      let sellable = Math.max(0, physical - occupied);
-      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
-      
-      if (restriction) {
-        if (restriction.stop_sell) {
-          sellable = 0;
-        } else if (restriction.availability !== undefined && restriction.availability !== null) {
-          sellable = Math.min(sellable, restriction.availability);
-        }
-      }
-      
-      rooms.push({ roomCode: mapping.external_room_code, available: Math.max(0, Math.round(Number(sellable) || 0)) });
     }
-    return { startDate: date, endDate: date, rooms };
-  }).filter(u => u.rooms.length > 0);
+
+    if (rooms.length > 0) {
+      updates.push({
+        startDate: date,
+        endDate: date,
+        rooms
+      });
+    }
+  }
 
   if (updates.length === 0) {
     const err = new Error('No valid inventory updates could be constructed for the selected date range.');
@@ -318,6 +460,7 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
     throw err;
   }
 
+  // 5. Execute external push
   const payload = { hotelCode: hotelConfig.hotelCode, updates };
   const result = await aiosellService.pushInventory(payload, hotelConfig);
 
@@ -331,20 +474,31 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
     throw err;
   }
 
-  // Post-push inventory verification check
+  // 6. Post-push inventory verification check
   let verified = true;
   let verifiedRoomsCount = 0;
+  const discrepancies = [];
+
   if (opts.skipVerification !== true) {
     try {
       await new Promise(resolve => setTimeout(resolve, 1500));
       const fetchedInv = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
       const fetchedUpdates = fetchedInv?.updates || (Array.isArray(fetchedInv) ? fetchedInv : []);
+
       for (const expectedUpdate of updates) {
         const matchingUpdate = fetchedUpdates.find(u => u.startDate === expectedUpdate.startDate);
         for (const expectedRoom of expectedUpdate.rooms) {
           const match = matchingUpdate?.rooms?.find(r => r.roomCode === expectedRoom.roomCode);
           if (match && Number(match.available) === Number(expectedRoom.available)) {
             verifiedRoomsCount++;
+          } else {
+            verified = false;
+            discrepancies.push({
+              date: expectedUpdate.startDate,
+              roomCode: expectedRoom.roomCode,
+              expected: expectedRoom.available,
+              actual: match ? Number(match.available) : null
+            });
           }
         }
       }
@@ -353,18 +507,22 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = 
     }
   }
 
-  const syncStatus = 'VERIFIED';
-  await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', syncStatus, `Inventory pushed and verified for ${updates.length} dates`, null, null, channelId);
+  const syncStatus = verified ? 'VERIFIED' : (discrepancies.length > 0 ? 'PARTIAL' : 'SUCCESS');
+  const safeLogMsg = `Inventory pushed (${updates.length} dates, ${verifiedRoomsCount} room dates verified)`;
+  await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', syncStatus, safeLogMsg, discrepancies.length > 0 ? JSON.stringify(discrepancies) : null, null, channelId);
 
   return {
     success: true,
-    verified: true,
+    verified,
     status: syncStatus,
-    message: 'Inventory updated and verified.',
+    message: verified ? 'Inventory updated and verified.' : 'Inventory update accepted, but verification detected discrepancies.',
     operation: 'inventory_push',
     hotelCode: hotelConfig.hotelCode,
     dateRange: `${startDate} to ${endDate}`,
     datesCount: updates.length,
+    recordsAttempted: updates.reduce((acc, u) => acc + u.rooms.length, 0),
+    recordsVerified: verifiedRoomsCount,
+    discrepancies: discrepancies.length > 0 ? discrepancies : undefined,
     result
   };
 };
@@ -378,6 +536,9 @@ router.post('/inventory/push', async (req, res) => {
       success: true,
       verified: result.verified,
       message: result.message,
+      recordsAttempted: result.recordsAttempted,
+      recordsVerified: result.recordsVerified,
+      discrepancies: result.discrepancies,
       result,
       requestId: req.requestId
     });
@@ -426,6 +587,98 @@ router.post('/inventory/fetch', async (req, res) => {
       code: err.code || 'INVENTORY_FETCH_FAILED',
       message: err.message || 'Failed to fetch inventory',
       requestId: req.requestId
+    });
+  }
+});
+
+router.post('/inventory/matrix', async (req, res) => {
+  const hotelId = (req.hotelId || req.auth?.hotelId);
+  try {
+    const { startDate, endDate } = req.body;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
+    }
+    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+    res.json({
+      success: true,
+      startDate,
+      endDate,
+      physicalCounts,
+      categories,
+      mappings,
+      matrix
+    });
+  } catch (err) {
+    console.error('[POST /inventory/matrix] Error:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      code: err.code || 'MATRIX_ERROR',
+      message: err.message || 'Failed to calculate inventory matrix'
+    });
+  }
+});
+
+router.post('/inventory/verify', async (req, res) => {
+  const hotelId = (req.hotelId || req.auth?.hotelId);
+  try {
+    const { startDate, endDate } = req.body;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
+    }
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const { matrix } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+    
+    // Fetch live from Aiosell
+    const fetchedInv = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
+    const fetchedUpdates = fetchedInv?.updates || (Array.isArray(fetchedInv) ? fetchedInv : []);
+
+    res.json({
+      success: true,
+      hotelCode: hotelConfig.hotelCode,
+      dateRange: `${startDate} to ${endDate}`,
+      fetchedUpdatesCount: fetchedUpdates.length,
+      fetchedUpdates,
+      localMatrix: matrix
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+router.post('/inventory/diagnostic', async (req, res) => {
+  const hotelId = (req.hotelId || req.auth?.hotelId);
+  try {
+    const { startDate, endDate } = req.body;
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+
+    res.json({
+      hotel: {
+        internalId: hotelId,
+        externalHotelCode: hotelConfig.hotelCode,
+        partnerId: hotelConfig.partnerId,
+        environment: hotelConfig.environment
+      },
+      dateRange: { startDate, endDate },
+      physicalCounts,
+      categories,
+      mappings: mappings.map(m => ({
+        roomCategoryId: m.room_category_id,
+        externalRoomCode: m.external_room_code
+      })),
+      matrixSample: matrix.slice(0, 6),
+      externalRequest: {
+        endpoint: `https://live.aiosell.com/api/v2/cm/update/${hotelConfig.partnerId}`,
+        method: 'POST'
+      }
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false,
+      error: err.message
     });
   }
 });
