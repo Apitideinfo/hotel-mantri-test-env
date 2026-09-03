@@ -16,6 +16,12 @@ export interface ApiError {
   error: string;
   message: string;
   status: number;
+  stage?: 'validation' | 'mapping' | 'aiosell' | 'database' | 'authorization' | 'network';
+  code?: string;
+  channelId?: string;
+  missingCategories?: string[];
+  requestId?: string;
+  [key: string]: any;
 }
 
 export interface ApiFetchOptions extends RequestInit {
@@ -61,11 +67,24 @@ export const apiFetch = async (
   try {
     response = await fetch(url, { ...options, headers });
   } catch (error: any) {
-    // This catches network errors (e.g., CORS, DNS, connection refused)
+    const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const isNetworkError =
+      isOffline ||
+      error.message?.includes('Failed to fetch') ||
+      error.message?.includes('NetworkError') ||
+      error.message?.includes('Load failed') ||
+      error.name === 'TypeError';
+
     throw {
       success: false,
-      error: 'NETWORK_ERROR',
-      message: error.message || 'Failed to fetch (Network error)',
+      error: isOffline ? 'INTERNET_DISCONNECTED' : 'NETWORK_ERROR',
+      code: isOffline ? 'ERR_INTERNET_DISCONNECTED' : 'ERR_NETWORK_FAILURE',
+      stage: 'network',
+      message: isOffline
+        ? 'No internet connection. Please check your network and try again.'
+        : isNetworkError
+        ? 'Unable to reach the server. Please check your internet connection and verify that the backend is reachable.'
+        : error.message || 'A network error occurred.',
       status: 0
     } as ApiError;
   }
@@ -139,12 +158,20 @@ export const apiFetch = async (
 
   if (!response.ok) {
     // If the server returned a structured error, use it. Otherwise, create one.
+    const errObj = typeof data.error === 'object' && data.error !== null ? data.error : {};
+    const code = errObj.code || data.code || (typeof data.error === 'string' ? data.error : 'API_ERROR');
+    const message = errObj.message || data.message || (typeof data.error === 'string' ? data.error : `HTTP Error ${response.status}`);
+    const stage = errObj.stage || data.stage;
+
     throw {
       success: false,
-      error: data.error?.code || data.code || data.error || 'API_ERROR',
-      message: data.error?.message || data.message || (typeof data.error === 'string' ? data.error : `HTTP Error ${response.status}`),
+      error: code,
+      code,
+      message,
+      stage,
       status: response.status,
-      ...data
+      ...errObj,
+      ...data,
     } as ApiError;
   }
 

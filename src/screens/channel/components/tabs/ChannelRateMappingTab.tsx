@@ -8,6 +8,7 @@ import type { RatePlan } from '@/lib/types-reservations';
 import { 
   saveChannelMappings, fetchChannelMapping 
 } from '@/lib/api-channel';
+import { supabase } from '@/lib/supabase';
 
 interface ChannelRateMappingTabProps {
   channel: ChannelConnection;
@@ -31,6 +32,7 @@ export const ChannelRateMappingTab: React.FC<ChannelRateMappingTabProps> = ({
   const [externalRatePlans, setExternalRatePlans] = useState<ExternalRatePlanOption[]>([]);
   const [loadingRates, setLoadingRates] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [creatingPlans, setCreatingPlans] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
@@ -136,6 +138,41 @@ export const ChannelRateMappingTab: React.FC<ChannelRateMappingTabProps> = ({
     }
   };
 
+  const handleCreateDefaultRatePlans = async () => {
+    setCreatingPlans(true);
+    setFeedback(null);
+    try {
+      const hotelId = channel.hotel_id;
+      const { error } = await supabase.from('rate_plans').insert([
+        {
+          hotel_id: hotelId,
+          plan_name: 'EP - European Plan (Room Only)',
+          plan_type: 'EP',
+          base_rate: 2500,
+          weekend_rate: 2800,
+          season_rate: 3200,
+          is_active: true
+        },
+        {
+          hotel_id: hotelId,
+          plan_name: 'CP - Continental Plan (With Breakfast)',
+          plan_type: 'CP',
+          base_rate: 3000,
+          weekend_rate: 3400,
+          season_rate: 3800,
+          is_active: true
+        }
+      ]);
+      if (error) throw error;
+      setFeedback({ type: 'success', message: 'Standard rate plans created successfully! You can now map them below.' });
+      onRefresh();
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: err.message || 'Failed to create rate plans.' });
+    } finally {
+      setCreatingPlans(false);
+    }
+  };
+
   return (
     <div className="space-y-5 animate-fade-in">
       {/* Feedback */}
@@ -192,81 +229,104 @@ export const ChannelRateMappingTab: React.FC<ChannelRateMappingTabProps> = ({
         </div>
       </div>
 
-      {/* Table */}
-      <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
-              <th className="py-3 px-4">Hotel Mantri Rate Plan</th>
-              <th className="py-3 px-4">Inclusion / Meal Plan</th>
-              <th className="py-3 px-4">External OTA Rate Plan</th>
-              <th className="py-3 px-4">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {ratePlans.map((rp) => {
-              const mapped = rateMappingState[rp.id];
-              const isMapped = Boolean(mapped?.code);
+      {/* Table / Empty State */}
+      {ratePlans.length === 0 ? (
+        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-8 text-center space-y-4">
+          <div className="w-12 h-12 bg-amber-100 rounded-2xl flex items-center justify-center mx-auto text-amber-600">
+            <Tag className="w-6 h-6" />
+          </div>
+          <div>
+            <h5 className="text-sm font-bold text-slate-800">No Rate Plans Configured</h5>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
+              Rate plans (such as EP - Room Only, CP - With Breakfast) must exist in Hotel Mantri before they can be mapped to OTA channels.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreateDefaultRatePlans}
+            disabled={creatingPlans}
+            className="px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl shadow-soft-blue transition inline-flex items-center gap-2"
+          >
+            {creatingPlans ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            Generate Standard Rate Plans (EP & CP)
+          </button>
+        </div>
+      ) : (
+        <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm bg-white">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
+                <th className="py-3 px-4">Hotel Mantri Rate Plan</th>
+                <th className="py-3 px-4">Inclusion / Meal Plan</th>
+                <th className="py-3 px-4">External OTA Rate Plan</th>
+                <th className="py-3 px-4">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {ratePlans.map((rp) => {
+                const mapped = rateMappingState[rp.id];
+                const isMapped = Boolean(mapped?.code);
 
-              return (
-                <tr key={rp.id} className="hover:bg-slate-50/60 transition">
-                  <td className="py-3.5 px-4 font-semibold text-slate-800">
-                    <div className="flex items-center gap-2">
-                      <Tag className="w-4 h-4 text-slate-400" />
-                      <div>
-                        <p>{rp.plan_name}</p>
-                        <p className="text-[10px] text-slate-400 font-normal">Type: {rp.plan_type || 'Standard'}</p>
+                return (
+                  <tr key={rp.id} className="hover:bg-slate-50/60 transition">
+                    <td className="py-3.5 px-4 font-semibold text-slate-800">
+                      <div className="flex items-center gap-2">
+                        <Tag className="w-4 h-4 text-slate-400" />
+                        <div>
+                          <p>{rp.plan_name}</p>
+                          <p className="text-[10px] text-slate-400 font-normal">Type: {rp.plan_type || 'Standard'}</p>
+                        </div>
                       </div>
-                    </div>
-                  </td>
+                    </td>
 
-                  <td className="py-3.5 px-4 text-slate-600">
-                    {rp.plan_type || 'Standard EP / Room only'}
-                  </td>
+                    <td className="py-3.5 px-4 text-slate-600">
+                      {rp.plan_type || 'Standard EP / Room only'}
+                    </td>
 
-                  <td className="py-3.5 px-4">
-                    {externalRatePlans.length > 0 ? (
-                      <select
-                        value={mapped?.code || ''}
-                        onChange={(e) => handleRateChange(rp.id, e.target.value)}
-                        className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 focus:ring-1 focus:ring-brand-500"
-                      >
-                        <option value="">-- Select External Rate Plan --</option>
-                        {externalRatePlans.map(erp => (
-                          <option key={erp.ratePlanId} value={erp.ratePlanId}>
-                            {erp.ratePlanName} ({erp.ratePlanId})
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={mapped?.code || ''}
-                        onChange={(e) => handleRateChange(rp.id, e.target.value)}
-                        placeholder="Enter external rate plan code"
-                        className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 focus:ring-1 focus:ring-brand-500"
-                      />
-                    )}
-                  </td>
+                    <td className="py-3.5 px-4">
+                      {externalRatePlans.length > 0 ? (
+                        <select
+                          value={mapped?.code || ''}
+                          onChange={(e) => handleRateChange(rp.id, e.target.value)}
+                          className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-xs bg-white text-slate-800 focus:ring-1 focus:ring-brand-500"
+                        >
+                          <option value="">-- Select External Rate Plan --</option>
+                          {externalRatePlans.map(erp => (
+                            <option key={erp.ratePlanId} value={erp.ratePlanId}>
+                              {erp.ratePlanName} ({erp.ratePlanId})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={mapped?.code || ''}
+                          onChange={(e) => handleRateChange(rp.id, e.target.value)}
+                          placeholder="Enter external rate plan code"
+                          className="w-full max-w-xs px-3 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-800 focus:ring-1 focus:ring-brand-500"
+                        />
+                      )}
+                    </td>
 
-                  <td className="py-3.5 px-4">
-                    {isMapped ? (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                        Mapped
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                        Unmapped
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    <td className="py-3.5 px-4">
+                      {isMapped ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          Mapped
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                          Unmapped
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 };

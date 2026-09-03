@@ -47,6 +47,17 @@ const getSupabase = () => {
   return supabaseInstance;
 };
 
+// Helper to sanitize secrets from logs
+const sanitizeLogData = (data) => {
+  if (!data) return null;
+  const str = typeof data === 'object' ? JSON.stringify(data) : String(data);
+  return str
+    .replace(/Basic\s+[A-Za-z0-9+/=]+/gi, 'Basic [REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
+    .replace(/password['"]?\s*[:=]\s*['"][^'"]+['"]/gi, 'password:"[REDACTED]"')
+    .replace(/key['"]?\s*[:=]\s*['"][^'"]+['"]/gi, 'key:"[REDACTED]"');
+};
+
 // Helper to log to Supabase channel_sync_logs
 const logSync = async (hotelId, operation, direction, status, message, errorDetail = null, roomCategory = null, channelConnectionId = null, requestId = null) => {
   try {
@@ -57,8 +68,8 @@ const logSync = async (hotelId, operation, direction, status, message, errorDeta
       log_type: operation,
       direction,
       status,
-      message,
-      error_detail: typeof errorDetail === 'object' ? JSON.stringify(errorDetail) : errorDetail,
+      message: sanitizeLogData(message),
+      error_detail: sanitizeLogData(errorDetail),
       room_category_id: roomCategory,
       retry_status: 'not_retried',
       retry_count: 0
@@ -157,6 +168,12 @@ router.get('/mapping', async (req, res) => {
  *   executeInventoryPush(hotelId, channelId, startDate, endDate)
  *   executeInventoryPush(hotelId, startDate, endDate)
  */
+/**
+ * Executes inventory push for a hotel.
+ * Supports signature:
+ *   executeInventoryPush(hotelId, channelId, startDate, endDate)
+ *   executeInventoryPush(hotelId, startDate, endDate)
+ */
 export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
   let channelId = null;
   let startDate = null;
@@ -167,15 +184,38 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
     startDate = arg3;
     endDate = arg4;
   } else {
-    // 3 args: hotelId, startDate, endDate
     startDate = arg2;
     endDate = arg3;
+  }
+
+  // 1. Validate dates
+  if (!startDate || !endDate) {
+    const err = new Error('Both start date and end date are required for inventory synchronization.');
+    err.status = 400;
+    err.code = 'INVALID_DATES';
+    err.stage = 'validation';
+    throw err;
+  }
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('Start date cannot be after end date.');
+    err.status = 400;
+    err.code = 'INVALID_DATE_RANGE';
+    err.stage = 'validation';
+    throw err;
+  }
+  const diffDays = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24));
+  if (diffDays > 90) {
+    const err = new Error('Date range cannot exceed 90 days for inventory synchronization.');
+    err.status = 400;
+    err.code = 'DATE_RANGE_EXCEEDED';
+    err.stage = 'validation';
+    throw err;
   }
 
   const supabase = getSupabase();
   const hotelConfig = await getHotelAiosellConfig(hotelId);
 
-  // 1. Get active room mappings
+  // 2. Get active room mappings
   let mappingQuery = supabase
     .from('channel_rate_mappings')
     .select('room_category_id, external_room_code, channel_connection_id, status')
@@ -194,13 +234,14 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
   }
 
   if (!mappings || mappings.length === 0) {
-    const err = new Error('No active room mappings found for this channel. Please configure room mapping first.');
+    const err = new Error('No active room mappings found for this channel. Please configure room mapping in Channel Settings.');
     err.status = 422;
     err.code = 'MAPPING_REQUIRED';
+    err.stage = 'mapping';
     throw err;
   }
 
-  // 2. Get physical rooms
+  // 3. Get physical rooms
   const { data: physicalRooms } = await supabase
     .from('rooms')
     .select('room_category_id')
@@ -211,7 +252,7 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
     physicalCounts[r.room_category_id] = (physicalCounts[r.room_category_id] || 0) + 1;
   });
 
-  // 3. Get active overlapping reservations
+  // 4. Get active overlapping reservations
   const { data: reservations } = await supabase
     .from('reservations')
     .select('room_categories!inner(id), check_in_date, check_out_date, status')
@@ -220,7 +261,7 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
     .lte('check_in_date', endDate + 'T23:59:59')
     .gte('check_out_date', startDate + 'T00:00:00');
 
-  // 4. Get inventory restrictions
+  // 5. Get inventory restrictions
   const categoryIds = [...new Set(mappings.map(m => m.room_category_id).filter(Boolean))];
   const { data: restrictions } = await supabase
     .from('channel_inventory_restrictions')
@@ -230,7 +271,7 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
     .gte('date', startDate)
     .lte('date', endDate);
 
-  // 5. Build payload
+  // 6. Build payload
   const dates = getDates(startDate, endDate);
   const updates = dates.map(date => {
     const rooms = [];
@@ -263,26 +304,44 @@ export const executeInventoryPush = async (hotelId, arg2, arg3, arg4) => {
         }
       }
       
-      rooms.push({ roomCode: mapping.external_room_code, available: sellable });
+      rooms.push({ roomCode: mapping.external_room_code, available: Math.max(0, Math.round(Number(sellable) || 0)) });
     }
     return { startDate: date, endDate: date, rooms };
   }).filter(u => u.rooms.length > 0);
 
+  if (updates.length === 0) {
+    const err = new Error('No valid inventory updates could be constructed for the selected date range.');
+    err.status = 422;
+    err.code = 'EMPTY_INVENTORY_UPDATES';
+    err.stage = 'validation';
+    throw err;
+  }
+
   const payload = { hotelCode: hotelConfig.hotelCode, updates };
   const result = await aiosellService.pushInventory(payload, hotelConfig);
-  await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', 'success', 'Inventory pushed successfully', null, null, channelId);
+  await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', 'success', `Inventory pushed successfully for ${updates.length} dates`, null, null, channelId);
   return result;
 };
 
 router.post('/inventory/push', async (req, res) => {
+  const hotelId = (req.hotelId || req.auth?.hotelId);
   try {
     const { startDate, endDate, channelId } = req.body;
-    const hotelId = (req.hotelId || req.auth?.hotelId);
     const result = await executeInventoryPush(hotelId, channelId, startDate, endDate);
-    res.json({ success: true, result });
+    res.json({ success: true, result, requestId: req.requestId });
   } catch (err) {
-    await logSync((req.hotelId || req.auth?.hotelId), 'INVENTORY_PUSH', 'outbound', 'failure', 'Inventory push failed', err.message);
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    await logSync(hotelId, 'INVENTORY_PUSH', 'outbound', 'failure', err.message || 'Inventory push failed', err.code, null, req.body?.channelId);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'INVENTORY_PUSH_FAILED',
+        message: err.message || 'Inventory push failed',
+        stage: err.stage || 'validation'
+      },
+      code: err.code || 'INVENTORY_PUSH_FAILED',
+      message: err.message || 'Inventory push failed',
+      requestId: req.requestId
+    });
   }
 });
 
@@ -293,9 +352,29 @@ router.post('/inventory/fetch', async (req, res) => {
     const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
     
     const result = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
-    res.json({ success: true, result });
+    const updates = result?.updates || (Array.isArray(result) ? result : []);
+    const count = updates.length;
+
+    res.json({
+      success: true,
+      hotelCode: hotelConfig.hotelCode,
+      count,
+      message: count === 0 ? 'No inventory data returned for the selected date range.' : undefined,
+      result,
+      requestId: req.requestId
+    });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'INVENTORY_FETCH_FAILED',
+        message: err.message || 'Failed to fetch inventory from channel provider',
+        stage: 'aiosell'
+      },
+      code: err.code || 'INVENTORY_FETCH_FAILED',
+      message: err.message || 'Failed to fetch inventory',
+      requestId: req.requestId
+    });
   }
 });
 
@@ -319,40 +398,104 @@ export const executeRatePush = async (hotelId, arg2, arg3, arg4) => {
     endDate = arg3;
   }
 
+  // 1. Validate dates
+  if (!startDate || !endDate) {
+    const err = new Error('Both start date and end date are required for rate synchronization.');
+    err.status = 400;
+    err.code = 'INVALID_DATES';
+    err.stage = 'validation';
+    throw err;
+  }
+  if (new Date(startDate) > new Date(endDate)) {
+    const err = new Error('Start date cannot be after end date.');
+    err.status = 400;
+    err.code = 'INVALID_DATE_RANGE';
+    err.stage = 'validation';
+    throw err;
+  }
+  const diffDays = Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24));
+  if (diffDays > 90) {
+    const err = new Error('Date range cannot exceed 90 days for rate synchronization.');
+    err.status = 400;
+    err.code = 'DATE_RANGE_EXCEEDED';
+    err.stage = 'validation';
+    throw err;
+  }
+
   const supabase = getSupabase();
   const hotelConfig = await getHotelAiosellConfig(hotelId);
 
-  // 1. Get active rate mappings
+  // 2. Query categories and all active mappings
+  const { data: allCategories } = await supabase
+    .from('room_categories')
+    .select('id, name, default_tariff')
+    .eq('hotel_id', hotelId)
+    .eq('is_active', true);
+
   let mappingQuery = supabase
     .from('channel_rate_mappings')
-    .select('room_category_id, rate_plan_id, external_room_code, external_rate_plan_code, channel_connection_id, status')
+    .select('id, room_category_id, rate_plan_id, external_room_code, external_rate_plan_code, channel_connection_id, status')
     .eq('hotel_id', hotelId)
-    .eq('status', 'mapped')
-    .not('external_room_code', 'is', null)
-    .not('external_rate_plan_code', 'is', null);
+    .eq('status', 'mapped');
 
   if (channelId) {
     mappingQuery = mappingQuery.or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
   }
 
-  const { data: mappings, error: mappingError } = await mappingQuery;
+  const { data: allMappings, error: mappingError } = await mappingQuery;
 
   if (mappingError) {
     console.error('[executeRatePush] Error querying mappings:', mappingError);
   }
 
-  if (!mappings || mappings.length === 0) {
-    const err = new Error('No active room and rate mappings found for this channel. Please configure rate mapping first.');
+  const roomMappings = (allMappings || []).filter(m => m.room_category_id && m.external_room_code);
+  if (roomMappings.length === 0) {
+    const err = new Error('No active room mappings found for this channel. Please configure room mapping first in Channel Settings.');
     err.status = 422;
-    err.code = 'RATE_MAPPING_REQUIRED';
+    err.code = 'ROOM_MAPPING_REQUIRED';
+    err.stage = 'mapping';
     throw err;
   }
 
-  // 2. Get categories and rate plans to find default tariffs
-  const categoryIds = [...new Set(mappings.map(m => m.room_category_id).filter(Boolean))];
-  const { data: categories } = await supabase.from('room_categories').select('id, default_tariff').in('id', categoryIds);
-  
-  // 3. Get inventory restrictions (which store overridden rates)
+  // 3. Match rate plan pairs
+  // Case A: Rows having BOTH external_room_code and external_rate_plan_code
+  // Case B: Correlated rows (external_rate_plan_code belonging to mapped room)
+  const effectivePairs = [];
+  const coveredRoomCategoryIds = new Set();
+
+  for (const rm of roomMappings) {
+    const matchingRatePlans = (allMappings || []).filter(m => 
+      m.external_rate_plan_code && 
+      (m.room_category_id === rm.room_category_id || (m.external_rate_plan_code.toLowerCase().startsWith(rm.external_room_code.toLowerCase())))
+    );
+
+    for (const rp of matchingRatePlans) {
+      effectivePairs.push({
+        room_category_id: rm.room_category_id,
+        roomCode: rm.external_room_code,
+        rateplanCode: rp.external_rate_plan_code
+      });
+      coveredRoomCategoryIds.add(rm.room_category_id);
+    }
+  }
+
+  // Check if any mapped rooms are missing rate plan mappings
+  const missingCategories = (allCategories || [])
+    .filter(c => roomMappings.some(rm => rm.room_category_id === c.id) && !coveredRoomCategoryIds.has(c.id))
+    .map(c => c.name);
+
+  if (effectivePairs.length === 0) {
+    const unmappedNames = missingCategories.length > 0 ? missingCategories : (allCategories || []).map(c => c.name);
+    const err = new Error(`Rate plan mapping is required before rates can be pushed. Missing rate plan mapping for: ${unmappedNames.join(', ')}. Please open Channel Settings > Rate Mapping.`);
+    err.status = 422;
+    err.code = 'RATE_MAPPING_REQUIRED';
+    err.stage = 'mapping';
+    err.missingCategories = unmappedNames;
+    throw err;
+  }
+
+  // 4. Get inventory restrictions for overridden rates
+  const categoryIds = [...new Set(effectivePairs.map(p => p.room_category_id).filter(Boolean))];
   const { data: restrictions } = await supabase
     .from('channel_inventory_restrictions')
     .select('date, room_category_id, channel_rate, base_rate')
@@ -361,28 +504,36 @@ export const executeRatePush = async (hotelId, arg2, arg3, arg4) => {
     .gte('date', startDate)
     .lte('date', endDate);
 
-  // 4. Build Payload
+  // 5. Build Payload with strict numeric rate validation
   const dates = getDates(startDate, endDate);
   const updates = dates.map(date => {
     const rates = [];
-    
-    for (const mapping of mappings) {
-      if (!mapping.external_room_code || !mapping.external_rate_plan_code) continue;
-      
-      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === mapping.room_category_id);
-      const category = (categories || []).find(c => c.id === mapping.room_category_id);
-      
+    const seenCombos = new Set();
+
+    for (const pair of effectivePairs) {
+      const comboKey = `${pair.roomCode}|${pair.rateplanCode}`;
+      if (seenCombos.has(comboKey)) continue;
+      seenCombos.add(comboKey);
+
+      const restriction = (restrictions || []).find(r => r.date === date && r.room_category_id === pair.room_category_id);
+      const category = (allCategories || []).find(c => c.id === pair.room_category_id);
+
       let rateValue = category ? (category.default_tariff || 0) : 0;
-      if (restriction && restriction.channel_rate > 0) rateValue = restriction.channel_rate;
-      else if (restriction && restriction.base_rate > 0) rateValue = restriction.base_rate;
-      
+      if (restriction && Number(restriction.channel_rate) > 0) rateValue = restriction.channel_rate;
+      else if (restriction && Number(restriction.base_rate) > 0) rateValue = restriction.base_rate;
+
+      const numericRate = Math.round(Number(rateValue));
+      if (!numericRate || isNaN(numericRate) || numericRate <= 0) {
+        continue;
+      }
+
       rates.push({
-        roomCode: mapping.external_room_code,
-        rateplanCode: mapping.external_rate_plan_code,
-        rate: rateValue
+        roomCode: pair.roomCode,
+        rateplanCode: pair.rateplanCode,
+        rate: numericRate
       });
     }
-    
+
     return {
       startDate: date,
       endDate: date,
@@ -390,25 +541,44 @@ export const executeRatePush = async (hotelId, arg2, arg3, arg4) => {
     };
   }).filter(u => u.rates.length > 0);
 
+  if (updates.length === 0) {
+    const err = new Error('No valid rate updates could be constructed. Please verify that room categories have a positive default tariff or channel rate configured.');
+    err.status = 422;
+    err.code = 'RATE_VALUES_MISSING';
+    err.stage = 'validation';
+    throw err;
+  }
+
   const payload = {
     hotelCode: hotelConfig.hotelCode,
     updates
   };
 
   const result = await aiosellService.pushRates(payload, hotelConfig);
-  await logSync(hotelId, 'RATE_PUSH', 'outbound', 'success', 'Rates pushed successfully', null, null, channelId);
+  await logSync(hotelId, 'RATE_PUSH', 'outbound', 'success', `Rates successfully pushed for ${updates.length} dates`, null, null, channelId);
   return result;
 };
 
 router.post('/rates/push', async (req, res) => {
+  const hotelId = (req.hotelId || req.auth?.hotelId);
   try {
     const { startDate, endDate, channelId } = req.body;
-    const hotelId = (req.hotelId || req.auth?.hotelId);
     const result = await executeRatePush(hotelId, channelId, startDate, endDate);
-    res.json({ success: true, result });
+    res.json({ success: true, result, requestId: req.requestId });
   } catch (err) {
-    await logSync((req.hotelId || req.auth?.hotelId), 'RATE_PUSH', 'outbound', 'failure', 'Rates push failed', err.message);
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    await logSync(hotelId, 'RATE_PUSH', 'outbound', 'failure', err.message || 'Rates push failed', err.code, null, req.body?.channelId);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'RATE_PUSH_FAILED',
+        message: err.message || 'Failed to push rates',
+        stage: err.stage || 'mapping',
+        missingCategories: err.missingCategories
+      },
+      code: err.code || 'RATE_PUSH_FAILED',
+      message: err.message || 'Failed to push rates',
+      requestId: req.requestId
+    });
   }
 });
 
@@ -417,11 +587,31 @@ router.post('/rates/fetch', async (req, res) => {
     const { startDate, endDate } = req.body;
     const hotelId = (req.hotelId || req.auth?.hotelId);
     const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
-    
+
     const result = await aiosellService.fetchRates(startDate, endDate, hotelConfig);
-    res.json({ success: true, result });
+    const updates = result?.updates || (Array.isArray(result) ? result : []);
+    const count = updates.length;
+
+    res.json({
+      success: true,
+      hotelCode: hotelConfig.hotelCode,
+      count,
+      message: count === 0 ? 'No rate data returned for the selected date range.' : undefined,
+      result,
+      requestId: req.requestId
+    });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'RATE_FETCH_FAILED',
+        message: err.message || 'Failed to fetch rates from channel provider',
+        stage: 'aiosell'
+      },
+      code: err.code || 'RATE_FETCH_FAILED',
+      message: err.message || 'Failed to fetch rates',
+      requestId: req.requestId
+    });
   }
 });
 

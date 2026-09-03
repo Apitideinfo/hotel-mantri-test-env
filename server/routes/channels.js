@@ -421,6 +421,12 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
     if (!mappings || mappings.length === 0) {
       return res.status(422).json({
         success: false,
+        error: {
+          code: 'MAPPING_REQUIRED',
+          message: 'Room mappings are required before inventory can be synchronized for this channel. Please configure room mappings in Channel Settings.',
+          stage: 'mapping',
+          channelId
+        },
         code: 'MAPPING_REQUIRED',
         message: 'Room mappings are required before inventory can be synchronized for this channel.',
         channelId,
@@ -488,6 +494,12 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
     const statusCode = err.status || 500;
     res.status(statusCode).json({
       success: false,
+      error: {
+        code: err.code || 'INVENTORY_SYNC_FAILED',
+        message: err.message || 'Inventory sync failed',
+        stage: err.stage || 'aiosell',
+        channelId
+      },
       code: err.code || 'INVENTORY_SYNC_FAILED',
       message: err.message || 'Inventory sync failed',
       requestId: req.requestId
@@ -532,6 +544,12 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
     if (!mappings || mappings.length === 0) {
       return res.status(422).json({
         success: false,
+        error: {
+          code: 'RATE_MAPPING_REQUIRED',
+          message: 'Rate mappings are required before rates can be synchronized for this channel. Please configure rate plan mappings in Channel Settings.',
+          stage: 'mapping',
+          channelId
+        },
         code: 'RATE_MAPPING_REQUIRED',
         message: 'Rate mappings are required before rates can be synchronized for this channel.',
         channelId,
@@ -599,8 +617,97 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
     const statusCode = err.status || 500;
     res.status(statusCode).json({
       success: false,
+      error: {
+        code: err.code || 'RATE_SYNC_FAILED',
+        message: err.message || 'Rate sync failed',
+        stage: err.stage || 'aiosell',
+        channelId,
+        missingCategories: err.missingCategories
+      },
       code: err.code || 'RATE_SYNC_FAILED',
       message: err.message || 'Rate sync failed',
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/:channelId/fetch/inventory
+ * Fetch live inventory from provider for this channel.
+ */
+router.post('/:channelId/fetch/inventory', checkAuth, async (req, res) => {
+  try {
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const { startDate, endDate } = req.body;
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+    const sDate = startDate || new Date().toISOString().split('T')[0];
+    const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    
+    const result = await aiosellService.fetchInventory(sDate, eDate, hotelConfig);
+    const updates = result?.updates || (Array.isArray(result) ? result : []);
+    const count = updates.length;
+
+    res.json({
+      success: true,
+      hotelCode: hotelConfig.hotelCode,
+      count,
+      message: count === 0 ? 'No inventory data returned for the selected date range.' : undefined,
+      result,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'INVENTORY_FETCH_FAILED',
+        message: err.message || 'Failed to fetch inventory from channel provider',
+        stage: 'aiosell'
+      },
+      code: err.code || 'INVENTORY_FETCH_FAILED',
+      message: err.message,
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/:channelId/fetch/rates
+ * Fetch live rates from provider for this channel.
+ */
+router.post('/:channelId/fetch/rates', checkAuth, async (req, res) => {
+  try {
+    const hotelId = (req.hotelId || req.auth?.hotelId);
+    const { startDate, endDate } = req.body;
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+    const sDate = startDate || new Date().toISOString().split('T')[0];
+    const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    
+    const result = await aiosellService.fetchRates(sDate, eDate, hotelConfig);
+    const updates = result?.updates || (Array.isArray(result) ? result : []);
+    const count = updates.length;
+
+    res.json({
+      success: true,
+      hotelCode: hotelConfig.hotelCode,
+      count,
+      message: count === 0 ? 'No rate data returned for the selected date range.' : undefined,
+      result,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'RATE_FETCH_FAILED',
+        message: err.message || 'Failed to fetch rates from channel provider',
+        stage: 'aiosell'
+      },
+      code: err.code || 'RATE_FETCH_FAILED',
+      message: err.message,
       requestId: req.requestId
     });
   }

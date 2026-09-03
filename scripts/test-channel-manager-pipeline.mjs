@@ -111,7 +111,59 @@ async function runTests() {
       assert('POST /api/channels/:channelId/sync/rates does NOT return 500', rateSyncRes.status !== 500, `(status: ${rateSyncRes.status}, code: ${rateSyncData.code})`);
       assert('Rate sync properly guarded by mapping check', rateValid, `(status: ${rateSyncRes.status}, code: ${rateSyncData.code})`);
 
-      console.log('\n--- 5. Future Bookings End-to-End Test ---');
+      console.log('\n--- 5. Direct Fetch Inventory & Rates Tests ---');
+      const fetchInvRes = await fetch(`http://localhost:${PORT}/api/aiosell/inventory/fetch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-01',
+          endDate: '2026-09-14'
+        })
+      });
+      const fetchInvData = await fetchInvRes.json();
+      assert('POST /api/aiosell/inventory/fetch returns 200 OK', fetchInvRes.status === 200);
+      assert('Fetch inventory reports success', fetchInvData.success === true);
+      assert('Fetch inventory returns hotelCode fa44d51cc0', fetchInvData.hotelCode === 'fa44d51cc0');
+
+      const fetchRatesRes = await fetch(`http://localhost:${PORT}/api/aiosell/rates/fetch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-01',
+          endDate: '2026-09-14'
+        })
+      });
+      const fetchRatesData = await fetchRatesRes.json();
+      assert('POST /api/aiosell/rates/fetch returns 200 OK', fetchRatesRes.status === 200);
+      assert('Fetch rates reports success', fetchRatesData.success === true);
+      assert('Fetch rates returns hotelCode fa44d51cc0', fetchRatesData.hotelCode === 'fa44d51cc0');
+
+      console.log('\n--- 6. Channel Scoped Fetch Inventory & Rates Tests ---');
+      const chFetchInvRes = await fetch(`http://localhost:${PORT}/api/channels/${CHANNEL_ID}/fetch/inventory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-01',
+          endDate: '2026-09-14'
+        })
+      });
+      const chFetchInvData = await chFetchInvRes.json();
+      assert('POST /api/channels/:channelId/fetch/inventory returns 200 OK', chFetchInvRes.status === 200);
+      assert('Channel fetch inventory reports success', chFetchInvData.success === true);
+
+      const chFetchRatesRes = await fetch(`http://localhost:${PORT}/api/channels/${CHANNEL_ID}/fetch/rates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          startDate: '2026-09-01',
+          endDate: '2026-09-14'
+        })
+      });
+      const chFetchRatesData = await chFetchRatesRes.json();
+      assert('POST /api/channels/:channelId/fetch/rates returns 200 OK', chFetchRatesRes.status === 200);
+      assert('Channel fetch rates reports success', chFetchRatesData.success === true);
+
+      console.log('\n--- 7. Future Bookings End-to-End Test ---');
       const futureBookingsRes = await fetch(`http://localhost:${PORT}/api/channels/${CHANNEL_ID}/future-bookings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -125,13 +177,27 @@ async function runTests() {
       assert('Future bookings response does not fail with "Partner is disabled"', futureBookingsData.success === true, `(success: ${futureBookingsData.success})`);
       assert('Future bookings contains stats object', !!futureBookingsData.stats, `(stats: ${JSON.stringify(futureBookingsData.stats)})`);
 
-      console.log('\n--- 6. Discovery Honest 501 Test ---');
+      console.log('\n--- 8. Discovery Honest 501 Test ---');
       const discoverRes = await fetch(`http://localhost:${PORT}/api/channels/discover`, {
         method: 'POST'
       });
       const discoverData = await discoverRes.json();
       assert('POST /api/channels/discover returns 501 Not Implemented', discoverRes.status === 501);
       assert('Discovery returns DISCOVERY_NOT_SUPPORTED', discoverData.code === 'DISCOVERY_NOT_SUPPORTED');
+
+      console.log('\n--- 9. Sanitized Sync Logs Verification ---');
+      const { data: syncLogs } = await supabaseServiceRole
+        .from('channel_sync_logs')
+        .select('*')
+        .eq('hotel_id', HOTEL_ID)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      const hasPlainCredentials = (syncLogs || []).some(log => {
+        const text = `${log.message || ''} ${log.error_detail || ''}`;
+        return text.includes('dcf42f0b7ffae5ba') || text.includes('Basic ZGNmNDJm') || text.includes('Aiosell@123');
+      });
+      assert('channel_sync_logs contains NO plain text passwords or auth tokens', !hasPlainCredentials);
 
       console.log(`\nTest Suite Complete: ${passed} passed, ${failed} failed.\n`);
     } catch (e) {

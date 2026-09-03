@@ -438,10 +438,24 @@ import { apiFetch } from './api-fetch';
 
 
 
-export const pushChannelInventory = async (startDate: string, endDate: string): Promise<any> => {
-  return apiFetch('/api/aiosell/inventory/push', {
+export const fetchChannelInventory = async (startDate: string, endDate: string): Promise<any> => {
+  return apiFetch('/api/aiosell/inventory/fetch', {
     method: 'POST',
     body: JSON.stringify({ startDate, endDate })
+  });
+};
+
+export const fetchChannelRates = async (startDate: string, endDate: string): Promise<any> => {
+  return apiFetch('/api/aiosell/rates/fetch', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate })
+  });
+};
+
+export const pushChannelInventory = async (startDate: string, endDate: string, channelId?: string): Promise<any> => {
+  return apiFetch('/api/aiosell/inventory/push', {
+    method: 'POST',
+    body: JSON.stringify({ startDate, endDate, channelId })
   });
 };
 
@@ -452,10 +466,10 @@ export const fetchChannelFutureBookings = async (startDate: string, endDate: str
   });
 };
 
-export const pushChannelRates = async (startDate: string, endDate: string): Promise<any> => {
+export const pushChannelRates = async (startDate: string, endDate: string, channelId?: string): Promise<any> => {
   return apiFetch('/api/aiosell/rates/push', {
     method: 'POST',
-    body: JSON.stringify({ startDate, endDate })
+    body: JSON.stringify({ startDate, endDate, channelId })
   });
 };
 

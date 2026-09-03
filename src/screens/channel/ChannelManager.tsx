@@ -15,6 +15,7 @@ import {
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
   CHANNEL_TYPES, getChannelMetadata, fetchChannelMapping,
   checkChannelStatus, pushChannelInventory, pushChannelRates,
+  fetchChannelInventory, fetchChannelRates,
   testChannelConnection, fetchChannelFutureBookings, addChannel
 } from '@/lib/api-channel';
 import type {
@@ -2536,6 +2537,13 @@ const DiagnosticsTab = () => {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  const [modalNotice, setModalNotice] = useState<{
+    title: string;
+    message: string;
+    details?: string;
+    type: 'success' | 'warning' | 'error' | 'info';
+  } | null>(null);
+
   const runHealthCheck = async () => {
     setLoading(true);
     try {
@@ -2554,9 +2562,17 @@ const DiagnosticsTab = () => {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
       await pushChannelInventory(today, nextMonth);
-      alert('Inventory push successful!');
+      setModalNotice({
+        type: 'success',
+        title: 'Inventory Push Successful',
+        message: 'Live PMS inventory successfully transmitted to channel manager for the next 30 days.'
+      });
     } catch (err: any) {
-      alert(`Inventory push failed: ${err.message}`);
+      setModalNotice({
+        type: err.code === 'MAPPING_REQUIRED' ? 'warning' : 'error',
+        title: err.code === 'MAPPING_REQUIRED' ? 'Room Mapping Required' : 'Inventory Push Failed',
+        message: err.message || 'Inventory push failed'
+      });
     } finally {
       setActionLoading(null);
     }
@@ -2568,9 +2584,65 @@ const DiagnosticsTab = () => {
       const today = new Date().toISOString().split('T')[0];
       const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
       await pushChannelRates(today, nextMonth);
-      alert('Rates push successful!');
+      setModalNotice({
+        type: 'success',
+        title: 'Rate Push Successful',
+        message: 'Live PMS rates successfully transmitted to channel manager for the next 30 days.'
+      });
     } catch (err: any) {
-      alert(`Rates push failed: ${err.message}`);
+      setModalNotice({
+        type: err.code === 'RATE_MAPPING_REQUIRED' ? 'warning' : 'error',
+        title: err.code === 'RATE_MAPPING_REQUIRED' ? 'Rate Plan Mapping Required' : 'Rate Push Failed',
+        message: err.message || 'Rates push failed'
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleFetchInventory = async () => {
+    setActionLoading('fetch-inventory');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextMonth = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+      const res = await fetchChannelInventory(today, nextMonth);
+      const count = res.count !== undefined ? res.count : (res.result?.updates?.length || 0);
+      setModalNotice({
+        type: 'info',
+        title: 'Live Inventory Query Results',
+        message: `Queried channel distribution provider for hotel ${res.hotelCode || ''}. Received ${count} date updates.`,
+        details: JSON.stringify(res.result || res, null, 2)
+      });
+    } catch (err: any) {
+      setModalNotice({
+        type: 'error',
+        title: 'Inventory Fetch Failed',
+        message: err.message || 'Could not fetch inventory from channel provider.'
+      });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleFetchRates = async () => {
+    setActionLoading('fetch-rates');
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nextMonth = new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0];
+      const res = await fetchChannelRates(today, nextMonth);
+      const count = res.count !== undefined ? res.count : (res.result?.updates?.length || 0);
+      setModalNotice({
+        type: 'info',
+        title: 'Live Rates Query Results',
+        message: `Queried channel distribution provider for hotel ${res.hotelCode || ''}. Received ${count} date updates.`,
+        details: JSON.stringify(res.result || res, null, 2)
+      });
+    } catch (err: any) {
+      setModalNotice({
+        type: 'error',
+        title: 'Rates Fetch Failed',
+        message: err.message || 'Could not fetch rates from channel provider.'
+      });
     } finally {
       setActionLoading(null);
     }
@@ -2582,6 +2654,41 @@ const DiagnosticsTab = () => {
 
   return (
     <div className="space-y-6">
+      {/* Notice Modal */}
+      {modalNotice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              {modalNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
+              {modalNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
+              {modalNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+              {modalNotice.type === 'info' && <Activity className="w-6 h-6 text-brand-600 flex-shrink-0" />}
+              <h4 className="text-base font-bold text-slate-900">{modalNotice.title}</h4>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              {modalNotice.message}
+            </p>
+
+            {modalNotice.details && (
+              <pre className="max-h-56 overflow-auto p-3 bg-slate-900 text-slate-100 text-[11px] rounded-xl font-mono">
+                {modalNotice.details}
+              </pre>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setModalNotice(null)}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-xl transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl border border-slate-200 p-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
@@ -2618,13 +2725,13 @@ const DiagnosticsTab = () => {
 
       <div className="bg-white rounded-2xl border border-slate-200 p-6">
         <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-6">
-          <Server className="w-5 h-5 text-brand-600" /> Manual Sync Triggers
+          <Server className="w-5 h-5 text-brand-600" /> Manual Sync & Live Query Triggers
         </h2>
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-3">
           <button 
             onClick={handlePushInventory}
             disabled={!!actionLoading}
-            className="px-5 py-2.5 bg-brand-600 text-white rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-brand-700"
+            className="px-4 py-2.5 bg-brand-600 text-white rounded-xl text-xs font-semibold flex items-center gap-2 hover:bg-brand-700 shadow-soft-blue transition disabled:opacity-50"
           >
             {actionLoading === 'inventory' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Calendar className="w-4 h-4" />}
             Push Inventory (30 Days)
@@ -2632,10 +2739,26 @@ const DiagnosticsTab = () => {
           <button 
             onClick={handlePushRates}
             disabled={!!actionLoading}
-            className="px-5 py-2.5 border border-brand-600 text-brand-700 rounded-lg text-sm font-semibold flex items-center gap-2 hover:bg-brand-50"
+            className="px-4 py-2.5 border border-brand-600 text-brand-700 rounded-xl text-xs font-semibold flex items-center gap-2 hover:bg-brand-50 transition disabled:opacity-50"
           >
             {actionLoading === 'rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <TrendingUp className="w-4 h-4" />}
             Push Rates (30 Days)
+          </button>
+          <button 
+            onClick={handleFetchInventory}
+            disabled={!!actionLoading}
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+          >
+            {actionLoading === 'fetch-inventory' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Fetch Live Inventory
+          </button>
+          <button 
+            onClick={handleFetchRates}
+            disabled={!!actionLoading}
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-2 transition disabled:opacity-50"
+          >
+            {actionLoading === 'fetch-rates' ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            Fetch Live Rates
           </button>
         </div>
       </div>
