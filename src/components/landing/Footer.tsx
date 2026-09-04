@@ -3,17 +3,12 @@ import { Logo } from '../login/Logo';
 
 interface FooterProps {
   onNavigateLogin: () => void;
-  onNavigateSignup: () => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigateLogin, onNavigateSignup }) => {
+export const Footer: React.FC<FooterProps> = ({ onNavigateLogin }) => {
   const handleNav = (id: string) => {
     if (id === 'login') {
       onNavigateLogin();
-      return;
-    }
-    if (id === 'signup') {
-      onNavigateSignup();
       return;
     }
     const el = document.getElementById(id);
@@ -27,12 +22,9 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLogin, onNavigateSignu
   return (
     <footer className="bg-[#030917] border-t border-white/10 text-slate-400 text-sm py-16 select-none">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-10 pb-12 border-b border-white/10">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-10 pb-12 border-b border-white/10">
           {/* Col 1 & 2: Brand Description */}
           <div className="md:col-span-2">
-            <div className="mb-4">
-              <Logo light />
-            </div>
             <p className="text-slate-400 text-xs sm:text-sm leading-relaxed max-w-sm">
               HotelMantri is a modern hospitality management platform designed to simplify room chart management, booking tracking, GST invoicing, staff duty, and guest experiences.
             </p>
@@ -49,28 +41,12 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLogin, onNavigateSignu
                 <button onClick={() => handleNav('product')} className="hover:text-white transition cursor-pointer">Product Showcase</button>
               </li>
               <li>
-                <button onClick={() => handleNav('pricing')} className="hover:text-white transition cursor-pointer">Transparent Pricing</button>
-              </li>
-            </ul>
-          </div>
-
-          {/* Col 4: Company Links */}
-          <div>
-            <h4 className="text-xs font-extrabold uppercase tracking-widest text-white mb-4">Company</h4>
-            <ul className="space-y-2.5 text-xs font-semibold">
-              <li>
                 <button onClick={() => handleNav('about')} className="hover:text-white transition cursor-pointer">About HotelMantri</button>
               </li>
-              <li>
-                <button onClick={() => handleNav('why-hotelmantri')} className="hover:text-white transition cursor-pointer">Why Choose Us</button>
-              </li>
-              <li>
-                <button onClick={() => handleNav('signup')} className="hover:text-white transition cursor-pointer">Start Free Trial</button>
-              </li>
             </ul>
           </div>
 
-          {/* Col 5: Support & Access */}
+          {/* Col 4: Account & Access */}
           <div>
             <h4 className="text-xs font-extrabold uppercase tracking-widest text-white mb-4">Account & Access</h4>
             <ul className="space-y-2.5 text-xs font-semibold">
@@ -78,10 +54,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLogin, onNavigateSignu
                 <button onClick={() => handleNav('login')} className="hover:text-white transition cursor-pointer">Customer Login</button>
               </li>
               <li>
-                <button onClick={() => handleNav('signup')} className="hover:text-white transition cursor-pointer">Register Hotel</button>
-              </li>
-              <li>
-                <button onClick={() => handleNav('login')} className="hover:text-white transition cursor-pointer">System Status</button>
+                <button onClick={() => handleNav('why-hotelmantri')} className="hover:text-white transition cursor-pointer">Why Choose Us</button>
               </li>
             </ul>
           </div>

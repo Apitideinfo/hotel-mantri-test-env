@@ -2,11 +2,11 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Play, Pause, Volume2, VolumeX, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react';
 
 interface HeroSectionProps {
-  onStartNow?: () => void;
+  onLogin?: () => void;
   onExploreFeatures?: () => void;
 }
 
-export const HeroSection: React.FC<HeroSectionProps> = ({ onStartNow, onExploreFeatures }) => {
+export const HeroSection: React.FC<HeroSectionProps> = ({ onLogin, onExploreFeatures }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [isMuted, setIsMuted] = useState(true);
@@ -86,11 +86,11 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onStartNow, onExploreF
           <div className="flex flex-wrap items-center gap-y-2 gap-x-6 text-xs sm:text-sm font-semibold text-slate-300 mb-9">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-cyan-400" />
-              <span>14-Day Free Trial</span>
+              <span>All-in-One Cloud PMS</span>
             </div>
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-cyan-400" />
-              <span>No Credit Card Required</span>
+              <span>No Hardware Required</span>
             </div>
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-cyan-400" />
@@ -101,11 +101,11 @@ export const HeroSection: React.FC<HeroSectionProps> = ({ onStartNow, onExploreF
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
             <button
-              onClick={onStartNow}
+              onClick={onLogin}
               type="button"
               className="group bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 text-white font-extrabold text-base px-8 py-4 rounded-2xl shadow-xl shadow-blue-500/30 transition-all duration-200 flex items-center justify-center gap-3 cursor-pointer transform hover:-translate-y-0.5"
             >
-              <span>Start Free Trial</span>
+              <span>Login to Platform</span>
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
 

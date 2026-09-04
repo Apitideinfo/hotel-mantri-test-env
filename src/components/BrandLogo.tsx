@@ -47,17 +47,24 @@ export const BrandLogo = ({ variant = 'sidebar', onDark = false, className = '',
   if (onDark) {
     return (
       <div
+        className="rounded-full bg-white p-0.5 shadow-md flex items-center justify-center aspect-square overflow-hidden shrink-0"
         style={{
-          background: '#fff',
-          borderRadius: '10px',
-          padding: '6px 10px',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 'auto',
+          width: `${size.width}px`,
+          height: `${size.width}px`,
         }}
       >
-        {img}
+        <img
+          src={LOGO_SRC}
+          alt="Hotel Mantri"
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain',
+            transform: 'scale(1.4)',
+            ...style,
+          }}
+          className={className}
+        />
       </div>
     );
   }
@@ -82,13 +89,10 @@ export const BrandIcon = ({ size = 32, onDark = false, className = '', style }: 
   if (onDark) {
     return (
       <div
+        className="rounded-full bg-white p-1 shadow-md flex items-center justify-center aspect-square"
         style={{
-          background: '#fff',
-          borderRadius: '8px',
-          padding: '3px',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          width: `${size + 12}px`,
+          height: `${size + 12}px`,
         }}
       >
         {img}

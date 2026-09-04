@@ -2,11 +2,10 @@ import React from 'react';
 import { ArrowRight } from 'lucide-react';
 
 interface FinalCTAProps {
-  onStartNow: () => void;
   onLogin: () => void;
 }
 
-export const FinalCTA: React.FC<FinalCTAProps> = ({ onStartNow, onLogin }) => {
+export const FinalCTA: React.FC<FinalCTAProps> = ({ onLogin }) => {
   const handleExplore = () => {
     const el = document.getElementById('features');
     if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -29,10 +28,10 @@ export const FinalCTA: React.FC<FinalCTAProps> = ({ onStartNow, onLogin }) => {
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <button
-              onClick={onStartNow}
+              onClick={onLogin}
               className="group bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 text-white font-extrabold text-base px-8 py-4 rounded-2xl shadow-xl shadow-blue-500/25 transition-all duration-200 flex items-center gap-3 cursor-pointer transform hover:-translate-y-0.5"
             >
-              <span>Get Started</span>
+              <span>Login to Platform</span>
               <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
 

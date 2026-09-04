@@ -4,10 +4,9 @@ import { Logo } from '../login/Logo';
 
 interface HeaderProps {
   onNavigateLogin: () => void;
-  onNavigateSignup: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onNavigateSignup }) => {
+export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
 
@@ -56,7 +55,6 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onNavigateSignu
     { label: 'Features', id: 'features' },
     { label: 'Product', id: 'product' },
     { label: 'Why Us', id: 'why-hotelmantri' },
-    { label: 'Pricing', id: 'pricing' },
   ];
 
   return (
@@ -68,15 +66,6 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onNavigateSignu
       }`}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-        {/* Brand Logo */}
-        <button
-          onClick={() => handleNavClick('home')}
-          className="text-left focus:outline-none cursor-pointer"
-          aria-label="HotelMantri Home"
-        >
-          <Logo light />
-        </button>
-
         {/* Desktop Navigation Links */}
         <nav className="hidden md:flex items-center gap-7 text-sm font-semibold text-slate-300">
           {NAV_ITEMS.map((item) => (
@@ -94,15 +83,9 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onNavigateSignu
         <div className="hidden md:flex items-center gap-4">
           <button
             onClick={onNavigateLogin}
-            className="text-sm font-bold text-slate-200 hover:text-white px-4 py-2 rounded-xl transition cursor-pointer"
+            className="group bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 text-white text-sm font-extrabold px-6 py-2.5 rounded-xl shadow-lg shadow-blue-500/25 transition-all duration-200 flex items-center gap-2 cursor-pointer transform hover:-translate-y-0.5"
           >
-            Login
-          </button>
-          <button
-            onClick={onNavigateSignup}
-            className="group bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 text-white text-sm font-extrabold px-5 py-2.5 rounded-xl shadow-lg shadow-blue-500/25 transition-all duration-200 flex items-center gap-2 cursor-pointer transform hover:-translate-y-0.5"
-          >
-            <span>Start Now</span>
+            <span>Login</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </button>
         </div>
@@ -139,18 +122,9 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onNavigateSignu
                 setMobileMenuOpen(false);
                 onNavigateLogin();
               }}
-              className="w-full text-center text-slate-200 font-bold bg-white/10 py-3 rounded-xl hover:bg-white/15 transition cursor-pointer"
-            >
-              Login
-            </button>
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onNavigateSignup();
-              }}
               className="w-full text-center bg-[#1a68fb] text-white font-extrabold py-3.5 rounded-xl shadow-lg shadow-blue-500/25 transition cursor-pointer"
             >
-              Start Now →
+              Login to Platform →
             </button>
           </div>
         </div>
