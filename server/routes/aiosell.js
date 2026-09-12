@@ -148,8 +148,26 @@ router.get('/mapping', async (req, res) => {
     res.setHeader('Expires', '0');
     
     const result = await aiosellService.getPropertyMapping(hotelConfig);
+    
+    // Enrich with hotel object matching frontend AiosellMappingResponse contract
+    const { data: hotelData } = await getSupabase()
+      .from('hotels')
+      .select('id, hotel_name')
+      .eq('id', hotelId)
+      .maybeSingle();
+
+    const hotelObj = {
+      id: hotelId,
+      hotel_id: hotelId,
+      name: hotelData?.hotel_name || result.hotelCode || 'Hotel',
+      hotel_name: hotelData?.hotel_name || result.hotelCode || 'Hotel',
+    };
+
     await logSync(hotelId, 'AIOSELL_FETCH_MAPPING', 'inbound', 'success', 'Successfully fetched property mapping', null, null, null, req.requestId);
-    res.json(result);
+    res.json({
+      ...result,
+      hotel: hotelObj,
+    });
   } catch (err) {
     await logSync((req.hotelId || req.auth?.hotelId), 'AIOSELL_FETCH_MAPPING', 'inbound', 'failure', 'Failed to fetch mapping', err.message, null, null, req.requestId);
     res.status(err.status || 500).json({

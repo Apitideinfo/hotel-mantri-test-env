@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Plus, Search, Filter, RefreshCw, Radio, 
   CheckCircle2, AlertTriangle, AlertCircle, ArrowUpRight 
@@ -45,15 +45,28 @@ export const ChannelsDashboard: React.FC<ChannelsDashboardProps> = ({
   const [showAddModal, setShowAddModal] = useState(false);
   const [syncingMap, setSyncingMap] = useState<Record<string, boolean>>({});
 
+  // Synchronize selectedChannel when connections prop refreshes
+  useEffect(() => {
+    if (selectedChannel) {
+      const updated = connections.find(c => c.id === selectedChannel.id);
+      if (updated) {
+        setSelectedChannel(updated);
+      }
+    }
+  }, [connections]);
+
   // Filter & Search logic
   const filteredChannels = useMemo(() => {
     return connections.filter(channel => {
       // 1. Search Query
       const q = searchQuery.toLowerCase().trim();
       if (q) {
-        const nameMatch = (channel.channel_name || '').toLowerCase().includes(q);
-        const typeMatch = channel.channel_type.toLowerCase().includes(q);
-        const idMatch = (channel.external_channel_id || '').toLowerCase().includes(q);
+        const name = channel.channel_name || (channel as any).displayName || '';
+        const type = channel.channel_type || (channel as any).channelType || '';
+        const extId = channel.external_channel_id || (channel as any).externalChannelId || '';
+        const nameMatch = name.toLowerCase().includes(q);
+        const typeMatch = type.toLowerCase().includes(q);
+        const idMatch = extId.toLowerCase().includes(q);
         if (!nameMatch && !typeMatch && !idMatch) return false;
       }
 

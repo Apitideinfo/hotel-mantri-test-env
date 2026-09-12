@@ -48,11 +48,15 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
 }) => {
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const meta = OTA_METADATA[channel.channel_type.toLowerCase()] || {
+  const channelType = channel.channel_type || (channel as any).channelType || '';
+  const channelName = channel.channel_name || (channel as any).displayName || channelType;
+  const externalChannelId = channel.external_channel_id || (channel as any).externalChannelId || '';
+
+  const meta = OTA_METADATA[channelType.toLowerCase()] || {
     bg: 'bg-slate-50 border-slate-200',
     text: 'text-slate-700',
-    label: channel.channel_name || channel.channel_type,
-    initials: (channel.channel_name || 'OT').slice(0, 2).toUpperCase()
+    label: channelName,
+    initials: (channelName || 'OT').slice(0, 2).toUpperCase()
   };
 
   // Calculate real mapping counts
@@ -230,7 +234,7 @@ export const ChannelCard: React.FC<ChannelCardProps> = ({
       {/* Card Footer Actions */}
       <div className="px-5 py-3.5 bg-slate-50/80 border-t border-slate-100 rounded-b-2xl flex items-center justify-between gap-2">
         <span className="text-[11px] text-slate-400 font-mono truncate">
-          ID: {channel.external_channel_id || channel.id.slice(0, 8)}
+          ID: {externalChannelId || channel.id.slice(0, 8)}
         </span>
         <button
           type="button"

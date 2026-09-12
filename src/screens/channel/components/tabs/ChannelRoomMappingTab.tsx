@@ -39,21 +39,29 @@ export const ChannelRoomMappingTab: React.FC<ChannelRoomMappingTabProps> = ({
   // Initialize mapping from existing DB mappings
   useEffect(() => {
     const initial: Record<string, { code: string; name: string }> = {};
+    const channelId = channel.id;
+    const channelType = channel.channel_type || (channel as any).channelType;
     const relevant = mappings.filter(
-      m => m.channel_connection_id === channel.id || (!m.channel_connection_id && channel.channel_type === 'agoda')
+      m => {
+        const connId = m.channel_connection_id || (m as any).channelConnectionId;
+        return connId === channelId || (!connId && channelType === 'agoda');
+      }
     );
 
     relevant.forEach(m => {
-      if (m.room_category_id && m.external_room_code) {
-        initial[m.room_category_id] = {
-          code: m.external_room_code,
-          name: m.external_room_name || m.external_room_code
+      const catId = m.room_category_id || (m as any).roomCategoryId;
+      const code = m.external_room_code || (m as any).externalRoomCode;
+      const name = m.external_room_name || (m as any).externalRoomName || code;
+      if (catId && code) {
+        initial[catId] = {
+          code,
+          name
         };
       }
     });
 
     setRoomMappingState(initial);
-  }, [mappings, channel.id, channel.channel_type]);
+  }, [mappings, channel.id, (channel as any).channel_type, (channel as any).channelType]);
 
   // Fetch available external rooms from live integration
   const loadExternalRooms = async () => {

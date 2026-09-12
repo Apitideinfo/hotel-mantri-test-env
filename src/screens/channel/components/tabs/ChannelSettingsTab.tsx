@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   KeyRound, Save, Trash2, AlertTriangle, CheckCircle2, 
   Loader2, Power, Building2 
@@ -17,22 +17,37 @@ export const ChannelSettingsTab: React.FC<ChannelSettingsTabProps> = ({
   onRefresh,
   onClose
 }) => {
-  const [externalId, setExternalId] = useState(channel.external_channel_id || '');
-  const [isEnabled, setIsEnabled] = useState(channel.is_enabled !== false);
+  const resolveExternalId = (ch: ChannelConnection) =>
+    ch.external_channel_id || (ch as any).externalChannelId || '';
+  const resolveIsEnabled = (ch: ChannelConnection) =>
+    ch.is_enabled !== false && (ch as any).isEnabled !== false;
+
+  const [externalId, setExternalId] = useState(() => resolveExternalId(channel));
+  const [isEnabled, setIsEnabled] = useState(() => resolveIsEnabled(channel));
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  useEffect(() => {
+    setExternalId(resolveExternalId(channel));
+    setIsEnabled(resolveIsEnabled(channel));
+  }, [channel]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setFeedback(null);
     try {
-      await updateChannel(channel.id, {
-        externalChannelId: externalId.trim() || null,
+      const cleanId = externalId.trim() || null;
+      const updated = await updateChannel(channel.id, {
+        externalChannelId: cleanId,
         isEnabled
       });
+      if (updated) {
+        setExternalId(resolveExternalId(updated));
+        setIsEnabled(resolveIsEnabled(updated));
+      }
       setFeedback({ type: 'success', message: 'Channel settings updated successfully.' });
       onRefresh();
     } catch (err: any) {

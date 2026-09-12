@@ -118,7 +118,7 @@ export const FutureBookingsModal: React.FC<FutureBookingsModalProps> = ({
             <div>
               <h2 className="text-base font-bold text-slate-900">Pull Future Bookings</h2>
               <p className="text-xs text-slate-400">
-                Channel: <span className="font-semibold text-slate-600">{channel.channel_name || channel.channel_type}</span>
+                Channel: <span className="font-semibold text-slate-600">{channel.channel_name || (channel as any).displayName || channel.channel_type}</span>
               </p>
             </div>
           </div>

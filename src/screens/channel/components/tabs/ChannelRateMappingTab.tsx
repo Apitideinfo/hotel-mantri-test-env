@@ -37,21 +37,29 @@ export const ChannelRateMappingTab: React.FC<ChannelRateMappingTabProps> = ({
 
   useEffect(() => {
     const initial: Record<string, { code: string; name: string }> = {};
+    const channelId = channel.id;
+    const channelType = channel.channel_type || (channel as any).channelType;
     const relevant = mappings.filter(
-      m => m.channel_connection_id === channel.id || (!m.channel_connection_id && channel.channel_type === 'agoda')
+      m => {
+        const connId = m.channel_connection_id || (m as any).channelConnectionId;
+        return connId === channelId || (!connId && channelType === 'agoda');
+      }
     );
 
     relevant.forEach(m => {
-      if (m.rate_plan_id && m.external_rate_plan_code) {
-        initial[m.rate_plan_id] = {
-          code: m.external_rate_plan_code,
-          name: m.external_rate_plan_name || m.external_rate_plan_code
+      const planId = m.rate_plan_id || (m as any).ratePlanId;
+      const code = m.external_rate_plan_code || (m as any).externalRatePlanCode;
+      const name = m.external_rate_plan_name || (m as any).externalRatePlanName || code;
+      if (planId && code) {
+        initial[planId] = {
+          code,
+          name
         };
       }
     });
 
     setRateMappingState(initial);
-  }, [mappings, channel.id, channel.channel_type]);
+  }, [mappings, channel.id, (channel as any).channel_type, (channel as any).channelType]);
 
   const loadExternalRates = async () => {
     setLoadingRates(true);
@@ -142,7 +150,7 @@ export const ChannelRateMappingTab: React.FC<ChannelRateMappingTabProps> = ({
     setCreatingPlans(true);
     setFeedback(null);
     try {
-      const hotelId = channel.hotel_id;
+      const hotelId = channel.hotel_id || (channel as any).hotelId;
       const { error } = await supabase.from('rate_plans').insert([
         {
           hotel_id: hotelId,

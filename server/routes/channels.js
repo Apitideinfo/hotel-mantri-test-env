@@ -10,6 +10,77 @@ import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPay
 const router = express.Router();
 
 /**
+ * Normalizes channel connection object to provide BOTH snake_case and camelCase
+ * properties so neither frontend contracts nor server contracts encounter undefined fields.
+ */
+function normalizeChannel(c) {
+  if (!c) return c;
+  return {
+    ...c,
+    id: c.id,
+    hotelId: c.hotel_id,
+    hotel_id: c.hotel_id,
+    channelType: c.channel_type,
+    channel_type: c.channel_type,
+    displayName: c.channel_name,
+    channel_name: c.channel_name,
+    externalChannelId: c.external_channel_id,
+    external_channel_id: c.external_channel_id,
+    status: c.status,
+    connectionStatus: c.connection_status,
+    connection_status: c.connection_status,
+    isEnabled: c.is_enabled,
+    is_enabled: c.is_enabled,
+    mappingStatus: c.mapping_status,
+    mapping_status: c.mapping_status,
+    lastSyncAt: c.last_sync_at,
+    last_sync_at: c.last_sync_at,
+    lastSuccessfulSyncAt: c.last_successful_sync_at,
+    last_successful_sync_at: c.last_successful_sync_at,
+    lastError: c.last_error,
+    last_error: c.last_error,
+    createdAt: c.created_at,
+    created_at: c.created_at,
+    updatedAt: c.updated_at,
+    updated_at: c.updated_at,
+  };
+}
+
+/**
+ * Normalizes channel mapping object to provide BOTH snake_case and camelCase properties.
+ */
+function normalizeMapping(m) {
+  if (!m) return m;
+  return {
+    ...m,
+    id: m.id,
+    hotelId: m.hotel_id,
+    hotel_id: m.hotel_id,
+    channelConnectionId: m.channel_connection_id,
+    channel_connection_id: m.channel_connection_id,
+    roomCategoryId: m.room_category_id,
+    room_category_id: m.room_category_id,
+    ratePlanId: m.rate_plan_id,
+    rate_plan_id: m.rate_plan_id,
+    externalRoomCode: m.external_room_code,
+    external_room_code: m.external_room_code,
+    externalRoomName: m.external_room_name,
+    external_room_name: m.external_room_name,
+    externalRatePlanCode: m.external_rate_plan_code,
+    external_rate_plan_code: m.external_rate_plan_code,
+    externalRatePlanName: m.external_rate_plan_name,
+    external_rate_plan_name: m.external_rate_plan_name,
+    status: m.status,
+    isActive: m.is_active,
+    is_active: m.is_active,
+    createdAt: m.created_at,
+    created_at: m.created_at,
+    updatedAt: m.updated_at,
+    updated_at: m.updated_at,
+  };
+}
+
+/**
  * GET /api/channels
  * Returns normalized channels for the current hotel.
  */
@@ -28,20 +99,7 @@ router.get('/', checkAuth, async (req, res) => {
       
     if (error) throw error;
 
-    const normalized = (channels || []).map(c => ({
-      id: c.id,
-      hotelId: c.hotel_id,
-      channelType: c.channel_type,
-      displayName: c.channel_name,
-      externalChannelId: c.external_channel_id,
-      status: c.status,
-      connectionStatus: c.connection_status,
-      isEnabled: c.is_enabled,
-      mappingStatus: c.mapping_status,
-      lastSyncAt: c.last_sync_at,
-      lastSuccessfulSyncAt: c.last_successful_sync_at,
-      lastError: c.last_error
-    }));
+    const normalized = (channels || []).map(normalizeChannel);
 
     res.json(normalized);
   } catch (err) {
@@ -211,19 +269,9 @@ router.get('/:channelId', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId)
       .eq('status', 'failure');
 
+    const base = normalizeChannel(channel);
     res.json({
-      id: channel.id,
-      hotelId: channel.hotel_id,
-      channelType: channel.channel_type,
-      displayName: channel.channel_name,
-      externalChannelId: channel.external_channel_id,
-      status: channel.status,
-      connectionStatus: channel.connection_status,
-      isEnabled: channel.is_enabled,
-      mappingStatus: channel.mapping_status,
-      lastSyncAt: channel.last_sync_at,
-      lastSuccessfulSyncAt: channel.last_successful_sync_at,
-      lastError: channel.last_error,
+      ...base,
       stats: {
         totalRooms: totalCategories || 0,
         mappedRooms,
@@ -267,7 +315,7 @@ router.patch('/:channelId', checkAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json(data);
+    res.json(normalizeChannel(data));
   } catch (err) {
     console.error('Error updating channel:', err);
     res.status(500).json({ success: false, code: 'CHANNEL_UPDATE_FAILED', message: 'Failed to update channel', requestId: req.requestId });
@@ -323,7 +371,8 @@ router.get('/:channelId/mappings', checkAuth, async (req, res) => {
       .order('created_at', { ascending: true });
 
     if (error) throw error;
-    res.json(data || []);
+    const normalizedMappings = (data || []).map(normalizeMapping);
+    res.json(normalizedMappings);
   } catch (err) {
     console.error('Error fetching channel mappings:', err);
     res.status(500).json({ success: false, code: 'MAPPINGS_FETCH_FAILED', message: 'Failed to fetch channel mappings', requestId: req.requestId });
@@ -333,6 +382,7 @@ router.get('/:channelId/mappings', checkAuth, async (req, res) => {
 /**
  * POST /api/channels/:channelId/mappings
  * Batch save/upsert room and rate mappings for this channel.
+ * Resolves existing records to preserve primary keys and counterpart mappings.
  */
 router.post('/:channelId/mappings', checkAuth, async (req, res) => {
   try {
@@ -343,21 +393,50 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
     if (!Array.isArray(mappings)) return res.status(400).json({ success: false, code: 'INVALID_MAPPINGS_PAYLOAD', message: 'mappings array required', requestId: req.requestId });
 
     const now = new Date().toISOString();
-    const records = mappings.map(m => ({
-      ...(m.id ? { id: m.id } : {}),
-      hotel_id: hotelId,
-      channel_connection_id: channelId,
-      room_category_id: m.roomCategoryId || m.room_category_id || null,
-      rate_plan_id: m.ratePlanId || m.rate_plan_id || null,
-      external_room_code: m.externalRoomCode || m.external_room_code || null,
-      external_room_name: m.externalRoomName || m.external_room_name || null,
-      external_rate_plan_code: m.externalRatePlanCode || m.external_rate_plan_code || null,
-      external_rate_plan_name: m.externalRatePlanName || m.external_rate_plan_name || null,
-      provider: 'aiosell',
-      status: m.status || ((m.externalRoomCode && m.externalRatePlanCode) ? 'mapped' : (m.externalRoomCode || m.externalRatePlanCode) ? 'mapped' : 'unmapped'),
-      is_active: m.isActive !== undefined ? m.isActive : true,
-      updated_at: now
-    }));
+
+    // 1. Fetch existing mappings for this hotel & channel to match primary key IDs
+    const { data: existingList } = await supabaseServiceRole
+      .from('channel_rate_mappings')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
+
+    const records = mappings.map(m => {
+      const roomCatId = m.roomCategoryId || m.room_category_id || null;
+      const ratePlanId = m.ratePlanId || m.rate_plan_id || null;
+
+      let existing = null;
+      if (m.id) {
+        existing = existingList?.find(e => e.id === m.id);
+      } else if (roomCatId && ratePlanId) {
+        existing = existingList?.find(e => e.room_category_id === roomCatId && e.rate_plan_id === ratePlanId);
+      } else if (roomCatId) {
+        existing = existingList?.find(e => e.room_category_id === roomCatId);
+      } else if (ratePlanId) {
+        existing = existingList?.find(e => e.rate_plan_id === ratePlanId);
+      }
+
+      return {
+        ...(existing?.id ? { id: existing.id } : (m.id ? { id: m.id } : {})),
+        hotel_id: hotelId,
+        channel_connection_id: channelId,
+        room_category_id: roomCatId || existing?.room_category_id || null,
+        rate_plan_id: ratePlanId || existing?.rate_plan_id || null,
+        external_room_code: m.externalRoomCode || m.external_room_code || existing?.external_room_code || null,
+        external_room_name: m.externalRoomName || m.external_room_name || existing?.external_room_name || null,
+        external_rate_plan_code: m.externalRatePlanCode || m.external_rate_plan_code || existing?.external_rate_plan_code || null,
+        external_rate_plan_name: m.externalRatePlanName || m.external_rate_plan_name || existing?.external_rate_plan_name || null,
+        provider: 'aiosell',
+        status: m.status || (
+          ((m.externalRoomCode || m.external_room_code || existing?.external_room_code) ||
+           (m.externalRatePlanCode || m.external_rate_plan_code || existing?.external_rate_plan_code))
+            ? 'mapped'
+            : 'unmapped'
+        ),
+        is_active: m.isActive !== undefined ? m.isActive : (m.is_active !== undefined ? m.is_active : (existing?.is_active !== undefined ? existing.is_active : true)),
+        updated_at: now
+      };
+    });
 
     const { data, error } = await supabaseServiceRole
       .from('channel_rate_mappings')
@@ -377,7 +456,8 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
       .eq('id', channelId)
       .eq('hotel_id', hotelId);
 
-    res.json({ success: true, count: data?.length || 0, mappings: data, requestId: req.requestId });
+    const normalizedMappings = (data || []).map(normalizeMapping);
+    res.json({ success: true, count: normalizedMappings.length, mappings: normalizedMappings, requestId: req.requestId });
   } catch (err) {
     console.error('Error saving channel mappings:', err);
     res.status(500).json({ success: false, code: 'MAPPINGS_SAVE_FAILED', message: err.message || 'Failed to save mappings', requestId: req.requestId });
@@ -962,7 +1042,7 @@ router.post('/', checkAuth, async (req, res) => {
 
     res.status(201).json({
       success: true,
-      channel: data,
+      channel: normalizeChannel(data),
       requestId: req.requestId
     });
   } catch (err) {
