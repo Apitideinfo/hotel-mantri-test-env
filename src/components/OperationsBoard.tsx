@@ -5,7 +5,7 @@ import {
   Smartphone, AlertCircle, Filter, RefreshCw, Loader2, CheckCircle2,
   Clock, Phone, Mail, IndianRupee, MessageCircle, Edit3, FileText,
   Sparkles, Play, ClipboardCheck, Wrench, Ban, Star,
-  ArrowRightLeft, CalendarPlus,
+  ArrowRightLeft, CalendarPlus, AlertTriangle,
 } from 'lucide-react';
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
@@ -211,6 +211,15 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
   useEffect(() => { load(); }, [load]);
 
+  // Automatically refresh board when live sync or realtime OTA updates fire
+  useEffect(() => {
+    const handleUpdate = () => {
+      load();
+    };
+    window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    return () => window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+  }, [load]);
+
   const activeRooms = useMemo(() => rooms.filter((r) => r.is_active), [rooms]);
   const floors = useMemo(
     () => [...new Set(activeRooms.map((r) => r.floor).filter((f): f is string => Boolean(f)))].sort(),
@@ -300,6 +309,10 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     }
     return result;
   }, [allBookings, search, filterCategory, filterFloor, filterSource, filterStatus, filterPayment, activeRooms, categories]);
+
+  const unassignedBookings = useMemo(() => {
+    return filteredBookings.filter((b) => !b.roomNo || !b.roomNo.trim());
+  }, [filteredBookings]);
 
   const bookingByRoom = useMemo(() => {
     const map = new Map<string, BoardBooking[]>();
@@ -728,6 +741,34 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}
           <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
+      {/* Unassigned Bookings Notification */}
+      {unassignedBookings.length > 0 && (
+        <div className="mx-4 mb-2 bg-amber-50 border border-amber-200 rounded-xl p-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <span className="text-xs font-bold text-amber-900">
+                {unassignedBookings.length} Unassigned OTA Reservation{unassignedBookings.length > 1 ? 's' : ''} (Need Room Allocation)
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {unassignedBookings.map((b) => (
+              <button
+                key={b.id}
+                onClick={() => setSelectedBooking(b)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs text-slate-800 hover:bg-amber-100/50 transition shrink-0 shadow-xs text-left cursor-pointer"
+              >
+                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                <span className="font-bold text-slate-900">{b.guestName || 'Guest'}</span>
+                <span className="text-slate-500">({b.checkIn} → {b.checkOut})</span>
+                <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">Assign Room</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

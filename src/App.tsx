@@ -8,6 +8,8 @@ import { BrandLogo } from '@/components/BrandLogo';
 import { mapAuthRoleToFrontOffice } from '@/lib/types';
 import { AppShell } from '@/components/AppShell';
 import { getTodayLocal } from '@/lib/calc';
+import { supabase } from '@/lib/supabase';
+import { triggerLiveSync } from '@/lib/externalChannelSyncService';
 
 
 type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'hotel-details' | 'checkout' | 'payment-success';
@@ -183,6 +185,51 @@ function AppInner() {
       }).catch(() => setFeatures(null));
     }
   }, [user, profileLoaded, role, hotelId]);
+
+  // Automatic non-blocking live OTA sync on application/page open when hotel context is ready
+  useEffect(() => {
+    if (hotelId && hotelStatus === 'HOTEL_CONTEXT_READY') {
+      triggerLiveSync(hotelId).catch((err) => {
+        console.warn('[LiveSync] Page open background sync warning:', err);
+      });
+    }
+  }, [hotelId, hotelStatus]);
+
+  // Realtime subscription for instant updates when reservations or OTA bookings change
+  useEffect(() => {
+    if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
+
+    const channel = supabase
+      .channel(`hotel_mantri_realtime_${hotelId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'reservations', filter: `hotel_id=eq.${hotelId}` },
+        (payload) => {
+          window.dispatchEvent(
+            new CustomEvent('hotel_mantri_reservations_updated', {
+              detail: { source: 'realtime_reservations', payload },
+            })
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'channel_ota_reservations', filter: `hotel_id=eq.${hotelId}` },
+        (payload) => {
+          window.dispatchEvent(
+            new CustomEvent('hotel_mantri_reservations_updated', {
+              detail: { source: 'realtime_ota', payload },
+            })
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [hotelId, hotelStatus]);
+
 
   // Keep browser history in sync with internal nav state so Back/Forward work naturally
   useEffect(() => {

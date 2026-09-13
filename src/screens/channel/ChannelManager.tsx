@@ -134,6 +134,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   const [overview, setOverview] = useState<ChannelManagerOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncingHeader, setSyncingHeader] = useState(false);
 
   const load = useCallback(async () => {
     if (!hotelId) {
@@ -159,6 +160,15 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       setLoading(false);
     }
   }, [hotelId, load]);
+
+  // Automatically refresh Channel Manager data when an OTA update or live sync finishes
+  useEffect(() => {
+    const handleUpdate = () => {
+      load();
+    };
+    window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    return () => window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+  }, [load]);
 
   // Persist tab to sessionStorage + sync with URL hash
   useEffect(() => {
@@ -312,6 +322,27 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${overview?.isLiveMode ? STATUS_STYLES.connected : 'bg-amber-100 text-amber-700 border-amber-300'}`}>
             {overview?.isLiveMode ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Live Sync</> : <><Clock className="w-3 h-3 inline mr-1" /> Integration Ready</>}
           </span>
+          <button
+            onClick={async () => {
+              if (!hotelId) return;
+              setSyncingHeader(true);
+              try {
+                const { triggerLiveSync } = await import('../../lib/externalChannelSyncService');
+                await triggerLiveSync(hotelId, { force: true });
+                await load();
+              } catch (e: any) {
+                alert(`Sync failed: ${e?.message || 'Error syncing reservations'}`);
+              } finally {
+                setSyncingHeader(false);
+              }
+            }}
+            disabled={syncingHeader || loading}
+            className="flex items-center gap-1.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shadow-xs transition disabled:opacity-50 cursor-pointer"
+            title="Trigger immediate live OTA sync"
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${syncingHeader ? 'animate-spin' : ''}`} />
+            <span>{syncingHeader ? 'Syncing...' : 'Sync Now'}</span>
+          </button>
           <button onClick={load} className="p-2 text-slate-500 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition" title="Refresh">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -1526,31 +1557,28 @@ const ReservationsTab = ({ reservations, onChanged }: {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const { fetchChannelFutureBookings } = await import('../../lib/api-channel');
-      const endDate = new Date().toISOString().split('T')[0];
-      const startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]; // last 7 days
-      const result = await fetchChannelFutureBookings(startDate, endDate);
+      const { triggerLiveSync } = await import('../../lib/externalChannelSyncService');
+      const result = await triggerLiveSync(undefined, { force: true });
       
-      let msg = 'Sync Complete!\n';
-      if (result.stats) {
-        msg += `Fetched: ${result.fetched}\n`;
-        msg += `Imported: ${result.stats.imported}\n`;
-        msg += `Updated: ${result.stats.updated}\n`;
-        msg += `Mapping Required: ${result.stats.mapping_required}\n`;
-        msg += `Failed: ${result.stats.failed}\n`;
-        msg += `Skipped: ${result.stats.skipped}\n`;
-      } else {
-        msg += `Processed: ${result.processed || 0}\n`;
+      let msg = `Live Sync Status: ${result.status}\n${result.message}\n`;
+      if (result.summary) {
+        msg += `Fetched: ${result.summary.fetched}\n`;
+        msg += `Imported (New): ${result.summary.imported}\n`;
+        msg += `Updated: ${result.summary.updated}\n`;
+        msg += `Cancelled: ${result.summary.cancelled}\n`;
+        msg += `Mapping Required: ${result.summary.mapping_required}\n`;
+        msg += `Failed: ${result.summary.failed}\n`;
+        msg += `Skipped: ${result.summary.skipped}\n`;
       }
-      if (result.errors?.length > 0) {
-         msg += `\nErrors: ${result.errors.length}`;
+      if (result.errors && result.errors.length > 0) {
+        msg += `\nErrors / Warnings:\n- ${result.errors.slice(0, 3).join('\n- ')}`;
       }
       alert(msg);
       
       onChanged();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Sync failed', err);
-      alert('Failed to sync reservations from channels');
+      alert(`Failed to sync reservations from channels: ${err?.message || 'Unknown error'}`);
     } finally {
       setSyncing(false);
     }
@@ -1570,7 +1598,7 @@ const ReservationsTab = ({ reservations, onChanged }: {
             className="flex items-center gap-2 bg-brand-50 hover:bg-brand-100 text-brand-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-50"
           >
             {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCw className="w-4 h-4" />}
-            Sync (7 Days)
+            Live Sync OTAs
           </button>
         </div>
         {reservations.length > 0 ? (

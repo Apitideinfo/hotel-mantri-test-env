@@ -636,4 +636,12 @@ export async function testChannelConnectionDirect() {
   });
 }
 
+export async function triggerChannelLiveSync(params?: { startDate?: string; endDate?: string; force?: boolean }) {
+  return apiFetch('/api/channels/live-sync', {
+    method: 'POST',
+    body: JSON.stringify(params || {})
+  });
+}
+
+
 

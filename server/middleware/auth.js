@@ -89,7 +89,7 @@ export const resolveAuthorizedHotel = async (req) => {
   }
 
   // Requested hotel from header, query, or body
-  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.body?.hotel_id;
+  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.body?.hotel_id || req.body?.hotelId;
 
   if (isSuperAdmin) {
     if (!requestedHotelId) {

@@ -72,23 +72,65 @@ router.get('/webhook-info', (req, res) => {
  */
 router.post('/reservations', webhookAuthMiddleware, async (req, res) => {
   try {
-    const parsedPayload = parseWebhookPayload(req.body);
+    let parsedPayload = parseWebhookPayload(req.body);
     const supabase = getSupabase();
     
-    // Resolve hotelId from channel_settings
-    const { data: config, error } = await supabase
+    // Resolve hotelId from channel_settings or channel_connections
+    let hotelId = null;
+    const { data: config } = await supabase
       .from('channel_settings')
       .select('hotel_id')
       .eq('aiosell_hotel_code', parsedPayload.hotelCode)
       .maybeSingle();
 
-    if (error || !config || !config.hotel_id) {
-      const err = new Error(`Hotel with Aiosell code ${parsedPayload.hotelCode} is not configured.`);
+    if (config?.hotel_id) {
+      hotelId = config.hotel_id;
+    } else {
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('hotel_id')
+        .eq('external_hotel_code', parsedPayload.hotelCode)
+        .maybeSingle();
+      if (conn?.hotel_id) hotelId = conn.hotel_id;
+    }
+
+    if (!hotelId) {
+      const err = new Error(`Hotel with channel code ${parsedPayload.hotelCode} is not configured.`);
       err.status = 404;
       throw err;
     }
 
-    const result = await processAiosellReservation(parsedPayload, config.hotel_id);
+    // If payload is incomplete and action is not cancel, fetch complete booking from provider
+    if (!parsedPayload.isCompletePayload && parsedPayload.action !== 'cancel') {
+      try {
+        const { getChannelProviderConfig } = await import('../../providerConfig.js');
+        const aiosellService = (await import('../../aiosellService.js')).default;
+        const hotelConfig = await getChannelProviderConfig(hotelId);
+        
+        const today = new Date();
+        const start = new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+        const end = new Date(today.getTime() + 60 * 86400000).toISOString().slice(0, 10);
+        
+        const fetchedBookings = await aiosellService.fetchReservations(start, end, hotelConfig);
+        const list = Array.isArray(fetchedBookings) ? fetchedBookings : (fetchedBookings?.data || []);
+        
+        const match = list.find(b => 
+          String(b.bookingId || b.booking_id || b.cmBookingId) === String(parsedPayload.bookingId)
+        );
+
+        if (match) {
+          parsedPayload = parseWebhookPayload({
+            ...match,
+            hotelCode: parsedPayload.hotelCode,
+            action: parsedPayload.action
+          });
+        }
+      } catch (fetchErr) {
+        console.warn(`[Webhook] Could not fetch complete reservation details for ${parsedPayload.bookingId}:`, fetchErr.message);
+      }
+    }
+
+    const result = await processAiosellReservation(parsedPayload, hotelId);
     res.status(200).json(result);
   } catch (error) {
     console.error('Webhook Error:', error);

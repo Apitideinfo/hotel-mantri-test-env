@@ -7,12 +7,14 @@ import {
   ChevronRight, Users, BarChart3, Receipt, Percent, Activity,
   Star, Plane, Award, CalendarClock, Shirt, UserRound, KeyRound,
   HelpCircle, Mail, Phone, ShieldCheck, UtensilsCrossed, Armchair, ChefHat,
+  RefreshCw, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 import { BrandIcon } from '@/components/BrandLogo';
 import { brand, layout } from '@/lib/theme';
 import { useAuth } from '@/lib/auth';
 import { getTodayLocal } from '@/lib/calc';
 import { getEnabledHotelFeatures } from '@/lib/api';
+import { useChannelSyncStatus } from '@/lib/externalChannelSyncService';
 
 export interface NavItem {
   key: string;
@@ -111,7 +113,8 @@ interface AppShellProps {
 export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posEnabled, children }: AppShellProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const syncStatus = useChannelSyncStatus();
   const [searchQuery, setSearchQuery] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [dialog, setDialog] = useState<'profile' | 'password' | 'help' | null>(null);
@@ -220,7 +223,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   };
 
   const toggleGroup = (label: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(label)) next.delete(label);
       else next.add(label);
@@ -347,7 +350,8 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
         {/* Navigation list */}
         <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3.5 sidebar-scroll">
           {filteredGroups.map((group) => {
-            const isGroupCollapsed = collapsedGroups.has(group.label) && !searchQuery;
+            const isGroupOpen = searchQuery.trim() ? true : expandedGroups.has(group.label);
+            const isGroupCollapsed = !isGroupOpen;
             return (
               <div key={group.label}>
                 {!isMobile ? (
@@ -500,6 +504,54 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
               <span className="text-[9px] text-amber-700 uppercase tracking-wider font-extrabold">Business Date</span>
               <span className="text-xs font-bold text-slate-900">{todayDisplay}</span>
             </div>
+
+            {/* OTA Live Sync Badge */}
+            <button
+              type="button"
+              onClick={() => syncStatus.syncNow()}
+              disabled={syncStatus.isSyncing}
+              title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition shadow-xs cursor-pointer ${
+                syncStatus.status === 'SYNCING'
+                  ? 'bg-sky-50 border-sky-200 text-sky-700'
+                  : syncStatus.status === 'SUCCESS'
+                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+                  : syncStatus.status === 'PARTIAL_SUCCESS'
+                  ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700'
+                  : syncStatus.status === 'FAILED'
+                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                  : syncStatus.status === 'NOT_AUTHORIZED'
+                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                  : syncStatus.status === 'NOT_CONFIGURED'
+                  ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500'
+                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+            >
+              {syncStatus.isSyncing ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
+              ) : syncStatus.status === 'SUCCESS' ? (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              ) : syncStatus.status === 'PARTIAL_SUCCESS' || syncStatus.status === 'FAILED' || syncStatus.status === 'NOT_AUTHORIZED' ? (
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+              )}
+              <span>
+                {syncStatus.isSyncing
+                  ? 'Syncing OTAs…'
+                  : syncStatus.status === 'SUCCESS'
+                  ? 'OTA Live'
+                  : syncStatus.status === 'PARTIAL_SUCCESS'
+                  ? 'OTA Notice'
+                  : syncStatus.status === 'FAILED'
+                  ? 'OTA Sync Failed'
+                  : syncStatus.status === 'NOT_AUTHORIZED'
+                  ? 'OTA Unauthorized'
+                  : syncStatus.status === 'NOT_CONFIGURED'
+                  ? 'OTA Unconfigured'
+                  : 'Sync OTAs'}
+              </span>
+            </button>
 
             {/* Notifications */}
             <button className="relative p-2 text-slate-600 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition">

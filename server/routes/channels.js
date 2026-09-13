@@ -189,6 +189,236 @@ router.post('/test-connection', checkAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/channels/live-sync
+ * Centralized live synchronization endpoint.
+ * Coordinates reservation reconciliation with external channel manager.
+ * Used by page-open auto-sync and manual "Sync Now" button.
+ */
+router.post('/live-sync', checkAuth, async (req, res) => {
+  const startTime = Date.now();
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const requestId = req.requestId || `SYNC-${Date.now()}`;
+
+  if (!hotelId) {
+    return res.status(400).json({
+      success: false,
+      status: 'FAILED',
+      code: 'HOTEL_CONTEXT_REQUIRED',
+      message: 'Hotel context is required.',
+      requestId
+    });
+  }
+
+  try {
+    // 1. Resolve channel configuration
+    let config;
+    try {
+      config = await getChannelProviderConfig(hotelId, requestId);
+    } catch (cfgErr) {
+      return res.status(200).json({
+        success: false,
+        status: 'NOT_CONFIGURED',
+        code: 'NOT_CONFIGURED',
+        message: 'Channel integration is not configured for this hotel.',
+        stats: {
+          records_fetched: 0,
+          records_created: 0,
+          records_updated: 0,
+          records_cancelled: 0,
+          records_unmapped: 0,
+          records_failed: 0
+        },
+        requestId
+      });
+    }
+
+    if (!config || !config.hotelCode) {
+      return res.status(200).json({
+        success: false,
+        status: 'NOT_CONFIGURED',
+        code: 'NOT_CONFIGURED',
+        message: 'Channel integration hotel code is not configured.',
+        stats: {
+          records_fetched: 0,
+          records_created: 0,
+          records_updated: 0,
+          records_cancelled: 0,
+          records_unmapped: 0,
+          records_failed: 0
+        },
+        requestId
+      });
+    }
+
+    // 2. Test connection with upstream provider
+    const connTest = await aiosellService.testConnection(config);
+    if (!connTest.success) {
+      const isAuthErr = connTest.status === 401 || connTest.status === 403 || connTest.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
+      const statusType = isAuthErr ? 'NOT_AUTHORIZED' : 'FAILED';
+      const errorMsg = connTest.error?.message || 'External channel manager is unreachable.';
+
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'LIVE_SYNC',
+        direction: 'inbound',
+        status: statusType,
+        message: `Sync aborted: ${errorMsg}`,
+        error_detail: errorMsg
+      });
+
+      return res.status(connTest.status >= 500 ? 502 : 200).json({
+        success: false,
+        status: statusType,
+        code: connTest.error?.code || 'CONNECTION_FAILED',
+        message: errorMsg,
+        stats: {
+          records_fetched: 0,
+          records_created: 0,
+          records_updated: 0,
+          records_cancelled: 0,
+          records_unmapped: 0,
+          records_failed: 0
+        },
+        requestId
+      });
+    }
+
+    // 3. Define rolling sync window (-7 days to +90 days)
+    const today = new Date();
+    const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+    const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
+
+    // 4. Fetch reservations from provider
+    const rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
+    let list = [];
+    if (Array.isArray(rawReservations)) list = rawReservations;
+    else if (rawReservations && Array.isArray(rawReservations.data)) list = rawReservations.data;
+    else if (rawReservations && Array.isArray(rawReservations.reservations)) list = rawReservations.reservations;
+
+    const stats = {
+      fetched: list.length,
+      created: 0,
+      updated: 0,
+      cancelled: 0,
+      unmapped: 0,
+      failed: 0
+    };
+    const errors = [];
+
+    // 5. Process each reservation idempotently
+    for (const raw of list) {
+      try {
+        const payload = parseWebhookPayload({
+          ...raw,
+          hotelCode: config.hotelCode,
+          action: raw.action || (raw.status === 'cancelled' ? 'cancel' : 'book')
+        });
+
+        const resResult = await processAiosellReservation(payload, hotelId);
+        if (resResult.status === 'mapping_required') {
+          stats.unmapped++;
+        } else if (resResult.status === 'imported') {
+          stats.created++;
+        } else if (resResult.status === 'updated') {
+          stats.updated++;
+        } else if (resResult.status === 'cancelled') {
+          stats.cancelled++;
+        } else if (resResult.status === 'failed') {
+          stats.failed++;
+        } else {
+          stats.updated++;
+        }
+      } catch (err) {
+        stats.failed++;
+        errors.push(err.message || 'Processing error');
+      }
+    }
+
+    // 6. Determine final sync status
+    let overallStatus = 'SUCCESS';
+    if (stats.failed > 0 && stats.created === 0 && stats.updated === 0 && stats.cancelled === 0) {
+      overallStatus = 'FAILED';
+    } else if (stats.unmapped > 0 || stats.failed > 0) {
+      overallStatus = 'PARTIAL_SUCCESS';
+    }
+
+    const now = new Date().toISOString();
+    const durationMs = Date.now() - startTime;
+    const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed (${durationMs}ms)`;
+
+    // 7. Update channel connections timestamps
+    await supabaseServiceRole
+      .from('channel_connections')
+      .update({
+        last_sync_at: now,
+        ...(overallStatus !== 'FAILED' ? { last_successful_sync_at: now } : {}),
+        last_sync_status: overallStatus.toLowerCase(),
+        last_error: errors.length > 0 ? errors[0] : null,
+        updated_at: now
+      })
+      .eq('hotel_id', hotelId);
+
+    // 8. Log to channel_sync_logs
+    await supabaseServiceRole.from('channel_sync_logs').insert({
+      hotel_id: hotelId,
+      log_type: 'LIVE_SYNC',
+      direction: 'inbound',
+      status: overallStatus,
+      message: summaryMsg,
+      date_range: `${startDate} to ${endDate}`,
+      error_detail: errors.length > 0 ? JSON.stringify(errors.slice(0, 5)) : null
+    });
+
+    return res.json({
+      success: overallStatus === 'SUCCESS' || overallStatus === 'PARTIAL_SUCCESS',
+      status: overallStatus,
+      message: summaryMsg,
+      last_sync_at: now,
+      stats: {
+        records_fetched: stats.fetched,
+        records_created: stats.created,
+        records_updated: stats.updated,
+        records_cancelled: stats.cancelled,
+        records_unmapped: stats.unmapped,
+        records_failed: stats.failed
+      },
+      durationMs,
+      dateRange: `${startDate} to ${endDate}`,
+      errors: errors.slice(0, 5),
+      requestId
+    });
+
+  } catch (err) {
+    console.error('Error executing live sync:', err);
+    const now = new Date().toISOString();
+    await supabaseServiceRole.from('channel_sync_logs').insert({
+      hotel_id: hotelId,
+      log_type: 'LIVE_SYNC',
+      direction: 'inbound',
+      status: 'FAILED',
+      message: 'Live sync failed with server error',
+      error_detail: err.message || 'Unknown server error'
+    });
+
+    return res.status(err.status || 500).json({
+      success: false,
+      status: 'FAILED',
+      code: err.code || 'LIVE_SYNC_FAILED',
+      message: err.message || 'Failed to execute live synchronization',
+      stats: {
+        records_fetched: 0,
+        records_created: 0,
+        records_updated: 0,
+        records_cancelled: 0,
+        records_unmapped: 0,
+        records_failed: 0
+      },
+      requestId
+    });
+  }
+});
+
+/**
  * GET /api/channels/catalog
  * Returns list of supported distribution channels.
  */

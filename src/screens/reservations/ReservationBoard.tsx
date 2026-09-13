@@ -75,6 +75,15 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
   useEffect(() => { load(); }, [load]);
 
+  // Automatically refresh reservations when live sync or realtime OTA updates fire
+  useEffect(() => {
+    const handleUpdate = () => {
+      load();
+    };
+    window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    return () => window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+  }, [load]);
+
   // Get unique room numbers from availability
   const rooms = useMemo(() => {
     const seen = new Set<string>();
