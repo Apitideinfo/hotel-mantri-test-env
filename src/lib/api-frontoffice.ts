@@ -263,8 +263,82 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
     .eq('id', params.entryId)
     .maybeSingle();
   if (fetchErr) throw fetchErr;
-  if (!entryData) throw new Error('Booking not found.');
-  const entry = entryData as RoomChartEntry;
+  let entry: RoomChartEntry;
+  if (!entryData) {
+    // Check if entryId is actually a reservationId
+    const { data: resData, error: resErr } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('id', params.entryId)
+      .maybeSingle();
+    if (resErr) throw resErr;
+    if (!resData) throw new Error('Booking not found.');
+    const res = resData as any;
+    if (res.status === 'checked_out') {
+      throw new Error('Guest is already checked out.');
+    }
+    await updateReservationStatus(res.id, 'checked_out');
+    await updateRoomHousekeeping(params.roomNo, 'Vacant Dirty');
+    await supabase
+      .from('rooms')
+      .update({
+        last_guest_name: res.guest_name ?? '',
+        last_departure_time: new Date().toTimeString().slice(0, 5),
+      })
+      .eq('hotel_id', hotelId)
+      .eq('room_no', params.roomNo);
+    await addTimelineEvent({
+      reservationId: res.id,
+      eventType: 'checkout',
+      description: `Check-out: ${res.guest_name} from Room ${params.roomNo}`,
+      amount: toNum(params.collectCash) + toNum(params.collectUpi) + toNum(params.collectCard) + toNum(params.collectBank),
+      performedBy: params.performedBy,
+    });
+    return {
+      id: res.id,
+      hotel_id: res.hotel_id,
+      report_date: res.check_in_date,
+      room_no: params.roomNo,
+      guest_name: res.guest_name,
+      arrival: res.check_in_date,
+      departure: res.check_out_date,
+      nights: res.nights,
+      room_rate: toNum(res.rate),
+      total: toNum(res.rate) * toNum(res.nights),
+      company: res.source_name,
+      source_category: res.source_category || 'Direct/Walking',
+      pay_mode: 'Cash',
+      description: '',
+      is_complimentary: false,
+      meal_plan: res.meal_plan || 'EP',
+      gst_mode: 'Exclusive',
+      gst_type: res.gst_type || 'No Scope',
+      gst_slab: res.gst_slab || 0,
+      gst_amount: toNum(res.gst_amount),
+      taxable_amount: toNum(res.taxable_amount),
+      invoice_total: toNum(res.invoice_total) || (toNum(res.rate) * toNum(res.nights)),
+      revenue_category: 'Room Revenue',
+      remarks: res.remarks ?? '',
+      created_by: res.created_by ?? '',
+      business_date: res.check_in_date,
+      room_category: 'Standard',
+      pay_cash: toNum(res.pay_cash) + toNum(params.collectCash),
+      pay_upi: toNum(res.pay_upi) + toNum(params.collectUpi),
+      pay_card: toNum(res.pay_card) + toNum(params.collectCard),
+      pay_bank: toNum(res.pay_bank) + toNum(params.collectBank),
+      pay_advance: toNum(res.advance_paid),
+      pay_balance: 0,
+      id_proof_type: '',
+      id_proof_number: '',
+      id_proof_verified: false,
+      arrival_time: '',
+      checkout_time: new Date().toTimeString().slice(0, 5),
+      checked_in_at: null,
+      checked_out_at: new Date().toISOString(),
+      reservation_id: res.id,
+    } as RoomChartEntry;
+  }
+  entry = entryData as RoomChartEntry;
 
   // Prevent double checkout
   if (entry.checked_out_at) {
@@ -316,6 +390,15 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
     })
     .eq('hotel_id', hotelId)
     .eq('room_no', params.roomNo);
+
+  // Synchronize linked reservation status to checked_out
+  if (entry.reservation_id) {
+    try {
+      await updateReservationStatus(entry.reservation_id, 'checked_out');
+    } catch (err) {
+      console.warn('[checkOutGuest] Could not update linked reservation status:', err);
+    }
+  }
 
   // Add timeline event
   await addTimelineEvent({

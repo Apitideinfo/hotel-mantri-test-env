@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { getCurrentHotelId, getRooms, getRoomCategories } from './api';
+import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
 import { calcStayNights } from './calc';
 import type { RoomChartEntry } from './types';
 import type {
@@ -10,20 +10,7 @@ import type {
   RoomBlock, RoomBlockInput, BlockType,
 } from './types-reservations';
 
-export const getRoomChartForDateRange = async (
-  fromDate: string,
-  toDate: string,
-): Promise<RoomChartEntry[]> => {
-  const { data, error } = await supabase
-    .from('room_chart_entries')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .gte('report_date', fromDate)
-    .lte('report_date', toDate)
-    .order('report_date', { ascending: true });
-  if (error) throw error;
-  return (data as RoomChartEntry[]) ?? [];
-};
+export { getRoomChartForDateRange };
 
 export const getReservations = async (
   fromDate?: string,
@@ -63,25 +50,42 @@ export const getReservationsForDateRange = async (
   startDate: string,
   endDate: string,
 ): Promise<Reservation[]> => {
-  try {
-    const hotelId = getCurrentHotelId();
-    const { data, error } = await supabase
-      .from('reservations')
-      .select('*')
-      .eq('hotel_id', hotelId)
-      .order('check_in_date', { ascending: true });
-    if (error) return [];
-
-    const list = (data as Reservation[]) ?? [];
-    return list.filter((r) => {
-      const ci = (r.check_in_date ?? '').slice(0, 10);
-      const co = (r.check_out_date ?? '').slice(0, 10);
-      if (!ci || !co) return false;
-      return ci <= endDate && co >= startDate;
-    });
-  } catch {
-    return [];
+  const hotelId = getCurrentHotelId();
+  const { data, error } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .order('check_in_date', { ascending: true });
+  if (error) {
+    console.error('[getReservationsForDateRange] Supabase query error:', error);
+    throw error;
   }
+
+  const list = (data as Reservation[]) ?? [];
+  return list.filter((r) => {
+    const ci = (r.check_in_date ?? '').slice(0, 10);
+    const co = (r.check_out_date ?? '').slice(0, 10);
+    if (!ci || !co) return false;
+    // Overlaps the date range [startDate, endDate]
+    return ci <= endDate && co >= startDate;
+  });
+};
+
+export const getFutureReservationsCount = async (
+  targetDate: string,
+): Promise<number> => {
+  const hotelId = getCurrentHotelId();
+  const { count, error } = await supabase
+    .from('reservations')
+    .select('id', { count: 'exact', head: true })
+    .eq('hotel_id', hotelId)
+    .eq('status', 'confirmed')
+    .gt('check_in_date', targetDate);
+  if (error) {
+    console.error('[getFutureReservationsCount] Supabase count error:', error);
+    throw error;
+  }
+  return count ?? 0;
 };
 
 export const saveReservation = async (
@@ -297,9 +301,7 @@ export const extendReservation = async (params: {
   if (res.status === 'checked_in') {
     try {
       const hotelId = getCurrentHotelId();
-      const checkInDt = new Date(res.check_in_date + 'T00:00:00');
-      const checkOutDt = new Date(newCheckOut + 'T00:00:00');
-      const newNights = Math.max(1, Math.round((checkOutDt.getTime() - checkInDt.getTime()) / 86400000));
+      const newNights = calcStayNights(res.check_in_date, newCheckOut);
 
       await supabase
         .from('room_chart_entries')

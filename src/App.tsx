@@ -223,6 +223,17 @@ function AppInner() {
           );
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'room_chart_entries', filter: `hotel_id=eq.${hotelId}` },
+        (payload) => {
+          window.dispatchEvent(
+            new CustomEvent('hotel_mantri_reservations_updated', {
+              detail: { source: 'realtime_room_chart_entries', payload },
+            })
+          );
+        }
+      )
       .subscribe();
 
     return () => {

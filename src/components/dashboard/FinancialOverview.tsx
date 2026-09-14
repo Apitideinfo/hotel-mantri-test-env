@@ -63,9 +63,12 @@ export const FinancialOverview = ({ mtd }: FinancialOverviewProps) => {
       <BreakdownCard title="Collection Breakup" icon={<Wallet className="w-4 h-4 text-emerald-600" />}>
         <div className="space-y-0.5">
           <RowItem label="Cash" value={mtd?.payCash ?? 0} color="text-emerald-600" />
-          <RowItem label="Bank Direct" value={mtd?.payBank ?? 0} color="text-slate-700" />
+          <RowItem label="Bank / OTA" value={mtd?.payBank ?? 0} color="text-slate-700" />
           <RowItem label="UPI" value={mtd?.payUpi ?? 0} color="text-brand-600" />
           <RowItem label="Card" value={mtd?.payCard ?? 0} color="text-amber-600" />
+          {(mtd?.payBalance ?? 0) > 0 && (
+            <RowItem label="Pending / Due at Checkout" value={mtd?.payBalance ?? 0} color="text-amber-600" />
+          )}
         </div>
         <RowItem label="Total Collection" value={totalCollection} isTotal />
       </BreakdownCard>

@@ -304,12 +304,16 @@ export interface RoomCategory {
   created_at: string;
 }
 
-export const CATEGORY_DISPLAY_ORDER = ['SUPER DELUXE', 'FOURBED', 'SUITE'] as const;
+export const CATEGORY_DISPLAY_ORDER = ['DELUXE', 'SUPER DELUXE', 'STANDARD', 'FOURBED', 'SUITE'] as const;
 
 export const categorySortIndex = (name: string): number => {
   const upper = name.trim().toUpperCase();
-  const idx = CATEGORY_DISPLAY_ORDER.findIndex((c) => upper === c || upper.includes(c));
-  return idx === -1 ? 999 : idx;
+  if (upper.includes('SUPER DELUXE')) return 1;
+  if (upper.includes('DELUXE')) return 0;
+  if (upper.includes('STANDARD')) return 2;
+  if (upper.includes('FOURBED')) return 3;
+  if (upper.includes('SUITE')) return 4;
+  return 999;
 };
 
 export const compareRoomNo = (a: string, b: string): number => {

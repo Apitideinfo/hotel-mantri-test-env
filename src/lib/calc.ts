@@ -283,15 +283,31 @@ export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: strin
     }
 
     if (isPaymentDay) {
-      agg.payCash += toNum(e.pay_cash);
-      agg.payUpi += toNum(e.pay_upi);
-      agg.payCard += toNum(e.pay_card);
-      agg.payBank += toNum(e.pay_bank);
-      agg.payAdvance += toNum(e.pay_advance);
+      let cashAmt = toNum(e.pay_cash);
+      let upiAmt = toNum(e.pay_upi);
+      let cardAmt = toNum(e.pay_card);
+      let bankAmt = toNum(e.pay_bank);
+      const advAmt = toNum(e.pay_advance);
+
+      // If a payment was logged in advance_paid without specific column split,
+      // attribute to the appropriate mode (Cash, UPI, Card, or Bank/OTA)
+      if (advAmt > 0 && cashAmt === 0 && bankAmt === 0 && upiAmt === 0 && cardAmt === 0) {
+        const mode = (e.pay_mode as string) || '';
+        if (mode === 'Cash') cashAmt = advAmt;
+        else if (mode === 'UPI') upiAmt = advAmt;
+        else if (mode === 'Card') cardAmt = advAmt;
+        else bankAmt = advAmt; // Bank or OTA
+      }
+
+      agg.payCash += cashAmt;
+      agg.payUpi += upiAmt;
+      agg.payCard += cardAmt;
+      agg.payBank += bankAmt;
+      agg.payAdvance += advAmt;
       agg.payBalance += toNum(e.pay_balance);
       if (!e.is_complimentary) {
-        agg.cash += toNum(e.pay_cash);
-        agg.bank += toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank);
+        agg.cash += cashAmt;
+        agg.bank += upiAmt + cardAmt + bankAmt;
       }
     }
   }

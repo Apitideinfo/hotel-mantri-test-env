@@ -37,6 +37,8 @@ export interface BoardBooking {
   hasPayment: boolean;
   vipType: string;
   raw: RoomChartEntry | Reservation;
+  rawReservation?: Reservation | null;
+  rawEntry?: RoomChartEntry | null;
 }
 
 interface BookingDetailPanelProps {
@@ -270,19 +272,16 @@ export const BookingDetailPanel = ({
               <div className="grid grid-cols-4 gap-2">
                 <ActionButton icon={Edit3} label="Edit" onClick={() => setEditMode(true)} />
                 {canCheckIn && <ActionButton icon={LogIn} label="Check In" onClick={() => onCheckIn(booking)} primary />}
-                {isReservation && !canCheckIn && reservation?.status === 'checked_in' && (
-                  <ActionButton icon={LogIn} label="Checked In" onClick={() => {}} />
-                )}
-                {!isReservation && entry && !entry.checked_out_at && (
+                {(booking.status === 'checked_in' || booking.status === 'occupied') && (
                   <ActionButton icon={LogOut} label="Check Out" onClick={() => onCheckOut(booking)} primary />
                 )}
-                {!isReservation && entry && entry.checked_out_at && (
+                {booking.status === 'checked_out' && (
                   <ActionButton icon={LogOut} label="Checked Out" onClick={() => {}} />
                 )}
                 <ActionButton icon={MessageCircle} label="WhatsApp" onClick={handleWhatsApp} />
                 <ActionButton icon={Trash2} label="Cancel" onClick={() => setShowDeleteConfirm(true)} danger={!canDeleteBooking(role)} />
               </div>
-              {!isReservation && entry && !entry.checked_out_at && (
+              {(booking.status === 'checked_in' || booking.status === 'occupied') && (
                 <div className="grid grid-cols-3 gap-2">
                   <button
                     onClick={() => onRoomShift(booking)}
@@ -306,7 +305,7 @@ export const BookingDetailPanel = ({
                   </button>
                 </div>
               )}
-              {!isReservation && entry && entry.checked_out_at && (
+              {booking.status === 'checked_out' && (
                 <button
                   onClick={() => onViewFolio(booking)}
                   className="w-full flex items-center justify-center gap-1.5 px-4 py-2.5 bg-brand-navy-700 hover:bg-brand-navy-800 text-white text-sm font-medium rounded-lg transition"

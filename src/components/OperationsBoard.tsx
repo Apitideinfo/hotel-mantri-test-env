@@ -20,14 +20,14 @@ import {
   getCompanySources, classifyCompany, getRoomCategories, getRooms,
 } from '@/lib/api';
 import {
-  getReservationsForDateRange, saveReservation, deleteReservation,
+  getReservationsForDateRange, getFutureReservationsCount, saveReservation, deleteReservation,
   updateReservationStatus, checkRoomAvailability, extendReservation,
 } from '@/lib/api-reservations';
 import { extendStay } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
-import { fmtMoney, fmtInt, toNum, getTodayLocal } from '@/lib/calc';
+import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
 import { NewBookingModal } from '@/components/NewBookingModal';
 import { CheckInModal } from '@/components/frontoffice/CheckInModal';
@@ -37,6 +37,7 @@ import { RoomShiftModal } from '@/components/frontoffice/RoomShiftModal';
 import { ExtendStayModal } from '@/components/frontoffice/ExtendStayModal';
 import { GuestFolio } from '@/components/frontoffice/GuestFolio';
 import { useAuth } from '@/lib/auth';
+import { useHotel } from '@/lib/hotel-context';
 
 interface OperationsBoardProps {
   date: string;
@@ -67,6 +68,8 @@ interface BoardBooking {
   hasPayment: boolean;
   vipType: string;
   raw: RoomChartEntry | Reservation;
+  rawReservation?: Reservation | null;
+  rawEntry?: RoomChartEntry | null;
 }
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -107,20 +110,18 @@ const PAY_INDICATOR: Record<string, { icon: typeof Wallet; color: string; label:
   Card: { icon: Banknote, color: 'text-brand-gold-600', label: 'Card' },
 };
 
-const addDays = (dateStr: string, n: number): string => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-};
-
 const fmtDay = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric' });
+  if (!d) return '';
+  const [y, m, day] = d.slice(0, 10).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'UTC', weekday: 'short', day: 'numeric' });
 };
 
 const fmtDateFull = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (!d) return '';
+  const [y, m, day] = d.slice(0, 10).split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'UTC', day: '2-digit', month: 'short', year: 'numeric' });
 };
 
 export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: OperationsBoardProps) => {
@@ -155,6 +156,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [vipGuests, setVipGuests] = useState<Guest[]>([]);
   const [guests, setGuests] = useState<Guest[]>([]);
   const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
+  const [futureCount, setFutureCount] = useState(0);
 
   // Drag-to-resize state
   const [stretchingBooking, setStretchingBooking] = useState<BoardBooking | null>(null);
@@ -162,6 +164,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
   const { role: authRole } = useAuth();
   const foRole: FrontOfficeRole | null = authRole ? mapAuthRoleToFrontOffice(authRole) : null;
+  const { hotelId, status: hotelStatus } = useHotel();
 
   const daysToShow = viewMode === 'day' ? 1 : 7;
   const timelineStart = viewMode === 'day' ? centerDate : addDays(centerDate, -3);
@@ -171,6 +174,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   );
 
   const load = useCallback(async () => {
+    if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
     try {
       setLoading(true);
       setError(null);
@@ -190,13 +194,14 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       const rangeStart = timelineDates[0];
       const rangeEnd = addDays(timelineDates[timelineDates.length - 1], 1);
 
-      const [es, resvs] = await Promise.all([
-        getRoomChartForDateRange(rangeStart, rangeEnd).catch(() => []),
-        getReservationsForDateRange(rangeStart, rangeEnd).catch(() => []),
+      const [es, resvs, futCount] = await Promise.all([
+        getRoomChartForDateRange(rangeStart, rangeEnd),
+        getReservationsForDateRange(rangeStart, rangeEnd),
+        getFutureReservationsCount(centerDate).catch(() => 0),
       ]);
       setEntries(es);
       setReservations(resvs);
-
+      setFutureCount(futCount);
 
       // Fetch VIP guests and all guest profiles for contact resolution
       try {
@@ -205,11 +210,12 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         setVipGuests(allGuests.filter((g) => g.vip_type !== ''));
       } catch { /* non-critical */ }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      console.error('[OperationsBoard] Failed to load board data:', e);
+      setError(e instanceof Error ? e.message : 'Failed to load board data');
     } finally {
       setLoading(false);
     }
-  }, [timelineDates]);
+  }, [timelineDates, centerDate, hotelId, hotelStatus]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -230,62 +236,90 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
   const allBookings = useMemo((): BoardBooking[] => {
     const result: BoardBooking[] = [];
+    const matchedReservationIds = new Set<string>();
+    const matchedEntryIds = new Set<string>();
+
+    // 1. Process entries (checked-in / in-house stays and walk-ins)
     for (const e of entries) {
       const hasPay = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance) > 0;
-      const res = reservations.find((r) => r.id === e.reservation_id || r.room_chart_entry_id === e.id || (r.room_no === e.room_no && r.check_in_date === (e.arrival ?? e.report_date)));
+      const res = reservations.find((r) => 
+        (e.reservation_id && r.id === e.reservation_id) || 
+        (r.room_chart_entry_id && r.room_chart_entry_id === e.id) || 
+        (r.room_no.trim().toLowerCase() === e.room_no.trim().toLowerCase() && 
+         (r.check_in_date ?? '').slice(0, 10) === (e.arrival ?? e.report_date).slice(0, 10))
+      );
+      if (res) matchedReservationIds.add(res.id);
+      matchedEntryIds.add(e.id);
+
       const guest = guests.find((g) => (e.guest_id && g.id === e.guest_id) || (res && g.id === res.guest_id) || (g.name && e.guest_name && g.name.trim().toLowerCase() === e.guest_name.trim().toLowerCase()));
       const phone = res?.guest_phone || guest?.mobile || '';
       const email = res?.guest_email || guest?.email || '';
       const vipType = guest?.vip_type || (phone ? vipGuests.find((g) => g.mobile === phone)?.vip_type : '') || '';
 
+      const checkIn = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+      const checkOut = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+      const isCheckedOut = Boolean(e.checked_out_at);
+
       result.push({
         id: e.id,
         type: 'entry',
         roomNo: e.room_no,
-        guestName: e.guest_name,
-        sourceCategory: e.source_category,
-        sourceName: e.company,
-        status: e.is_complimentary ? 'complimentary' : 'occupied',
-        paymentMode: e.pay_mode,
-        checkIn: e.arrival ?? e.report_date,
-        checkOut: e.departure ?? e.report_date,
-        rate: e.room_rate,
-        nights: e.nights,
+        guestName: e.guest_name || res?.guest_name || 'Guest',
+        sourceCategory: e.source_category || res?.source_category || 'Direct/Walking',
+        sourceName: e.company || res?.source_name || '',
+        status: isCheckedOut ? 'checked_out' : (e.is_complimentary ? 'complimentary' : 'checked_in'),
+        paymentMode: e.pay_mode || res?.payment_mode || 'Cash',
+        checkIn,
+        checkOut,
+        rate: toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (res ? toNum(res.rate) : 0),
+        nights: Math.max(1, toNum(e.nights) || calcStayNights(checkIn, checkOut)),
         phone,
         email,
-        remarks: e.remarks,
+        remarks: e.remarks || res?.remarks || '',
         isComplimentary: e.is_complimentary,
-        hasPayment: hasPay,
+        hasPayment: hasPay || (res ? toNum(res.advance_paid) > 0 : false),
         vipType,
         raw: e,
+        rawReservation: res ?? null,
+        rawEntry: e,
       });
     }
+
+    // 2. Process reservations not already merged into an entry
     for (const r of reservations) {
       if (r.status === 'cancelled' || r.status === 'no_show') continue;
+      if (matchedReservationIds.has(r.id)) continue;
+      if (r.room_chart_entry_id && matchedEntryIds.has(r.room_chart_entry_id)) continue;
+
       const guest = guests.find((g) => g.id === r.guest_id || (r.guest_phone && g.mobile === r.guest_phone));
       const phone = r.guest_phone || guest?.mobile || '';
       const email = r.guest_email || guest?.email || '';
       const vipType = vipGuests.find((g) => g.mobile && g.mobile === phone)?.vip_type ?? guest?.vip_type ?? '';
+      const checkIn = (r.check_in_date ?? '').slice(0, 10);
+      const checkOut = (r.check_out_date ?? '').slice(0, 10);
+
       result.push({
         id: r.id,
         type: 'reservation',
         roomNo: r.room_no,
-        guestName: r.guest_name,
-        sourceCategory: r.source_category,
-        sourceName: r.source_name,
+        guestName: r.guest_name || 'Guest',
+        sourceCategory: r.source_category || 'Direct/Walking',
+        sourceName: r.source_name || '',
         status: r.status,
-        paymentMode: r.payment_mode,
-        checkIn: r.check_in_date,
-        checkOut: r.check_out_date,
-        rate: r.rate,
-        nights: r.nights,
+        paymentMode: r.payment_mode || 'Cash',
+        checkIn,
+        checkOut,
+        rate: toNum(r.rate),
+        nights: Math.max(1, toNum(r.nights) || calcStayNights(checkIn, checkOut)),
         phone,
         email,
-        remarks: r.remarks,
+        remarks: r.remarks || '',
         isComplimentary: false,
         hasPayment: toNum(r.advance_paid) > 0,
         vipType,
         raw: r,
+        rawReservation: r,
+        rawEntry: null,
       });
     }
     return result;
@@ -300,6 +334,8 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           b.guestName.toLowerCase().includes(q) ||
           b.roomNo.toLowerCase().includes(q) ||
           b.phone.toLowerCase().includes(q) ||
+          b.sourceName.toLowerCase().includes(q) ||
+          b.sourceCategory.toLowerCase().includes(q) ||
           b.id.toLowerCase().includes(q),
       );
     }
@@ -323,7 +359,11 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   }, [allBookings, search, filterCategory, filterFloor, filterSource, filterStatus, filterPayment, activeRooms, categories]);
 
   const unassignedBookings = useMemo(() => {
-    return filteredBookings.filter((b) => !b.roomNo || !b.roomNo.trim());
+    return filteredBookings.filter((b) => {
+      if (!b.roomNo || !b.roomNo.trim()) return true;
+      const r = b.roomNo.trim().toUpperCase();
+      return r === 'TBD' || r === 'UNASSIGNED';
+    });
   }, [filteredBookings]);
 
   const bookingByRoom = useMemo(() => {
@@ -337,30 +377,72 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   }, [filteredBookings]);
 
   const todayStats = useMemo(() => {
-    const occupied = entries.filter((e) => !e.is_complimentary).length;
-    const vacant = activeRooms.length - occupied;
-    const arrivals = allBookings.filter((b) => b.checkIn === date).length;
-    const departures = allBookings.filter((b) => b.checkOut === date).length;
-    const futureBookings = reservations.filter(
-      (r) => r.status === 'confirmed' && r.check_in_date > date,
+    const selectedDate = centerDate;
+    const occupiedRoomNos = new Set<string>();
+    let todayRevenue = 0;
+    let missingTariffCount = 0;
+    let missingPaymentCount = 0;
+
+    for (const b of allBookings) {
+      if (b.status === 'cancelled' || b.status === 'no_show') continue;
+
+      const isIntervalOccupied = (b.checkIn <= selectedDate && b.checkOut > selectedDate) ||
+        (b.checkIn === selectedDate && b.checkOut === selectedDate);
+      
+      if (isIntervalOccupied && b.status !== 'checked_out') {
+        const roomKey = b.roomNo.trim().toLowerCase();
+        if (roomKey && roomKey !== 'tbd' && roomKey !== 'unassigned') {
+          occupiedRoomNos.add(roomKey);
+        }
+        // Recognize nightly room revenue on this business date
+        todayRevenue += toNum(b.rate);
+
+        // Missing tariff check
+        if (toNum(b.rate) === 0 && !b.isComplimentary) {
+          missingTariffCount++;
+        }
+
+        // Missing payment check (exclude OTA/prepaid/complimentary)
+        const isOtaOrPrepaid = b.sourceCategory === 'OTA' || b.paymentMode === 'OTA' || b.isComplimentary;
+        if (!isOtaOrPrepaid && !b.hasPayment) {
+          missingPaymentCount++;
+        }
+      }
+    }
+
+    const occupied = occupiedRoomNos.size;
+    const vacant = Math.max(0, activeRooms.length - occupied);
+
+    // Arrivals on selectedDate: eligible confirmed arrivals who have not checked in yet
+    const arrivals = allBookings.filter((b) => 
+      b.checkIn === selectedDate && 
+      b.status === 'confirmed'
     ).length;
-    const todayRevenue = entries.reduce((s, e) => s + toNum(e.room_rate) * toNum(e.nights), 0);
-    const cashTotal = entries.reduce((s, e) => s + toNum(e.pay_cash), 0);
-    const bankTotal = entries.reduce((s, e) => s + toNum(e.pay_bank), 0);
-    const upiTotal = entries.reduce((s, e) => s + toNum(e.pay_upi), 0);
-    const missingTariff = entries.filter((e) => toNum(e.room_rate) === 0).length;
-    const missingPayment = entries.filter(
-      (e) => toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) === 0 && !e.is_complimentary,
+
+    // Departures on selectedDate: staying guests checking out on selectedDate
+    const departures = allBookings.filter((b) => 
+      b.checkOut === selectedDate && 
+      b.status !== 'cancelled' && 
+      b.status !== 'no_show' && 
+      b.status !== 'checked_out'
     ).length;
-    const missingGst = entries.filter(
-      (e) => (e.gst_type !== 'No Scope' && toNum(e.gst_amount) === 0),
+
+    // Future confirmed bookings strictly after selectedDate
+    const futureBookings = futureCount > 0 ? futureCount : allBookings.filter(
+      (b) => b.status === 'confirmed' && b.checkIn > selectedDate
     ).length;
+
     return {
-      occupied, vacant, arrivals, departures, futureBookings,
-      todayRevenue, cashTotal, bankTotal, upiTotal,
-      missingTariff, missingPayment, missingGst,
+      occupied,
+      vacant,
+      arrivals,
+      departures,
+      futureBookings,
+      todayRevenue,
+      missingTariff: missingTariffCount,
+      missingPayment: missingPaymentCount,
     };
-  }, [entries, reservations, date, allBookings, activeRooms.length]);
+  }, [allBookings, centerDate, activeRooms.length, futureCount]);
 
   const handleSaveEntry = async (row: RoomChartEntryInput, existingId?: string) => {
     setSaving(true);
@@ -419,13 +501,67 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const handleDeleteReservation = async (id: string) => {
     setSaving(true);
     try {
-      await deleteReservation(id);
+      await updateReservationStatus(id, 'cancelled');
       await load();
       onSaved();
     } finally {
       setSaving(false);
     }
   };
+
+  const getResolvedEntry = useCallback((booking: BoardBooking): RoomChartEntry | null => {
+    if (booking.type === 'entry') return booking.raw as RoomChartEntry;
+    if (booking.rawEntry) return booking.rawEntry;
+    const match = entries.find(e => e.reservation_id === booking.id || (booking.raw as Reservation).room_chart_entry_id === e.id);
+    if (match) return match;
+    if (booking.status === 'checked_in' || booking.status === 'occupied') {
+      const res = (booking.rawReservation || booking.raw) as Reservation;
+      return {
+        id: booking.id,
+        hotel_id: res.hotel_id,
+        report_date: booking.checkIn,
+        room_no: booking.roomNo,
+        guest_name: booking.guestName,
+        arrival: booking.checkIn,
+        departure: booking.checkOut,
+        nights: booking.nights,
+        room_rate: booking.rate,
+        total: booking.rate * booking.nights,
+        company: booking.sourceName,
+        source_category: (booking.sourceCategory as SourceCategory) || 'Direct/Walking',
+        pay_mode: (booking.paymentMode as PayMode) || 'Cash',
+        description: '',
+        is_complimentary: false,
+        meal_plan: (res.meal_plan as MealPlan) || 'EP',
+        gst_mode: 'Exclusive',
+        gst_type: (res.gst_type as GstType) || 'No Scope',
+        gst_slab: (res.gst_slab as GstSlab) || 0,
+        gst_amount: toNum(res.gst_amount),
+        taxable_amount: toNum(res.taxable_amount),
+        invoice_total: toNum(res.invoice_total) || (booking.rate * booking.nights),
+        revenue_category: 'Room Revenue',
+        remarks: booking.remarks,
+        created_by: res.created_by ?? '',
+        business_date: booking.checkIn,
+        room_category: 'Standard',
+        pay_cash: toNum(res.pay_cash),
+        pay_upi: toNum(res.pay_upi),
+        pay_card: toNum(res.pay_card),
+        pay_bank: toNum(res.pay_bank),
+        pay_advance: toNum(res.advance_paid),
+        pay_balance: Math.max(0, (toNum(res.invoice_total) || (booking.rate * booking.nights)) - toNum(res.advance_paid)),
+        id_proof_type: '',
+        id_proof_number: '',
+        id_proof_verified: false,
+        arrival_time: '',
+        checkout_time: '',
+        checked_in_at: null,
+        checked_out_at: null,
+        reservation_id: booking.id,
+      };
+    }
+    return null;
+  }, [entries]);
 
   const handleCheckIn = (booking: BoardBooking) => {
     setSelectedBooking(booking);
@@ -481,9 +617,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   };
 
   const commitStretch = useCallback(async (booking: BoardBooking, targetDate: string) => {
-    const newCheckOut = new Date(targetDate + 'T00:00:00');
-    newCheckOut.setDate(newCheckOut.getDate() + 1);
-    const newCheckOutStr = newCheckOut.toISOString().slice(0, 10);
+    const newCheckOutStr = addDays(targetDate, 1);
     const currentCheckOut = booking.checkOut;
     
     if (newCheckOutStr === currentCheckOut) {
@@ -642,14 +776,14 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           </button>
           <button
             onClick={() => selectedBooking && handleCheckIn(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.type !== 'reservation'}
+            disabled={!selectedBooking || selectedBooking.status !== 'confirmed'}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Check-In</span>
           </button>
           <button
             onClick={() => selectedBooking && handleCheckOut(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <LogOut className="w-4 h-4" /> <span className="whitespace-nowrap">Check-Out</span>
@@ -662,21 +796,21 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           </button>
           <button
             onClick={() => selectedBooking && handleViewFolio(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            disabled={!selectedBooking}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <Wallet className="w-4 h-4" /> <span className="whitespace-nowrap">Collect Payment</span>
           </button>
           <button
             onClick={() => selectedBooking && handleRoomShift(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-slate-600 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <ArrowRightLeft className="w-4 h-4" /> <span className="whitespace-nowrap">Room Shift</span>
           </button>
           <button
             onClick={() => selectedBooking && handleExtendStay(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.type !== 'entry'}
+            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <CalendarPlus className="w-4 h-4" /> <span className="whitespace-nowrap">Extend Stay</span>
@@ -822,6 +956,53 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 );
               })}
             </div>
+            {/* Unassigned / Pending Room Allocation Timeline Row */}
+            {unassignedBookings.length > 0 && (
+              <div className="border-b-2 border-amber-300 bg-amber-50/20">
+                <div className="flex border-b border-amber-200 bg-amber-100/70 sticky left-0 z-[6]">
+                  <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-100/90 flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+                      UNASSIGNED
+                    </span>
+                    <span className="text-[10px] font-bold bg-amber-500 text-white px-1.5 py-0.2 rounded-full">
+                      {unassignedBookings.length}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0 flex items-center px-3">
+                    <span className="text-[10px] font-semibold text-amber-800">
+                      Pending Room Allocation ({unassignedBookings.length} booking{unassignedBookings.length > 1 ? 's' : ''}) — Click card to assign room
+                    </span>
+                  </div>
+                </div>
+                <div className="flex border-b border-amber-200/60 hover:bg-amber-100/30 transition">
+                  <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-50 sticky left-0 z-[5] flex flex-col justify-center">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                      <span className="text-sm font-bold text-amber-900">TBD</span>
+                    </div>
+                    <span className="text-[10px] text-amber-700">Unassigned</span>
+                  </div>
+                  {timelineDates.map((d) => {
+                    const dayBookings = unassignedBookings.filter(
+                      (b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut)
+                    );
+                    const isToday = d === date;
+                    return (
+                      <div
+                        key={d}
+                        className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-amber-100 ${
+                          isToday ? 'bg-amber-50/50' : ''
+                        }`}
+                      >
+                        {dayBookings.map((b) => (
+                          <BookingBar key={b.id} booking={b} onClick={() => setSelectedBooking(b)} />
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Room rows grouped by category */}
             {(() => {
               const sortedRooms = [...activeRooms].sort((a, b) => compareRoomNo(a.room_no, b.room_no));
@@ -1070,9 +1251,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       )}
 
       {/* Check-In Modal */}
-      {showCheckIn && selectedBooking && selectedBooking.type === 'reservation' && (
+      {showCheckIn && selectedBooking && (
         <CheckInModal
-          reservation={selectedBooking.raw as Reservation}
+          reservation={((selectedBooking.rawReservation || selectedBooking.raw) as Reservation)}
           rooms={activeRooms}
           categories={categories}
           sources={sources}
@@ -1099,9 +1280,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       )}
 
       {/* Check-Out Modal */}
-      {showCheckOut && selectedBooking && selectedBooking.type === 'entry' && (
+      {showCheckOut && selectedBooking && getResolvedEntry(selectedBooking) && (
         <CheckOutModal
-          entry={selectedBooking.raw as RoomChartEntry}
+          entry={getResolvedEntry(selectedBooking)!}
           roomNo={selectedBooking.roomNo}
           role={foRole}
           onClose={() => { setShowCheckOut(false); setSelectedBooking(null); }}
@@ -1110,9 +1291,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       )}
 
       {/* Room Shift Modal */}
-      {showRoomShift && selectedBooking && selectedBooking.type === 'entry' && (
+      {showRoomShift && selectedBooking && getResolvedEntry(selectedBooking) && (
         <RoomShiftModal
-          entryId={(selectedBooking.raw as RoomChartEntry).id}
+          entryId={getResolvedEntry(selectedBooking)!.id}
           fromRoom={selectedBooking.roomNo}
           rooms={activeRooms}
           categories={categories}
@@ -1123,9 +1304,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       )}
 
       {/* Extend Stay Modal */}
-      {showExtendStay && selectedBooking && selectedBooking.type === 'entry' && (
+      {showExtendStay && selectedBooking && getResolvedEntry(selectedBooking) && (
         <ExtendStayModal
-          entry={selectedBooking.raw as RoomChartEntry}
+          entry={getResolvedEntry(selectedBooking)!}
           role={foRole}
           onClose={() => { setShowExtendStay(false); setSelectedBooking(null); }}
           onExtended={handleExtendStayComplete}
@@ -1136,51 +1317,49 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       {showFolio && selectedBooking && (
         <GuestFolio
           entry={
-            selectedBooking.type === 'entry'
-              ? (selectedBooking.raw as RoomChartEntry)
-              : (entries.find((e) => e.reservation_id === selectedBooking.id || (selectedBooking.raw as Reservation).room_chart_entry_id === e.id) || {
-                  id: selectedBooking.id,
-                  hotel_id: (selectedBooking.raw as Reservation).hotel_id,
-                  report_date: selectedBooking.checkIn,
-                  room_no: selectedBooking.roomNo,
-                  guest_name: selectedBooking.guestName,
-                  arrival: selectedBooking.checkIn,
-                  departure: selectedBooking.checkOut,
-                  nights: selectedBooking.nights,
-                  room_rate: selectedBooking.rate,
-                  total: selectedBooking.rate * selectedBooking.nights,
-                  company: selectedBooking.sourceName,
-                  source_category: (selectedBooking.sourceCategory as SourceCategory) || 'Direct/Walking',
-                  pay_mode: (selectedBooking.paymentMode as PayMode) || 'Cash',
-                  description: '',
-                  is_complimentary: false,
-                  meal_plan: ((selectedBooking.raw as Reservation).meal_plan as MealPlan) || 'EP',
-                  gst_mode: 'Exclusive',
-                  gst_type: ((selectedBooking.raw as Reservation).gst_type as GstType) || 'No Scope',
-                  gst_slab: ((selectedBooking.raw as Reservation).gst_slab as GstSlab) || 0,
-                  gst_amount: toNum((selectedBooking.raw as Reservation).gst_amount),
-                  taxable_amount: toNum((selectedBooking.raw as Reservation).taxable_amount),
-                  invoice_total: toNum((selectedBooking.raw as Reservation).invoice_total) || (selectedBooking.rate * selectedBooking.nights),
-                  revenue_category: 'Room Revenue',
-                  remarks: selectedBooking.remarks,
-                  created_by: (selectedBooking.raw as Reservation).created_by ?? '',
-                  business_date: selectedBooking.checkIn,
-                  room_category: 'Standard',
-                  pay_cash: toNum((selectedBooking.raw as Reservation).pay_cash),
-                  pay_upi: toNum((selectedBooking.raw as Reservation).pay_upi),
-                  pay_card: toNum((selectedBooking.raw as Reservation).pay_card),
-                  pay_bank: toNum((selectedBooking.raw as Reservation).pay_bank),
-                  pay_advance: toNum((selectedBooking.raw as Reservation).advance_paid),
-                  pay_balance: Math.max(0, (toNum((selectedBooking.raw as Reservation).invoice_total) || (selectedBooking.rate * selectedBooking.nights)) - toNum((selectedBooking.raw as Reservation).advance_paid)),
-                  id_proof_type: '',
-                  id_proof_number: '',
-                  id_proof_verified: false,
-                  arrival_time: '',
-                  checkout_time: '',
-                  checked_in_at: null,
-                  checked_out_at: null,
-                  reservation_id: selectedBooking.id,
-                })
+            getResolvedEntry(selectedBooking) || {
+              id: selectedBooking.id,
+              hotel_id: hotelId ?? '',
+              report_date: selectedBooking.checkIn,
+              room_no: selectedBooking.roomNo,
+              guest_name: selectedBooking.guestName,
+              arrival: selectedBooking.checkIn,
+              departure: selectedBooking.checkOut,
+              nights: selectedBooking.nights,
+              room_rate: selectedBooking.rate,
+              total: selectedBooking.rate * selectedBooking.nights,
+              company: selectedBooking.sourceName,
+              source_category: (selectedBooking.sourceCategory as SourceCategory) || 'Direct/Walking',
+              pay_mode: (selectedBooking.paymentMode as PayMode) || 'Cash',
+              description: '',
+              is_complimentary: false,
+              meal_plan: ((selectedBooking.raw as Reservation)?.meal_plan as MealPlan) || 'EP',
+              gst_mode: 'Exclusive',
+              gst_type: ((selectedBooking.raw as Reservation)?.gst_type as GstType) || 'No Scope',
+              gst_slab: ((selectedBooking.raw as Reservation)?.gst_slab as GstSlab) || 0,
+              gst_amount: toNum((selectedBooking.raw as Reservation)?.gst_amount),
+              taxable_amount: toNum((selectedBooking.raw as Reservation)?.taxable_amount),
+              invoice_total: toNum((selectedBooking.raw as Reservation)?.invoice_total) || (selectedBooking.rate * selectedBooking.nights),
+              revenue_category: 'Room Revenue',
+              remarks: selectedBooking.remarks,
+              created_by: (selectedBooking.raw as Reservation)?.created_by ?? '',
+              business_date: selectedBooking.checkIn,
+              room_category: 'Standard',
+              pay_cash: toNum((selectedBooking.raw as Reservation)?.pay_cash),
+              pay_upi: toNum((selectedBooking.raw as Reservation)?.pay_upi),
+              pay_card: toNum((selectedBooking.raw as Reservation)?.pay_card),
+              pay_bank: toNum((selectedBooking.raw as Reservation)?.pay_bank),
+              pay_advance: toNum((selectedBooking.raw as Reservation)?.advance_paid),
+              pay_balance: Math.max(0, (toNum((selectedBooking.raw as Reservation)?.invoice_total) || (selectedBooking.rate * selectedBooking.nights)) - toNum((selectedBooking.raw as Reservation)?.advance_paid)),
+              id_proof_type: '',
+              id_proof_number: '',
+              id_proof_verified: false,
+              arrival_time: '',
+              checkout_time: '',
+              checked_in_at: null,
+              checked_out_at: null,
+              reservation_id: selectedBooking.id,
+            }
           }
           roomNo={selectedBooking.roomNo}
           rooms={activeRooms}
@@ -1241,7 +1420,7 @@ const BookingBar = ({
     <div className={`relative ${isStretching ? 'opacity-50' : ''}`}>
       <button
       onClick={onClick}
-      title={`${booking.guestName || 'Guest'} · ${booking.sourceCategory} · ₹${fmtMoney(booking.rate)}/night${balance > 0 ? ` · Bal ₹${fmtMoney(balance)}` : ''}`}
+      title={`${booking.guestName || 'Guest'} · ${booking.sourceCategory} · ₹${fmtMoney(booking.rate)}/night${balance >= 1.0 ? ` · Due ₹${fmtMoney(balance)}` : ''}`}
       className="w-full text-left rounded-md px-2 py-1 mb-1 text-xs transition hover:shadow-md hover:z-20 relative group border border-slate-200 bg-white"
     >
       <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l ${sourceColor}`} />
@@ -1255,18 +1434,20 @@ const BookingBar = ({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 mt-0.5 text-[10px] text-slate-400">
+        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-400">
           <span className="truncate">{booking.sourceName || booking.sourceCategory}</span>
           {payInfo && booking.hasPayment && (
             <span className={`flex items-center gap-0.5 ${payInfo.color}`}>
               <payInfo.icon className="w-2.5 h-2.5" />
             </span>
           )}
-          {booking.isComplimentary && (
+          {booking.isComplimentary ? (
             <span className="text-brand-gold-600 font-bold">COMP</span>
+          ) : (
+            <span className="text-slate-700 font-semibold">₹{fmtMoney(booking.rate)}</span>
           )}
-          {balance > 0 && !booking.isComplimentary && (
-            <span className="text-amber-600 font-medium">₹{fmtMoney(balance)}</span>
+          {balance >= 1.0 && !booking.isComplimentary && (
+            <span className="text-amber-700 font-bold bg-amber-50 border border-amber-200 px-1 py-0.2 rounded text-[9px]">Due ₹{fmtMoney(balance)}</span>
           )}
         </div>
       </div>
