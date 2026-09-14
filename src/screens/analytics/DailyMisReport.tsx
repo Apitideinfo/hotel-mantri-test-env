@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo } from 'react';
 import {
-  FileText, Download, Printer, MessageCircle, Mail, Loader2,
+  FileText, Download, Printer, MessageCircle, Loader2,
   Building2, BedDouble, TrendingUp, Receipt, Wallet, Percent,
 } from 'lucide-react';
 import type { HotelSettings, DerivedReport, RoomChartEntry } from '@/lib/types';
 import { getSettings, getDerivedReport, getRoomChart, getMtdYtd } from '@/lib/api';
-import { toNum, fmtMoney, fmtInt, calcArr, calcOcc, calcTotalRevenue, calcTotalExpenses, splitGst, aggregateRoomChart, derivedToDaily } from '@/lib/calc';
+import { toNum, fmtMoney, fmtInt, calcArr, calcOcc, calcTotalRevenue, calcTotalExpenses, splitGst, derivedToDaily } from '@/lib/calc';
 import { generateWhatsAppReport } from '@/lib/whatsapp';
 import { ScreenHeader, SectionCard, Banner } from '@/components/finance-ui';
 
@@ -45,7 +45,6 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
     })();
   }, [businessDate]);
 
-  const agg = useMemo(() => aggregateRoomChart(entries), [entries]);
 
   const handlePrint = () => window.print();
 

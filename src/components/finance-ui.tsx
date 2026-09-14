@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export const inputCls =
   'w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-base focus:outline-none focus:ring-2 focus:ring-sky-500 transition placeholder:text-slate-400';
@@ -15,7 +15,7 @@ export const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ 
 
 export const TextInput: React.FC<{
   label: string; value: string; onChange: (v: string) => void;
-  placeholder?: string; type?: string; inputMode?: 'text' | 'numeric' | 'decimal' | 'tel' | 'email';
+  placeholder?: string; type?: string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
   maxLength?: number;
 }> = ({ label, value, onChange, placeholder, type = 'text', inputMode, maxLength }) => (
   <Field label={label}>
@@ -29,13 +29,47 @@ export const NumInput: React.FC<{
   label: string; value: number; onChange: (v: number) => void;
   prefix?: string; allowDecimal?: boolean; placeholder?: string;
 }> = ({ label, value, onChange, prefix, allowDecimal = true, placeholder }) => {
+  const [localStr, setLocalStr] = useState<string>(() => (Number.isFinite(value) ? String(value) : ''));
+  const isFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalStr(Number.isFinite(value) ? String(value) : '');
+    } else {
+      const currentParsed = localStr === '' ? 0 : allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(value) && value !== currentParsed) {
+        setLocalStr(String(value));
+      }
+    }
+  }, [value, allowDecimal]);
+
   const handle = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    if (raw === '') { onChange(0); return; }
+    setLocalStr(raw);
+    if (raw === '' || raw === '-' || (allowDecimal && raw.endsWith('.'))) {
+      if (raw === '') onChange(0);
+      return;
+    }
     const n = allowDecimal ? parseFloat(raw) : parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 0) return;
     onChange(n);
   };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    if (localStr === '' || isNaN(Number(localStr))) {
+      const fallback = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      setLocalStr(String(fallback));
+      onChange(fallback);
+    } else {
+      const n = allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(n)) {
+        setLocalStr(String(n));
+        onChange(n);
+      }
+    }
+  };
+
   return (
     <Field label={label}>
       <div className="relative flex items-stretch">
@@ -44,10 +78,18 @@ export const NumInput: React.FC<{
             {prefix}
           </span>
         )}
-        <input type="number" inputMode={allowDecimal ? 'decimal' : 'numeric'} min={0}
-          step={allowDecimal ? '0.01' : '1'} value={value === 0 ? '' : value}
-          onChange={handle} placeholder={placeholder ?? '0'}
-          className={`${inputCls} ${prefix ? 'rounded-l-none' : ''}`} />
+        <input
+          type="number"
+          inputMode={allowDecimal ? 'decimal' : 'numeric'}
+          min={0}
+          step={allowDecimal ? '0.01' : '1'}
+          value={localStr}
+          onChange={handle}
+          onFocus={() => { isFocusedRef.current = true; }}
+          onBlur={handleBlur}
+          placeholder={placeholder ?? '0'}
+          className={`${inputCls} ${prefix ? 'rounded-l-none' : ''}`}
+        />
       </div>
     </Field>
   );

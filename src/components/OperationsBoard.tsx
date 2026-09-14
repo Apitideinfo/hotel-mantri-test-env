@@ -10,7 +10,7 @@ import {
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, GstType, GstSlab,
-  FrontOfficeRole, HotSeason,
+  FrontOfficeRole, HotSeason, MealPlan,
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo, mapAuthRoleToFrontOffice } from '@/lib/types';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
@@ -153,6 +153,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [showFolio, setShowFolio] = useState(false);
   const [saving, setSaving] = useState(false);
   const [vipGuests, setVipGuests] = useState<Guest[]>([]);
+  const [guests, setGuests] = useState<Guest[]>([]);
   const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
 
   // Drag-to-resize state
@@ -197,9 +198,10 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       setReservations(resvs);
 
 
-      // Fetch VIP guests for badge display
+      // Fetch VIP guests and all guest profiles for contact resolution
       try {
         const allGuests = await getGuests();
+        setGuests(allGuests);
         setVipGuests(allGuests.filter((g) => g.vip_type !== ''));
       } catch { /* non-critical */ }
     } catch (e) {
@@ -230,6 +232,12 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     const result: BoardBooking[] = [];
     for (const e of entries) {
       const hasPay = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance) > 0;
+      const res = reservations.find((r) => r.id === e.reservation_id || r.room_chart_entry_id === e.id || (r.room_no === e.room_no && r.check_in_date === (e.arrival ?? e.report_date)));
+      const guest = guests.find((g) => (e.guest_id && g.id === e.guest_id) || (res && g.id === res.guest_id) || (g.name && e.guest_name && g.name.trim().toLowerCase() === e.guest_name.trim().toLowerCase()));
+      const phone = res?.guest_phone || guest?.mobile || '';
+      const email = res?.guest_email || guest?.email || '';
+      const vipType = guest?.vip_type || (phone ? vipGuests.find((g) => g.mobile === phone)?.vip_type : '') || '';
+
       result.push({
         id: e.id,
         type: 'entry',
@@ -243,17 +251,21 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         checkOut: e.departure ?? e.report_date,
         rate: e.room_rate,
         nights: e.nights,
-        phone: '',
-        email: '',
+        phone,
+        email,
         remarks: e.remarks,
         isComplimentary: e.is_complimentary,
         hasPayment: hasPay,
-        vipType: '',
+        vipType,
         raw: e,
       });
     }
     for (const r of reservations) {
       if (r.status === 'cancelled' || r.status === 'no_show') continue;
+      const guest = guests.find((g) => g.id === r.guest_id || (r.guest_phone && g.mobile === r.guest_phone));
+      const phone = r.guest_phone || guest?.mobile || '';
+      const email = r.guest_email || guest?.email || '';
+      const vipType = vipGuests.find((g) => g.mobile && g.mobile === phone)?.vip_type ?? guest?.vip_type ?? '';
       result.push({
         id: r.id,
         type: 'reservation',
@@ -267,17 +279,17 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         checkOut: r.check_out_date,
         rate: r.rate,
         nights: r.nights,
-        phone: r.guest_phone,
-        email: r.guest_email,
+        phone,
+        email,
         remarks: r.remarks,
         isComplimentary: false,
         hasPayment: toNum(r.advance_paid) > 0,
-        vipType: vipGuests.find((g) => g.mobile && g.mobile === r.guest_phone)?.vip_type ?? '',
+        vipType,
         raw: r,
       });
     }
     return result;
-  }, [entries, reservations, vipGuests]);
+  }, [entries, reservations, guests, vipGuests]);
 
   const filteredBookings = useMemo(() => {
     let result = allBookings;
@@ -1121,13 +1133,60 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       )}
 
       {/* Guest Folio */}
-      {showFolio && selectedBooking && selectedBooking.type === 'entry' && (
+      {showFolio && selectedBooking && (
         <GuestFolio
-          entry={selectedBooking.raw as RoomChartEntry}
+          entry={
+            selectedBooking.type === 'entry'
+              ? (selectedBooking.raw as RoomChartEntry)
+              : (entries.find((e) => e.reservation_id === selectedBooking.id || (selectedBooking.raw as Reservation).room_chart_entry_id === e.id) || {
+                  id: selectedBooking.id,
+                  hotel_id: (selectedBooking.raw as Reservation).hotel_id,
+                  report_date: selectedBooking.checkIn,
+                  room_no: selectedBooking.roomNo,
+                  guest_name: selectedBooking.guestName,
+                  arrival: selectedBooking.checkIn,
+                  departure: selectedBooking.checkOut,
+                  nights: selectedBooking.nights,
+                  room_rate: selectedBooking.rate,
+                  total: selectedBooking.rate * selectedBooking.nights,
+                  company: selectedBooking.sourceName,
+                  source_category: (selectedBooking.sourceCategory as SourceCategory) || 'Direct/Walking',
+                  pay_mode: (selectedBooking.paymentMode as PayMode) || 'Cash',
+                  description: '',
+                  is_complimentary: false,
+                  meal_plan: ((selectedBooking.raw as Reservation).meal_plan as MealPlan) || 'EP',
+                  gst_mode: 'Exclusive',
+                  gst_type: ((selectedBooking.raw as Reservation).gst_type as GstType) || 'No Scope',
+                  gst_slab: ((selectedBooking.raw as Reservation).gst_slab as GstSlab) || 0,
+                  gst_amount: toNum((selectedBooking.raw as Reservation).gst_amount),
+                  taxable_amount: toNum((selectedBooking.raw as Reservation).taxable_amount),
+                  invoice_total: toNum((selectedBooking.raw as Reservation).invoice_total) || (selectedBooking.rate * selectedBooking.nights),
+                  revenue_category: 'Room Revenue',
+                  remarks: selectedBooking.remarks,
+                  created_by: (selectedBooking.raw as Reservation).created_by ?? '',
+                  business_date: selectedBooking.checkIn,
+                  room_category: 'Standard',
+                  pay_cash: toNum((selectedBooking.raw as Reservation).pay_cash),
+                  pay_upi: toNum((selectedBooking.raw as Reservation).pay_upi),
+                  pay_card: toNum((selectedBooking.raw as Reservation).pay_card),
+                  pay_bank: toNum((selectedBooking.raw as Reservation).pay_bank),
+                  pay_advance: toNum((selectedBooking.raw as Reservation).advance_paid),
+                  pay_balance: Math.max(0, (toNum((selectedBooking.raw as Reservation).invoice_total) || (selectedBooking.rate * selectedBooking.nights)) - toNum((selectedBooking.raw as Reservation).advance_paid)),
+                  id_proof_type: '',
+                  id_proof_number: '',
+                  id_proof_verified: false,
+                  arrival_time: '',
+                  checkout_time: '',
+                  checked_in_at: null,
+                  checked_out_at: null,
+                  reservation_id: selectedBooking.id,
+                })
+          }
           roomNo={selectedBooking.roomNo}
           rooms={activeRooms}
           categories={categories}
           settings={settings}
+          booking={selectedBooking}
           onClose={() => { setShowFolio(false); setSelectedBooking(null); }}
         />
       )}

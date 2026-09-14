@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   X, Loader2, User, Phone, BedDouble, Calendar, Clock,
   AlertCircle, CheckCircle2, ChevronRight, ChevronLeft, Wallet,
@@ -10,7 +10,7 @@ import type {
   FrontOfficeRole,
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
-import { fmtMoney, toNum, calcGstFull } from '@/lib/calc';
+import { fmtMoney, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { walkInCheckIn, validateCheckIn, getVacantRooms } from '@/lib/api-frontoffice';
 import { brand } from '@/lib/theme';
 
@@ -56,8 +56,12 @@ export const WalkInModal = ({
   const [vacantRooms, setVacantRooms] = useState<Room[]>([]);
 
   // Load vacant rooms on mount
-  useMemo(() => {
-    getVacantRooms().then(setVacantRooms).catch(() => setVacantRooms(rooms.filter((r) => r.is_active)));
+  useEffect(() => {
+    let active = true;
+    getVacantRooms()
+      .then((data) => { if (active) setVacantRooms(data); })
+      .catch(() => { if (active) setVacantRooms(rooms.filter((r) => r.is_active)); });
+    return () => { active = false; };
   }, [rooms]);
 
   const selectedRoom = useMemo(
@@ -69,11 +73,7 @@ export const WalkInModal = ({
     [categories, selectedRoom],
   );
 
-  const nights = useMemo(() => {
-    const ci = new Date(checkIn + 'T00:00:00');
-    const co = new Date(checkOut + 'T00:00:00');
-    return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
-  }, [checkIn, checkOut]);
+  const nights = useMemo(() => calcStayNights(checkIn, checkOut), [checkIn, checkOut]);
 
   const subtotal = toNum(rate) * nights;
   const { invoiceTotal } = calcGstFull(subtotal, 'No Scope', 0);
@@ -201,7 +201,7 @@ export const WalkInModal = ({
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input value={guestName} onChange={(e) => setGuestName(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                      className="w-full pl-9 pr-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                       placeholder="Guest name" />
                   </div>
                 </Field>
@@ -210,19 +210,19 @@ export const WalkInModal = ({
                     <div className="relative">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input value={phone} onChange={(e) => setPhone(e.target.value)}
-                        className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                        className="w-full pl-9 pr-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                         placeholder="Phone" />
                     </div>
                   </Field>
                   <Field label="Email">
                     <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                       placeholder="Email (optional)" />
                   </Field>
                 </div>
                 <Field label="Source Category">
                   <select value={sourceCat} onChange={(e) => setSourceCat(e.target.value as SourceCategory)}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30">
+                    className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30">
                     {SOURCE_CATEGORIES.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </Field>
@@ -230,7 +230,7 @@ export const WalkInModal = ({
                   <div className="relative">
                     <Clock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input type="time" value={arrivalTime} onChange={(e) => setArrivalTime(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                      className="w-full pl-9 pr-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </div>
                 </Field>
               </div>
@@ -248,17 +248,17 @@ export const WalkInModal = ({
                       ciDate.setDate(ciDate.getDate() + nights);
                       setCheckOut(ciDate.toISOString().split('T')[0]);
                     }}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Check-out *">
                     <input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Rate / Night">
-                    <input type="number" value={rate} onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                    <input type="number" step="any" min={0} value={rate} onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Nights">
                     <input 
@@ -271,7 +271,7 @@ export const WalkInModal = ({
                         ciDate.setDate(ciDate.getDate() + newNights);
                         setCheckOut(ciDate.toISOString().split('T')[0]);
                       }}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30 font-medium" />
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30 font-medium" />
                   </Field>
                 </div>
                 <div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   ArrowLeft, Plus, Trash2, Save, BedDouble, X, Check,
   UtensilsCrossed, Receipt, TrendingUp, Calculator,
@@ -26,7 +26,7 @@ import {
   getRevenueEntriesForDate, saveRevenueEntry, deleteRevenueEntry,
 } from '@/lib/api-finance';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
-import { aggregateRoomChart, fmtMoney, fmtInt, calcOcc, calcClosingRooms, calcGst, calcGstFull, toNum } from '@/lib/calc';
+import { aggregateRoomChart, fmtMoney, fmtInt, calcOcc, calcClosingRooms, calcGst, calcGstFull, toNum, calcStayNights, addDays } from '@/lib/calc';
 import { brand } from '@/lib/theme';
 import type { DerivedReport, DayCloseRecord, DayCloseAuditLog } from '@/lib/types';
 
@@ -38,7 +38,7 @@ interface RoomChartProps {
 
 type Tab = 'rooms' | 'expenses' | 'review';
 type RoomStatus = 'occupied' | 'vacant' | 'complimentary' | 'house_use' | 'day_use' | 'ooo';
-type RoomSelectionRow = { roomNo: string; category: string; rate: number };
+type RoomSelectionRow = { roomNo: string; category: string; rate: number | '' };
 const UNAVAILABLE_HOUSEKEEPING = new Set(['Occupied', 'Occupied Clean', 'Occupied Service Due', 'Out Of Order', 'OutOfOrder', 'Blocked']);
 
 const MEAL_LABEL: Record<MealPlan, string> = { EP: 'EP', CP: 'CP', MAP: 'MAP', AP: 'AP' };
@@ -72,7 +72,7 @@ const emptyRow = (date: string, settings?: HotelSettings | null): RoomChartEntry
     room_no: '',
     guest_name: '',
     arrival: date,
-    departure: date,
+    departure: addDays(date, 1),
     nights: 1,
     room_rate: 0,
     total: 0,
@@ -152,7 +152,8 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
   const [panelRow, setPanelRow] = useState<RoomChartEntryInput | null>(null);
   const [panelMode, setPanelMode] = useState<'add' | 'edit'>('add');
   const [addRoomRows, setAddRoomRows] = useState<RoomSelectionRow[]>([]);
-  const [defaultRoomRate, setDefaultRoomRate] = useState(0);
+  const [roomRates, setRoomRates] = useState<Record<string, number | ''>>({});
+  const [defaultRoomRate, setDefaultRoomRate] = useState<number | ''>(0);
   const [roomSearch, setRoomSearch] = useState('');
   const [roomPickerOpen, setRoomPickerOpen] = useState(false);
   const [availableRoomNos, setAvailableRoomNos] = useState<Set<string>>(new Set());
@@ -286,7 +287,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     }
   };
 
-  const agg = useMemo(() => aggregateRoomChart(entries), [entries]);
+  const agg = useMemo(() => aggregateRoomChart(entries, selectedDate), [entries, selectedDate]);
   const occupiedTotal = agg.roomsOccupied + agg.complimentary;
   const occ = calcOcc(occupiedTotal, totalRooms);
   const closingRooms = calcClosingRooms(occupiedTotal, totalRooms);
@@ -340,6 +341,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     setEditingId(null);
     setPanelRow(emptyRow(selectedDate, settings));
     setAddRoomRows([]);
+    setRoomRates({});
     setDefaultRoomRate(0);
     setRoomSearch('');
     setRoomPickerOpen(false);
@@ -353,17 +355,19 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     row.room_no = roomNo;
     if (category) row.room_category = category;
     const cat = categories.find((c) => c.name === category);
+    const tariff = toNum(cat?.default_tariff);
     if (cat) {
-      row.room_rate = toNum(cat.default_tariff);
-      row.total = toNum(cat.default_tariff);
+      row.room_rate = tariff;
+      row.total = tariff;
       const { taxable, gst, invoiceTotal } = calcGstFull(row.total, row.gst_type, row.gst_slab);
       row.taxable_amount = taxable;
       row.gst_amount = gst;
       row.invoice_total = invoiceTotal;
     }
     setPanelRow(row);
-    setAddRoomRows([{ roomNo, category: category ?? '', rate: toNum(row.room_rate) }]);
-    setDefaultRoomRate(toNum(row.room_rate));
+    setAddRoomRows([{ roomNo, category: category ?? '', rate: tariff }]);
+    setRoomRates({ [roomNo]: tariff });
+    setDefaultRoomRate(tariff);
     setRoomSearch('');
     setRoomPickerOpen(false);
     setPanelOpen(true);
@@ -381,7 +385,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
       guest_name: e.guest_name,
       arrival: e.arrival ?? '',
       departure: e.departure ?? '',
-      nights: e.nights,
+      nights: (e.arrival && e.departure) ? calcStayNights(e.arrival, e.departure) : (e.nights || 1),
       room_rate: e.room_rate,
       total: e.total,
       company: e.company,
@@ -424,6 +428,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     setEditingId(null);
     setPanelRow(null);
     setAddRoomRows([]);
+    setRoomRates({});
     setDefaultRoomRate(0);
     setRoomSearch('');
     setRoomPickerOpen(false);
@@ -457,7 +462,13 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     .sort((a, b) => compareRoomNo(a.room_no, b.room_no)),
   [rooms, categories, availableRoomNos, roomSearch]);
 
-  const addRoomAmount = useMemo(() => addRoomRows.reduce((sum, row) => sum + toNum(row.rate) * toNum(panelRow?.nights), 0), [addRoomRows, panelRow?.nights]);
+  const addRoomAmount = useMemo(() => {
+    const nights = toNum(panelRow?.nights) || 1;
+    return addRoomRows.reduce((sum, row) => {
+      const rate = roomRates[row.roomNo] !== undefined ? toNum(roomRates[row.roomNo]) : toNum(row.rate);
+      return sum + rate * nights;
+    }, 0);
+  }, [addRoomRows, roomRates, panelRow?.nights]);
   const addRoomFinance = useMemo(() => {
     if (!panelRow) return { taxable: 0, gst: 0, invoiceTotal: 0 };
     return calcGstFull(addRoomAmount, panelRow.gst_type, panelRow.gst_slab);
@@ -469,7 +480,9 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
   const handlePanelSave = async () => {
     if (!panelRow) return;
     setError(null);
-    const rows = panelMode === 'add' ? addRoomRows : [{ roomNo: panelRow.room_no, category: panelRow.room_category, rate: panelRow.room_rate }];
+    const rows = panelMode === 'add'
+      ? addRoomRows.map(r => ({ ...r, rate: roomRates[r.roomNo] !== undefined ? toNum(roomRates[r.roomNo]) : toNum(r.rate) }))
+      : [{ roomNo: panelRow.room_no, category: panelRow.room_category, rate: panelRow.room_rate }];
     if (panelMode === 'add' && rows.length === 0) {
       setError('Select at least one available room.');
       return;
@@ -487,8 +500,11 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
         setEntries((prev) => prev.map((e) => (e.id === editingId ? saved : e)));
       } else {
         const savedRows: RoomChartEntry[] = [];
+        const nightsCount = toNum(panelRow.nights) || 1;
         for (const [index, row] of rows.entries()) {
-          const next = { ...panelRow, room_no: row.roomNo, room_category: row.category || 'Standard', room_rate: toNum(row.rate), total: toNum(row.rate) * toNum(panelRow.nights) };
+          const individualRate = toNum(row.rate);
+          const individualTotal = individualRate * nightsCount;
+          const next = { ...panelRow, room_no: row.roomNo, room_category: row.category || 'Standard', room_rate: individualRate, total: individualTotal };
           const { taxable, gst, invoiceTotal } = calcGstFull(next.total, next.gst_type, next.gst_slab);
           next.taxable_amount = taxable;
           next.gst_amount = gst;
@@ -527,7 +543,16 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
       if (key === 'company') {
         next.source_category = classifyCompany(v as string, sources);
       }
-      if (key === 'room_rate' || key === 'nights') {
+      if (key === 'arrival' || key === 'departure') {
+        const arr = (key === 'arrival' ? (v as string) : next.arrival) || '';
+        let dep = (key === 'departure' ? (v as string) : next.departure) || '';
+        if (arr && dep && dep <= arr) {
+          dep = addDays(arr, 1);
+          next.departure = dep;
+        }
+        next.nights = calcStayNights(arr, dep);
+      }
+      if (key === 'room_rate' || key === 'nights' || key === 'arrival' || key === 'departure') {
         next.total = toNum(next.room_rate) * toNum(next.nights);
       }
       if (key === 'gst_type') {
@@ -539,7 +564,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
           next.gst_mode = newType as GstMode;
         }
       }
-      if (key === 'total' || key === 'room_rate' || key === 'nights' || key === 'gst_type' || key === 'gst_mode' || key === 'gst_slab') {
+      if (key === 'total' || key === 'room_rate' || key === 'nights' || key === 'arrival' || key === 'departure' || key === 'gst_type' || key === 'gst_mode' || key === 'gst_slab') {
         const { taxable, gst, invoiceTotal } = calcGstFull(next.total, next.gst_type, next.gst_slab);
         next.taxable_amount = taxable;
         next.gst_amount = gst;
@@ -547,7 +572,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
       }
       // Auto-calculate advance (= total received) and balance whenever payment or amount changes
       if (key === 'pay_cash' || key === 'pay_upi' || key === 'pay_card' || key === 'pay_bank' ||
-          key === 'total' || key === 'room_rate' || key === 'nights' || key === 'gst_type' ||
+          key === 'total' || key === 'room_rate' || key === 'nights' || key === 'arrival' || key === 'departure' || key === 'gst_type' ||
           key === 'gst_mode' || key === 'gst_slab' || key === 'invoice_total') {
         const received = toNum(next.pay_cash) + toNum(next.pay_upi) + toNum(next.pay_card) + toNum(next.pay_bank);
         const final = toNum(next.invoice_total) || (toNum(next.total) + toNum(next.gst_amount));
@@ -1286,7 +1311,20 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                             const selected = addRoomRows.some((row) => row.roomNo === room.room_no);
                             return (
                               <label key={room.id} className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-sky-50 cursor-pointer">
-                                <input type="checkbox" checked={selected} onChange={() => setAddRoomRows((prev) => selected ? prev.filter((row) => row.roomNo !== room.room_no) : [...prev, { roomNo: room.room_no, category: category?.name ?? 'Uncategorized', rate: defaultRoomRate || toNum(category?.default_tariff) }])}
+                                <input type="checkbox" checked={selected} onChange={() => {
+                                  if (selected) {
+                                    setAddRoomRows((prev) => prev.filter((row) => row.roomNo !== room.room_no));
+                                    setRoomRates((prev) => {
+                                      const next = { ...prev };
+                                      delete next[room.room_no];
+                                      return next;
+                                    });
+                                  } else {
+                                    const initialRate = toNum(defaultRoomRate) > 0 ? defaultRoomRate : (category?.default_tariff ? toNum(category.default_tariff) : '');
+                                    setAddRoomRows((prev) => [...prev, { roomNo: room.room_no, category: category?.name ?? 'Uncategorized', rate: initialRate }]);
+                                    setRoomRates((prev) => ({ ...prev, [room.room_no]: initialRate }));
+                                  }
+                                }}
                                   className="w-4 h-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500" />
                                 <span className="text-sm font-semibold text-slate-800">Room {room.room_no}</span>
                                 <span className="text-xs text-slate-500">{category?.name ?? 'Uncategorized'}</span>
@@ -1301,20 +1339,65 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                   {availabilityLoading && <p className="text-xs text-slate-400">Checking room availability…</p>}
                   <div className="flex items-end gap-2">
                     <NumField label="Default Room Rate" prefix="₹" value={defaultRoomRate} onChange={setDefaultRoomRate} />
-                    <button type="button" onClick={() => setAddRoomRows((prev) => prev.map((row) => ({ ...row, rate: defaultRoomRate })))} disabled={!addRoomRows.length}
+                    <button type="button" onClick={() => {
+                      if (!addRoomRows.length) return;
+                      const rateToApply = toNum(defaultRoomRate);
+                      setRoomRates((prev) => {
+                        const next = { ...prev };
+                        for (const r of addRoomRows) {
+                          next[r.roomNo] = rateToApply;
+                        }
+                        return next;
+                      });
+                      setAddRoomRows((prev) => prev.map((row) => ({ ...row, rate: rateToApply })));
+                    }} disabled={!addRoomRows.length}
                       className="shrink-0 px-3 py-2.5 rounded-xl border border-sky-200 bg-sky-50 text-sky-700 text-sm font-semibold hover:bg-sky-100 disabled:opacity-50 transition">Apply to All</button>
                   </div>
                   {addRoomRows.length > 0 && (
                     <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-                      {addRoomRows.map((row) => (
-                        <div key={row.roomNo} className="grid grid-cols-[1fr_1fr_112px_auto] gap-2 items-center px-3 py-2 bg-white">
-                          <span className="text-sm font-semibold text-slate-800">{row.roomNo}</span>
-                          <span className="text-xs text-slate-500">{row.category}</span>
-                          <input type="number" min={0} value={row.rate} onChange={(e) => setAddRoomRows((prev) => prev.map((item) => item.roomNo === row.roomNo ? { ...item, rate: Math.max(0, Number(e.target.value)) } : item))}
-                            aria-label={`Room rate for ${row.roomNo}`} className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-sky-500" />
-                          <button type="button" onClick={() => setAddRoomRows((prev) => prev.filter((item) => item.roomNo !== row.roomNo))} aria-label={`Remove room ${row.roomNo}`} className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
-                        </div>
-                      ))}
+                      {addRoomRows.map((row) => {
+                        const currentRate = roomRates[row.roomNo] !== undefined ? roomRates[row.roomNo] : row.rate;
+                        return (
+                          <div key={row.roomNo} className="grid grid-cols-[1fr_1fr_112px_auto] gap-2 items-center px-3 py-2 bg-white">
+                            <span className="text-sm font-semibold text-slate-800">{row.roomNo}</span>
+                            <span className="text-xs text-slate-500">{row.category}</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={currentRate}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const val = raw === '' ? '' : Math.max(0, Number(raw));
+                                setRoomRates((prev) => ({ ...prev, [row.roomNo]: val }));
+                                setAddRoomRows((prev) => prev.map((item) => item.roomNo === row.roomNo ? { ...item, rate: toNum(val) } : item));
+                              }}
+                              onBlur={() => {
+                                if (currentRate === '') {
+                                  setRoomRates((prev) => ({ ...prev, [row.roomNo]: 0 }));
+                                  setAddRoomRows((prev) => prev.map((item) => item.roomNo === row.roomNo ? { ...item, rate: 0 } : item));
+                                }
+                              }}
+                              aria-label={`Room rate for ${row.roomNo}`}
+                              className="w-full px-2 py-1.5 border border-slate-200 rounded-lg text-sm text-right focus:outline-none focus:ring-2 focus:ring-sky-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAddRoomRows((prev) => prev.filter((item) => item.roomNo !== row.roomNo));
+                                setRoomRates((prev) => {
+                                  const next = { ...prev };
+                                  delete next[row.roomNo];
+                                  return next;
+                                });
+                              }}
+                              aria-label={`Remove room ${row.roomNo}`}
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1338,7 +1421,19 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
 
               {/* Nights */}
               <div className={panelMode === 'edit' ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-1 gap-3'}>
-                <NumField label="Nights" value={panelRow.nights} allowDecimal={false} onChange={(v) => updatePanelRow('nights', v)} />
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">
+                    Nights <span className="text-[11px] font-normal text-slate-400">(Auto-calculated)</span>
+                  </label>
+                  <input
+                    type="number"
+                    value={panelRow.nights}
+                    readOnly
+                    disabled
+                    aria-label="Nights"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-100 text-slate-600 font-semibold cursor-not-allowed"
+                  />
+                </div>
                 {panelMode === 'edit' && <NumField label="Room Rate" prefix="₹" value={panelRow.room_rate} onChange={(v) => updatePanelRow('room_rate', v)} />}
               </div>
 
@@ -1548,23 +1643,67 @@ const DateField = ({ label, value, onChange }: { label: string; value: string; o
 );
 
 const NumField = ({ label, value, onChange, prefix, allowDecimal = true }: {
-  label: string; value: number; onChange: (v: number) => void; prefix?: string; allowDecimal?: boolean;
+  label: string; value: number | ''; onChange: (v: number) => void; prefix?: string; allowDecimal?: boolean;
 }) => {
+  const [localStr, setLocalStr] = useState<string>(() => (typeof value === 'number' && Number.isFinite(value) ? String(value) : ''));
+  const isFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+    } else {
+      const currentParsed = localStr === '' ? 0 : allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      const targetParsed = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      if (targetParsed !== currentParsed) {
+        setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+      }
+    }
+  }, [value, allowDecimal]);
+
   const handle = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    if (raw === '') { onChange(0); return; }
+    setLocalStr(raw);
+    if (raw === '' || raw === '-' || (allowDecimal && raw.endsWith('.'))) {
+      if (raw === '') onChange(0);
+      return;
+    }
     const n = allowDecimal ? parseFloat(raw) : parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 0) return;
     onChange(n);
   };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    if (localStr === '' || isNaN(Number(localStr))) {
+      const fallback = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      setLocalStr(String(fallback));
+      onChange(fallback);
+    } else {
+      const n = allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(n)) {
+        setLocalStr(String(n));
+        onChange(n);
+      }
+    }
+  };
+
   return (
     <label className="block">
       <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
       <div className="relative flex items-stretch">
         {prefix && <span className="inline-flex items-center px-3 bg-slate-100 border border-r-0 border-slate-300 rounded-l-xl text-slate-500 text-sm">{prefix}</span>}
-        <input type="number" inputMode={allowDecimal ? 'decimal' : 'numeric'} min={0} step={allowDecimal ? '0.01' : '1'}
-          value={value === 0 ? '' : value} onChange={handle} placeholder="0"
-          className={`flex-1 min-w-0 px-3 py-2.5 text-base border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 ${prefix ? 'rounded-r-xl' : 'rounded-xl'}`} />
+        <input
+          type="number"
+          inputMode={allowDecimal ? 'decimal' : 'numeric'}
+          min={0}
+          step={allowDecimal ? '0.01' : '1'}
+          value={localStr}
+          onChange={handle}
+          onFocus={() => { isFocusedRef.current = true; }}
+          onBlur={handleBlur}
+          placeholder="0"
+          className={`flex-1 min-w-0 px-3 py-2.5 text-base border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 ${prefix ? 'rounded-r-xl' : 'rounded-xl'}`}
+        />
       </div>
     </label>
   );

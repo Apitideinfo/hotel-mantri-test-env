@@ -1,5 +1,6 @@
 // Enterprise HQ — shared UI components
 
+import { useState, useEffect, useRef } from 'react';
 import { AlertCircle, Inbox } from 'lucide-react';
 
 export const LoadingState = ({ label = 'Loading…' }: { label?: string }) => (
@@ -107,15 +108,66 @@ export const SelectInput = ({ label, value, onChange, options }: {
   </label>
 );
 
-export const NumInput = ({ label, value, onChange }: {
-  label: string; value: number; onChange: (v: number) => void;
-}) => (
-  <label className="block">
-    <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
-    <input type="number" value={value === 0 ? '' : value} onChange={(e) => onChange(e.target.value === '' ? 0 : parseFloat(e.target.value))}
-      className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500" />
-  </label>
-);
+export const NumInput = ({ label, value, onChange, placeholder = '0' }: {
+  label: string; value: number | ''; onChange: (v: number) => void; placeholder?: string;
+}) => {
+  const [localStr, setLocalStr] = useState<string>(() => (typeof value === 'number' && Number.isFinite(value) ? String(value) : ''));
+  const isFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+    } else {
+      const currentParsed = localStr === '' ? 0 : parseFloat(localStr);
+      const targetParsed = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      if (targetParsed !== currentParsed) {
+        setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+      }
+    }
+  }, [value]);
+
+  const handle = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    setLocalStr(raw);
+    if (raw === '' || raw === '-' || raw.endsWith('.')) {
+      if (raw === '') onChange(0);
+      return;
+    }
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || n < 0) return;
+    onChange(n);
+  };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    if (localStr === '' || isNaN(Number(localStr))) {
+      const fallback = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      setLocalStr(String(fallback));
+      onChange(fallback);
+    } else {
+      const n = parseFloat(localStr);
+      if (Number.isFinite(n)) {
+        setLocalStr(String(n));
+        onChange(n);
+      }
+    }
+  };
+
+  return (
+    <label className="block">
+      <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
+      <input
+        type="number"
+        value={localStr}
+        onChange={handle}
+        onFocus={() => { isFocusedRef.current = true; }}
+        onBlur={handleBlur}
+        placeholder={placeholder}
+        className="w-full px-3 py-2 border border-slate-300 rounded-lg bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+      />
+    </label>
+  );
+};
 
 export const TextArea = ({ label, value, onChange, rows = 3 }: {
   label: string; value: string; onChange: (v: string) => void; rows?: number;

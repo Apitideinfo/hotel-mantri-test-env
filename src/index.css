@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  body {
+    color: #0f172a;
+    background-color: #f8fafc;
+  }
+
+  input,
+  textarea,
+  select {
+    color: #0f172a;
+    caret-color: #0f172a;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #94a3b8;
+  }
+}
+
 html { -webkit-text-size-adjust: 100%; }
 body {
   -webkit-tap-highlight-color: transparent;

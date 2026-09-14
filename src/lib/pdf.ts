@@ -338,7 +338,7 @@ export async function buildRoomChartPDF(opts: RoomChartPDFOpts): Promise<jsPDF> 
   // ── PAGE 1 (LANDSCAPE): Room Chart + compact summary ────────────────────
   await drawPageHeader(doc, settings, 'Daily Room Chart', `Date: ${fmtDate(date)}`, true);
 
-  const agg = aggregateRoomChart(entries);
+  const agg = aggregateRoomChart(entries, date);
   const occupied = agg.roomsOccupied + agg.complimentary;
 
   autoTable(doc, {

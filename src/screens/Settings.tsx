@@ -62,9 +62,9 @@ export const Settings = ({ onBack }: SettingsProps) => {
   /* Hotel basic */
   const [hotelName, setHotelName] = useState('');
   const [legalName, setLegalName] = useState('');
-  const [totalRooms, setTotalRooms] = useState(22);
-  const [openingCash, setOpeningCash] = useState(0);
-  const [financialYear, setFinancialYear] = useState(CURRENT_YEAR);
+  const [totalRooms, setTotalRooms] = useState<number | ''>(22);
+  const [openingCash, setOpeningCash] = useState<number | ''>(0);
+  const [financialYear, setFinancialYear] = useState<number | ''>(CURRENT_YEAR);
 
   /* Contact */
   const [address, setAddress] = useState('');
@@ -195,9 +195,9 @@ export const Settings = ({ onBack }: SettingsProps) => {
       const updated = await updateSettings({
         hotel_name: hotelName.trim() || settings.hotel_name,
         legal_name: legalName.trim(),
-        total_rooms: Math.max(1, totalRooms),
-        opening_cash_balance: Math.max(0, openingCash),
-        financial_year: financialYear,
+        total_rooms: Math.max(1, typeof totalRooms === 'number' ? totalRooms : 1),
+        opening_cash_balance: Math.max(0, typeof openingCash === 'number' ? openingCash : 0),
+        financial_year: typeof financialYear === 'number' ? financialYear : CURRENT_YEAR,
         logo_url: logoUrl,
         address: address.trim(),
         city: city.trim(),
@@ -459,8 +459,24 @@ export const Settings = ({ onBack }: SettingsProps) => {
               <Field>
                 <Label>Total Rooms</Label>
                 {unlocked ? (
-                  <input className={input} type="number" min={1} value={totalRooms}
-                    onChange={(e) => setTotalRooms(Math.max(1, parseInt(e.target.value || '1', 10)))} />
+                  <input
+                    className={input}
+                    type="number"
+                    min={1}
+                    value={totalRooms}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setTotalRooms('');
+                      } else {
+                        const parsed = parseInt(val, 10);
+                        if (!isNaN(parsed)) setTotalRooms(parsed);
+                      }
+                    }}
+                    onBlur={() => {
+                      if (totalRooms === '' || totalRooms < 1) setTotalRooms(1);
+                    }}
+                  />
                 ) : (
                   <div className={inputDisabled}>{totalRooms}</div>
                 )}
@@ -468,18 +484,47 @@ export const Settings = ({ onBack }: SettingsProps) => {
 
               <Field>
                 <Label>Opening Cash Balance (Rs.)</Label>
-                <input className={input} type="number" min={0} step="0.01" value={openingCash}
-                  onChange={(e) => setOpeningCash(Math.max(0, parseFloat(e.target.value || '0')))} />
+                <input
+                  className={input}
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={openingCash}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') {
+                      setOpeningCash('');
+                    } else {
+                      const parsed = parseFloat(val);
+                      if (!isNaN(parsed)) setOpeningCash(parsed);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (openingCash === '' || openingCash < 0) setOpeningCash(0);
+                  }}
+                />
                 <p className="text-xs text-slate-400">Used as opening balance for each month's cash closing calculation.</p>
               </Field>
 
               <Field>
                 <Label>Financial Year</Label>
-                <input className={input} type="number" value={financialYear}
+                <input
+                  className={input}
+                  type="number"
+                  value={financialYear}
                   onChange={(e) => {
-                    const v = parseInt(e.target.value, 10);
-                    if (!isNaN(v)) setFinancialYear(v);
-                  }} />
+                    const val = e.target.value;
+                    if (val === '') {
+                      setFinancialYear('');
+                    } else {
+                      const parsed = parseInt(val, 10);
+                      if (!isNaN(parsed)) setFinancialYear(parsed);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (financialYear === '') setFinancialYear(CURRENT_YEAR);
+                  }}
+                />
                 <p className="text-xs text-slate-400">e.g. 2026 means the FY Apr 2026 – Mar 2027.</p>
               </Field>
             </SectionCard>

@@ -11,7 +11,7 @@ import type {
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
 import type { Reservation } from '@/lib/types-reservations';
-import { fmtMoney, toNum, calcGstFull } from '@/lib/calc';
+import { fmtMoney, toNum, calcGstFull, calcStayNights, addDays } from '@/lib/calc';
 import { checkInGuest, validateCheckIn } from '@/lib/api-frontoffice';
 import { checkRoomAvailability } from '@/lib/api-reservations';
 import { brand } from '@/lib/theme';
@@ -28,15 +28,11 @@ interface CheckInModalProps {
   onCheckedIn: () => void;
 }
 
-const addDays = (d: string, n: number): string => {
-  const dt = new Date(d + 'T00:00:00');
-  dt.setDate(dt.getDate() + n);
-  return dt.toISOString().slice(0, 10);
-};
+
 
 const ID_PROOF_TYPES = ['Aadhaar', 'Passport', 'Driving License', 'Voter ID', 'Other'];
 const UNAVAILABLE_HOUSEKEEPING = new Set(['Occupied', 'Occupied Clean', 'Occupied Service Due', 'Out Of Order', 'OutOfOrder', 'Blocked']);
-interface CheckInRoomRow { roomNo: string; rate: number }
+interface CheckInRoomRow { roomNo: string; rate: number | '' }
 
 export const CheckInModal = ({
   reservation, rooms, categories, sources, settings, role, defaultDate, onClose, onCheckedIn,
@@ -46,7 +42,7 @@ export const CheckInModal = ({
   const [phone, setPhone] = useState(reservation?.guest_phone ?? '');
   const [email, setEmail] = useState(reservation?.guest_email ?? '');
   const [roomRows, setRoomRows] = useState<CheckInRoomRow[]>([
-    { roomNo: reservation?.room_no ?? '', rate: reservation?.rate ?? 0 },
+    { roomNo: reservation?.room_no ?? '', rate: reservation?.rate ?? '' },
   ]);
   const [checkIn, setCheckIn] = useState(reservation?.check_in_date ?? defaultDate);
   const [checkOut, setCheckOut] = useState(reservation?.check_out_date ?? addDays(defaultDate, 1));
@@ -54,6 +50,7 @@ export const CheckInModal = ({
   const [roomSearch, setRoomSearch] = useState('');
   const [availableRoomNos, setAvailableRoomNos] = useState<Set<string>>(new Set());
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [defaultRate, setDefaultRate] = useState<number | ''>(reservation?.rate ?? '');
   const [arrivalTime, setArrivalTime] = useState(new Date().toTimeString().slice(0, 5));
   const [idProofType, setIdProofType] = useState('');
   const [idProofNumber, setIdProofNumber] = useState('');
@@ -90,12 +87,8 @@ export const CheckInModal = ({
     })
     .sort((a, b) => compareRoomNo(a.room_no, b.room_no)),
   [rooms, categories, categoryFilter, roomSearch, availableRoomNos, reservation]);
-  const nights = useMemo(() => {
-    const ci = new Date(checkIn + 'T00:00:00');
-    const co = new Date(checkOut + 'T00:00:00');
-    return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
-  }, [checkIn, checkOut]);
-  const totalAmount = roomRows.reduce((sum, row) => sum + row.rate * nights, 0);
+  const nights = useMemo(() => calcStayNights(checkIn, checkOut), [checkIn, checkOut]);
+  const totalAmount = roomRows.reduce((sum, row) => sum + toNum(row.rate) * nights, 0);
   const { invoiceTotal } = calcGstFull(totalAmount, 'No Scope', 0);
 
   const updateRoomRow = (index: number, changes: Partial<CheckInRoomRow>) => {
@@ -140,7 +133,7 @@ export const CheckInModal = ({
       arrivalTime,
       performedBy,
     };
-    const validationError = validateCheckIn({ ...baseParams, roomNo: roomRows[0].roomNo, rate: roomRows[0].rate });
+    const validationError = validateCheckIn({ ...baseParams, roomNo: roomRows[0].roomNo, rate: toNum(roomRows[0].rate) });
     if (validationError) { setError(validationError); return; }
 
     setSaving(true);
@@ -150,7 +143,7 @@ export const CheckInModal = ({
           ...baseParams,
           reservationId: index === 0 ? reservation?.id : undefined,
           roomNo: room.roomNo,
-          rate: room.rate,
+          rate: toNum(room.rate),
           payCash: index === 0 ? reservation?.pay_cash : 0,
           payUpi: index === 0 ? reservation?.pay_upi : 0,
           payCard: index === 0 ? reservation?.pay_card : 0,
@@ -244,7 +237,7 @@ export const CheckInModal = ({
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input value={guestName} onChange={(e) => setGuestName(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                      className="w-full pl-9 pr-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                       placeholder="Guest name" />
                   </div>
                 </Field>
@@ -253,24 +246,37 @@ export const CheckInModal = ({
                     <div className="relative">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                       <input value={phone} onChange={(e) => setPhone(e.target.value)}
-                        className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                        className="w-full pl-9 pr-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                         placeholder="Phone" />
                     </div>
                   </Field>
                   <Field label="Email">
                     <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
                       placeholder="Email (optional)" />
                   </Field>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Check-in *">
-                    <input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                    <input type="date" value={checkIn} onChange={(e) => {
+                      const nextIn = e.target.value;
+                      setCheckIn(nextIn);
+                      if (nextIn && checkOut <= nextIn) {
+                        setCheckOut(addDays(nextIn, 1));
+                      }
+                    }}
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                   <Field label="Check-out *">
-                    <input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+                    <input type="date" value={checkOut} min={addDays(checkIn, 1)} onChange={(e) => {
+                      const nextOut = e.target.value;
+                      if (nextOut && nextOut <= checkIn) {
+                        setCheckOut(addDays(checkIn, 1));
+                      } else {
+                        setCheckOut(nextOut);
+                      }
+                    }}
+                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
                   </Field>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
@@ -280,7 +286,32 @@ export const CheckInModal = ({
                 </div>
 
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><BedDouble className="w-3.5 h-3.5" /> Assign Rooms *</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><BedDouble className="w-3.5 h-3.5" /> Assign Rooms *</p>
+                    {roomRows.length > 1 && (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="Default Rate"
+                          value={defaultRate}
+                          onChange={(e) => setDefaultRate(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
+                          className="w-28 px-2 py-1 text-xs border border-slate-200 rounded-lg text-right"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (defaultRate === '') return;
+                            const r = toNum(defaultRate);
+                            setRoomRows((rows) => rows.map((row) => ({ ...row, rate: r })));
+                          }}
+                          className="px-2.5 py-1 text-xs font-semibold bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg transition"
+                        >
+                          Apply to All
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   {roomRows.map((row, index) => {
                     const selected = rooms.find((room) => room.room_no.trim().toLowerCase() === row.roomNo.trim().toLowerCase());
                     const category = categories.find((item) => item.id === selected?.category_id);
@@ -300,7 +331,23 @@ export const CheckInModal = ({
                           </Field>
                           <button type="button" onClick={() => removeRoomRow(index)} disabled={roomRows.length === 1} className="p-2 text-slate-400 hover:text-red-600 disabled:opacity-30" aria-label="Remove room"><Trash2 className="w-4 h-4" /></button>
                         </div>
-                        <Field label="Room Rate / Night"><input type="number" min="0" value={row.rate} onChange={(e) => updateRoomRow(index, { rate: Number(e.target.value) })} className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg" /></Field>
+                        <Field label="Room Rate / Night">
+                          <input
+                            type="number"
+                            min="0"
+                            value={row.rate}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              updateRoomRow(index, { rate: raw === '' ? '' : Math.max(0, Number(raw)) });
+                            }}
+                            onBlur={() => {
+                              if (row.rate === '') {
+                                updateRoomRow(index, { rate: 0 });
+                              }
+                            }}
+                            className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
+                          />
+                        </Field>
                       </div>
                     );
                   })}
@@ -385,7 +432,7 @@ export const CheckInModal = ({
                   </div>
                   <div className="p-4 space-y-2">
                     <Row label="Guest" value={guestName} />
-                    <Row label="Rooms" value={roomRows.map((row) => `${row.roomNo} · ₹${fmtMoney(row.rate)}`).join(', ')} />
+                    <Row label="Rooms" value={roomRows.map((row) => `${row.roomNo} · ₹${fmtMoney(toNum(row.rate))}`).join(', ')} />
                     <Row label="Check-in" value={checkIn} />
                     <Row label="Check-out" value={checkOut} />
                     <Row label="Nights" value={String(nights)} />

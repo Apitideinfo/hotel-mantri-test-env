@@ -23,6 +23,29 @@ export const getTodayLocal = (): string => {
   return `${year}-${month}-${day}`;
 };
 
+export const addDays = (dateStr: string, n: number): string => {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr || '';
+  const [y, m, d] = dateStr.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return dateStr;
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  if (isNaN(dt.getTime())) return dateStr;
+  const year = dt.getUTCFullYear();
+  const month = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(dt.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const calcStayNights = (arrival?: string | null, departure?: string | null): number => {
+  if (!arrival || !departure) return 1;
+  const [y1, m1, d1] = arrival.slice(0, 10).split('-').map(Number);
+  const [y2, m2, d2] = departure.slice(0, 10).split('-').map(Number);
+  if (!y1 || !m1 || !d1 || !y2 || !m2 || !d2) return 1;
+  const utc1 = Date.UTC(y1, m1 - 1, d1);
+  const utc2 = Date.UTC(y2, m2 - 1, d2);
+  const diffDays = Math.round((utc2 - utc1) / 86400000);
+  return diffDays > 0 ? diffDays : 1;
+};
+
 export const calcArr = (roomSale: number, roomsOccupied: number): number =>
   roomsOccupied > 0 ? toNum(roomSale) / roomsOccupied : 0;
 
@@ -204,7 +227,16 @@ const SOURCE_KEYS: Record<SourceCategory, keyof RoomChartAggregate> = {
   'Phonebook': 'phonebook',
 };
 
-export const aggregateRoomChart = (entries: RoomChartEntry[]): RoomChartAggregate => {
+export const isStayOccupiedOnDate = (e: RoomChartEntry, date: string): boolean => {
+  const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+  const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+  if (arr >= dep) {
+    return arr === date;
+  }
+  return arr <= date && dep > date;
+};
+
+export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: string): RoomChartAggregate => {
   const agg: RoomChartAggregate = {
     roomsOccupied: 0, complimentary: 0, roomRevenue: 0,
     ota: 0, directWalking: 0, corporateAgent: 0, phonebook: 0,
@@ -213,28 +245,54 @@ export const aggregateRoomChart = (entries: RoomChartEntry[]): RoomChartAggregat
     payCash: 0, payUpi: 0, payCard: 0, payBank: 0, payAdvance: 0, payBalance: 0,
   };
   for (const e of entries) {
-    if (e.is_complimentary) {
-      agg.complimentary += 1;
-    } else {
-      agg.roomsOccupied += 1;
-      const amt = toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate);
-      agg.roomRevenue += amt;
-      const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
-      (agg[key] as number) += amt;
-      // GST
-      agg.taxableRevenue += toNum(e.taxable_amount);
-      agg.gstCollected += toNum(e.gst_amount);
-      // Split payments
+    const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+    const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+
+    if (targetDate) {
+      if (arr === targetDate) agg.expectedArrivals += 1;
+      if (dep === targetDate) agg.departures += 1;
+    }
+
+    const isOccupied = targetDate ? isStayOccupiedOnDate(e, targetDate) : true;
+    const isPaymentDay = targetDate
+      ? ((e.report_date && e.report_date === targetDate) || (!e.report_date && arr === targetDate))
+      : true;
+
+    if (isOccupied) {
+      const nightsCount = Math.max(1, toNum(e.nights) || 1);
+      const nightlyRate = targetDate && nightsCount > 1
+        ? (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (toNum(e.total) / nightsCount))
+        : (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : toNum(e.total));
+      const nightlyTaxable = targetDate && nightsCount > 1
+        ? (toNum(e.taxable_amount) > 0 ? toNum(e.taxable_amount) / nightsCount : nightlyRate)
+        : toNum(e.taxable_amount);
+      const nightlyGst = targetDate && nightsCount > 1
+        ? (toNum(e.gst_amount) > 0 ? toNum(e.gst_amount) / nightsCount : 0)
+        : toNum(e.gst_amount);
+
+      if (e.is_complimentary) {
+        agg.complimentary += 1;
+      } else {
+        agg.roomsOccupied += 1;
+        agg.roomRevenue += nightlyRate;
+        const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
+        (agg[key] as number) += nightlyRate;
+        agg.taxableRevenue += nightlyTaxable;
+        agg.gstCollected += nightlyGst;
+      }
+    }
+
+    if (isPaymentDay) {
       agg.payCash += toNum(e.pay_cash);
       agg.payUpi += toNum(e.pay_upi);
       agg.payCard += toNum(e.pay_card);
       agg.payBank += toNum(e.pay_bank);
       agg.payAdvance += toNum(e.pay_advance);
       agg.payBalance += toNum(e.pay_balance);
-    }
-    if (!e.is_complimentary) {
-      agg.cash += toNum(e.pay_cash);
-      agg.bank += toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank);
+      if (!e.is_complimentary) {
+        agg.cash += toNum(e.pay_cash);
+        agg.bank += toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank);
+      }
     }
   }
   return agg;
@@ -310,7 +368,7 @@ export const buildDerivedReport = (
   financeExpenses?: { category: string; amount: number }[],
   otherRevenueEntries?: { category: string; amount: number }[],
 ): DerivedReport => {
-  const agg = aggregateRoomChart(entries);
+  const agg = aggregateRoomChart(entries, date);
   const { departures, expectedArrivals } = calcTomorrowStatus(entries, date);
 
   // Aggregate finance expenses, skipping categories already tracked in Other Daily Entries
@@ -352,16 +410,20 @@ export const buildDerivedReport = (
   const gstSplit = splitGst(agg.gstCollected);
   const netRevenue = agg.roomRevenue - agg.gstCollected;
   const invoiceTotal = agg.roomRevenue;
-  // Revenue breakup by category
+  const getEntryNightlyRate = (e: RoomChartEntry): number => {
+    if (e.is_complimentary) return 0;
+    const nightsCount = Math.max(1, toNum(e.nights) || 1);
+    return toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (toNum(e.total) / nightsCount);
+  };
   const roomRevenueCat = entries
-    .filter((e) => !e.is_complimentary && (e.revenue_category || 'Room Revenue') === 'Room Revenue')
-    .reduce((s, e) => s + (toNum(e.invoice_total) > 0 ? toNum(e.invoice_total) : (toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate))), 0);
+    .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && (e.revenue_category || 'Room Revenue') === 'Room Revenue')
+    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
   const fbRevenueCat = entries
-    .filter((e) => !e.is_complimentary && (e.revenue_category) === 'F&B Revenue')
-    .reduce((s, e) => s + (toNum(e.invoice_total) > 0 ? toNum(e.invoice_total) : (toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate))), 0);
+    .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'F&B Revenue')
+    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
   const miscRevenueCat = entries
-    .filter((e) => !e.is_complimentary && (e.revenue_category) === 'Misc Revenue')
-    .reduce((s, e) => s + (toNum(e.invoice_total) > 0 ? toNum(e.invoice_total) : (toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate))), 0);
+    .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'Misc Revenue')
+    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
   return {
     report_date: date,
     rooms_occupied: agg.roomsOccupied + agg.complimentary,
@@ -518,7 +580,7 @@ export const buildCashFlow = (
   openingCash: number,
   daily: DerivedReport,
 ): CashFlowData => {
-  const cashCollection = toNum(daily.pay_cash);
+  const cashCollection = toNum(daily.pay_cash) + toNum(daily.other_income) + toNum(daily.other_revenue_entries);
   const cashExpenses = toNum(daily.housekeeping_supply) + toNum(daily.other_expense) + toNum(daily.maintenance_bill) + toNum(daily.finance_expenses);
   const salaryAdvance = toNum(daily.salary_advance);
   const cashHandover = toNum(daily.cash_handover_md);

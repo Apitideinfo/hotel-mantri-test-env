@@ -26,10 +26,10 @@ const CHARGE_TYPES: FolioChargeType[] = ['Laundry', 'Minibar', 'Extra Bed', 'Roo
 export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: CheckOutModalProps) => {
   const [charges, setCharges] = useState<FolioCharge[]>([]);
   const [loading, setLoading] = useState(true);
-  const [collectCash, setCollectCash] = useState(0);
-  const [collectUpi, setCollectUpi] = useState(0);
-  const [collectCard, setCollectCard] = useState(0);
-  const [collectBank, setCollectBank] = useState(0);
+  const [collectCash, setCollectCash] = useState<number | ''>('');
+  const [collectUpi, setCollectUpi] = useState<number | ''>('');
+  const [collectCard, setCollectCard] = useState<number | ''>('');
+  const [collectBank, setCollectBank] = useState<number | ''>('');
   const [checkoutAnyway, setCheckoutAnyway] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +39,7 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [newChargeType, setNewChargeType] = useState<FolioChargeType>('Laundry');
   const [newChargeDesc, setNewChargeDesc] = useState('');
-  const [newChargeAmount, setNewChargeAmount] = useState(0);
+  const [newChargeAmount, setNewChargeAmount] = useState<number | ''>('');
   const [newChargeQty, setNewChargeQty] = useState(1);
 
   const canAnyway = role === 'admin' || role === 'super_admin';
@@ -62,7 +62,7 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
   const remainingAfterCollect = Math.max(0, balance - collectingNow);
 
   const handleAddCharge = async () => {
-    if (newChargeAmount <= 0) { setError('Charge amount must be greater than 0.'); return; }
+    if (toNum(newChargeAmount) <= 0) { setError('Charge amount must be greater than 0.'); return; }
     setSaving(true);
     setError(null);
     try {
@@ -70,13 +70,13 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
         entry_id: entry.id,
         charge_type: newChargeType,
         description: newChargeDesc,
-        amount: newChargeAmount,
+        amount: toNum(newChargeAmount),
         quantity: newChargeQty,
       });
       setCharges((prev) => [...prev, newCharge]);
       setNewChargeType('Laundry');
       setNewChargeDesc('');
-      setNewChargeAmount(0);
+      setNewChargeAmount('');
       setNewChargeQty(1);
       setShowAddCharge(false);
     } catch (e) {
@@ -109,10 +109,10 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
       await checkOutGuest({
         entryId: entry.id,
         roomNo,
-        collectCash,
-        collectUpi,
-        collectCard,
-        collectBank,
+        collectCash: toNum(collectCash),
+        collectUpi: toNum(collectUpi),
+        collectCard: toNum(collectCard),
+        collectBank: toNum(collectBank),
         checkoutAnyway,
       });
       setSuccess(true);
@@ -221,20 +221,29 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
               <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-2">
                 <div className="grid grid-cols-2 gap-2">
                   <select value={newChargeType} onChange={(e) => setNewChargeType(e.target.value as FolioChargeType)}
-                    className="px-3 py-2 text-sm border border-slate-200 rounded-lg bg-white">
+                    className="px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg bg-white">
                     {CHARGE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
-                  <input type="number" placeholder="Amount" value={newChargeAmount === 0 ? '' : newChargeAmount}
-                    onChange={(e) => setNewChargeAmount(Math.max(0, Number(e.target.value)))}
-                    className="px-3 py-2 text-sm border border-slate-200 rounded-lg" />
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    placeholder="Amount"
+                    value={newChargeAmount}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setNewChargeAmount(raw === '' ? '' : Math.max(0, Number(raw)));
+                    }}
+                    className="px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg bg-white"
+                  />
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   <input placeholder="Description" value={newChargeDesc}
                     onChange={(e) => setNewChargeDesc(e.target.value)}
-                    className="col-span-2 px-3 py-2 text-sm border border-slate-200 rounded-lg" />
+                    className="col-span-2 px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg bg-white" />
                   <input type="number" placeholder="Qty" min={1} value={newChargeQty}
                     onChange={(e) => setNewChargeQty(Math.max(1, Number(e.target.value)))}
-                    className="px-3 py-2 text-sm border border-slate-200 rounded-lg" />
+                    className="px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg bg-white" />
                 </div>
                 <div className="flex gap-2">
                   <button onClick={handleAddCharge} disabled={saving}
@@ -340,15 +349,23 @@ const FolioRow = ({ icon: Icon, label, value }: { icon: typeof Wallet; label: st
 );
 
 const CollectField = ({ icon: Icon, label, value, onChange }: {
-  icon: typeof Wallet; label: string; value: number; onChange: (v: number) => void;
+  icon: typeof Wallet; label: string; value: number | ''; onChange: (v: number | '') => void;
 }) => (
   <label className="block">
     <span className="block text-xs font-medium text-slate-500 mb-1">{label}</span>
     <div className="relative">
       <Icon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-      <input type="number" min={0} value={value === 0 ? '' : value} onChange={(e) => onChange(Math.max(0, Number(e.target.value)))}
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(e) => {
+          const raw = e.target.value;
+          onChange(raw === '' ? '' : Math.max(0, Number(raw)));
+        }}
         placeholder="0"
-        className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+        className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+      />
     </div>
   </label>
 );

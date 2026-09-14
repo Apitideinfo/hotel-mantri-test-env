@@ -11,7 +11,7 @@ import type {
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
 import type { ReservationInput } from '@/lib/types-reservations';
-import { fmtMoney, toNum, calcGstFull } from '@/lib/calc';
+import { fmtMoney, toNum, calcGstFull, addDays, calcStayNights } from '@/lib/calc';
 
 interface NewBookingModalProps {
   rooms: Room[];
@@ -27,11 +27,6 @@ interface NewBookingModalProps {
   onSave: (input: ReservationInput | ReservationInput[]) => void;
 }
 
-const addDays = (dateStr: string, n: number): string => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-};
 
 export const NewBookingModal = ({
   rooms, categories, sources, settings: _settings, defaultDate,
@@ -46,6 +41,7 @@ export const NewBookingModal = ({
   const [checkIn, setCheckIn] = useState(preselectCheckIn ?? defaultDate);
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
   const [rate, setRate] = useState<number | ''>('');
+  const [roomRates, setRoomRates] = useState<Record<string, number>>({});
   const [sourceName, setSourceName] = useState('');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
   const [payMode, setPayMode] = useState('Cash');
@@ -77,12 +73,13 @@ export const NewBookingModal = ({
   );
 
   const nights = useMemo(() => {
-    const ci = new Date(checkIn + 'T00:00:00');
-    const co = new Date(checkOut + 'T00:00:00');
-    return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
+    return calcStayNights(checkIn, checkOut);
   }, [checkIn, checkOut]);
 
-  const subtotal = toNum(rate) * nights * Math.max(1, roomNos.length);
+  const subtotal = roomNos.reduce((sum, no) => {
+    const rRate = roomRates[no] !== undefined ? roomRates[no] : toNum(rate);
+    return sum + rRate * nights;
+  }, 0);
   const afterDiscount = Math.max(0, subtotal - toNum(discount));
   const { taxable: _taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, gstType, gstSlab);
   const totalReceived = toNum(payCash) + toNum(payUpi) + toNum(payCard) + toNum(payBank);
@@ -90,13 +87,22 @@ export const NewBookingModal = ({
 
   const toggleRoom = (no: string) => {
     setRoomNos(prev => {
-      const newNos = prev.includes(no) ? prev.filter(n => n !== no) : [...prev, no];
-      if (newNos.length > 0 && rate === '' && newNos.length > prev.length) {
+      const isRemoving = prev.includes(no);
+      const newNos = isRemoving ? prev.filter(n => n !== no) : [...prev, no];
+      if (isRemoving) {
+        setRoomRates(rates => {
+          const next = { ...rates };
+          delete next[no];
+          return next;
+        });
+      } else {
         const r = rooms.find((rm) => rm.room_no === no);
-        if (r) {
-          const cat = categories.find((c) => c.id === r.category_id);
-          setRate(cat?.default_tariff ?? r.default_tariff ?? 0);
+        const cat = categories.find((c) => c.id === r?.category_id);
+        const rTariff = toNum(rate) > 0 ? toNum(rate) : (cat?.default_tariff ?? r?.default_tariff ?? 0);
+        if (newNos.length === 1 && rate === '') {
+          setRate(rTariff);
         }
+        setRoomRates(rates => ({ ...rates, [no]: rTariff }));
       }
       return newNos;
     });
@@ -131,8 +137,9 @@ export const NewBookingModal = ({
       const rPayCard = idx === 0 ? toNum(payCard) : 0;
       const rPayBank = idx === 0 ? toNum(payBank) : 0;
       
-      const roomSubtotal = toNum(rate) * nights;
-      const roomDiscount = toNum(discount) / roomNos.length;
+      const individualRate = roomRates[no] !== undefined ? toNum(roomRates[no]) : toNum(rate);
+      const roomSubtotal = individualRate * nights;
+      const roomDiscount = toNum(discount) / (roomNos.length || 1);
       const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
       const { taxable: rTaxable, gst: rGst, invoiceTotal: rInvoiceTotal } = calcGstFull(roomAfterDiscount, gstType, gstSlab);
       
@@ -147,7 +154,7 @@ export const NewBookingModal = ({
         company_gst: companyGst.trim(),
         check_in_date: checkIn,
         check_out_date: checkOut,
-        rate: toNum(rate),
+        rate: individualRate,
         source_category: sourceCat,
         source_name: sourceName.trim(),
         payment_mode: payMode,
@@ -284,7 +291,7 @@ export const NewBookingModal = ({
                     value={guestName}
                     onChange={(e) => setGuestName(e.target.value)}
                     placeholder="Enter guest name"
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                   />
                 </div>
 
@@ -296,7 +303,7 @@ export const NewBookingModal = ({
                     <select
                       value={countryCode}
                       onChange={(e) => setCountryCode(e.target.value)}
-                      className="px-3 py-2.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 shrink-0"
+                      className="px-3 py-2.5 text-xs font-semibold text-slate-900 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 shrink-0"
                     >
                       <option value="+91">+91</option>
                       <option value="+1">+1</option>
@@ -308,7 +315,7 @@ export const NewBookingModal = ({
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder="Enter mobile number"
-                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                     />
                   </div>
                 </div>
@@ -327,11 +334,11 @@ export const NewBookingModal = ({
                       onChange={(e) => {
                         const newCi = e.target.value;
                         setCheckIn(newCi);
-                        const ciDate = new Date(newCi + 'T00:00:00');
-                        ciDate.setDate(ciDate.getDate() + nights);
-                        setCheckOut(ciDate.toISOString().split('T')[0]);
+                        if (newCi) {
+                          setCheckOut(addDays(newCi, nights));
+                        }
                       }}
-                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                     />
                   </div>
                 </div>
@@ -343,8 +350,16 @@ export const NewBookingModal = ({
                   <input
                     type="date"
                     value={checkOut}
-                    onChange={(e) => setCheckOut(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                    min={addDays(checkIn, 1)}
+                    onChange={(e) => {
+                      const newCo = e.target.value;
+                      if (newCo && newCo <= checkIn) {
+                        setCheckOut(addDays(checkIn, 1));
+                      } else {
+                        setCheckOut(newCo);
+                      }
+                    }}
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                   />
                 </div>
 
@@ -415,7 +430,7 @@ export const NewBookingModal = ({
                   <select
                     value={selectedCategoryFilter}
                     onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition mb-2"
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition mb-2"
                   >
                     <option value="all">Select room type / category</option>
                     {categories.map((c) => (
@@ -426,16 +441,75 @@ export const NewBookingModal = ({
                   </select>
 
                   <div className="pt-1">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Rate / Night per Room (₹)
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        {roomNos.length > 1 ? 'Default Room Rate (₹)' : 'Rate / Night (₹)'}
+                      </label>
+                      {roomNos.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (rate === '') return;
+                            const r = toNum(rate);
+                            setRoomRates(() => {
+                              const next: Record<string, number> = {};
+                              for (const no of roomNos) next[no] = r;
+                              return next;
+                            });
+                          }}
+                          className="px-2 py-0.5 text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition"
+                        >
+                          Apply to All
+                        </button>
+                      )}
+                    </div>
                     <input
                       type="number"
+                      step="any"
+                      min={0}
                       value={rate}
-                      onChange={(e) => setRate(e.target.value === '' ? '' : Number(e.target.value))}
+                      onChange={(e) => {
+                        const val = e.target.value === '' ? '' : Number(e.target.value);
+                        setRate(val);
+                      }}
                       placeholder="Enter rate per night"
-                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                      className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                     />
+                    {roomNos.length > 1 && (
+                      <div className="mt-3 border border-slate-200 rounded-xl divide-y divide-slate-100 overflow-hidden bg-slate-50/50">
+                        <div className="px-3 py-1.5 bg-slate-100 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                          Individual Room Rates
+                        </div>
+                        {roomNos.map((no) => {
+                          const rm = rooms.find((r) => r.room_no === no);
+                          const cat = categories.find((c) => c.id === rm?.category_id);
+                          const currentRate = roomRates[no] !== undefined ? roomRates[no] : (rate !== '' ? toNum(rate) : (cat?.default_tariff ?? 0));
+                          return (
+                            <div key={no} className="flex items-center justify-between gap-3 px-3 py-2 bg-white">
+                              <div>
+                                <span className="text-xs font-bold text-slate-800">Room {no}</span>
+                                {cat && <span className="text-[10px] text-slate-400 ml-1.5">{cat.name}</span>}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs text-slate-400">₹</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step="any"
+                                  value={currentRate}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value));
+                                    setRoomRates((rates) => ({ ...rates, [no]: val }));
+                                  }}
+                                  aria-label={`Rate for Room ${no}`}
+                                  className="w-24 px-2 py-1 text-xs text-slate-900 bg-white border border-slate-200 rounded-lg text-right font-medium focus:outline-none focus:ring-1 focus:ring-sky-500"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -463,7 +537,7 @@ export const NewBookingModal = ({
                     value={sourceName}
                     onChange={(e) => setSourceName(e.target.value)}
                     placeholder="Select source"
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                   />
                   <datalist id="booking-sources-list">
                     {sources.map((s) => <option key={s.id} value={s.name} />)}
@@ -477,7 +551,7 @@ export const NewBookingModal = ({
                   <select
                     value={sourceCat}
                     onChange={(e) => setSourceCat(e.target.value as SourceCategory)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                   >
                     {SOURCE_CATEGORIES.map((s) => (
                       <option key={s} value={s}>{s}</option>
@@ -492,7 +566,7 @@ export const NewBookingModal = ({
                   <select
                     value={mealPlan}
                     onChange={(e) => setMealPlan(e.target.value as MealPlan)}
-                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
+                    className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition"
                   >
                     {MEAL_PLANS.map((m) => (
                       <option key={m.value} value={m.value}>{m.label}</option>
@@ -511,7 +585,7 @@ export const NewBookingModal = ({
                   onChange={(e) => setRemarks(e.target.value)}
                   rows={2}
                   placeholder="Add any special requests or notes..."
-                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition resize-none"
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 focus:border-sky-500 transition resize-none"
                 />
               </div>
             </div>
@@ -608,9 +682,10 @@ export const NewBookingModal = ({
                       <input
                         type="number"
                         min={0}
+                        step="any"
                         value={discount}
                         onChange={(e) => setDiscount(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                     <div>
@@ -620,7 +695,7 @@ export const NewBookingModal = ({
                         min={1}
                         value={adults}
                         onChange={(e) => setAdults(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                     <div>
@@ -630,7 +705,7 @@ export const NewBookingModal = ({
                         min={0}
                         value={children}
                         onChange={(e) => setChildren(e.target.value === '' ? '' : Math.max(0, Number(e.target.value)))}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                     <div>
@@ -638,7 +713,7 @@ export const NewBookingModal = ({
                       <select
                         value={payMode}
                         onChange={(e) => setPayMode(e.target.value)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       >
                         <option value="Cash">Cash</option>
                         <option value="UPI">UPI</option>
@@ -654,7 +729,7 @@ export const NewBookingModal = ({
                       <select
                         value={gstType}
                         onChange={(e) => setGstType(e.target.value as GstType)}
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       >
                         {GST_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                       </select>
@@ -665,7 +740,7 @@ export const NewBookingModal = ({
                         <select
                           value={String(gstSlab)}
                           onChange={(e) => setGstSlab(Number(e.target.value) as GstSlab)}
-                          className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                          className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                         >
                           {GST_SLABS.map((s) => <option key={s} value={String(s)}>{s}%</option>)}
                         </select>
@@ -681,7 +756,7 @@ export const NewBookingModal = ({
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         placeholder="guest@example.com"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                     <div>
@@ -691,7 +766,7 @@ export const NewBookingModal = ({
                         value={companyGst}
                         onChange={(e) => setCompanyGst(e.target.value)}
                         placeholder="Company GST number"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                   </div>
@@ -704,7 +779,7 @@ export const NewBookingModal = ({
                         value={paymentRef}
                         onChange={(e) => setPaymentRef(e.target.value)}
                         placeholder="UTR / transaction ref number"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                     <div>
@@ -714,7 +789,7 @@ export const NewBookingModal = ({
                         value={createdBy}
                         onChange={(e) => setCreatedBy(e.target.value)}
                         placeholder="Staff name"
-                        className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
                       />
                     </div>
                   </div>
@@ -726,7 +801,7 @@ export const NewBookingModal = ({
                       onChange={(e) => setGuestAddress(e.target.value)}
                       rows={2}
                       placeholder="Guest full address"
-                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 resize-none"
+                      className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30 resize-none"
                     />
                   </div>
                 </div>

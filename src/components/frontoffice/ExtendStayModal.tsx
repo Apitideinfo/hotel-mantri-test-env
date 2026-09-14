@@ -3,7 +3,7 @@ import {
   X, Loader2, AlertCircle, CheckCircle2, CalendarPlus, Calendar, IndianRupee,
 } from 'lucide-react';
 import type { RoomChartEntry, FrontOfficeRole } from '@/lib/types';
-import { fmtMoney, toNum, calcGstFull } from '@/lib/calc';
+import { fmtMoney, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { extendStay, validateExtendStay } from '@/lib/api-frontoffice';
 import { brand } from '@/lib/theme';
 
@@ -31,9 +31,7 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
   const currentNights = toNum(entry.nights);
   const newNights = useMemo(() => {
     if (!newCheckOut) return currentNights;
-    return Math.max(1, Math.round(
-      (new Date(newCheckOut + 'T00:00:00').getTime() - new Date(currentCheckIn + 'T00:00:00').getTime()) / 86400000,
-    ));
+    return calcStayNights(currentCheckIn, newCheckOut);
   }, [newCheckOut, currentCheckIn, currentNights]);
 
   const newSubtotal = toNum(entry.room_rate) * newNights;

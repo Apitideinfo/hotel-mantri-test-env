@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories } from './api';
+import { calcStayNights } from './calc';
 import type { RoomChartEntry } from './types';
 import type {
   Reservation, ReservationInput, ReservationStatus,
@@ -93,6 +94,60 @@ export const saveReservation = async (
   // Remove generated/virtual fields that PostgreSQL generated columns forbid inserting into
   delete (rawPayload as { id?: string }).id;
   delete (rawPayload as { nights?: number }).nights;
+
+  // Sync guest into guests master table if name or phone provided
+  try {
+    const cleanName = (rawPayload.guest_name ?? '').trim();
+    const cleanPhone = (rawPayload.guest_phone ?? '').trim();
+    const cleanEmail = (rawPayload.guest_email ?? '').trim();
+    if (cleanName && !rawPayload.guest_id) {
+      let existingGuest: { id: string } | null = null;
+      if (cleanPhone) {
+        const { data: g } = await supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .eq('mobile', cleanPhone)
+          .maybeSingle();
+        existingGuest = g;
+      }
+      if (!existingGuest) {
+        const { data: g } = await supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .ilike('name', cleanName)
+          .maybeSingle();
+        existingGuest = g;
+      }
+
+      if (existingGuest) {
+        rawPayload.guest_id = existingGuest.id;
+        await supabase
+          .from('guests')
+          .update({
+            mobile: cleanPhone || undefined,
+            email: cleanEmail || undefined,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingGuest.id);
+      } else {
+        const { data: newG } = await supabase
+          .from('guests')
+          .insert({
+            hotel_id: hotelId,
+            name: cleanName,
+            mobile: cleanPhone,
+            email: cleanEmail,
+          })
+          .select('id')
+          .single();
+        if (newG) rawPayload.guest_id = newG.id;
+      }
+    }
+  } catch {
+    // Non-blocking guest sync
+  }
 
   if (id && id.trim() !== '') {
     const { data, error } = await supabase
@@ -433,9 +488,7 @@ export const createGroupBooking = async (params: {
   // Create reservations for each room
   const reservations: Reservation[] = [];
   for (const room of params.rooms) {
-    const nights = Math.max(1, Math.round(
-      (new Date(room.check_out + 'T00:00:00').getTime() - new Date(room.check_in + 'T00:00:00').getTime()) / 86400000,
-    ));
+    const nights = calcStayNights(room.check_in, room.check_out);
 
     // Validate availability
     const available = await checkRoomAvailability(room.room_no, room.check_in, room.check_out);
@@ -549,9 +602,7 @@ export const getWaitlist = async (status?: WaitlistStatus): Promise<WaitlistEntr
 };
 
 export const addToWaitlist = async (input: WaitlistInput): Promise<WaitlistEntry> => {
-  const nights = input.nights ?? Math.max(1, Math.round(
-    (new Date(input.check_out + 'T00:00:00').getTime() - new Date(input.check_in + 'T00:00:00').getTime()) / 86400000,
-  ));
+  const nights = input.nights ?? calcStayNights(input.check_in, input.check_out);
   const { data, error } = await supabase
     .from('waitlist')
     .insert({
@@ -922,9 +973,7 @@ export const quickReservation = async (params: {
   const available = await checkRoomAvailability(params.roomNo, params.checkIn, params.checkOut);
   if (!available) throw new Error('Room is not available for the selected dates.');
 
-  const nights = Math.max(1, Math.round(
-    (new Date(params.checkOut + 'T00:00:00').getTime() - new Date(params.checkIn + 'T00:00:00').getTime()) / 86400000,
-  ));
+  const nights = calcStayNights(params.checkIn, params.checkOut);
 
   return saveReservation({
     room_id: null,

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 
 interface NumberFieldProps {
   label: string;
@@ -13,14 +13,58 @@ interface NumberFieldProps {
 export const NumberField = ({
   label, value, onChange, prefix, suffix, allowDecimal = true, max,
 }: NumberFieldProps) => {
+  const [localStr, setLocalStr] = useState<string>(() => {
+    const num = typeof value === 'string' ? parseFloat(value) : value;
+    return Number.isFinite(num) ? String(num) : '';
+  });
+  const isFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      const num = typeof value === 'string' ? parseFloat(value) : value;
+      setLocalStr(Number.isFinite(num) ? String(num) : '');
+    } else {
+      const num = typeof value === 'string' ? parseFloat(value) : value;
+      const currentParsed = localStr === '' ? 0 : allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(num) && num !== currentParsed) {
+        setLocalStr(String(num));
+      }
+    }
+  }, [value, allowDecimal]);
+
   const handle = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    if (raw === '') { onChange(0); return; }
+    setLocalStr(raw);
+    if (raw === '' || raw === '-' || (allowDecimal && raw.endsWith('.'))) {
+      if (raw === '') onChange(0);
+      return;
+    }
     const n = allowDecimal ? parseFloat(raw) : parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 0) return;
     if (max !== undefined && n > max) return;
     onChange(n);
   };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    if (localStr === '' || isNaN(Number(localStr))) {
+      const fallback = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      setLocalStr(String(fallback));
+      onChange(fallback);
+    } else {
+      const n = allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(n)) {
+        if (max !== undefined && n > max) {
+          setLocalStr(String(max));
+          onChange(max);
+        } else {
+          setLocalStr(String(n));
+          onChange(n);
+        }
+      }
+    }
+  };
+
   return (
     <label className="block">
       <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
@@ -34,9 +78,12 @@ export const NumberField = ({
           type="number"
           inputMode={allowDecimal ? 'decimal' : 'numeric'}
           min={0}
+          max={max}
           step={allowDecimal ? '0.01' : '1'}
-          value={value === 0 ? '' : value}
+          value={localStr}
           onChange={handle}
+          onFocus={() => { isFocusedRef.current = true; }}
+          onBlur={handleBlur}
           placeholder="0"
           className={`flex-1 min-w-0 px-3 py-2.5 text-base border border-slate-300 bg-white text-slate-900
             focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500

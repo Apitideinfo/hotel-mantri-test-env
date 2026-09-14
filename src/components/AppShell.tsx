@@ -101,6 +101,179 @@ const NAV_GROUPS: NavGroup[] = [
 const ALL_ITEMS = [...NAV_GROUPS, POS_GROUP].flatMap((g) => g.items);
 const findLabel = (key: string) => ALL_ITEMS.find((i) => i.key === key)?.label ?? '';
 
+interface SidebarContentProps {
+  isMobile?: boolean;
+  collapsed: boolean;
+  hotelName?: string | null;
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  filteredGroups: NavGroup[];
+  expandedGroups: Set<string>;
+  toggleGroup: (label: string) => void;
+  currentScreen: string;
+  go: (key: string) => void;
+  onSignOut: () => void;
+  setSidebarOpen: (open: boolean) => void;
+}
+
+const SidebarContent = ({
+  isMobile = false,
+  collapsed,
+  hotelName,
+  searchQuery,
+  setSearchQuery,
+  filteredGroups,
+  expandedGroups,
+  toggleGroup,
+  currentScreen,
+  go,
+  onSignOut,
+  setSidebarOpen,
+}: SidebarContentProps) => {
+  return (
+    <>
+      {/* Header */}
+      <div className="px-5 py-4 flex items-center justify-between shrink-0 border-b border-amber-200/70 bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-white">
+        <div className="flex items-center gap-3">
+          <div className="p-1.5 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-white shadow-gold-glow">
+            <BrandIcon className="w-6 h-6 shrink-0" />
+          </div>
+          {!isMobile ? (
+            <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+              <div>
+                <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
+                <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
+              </div>
+            </div>
+          ) : (
+            <div className="min-w-0 flex-1 overflow-hidden ml-3">
+              <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
+              <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
+            </div>
+          )}
+        </div>
+        {isMobile && (
+          <button onClick={() => setSidebarOpen(false)} className="text-amber-800 hover:text-slate-900 p-1 shrink-0">
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+
+      {/* Search menu */}
+      {!isMobile ? (
+        <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 py-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[60px] opacity-100 py-3 mb-1 px-3.5'}`}>
+          <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
+            <Search className="w-4 h-4 text-amber-600 shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search menu…"
+              className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="px-3.5 pb-1 pt-3.5">
+          <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
+            <Search className="w-4 h-4 text-amber-600 shrink-0" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search menu…"
+              className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Navigation list */}
+      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3.5 sidebar-scroll">
+        {filteredGroups.map((group) => {
+          const isGroupOpen = searchQuery.trim() ? true : expandedGroups.has(group.label);
+          const isGroupCollapsed = !isGroupOpen;
+          return (
+            <div key={group.label}>
+              {!isMobile ? (
+                <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 mt-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[30px] opacity-100 mt-2 mb-1.5 px-3'}`}>
+                  <button
+                    onClick={() => toggleGroup(group.label)}
+                    className="w-full flex items-center justify-between text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950"
+                  >
+                    <span className="whitespace-nowrap">{group.label}</span>
+                    <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => toggleGroup(group.label)}
+                  className="w-full flex items-center justify-between px-3 text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950 mb-1.5 mt-2"
+                >
+                  <span className="whitespace-nowrap">{group.label}</span>
+                  <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
+                </button>
+              )}
+              <div
+                className="space-y-1 overflow-hidden transition-all duration-300 ease-in-out"
+                style={{
+                  maxHeight: isGroupCollapsed ? '0' : '600px',
+                  opacity: isGroupCollapsed ? 0 : 1,
+                }}
+              >
+                {group.items.map((item) => {
+                  const active = currentScreen === item.key;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => go(item.key)}
+                      title={collapsed && !isMobile ? item.label : undefined}
+                      className={`group relative w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm transition-all duration-150 overflow-hidden ${
+                        active
+                          ? 'bg-gradient-to-r from-amber-100/90 via-amber-50/90 to-amber-100/50 text-amber-950 font-extrabold border-l-4 border-amber-500 shadow-sm shadow-amber-500/10'
+                          : 'text-slate-700 hover:text-amber-900 hover:bg-amber-50/60 font-semibold'
+                      }`}
+                    >
+                      <span className={`shrink-0 transition-transform duration-150 group-hover:translate-x-0.5 flex items-center justify-center w-5 ${active ? 'text-amber-600 font-bold' : 'text-slate-400 group-hover:text-amber-600'}`}>
+                        {item.icon}
+                      </span>
+                      {!isMobile ? (
+                        <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+                          {item.label}
+                        </div>
+                      ) : (
+                        <span className="ml-3 truncate">{item.label}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </nav>
+
+      {/* Sign out */}
+      <div className="px-3.5 py-3.5 border-t border-amber-200/70 bg-amber-50/40">
+        <button
+          onClick={onSignOut}
+          title={collapsed && !isMobile ? 'Sign Out' : undefined}
+          className="w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-700 hover:text-rose-700 hover:bg-rose-50 transition-colors duration-200 overflow-hidden"
+        >
+          <span className="flex items-center justify-center shrink-0 w-5"><LogOut className="w-4 h-4 text-rose-500" /></span>
+          {!isMobile ? (
+            <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+              Sign Out
+            </div>
+          ) : (
+            <span className="ml-3 truncate">Sign Out</span>
+          )}
+        </button>
+      </div>
+    </>
+  );
+};
+
 interface AppShellProps {
   currentScreen: string;
   onNavigate: (screen: string, payload?: { date?: string }) => void;
@@ -116,6 +289,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const syncStatus = useChannelSyncStatus();
   const [searchQuery, setSearchQuery] = useState('');
+  const [headerSearch, setHeaderSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
   const [dialog, setDialog] = useState<'profile' | 'password' | 'help' | null>(null);
   const [profileName, setProfileName] = useState('');
@@ -137,6 +311,57 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
       ? metadata.name
       : user?.email?.split('@')[0] ?? 'User';
   const userMobile = typeof metadata.phone === 'string' ? metadata.phone : '';
+
+  const todayDisplay = new Date().toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+  });
+
+  const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean> | null>(null);
+
+  useEffect(() => {
+    getEnabledHotelFeatures().then(setEnabledFeatures).catch(() => setEnabledFeatures(null));
+  }, []);
+
+  const allGroups = useMemo(() => {
+    let base = posEnabled ? [...NAV_GROUPS, POS_GROUP] : NAV_GROUPS;
+    if (role === 'hotel_staff') {
+      const restrictedLabels = ['Finance', 'Reports', 'Channel Manager', 'Master'];
+      base = base.filter((g) => !restrictedLabels.includes(g.label));
+    }
+
+    if (enabledFeatures) {
+      base = base.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          if (item.key === 'dashboard' && enabledFeatures.dashboard === false) return false;
+          if (item.key === 'operations' && enabledFeatures.daily_entry === false && enabledFeatures.room_chart === false) return false;
+          if (item.key === 'roomchart' && enabledFeatures.room_chart === false) return false;
+          if (item.key === 'finance' && enabledFeatures.finance === false) return false;
+          if (item.key === 'close-day' && enabledFeatures.finance === false) return false;
+          if (item.key === 'report' && enabledFeatures.daily_entry === false) return false;
+          if (item.key === 'mtd' && enabledFeatures.mtd === false) return false;
+          if (item.key === 'ytd' && enabledFeatures.ytd === false) return false;
+          if (item.key === 'mis-report' && enabledFeatures.dashboard === false) return false;
+          if (item.key === 'pdf' && enabledFeatures.pdf_reports === false) return false;
+          if (item.key === 'whatsapp' && enabledFeatures.whatsapp_reports === false) return false;
+          if (item.key === 'housekeeping' && enabledFeatures.housekeeping === false) return false;
+          if (item.key === 'channel-manager' && enabledFeatures.channel_manager === false) return false;
+          return true;
+        }),
+      })).filter((group) => group.items.length > 0);
+    }
+
+    return base;
+  }, [posEnabled, role, enabledFeatures]);
+
+  const filteredGroups = useMemo(() => {
+    if (!searchQuery.trim()) return allGroups;
+    const q = searchQuery.toLowerCase();
+    return allGroups.map((g) => ({
+      ...g,
+      items: g.items.filter((i) => i.label.toLowerCase().includes(q)),
+    })).filter((g) => g.items.length > 0);
+  }, [searchQuery, allGroups]);
   const roleLabel = role === 'super_admin' ? 'Super Admin' : role === 'hotel_admin' ? 'Hotel Admin' : role === 'hotel_staff' ? 'Receptionist' : role ?? 'User';
   const canManageProperty = role === 'hotel_admin' || role === 'super_admin';
 
@@ -237,210 +462,25 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
-  const todayDisplay = new Date().toLocaleDateString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-  });
-
-  const [enabledFeatures, setEnabledFeatures] = useState<Record<string, boolean> | null>(null);
-
-  useEffect(() => {
-    getEnabledHotelFeatures().then(setEnabledFeatures).catch(() => setEnabledFeatures(null));
-  }, []);
-
-  const allGroups = useMemo(() => {
-    let base = posEnabled ? [...NAV_GROUPS, POS_GROUP] : NAV_GROUPS;
-    if (role === 'hotel_staff') {
-      const restrictedLabels = ['Finance', 'Reports', 'Channel Manager', 'Master'];
-      base = base.filter((g) => !restrictedLabels.includes(g.label));
-    }
-
-    if (enabledFeatures) {
-      base = base.map((group) => ({
-        ...group,
-        items: group.items.filter((item) => {
-          if (item.key === 'dashboard' && enabledFeatures.dashboard === false) return false;
-          if (item.key === 'operations' && enabledFeatures.daily_entry === false && enabledFeatures.room_chart === false) return false;
-          if (item.key === 'roomchart' && enabledFeatures.room_chart === false) return false;
-          if (item.key === 'finance' && enabledFeatures.finance === false) return false;
-          if (item.key === 'close-day' && enabledFeatures.finance === false) return false;
-          if (item.key === 'report' && enabledFeatures.daily_entry === false) return false;
-          if (item.key === 'mtd' && enabledFeatures.mtd === false) return false;
-          if (item.key === 'ytd' && enabledFeatures.ytd === false) return false;
-          if (item.key === 'mis-report' && enabledFeatures.dashboard === false) return false;
-          if (item.key === 'pdf' && enabledFeatures.pdf_reports === false) return false;
-          if (item.key === 'whatsapp' && enabledFeatures.whatsapp_reports === false) return false;
-          if (item.key === 'housekeeping' && enabledFeatures.housekeeping === false) return false;
-          if (item.key === 'channel-manager' && enabledFeatures.channel_manager === false) return false;
-          return true;
-        }),
-      })).filter((group) => group.items.length > 0);
-    }
-
-    return base;
-  }, [posEnabled, role, enabledFeatures]);
-
-  const filteredGroups = useMemo(() => {
-    if (!searchQuery.trim()) return allGroups;
-    const q = searchQuery.toLowerCase();
-    return allGroups.map((g) => ({
-      ...g,
-      items: g.items.filter((i) => i.label.toLowerCase().includes(q)),
-    })).filter((g) => g.items.length > 0);
-  }, [searchQuery, allGroups]);
-
-  const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => {
-    return (
-      <>
-        {/* Header */}
-        <div className="px-5 py-4 flex items-center justify-between shrink-0 border-b border-amber-200/70 bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-white">
-          <div className="flex items-center gap-3">
-            <div className="p-1.5 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-white shadow-gold-glow">
-              <BrandIcon className="w-6 h-6 shrink-0" />
-            </div>
-            {!isMobile ? (
-              <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
-                <div>
-                  <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
-                  <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
-                </div>
-              </div>
-            ) : (
-              <div className="min-w-0 flex-1 overflow-hidden ml-3">
-                <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
-                <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
-              </div>
-            )}
-          </div>
-          {isMobile && (
-            <button onClick={() => setSidebarOpen(false)} className="text-amber-800 hover:text-slate-900 p-1 shrink-0">
-              <X className="w-5 h-5" />
-            </button>
-          )}
-        </div>
-
-        {/* Search menu */}
-        {!isMobile ? (
-          <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 py-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[60px] opacity-100 py-3 mb-1 px-3.5'}`}>
-            <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
-              <Search className="w-4 h-4 text-amber-600 shrink-0" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search menu…"
-                className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="px-3.5 pb-1 pt-3.5">
-            <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
-              <Search className="w-4 h-4 text-amber-600 shrink-0" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search menu…"
-                className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Navigation list */}
-        <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3.5 sidebar-scroll">
-          {filteredGroups.map((group) => {
-            const isGroupOpen = searchQuery.trim() ? true : expandedGroups.has(group.label);
-            const isGroupCollapsed = !isGroupOpen;
-            return (
-              <div key={group.label}>
-                {!isMobile ? (
-                  <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 mt-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[30px] opacity-100 mt-2 mb-1.5 px-3'}`}>
-                    <button
-                      onClick={() => toggleGroup(group.label)}
-                      className="w-full flex items-center justify-between text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950"
-                    >
-                      <span className="whitespace-nowrap">{group.label}</span>
-                      <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => toggleGroup(group.label)}
-                    className="w-full flex items-center justify-between px-3 text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950 mb-1.5 mt-2"
-                  >
-                    <span className="whitespace-nowrap">{group.label}</span>
-                    <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
-                  </button>
-                )}
-                <div
-                  className="space-y-1 overflow-hidden transition-all duration-300 ease-in-out"
-                  style={{
-                    maxHeight: isGroupCollapsed ? '0' : '600px',
-                    opacity: isGroupCollapsed ? 0 : 1,
-                  }}
-                >
-                  {group.items.map((item) => {
-                    const active = currentScreen === item.key;
-                    return (
-                      <button
-                        key={item.key}
-                        onClick={() => go(item.key)}
-                        title={collapsed && !isMobile ? item.label : undefined}
-                        className={`group relative w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm transition-all duration-150 overflow-hidden ${
-                          active
-                            ? 'bg-gradient-to-r from-amber-100/90 via-amber-50/90 to-amber-100/50 text-amber-950 font-extrabold border-l-4 border-amber-500 shadow-sm shadow-amber-500/10'
-                            : 'text-slate-700 hover:text-amber-900 hover:bg-amber-50/60 font-semibold'
-                        }`}
-                      >
-                        <span className={`shrink-0 transition-transform duration-150 group-hover:translate-x-0.5 flex items-center justify-center w-5 ${active ? 'text-amber-600 font-bold' : 'text-slate-400 group-hover:text-amber-600'}`}>
-                          {item.icon}
-                        </span>
-                        {!isMobile ? (
-                          <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
-                            {item.label}
-                          </div>
-                        ) : (
-                          <span className="ml-3 truncate">{item.label}</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </nav>
-
-        {/* Sign out */}
-        <div className="px-3.5 py-3.5 border-t border-amber-200/70 bg-amber-50/40">
-          <button
-            onClick={onSignOut}
-            title={collapsed && !isMobile ? 'Sign Out' : undefined}
-            className="w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-700 hover:text-rose-700 hover:bg-rose-50 transition-colors duration-200 overflow-hidden"
-          >
-            <span className="flex items-center justify-center shrink-0 w-5"><LogOut className="w-4 h-4 text-rose-500" /></span>
-            {!isMobile ? (
-              <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
-                Sign Out
-              </div>
-            ) : (
-              <span className="ml-3 truncate">Sign Out</span>
-            )}
-          </button>
-        </div>
-      </>
-    );
-  };
-
-
   return (
     <div className={`min-h-screen bg-slate-50 flex app-wrapper ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
       {/* Desktop sidebar */}
       <aside
         className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container bg-white border-r border-slate-200/80 shadow-sm transition-all ${collapsed ? 'duration-500 ease-in-out delay-300 lg:w-[72px]' : 'duration-700 ease-out delay-0 lg:w-[280px]'}`}
       >
-        <SidebarContent />
+        <SidebarContent
+          collapsed={collapsed}
+          hotelName={hotelName}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          filteredGroups={filteredGroups}
+          expandedGroups={expandedGroups}
+          toggleGroup={toggleGroup}
+          currentScreen={currentScreen}
+          go={go}
+          onSignOut={onSignOut}
+          setSidebarOpen={setSidebarOpen}
+        />
         <button
           onClick={() => setCollapsed((c) => !c)}
           className="absolute top-1/2 -right-3 -translate-y-1/2 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-card flex items-center justify-center hover:bg-slate-50 transition"
@@ -457,7 +497,20 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
           <aside
             className="absolute inset-y-0 left-0 w-64 flex flex-col bg-white border-r border-slate-200 shadow-xl animate-slide-in"
           >
-            <SidebarContent isMobile />
+            <SidebarContent
+              isMobile
+              collapsed={collapsed}
+              hotelName={hotelName}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              filteredGroups={filteredGroups}
+              expandedGroups={expandedGroups}
+              toggleGroup={toggleGroup}
+              currentScreen={currentScreen}
+              go={go}
+              onSignOut={onSignOut}
+              setSidebarOpen={setSidebarOpen}
+            />
           </aside>
         </div>
       )}
@@ -494,7 +547,20 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
               <Search className="w-4 h-4 text-slate-400" />
               <input
                 type="text"
-                placeholder="Search…"
+                placeholder="Search menu or bookings…"
+                value={headerSearch}
+                onChange={(e) => setHeaderSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && headerSearch.trim()) {
+                    const q = headerSearch.toLowerCase().trim();
+                    const match = allGroups.flatMap((g) => g.items).find((i) => i.label.toLowerCase().includes(q));
+                    if (match) {
+                      go(match.key);
+                    } else {
+                      go('reservations');
+                    }
+                  }
+                }}
                 className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full"
               />
             </div>

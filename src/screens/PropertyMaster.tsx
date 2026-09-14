@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ArrowLeft, Plus, Trash2, Save, Building2, BedDouble, Pencil, X, Check,
   IndianRupee, Layers, Power, AlertCircle, Copy, ChevronDown, ChevronUp,
@@ -590,23 +590,67 @@ const TextInput = ({ label, value, onChange, placeholder }: {
 );
 
 const NumInput = ({ label, value, onChange, prefix, allowDecimal = true }: {
-  label: string; value: number; onChange: (v: number) => void; prefix?: string; allowDecimal?: boolean;
+  label: string; value: number | ''; onChange: (v: number) => void; prefix?: string; allowDecimal?: boolean;
 }) => {
+  const [localStr, setLocalStr] = useState<string>(() => (typeof value === 'number' && Number.isFinite(value) ? String(value) : ''));
+  const isFocusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+    } else {
+      const currentParsed = localStr === '' ? 0 : allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      const targetParsed = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      if (targetParsed !== currentParsed) {
+        setLocalStr(typeof value === 'number' && Number.isFinite(value) ? String(value) : '');
+      }
+    }
+  }, [value, allowDecimal]);
+
   const handle = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
-    if (raw === '') { onChange(0); return; }
+    setLocalStr(raw);
+    if (raw === '' || raw === '-' || (allowDecimal && raw.endsWith('.'))) {
+      if (raw === '') onChange(0);
+      return;
+    }
     const n = allowDecimal ? parseFloat(raw) : parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 0) return;
     onChange(n);
   };
+
+  const handleBlur = () => {
+    isFocusedRef.current = false;
+    if (localStr === '' || isNaN(Number(localStr))) {
+      const fallback = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+      setLocalStr(String(fallback));
+      onChange(fallback);
+    } else {
+      const n = allowDecimal ? parseFloat(localStr) : parseInt(localStr, 10);
+      if (Number.isFinite(n)) {
+        setLocalStr(String(n));
+        onChange(n);
+      }
+    }
+  };
+
   return (
     <label className="block">
       <span className="block text-sm font-medium text-slate-700 mb-1">{label}</span>
       <div className="relative flex items-stretch">
         {prefix && <span className="inline-flex items-center px-3 bg-slate-100 border border-r-0 border-slate-300 rounded-l-xl text-slate-500 text-sm">{prefix}</span>}
-        <input type="number" inputMode={allowDecimal ? 'decimal' : 'numeric'} min={0} step={allowDecimal ? '0.01' : '1'}
-          value={value === 0 ? '' : value} onChange={handle} placeholder="0"
-          className={`flex-1 min-w-0 px-3 py-2.5 text-base border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 ${prefix ? 'rounded-r-xl' : 'rounded-xl'}`} />
+        <input
+          type="number"
+          inputMode={allowDecimal ? 'decimal' : 'numeric'}
+          min={0}
+          step={allowDecimal ? '0.01' : '1'}
+          value={localStr}
+          onChange={handle}
+          onFocus={() => { isFocusedRef.current = true; }}
+          onBlur={handleBlur}
+          placeholder="0"
+          className={`flex-1 min-w-0 px-3 py-2.5 text-base border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500 ${prefix ? 'rounded-r-xl' : 'rounded-xl'}`}
+        />
       </div>
     </label>
   );

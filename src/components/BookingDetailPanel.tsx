@@ -13,7 +13,7 @@ import type {
 } from '@/lib/types';
 import { GST_TYPES, GST_SLABS, MEAL_PLANS, SOURCE_CATEGORIES, canCheckoutAnyway, canRoomShift, canDeleteBooking } from '@/lib/types';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
-import { fmtMoney, toNum, calcGstFull } from '@/lib/calc';
+import { fmtMoney, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { classifyCompany } from '@/lib/api';
 import { brand } from '@/lib/theme';
 
@@ -122,9 +122,7 @@ export const BookingDetailPanel = ({
   );
 
   const editNights = useMemo(() => {
-    const ci = new Date(editCheckIn + 'T00:00:00');
-    const co = new Date(editCheckOut + 'T00:00:00');
-    return Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400000));
+    return calcStayNights(editCheckIn, editCheckOut);
   }, [editCheckIn, editCheckOut]);
 
   const editTotal = editRate * editNights;
@@ -324,6 +322,7 @@ export const BookingDetailPanel = ({
                   <FileText className="w-4 h-4" /> View Folio
                 </button>
               )}
+              <ViewFields booking={booking} settings={settings} category={category} />
             </>
           )}
         </div>
@@ -384,6 +383,9 @@ const ViewFields = ({
         <DetailRow icon={Phone} label="Mobile" value={booking.phone || '—'} />
         <DetailRow icon={Mail} label="Email" value={booking.email || '—'} />
         {reservation?.guest_address && <DetailRow icon={MapPin} label="Address" value={reservation.guest_address} />}
+        {entry?.id_proof_type && entry.id_proof_type !== 'None' && (
+          <DetailRow icon={FileText} label="ID Proof" value={`${entry.id_proof_type}${entry.id_proof_number ? ` · ${entry.id_proof_number}` : ''}${entry.id_proof_verified ? ' (Verified)' : ''}`} />
+        )}
       </Section>
 
       <Section title="Stay Details" icon={Calendar}>

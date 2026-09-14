@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   X, Loader2, FileText, Printer, Mail, MessageCircle, Download,
   BedDouble, Wallet, Receipt, ArrowRight, CalendarPlus, LogIn, LogOut,
-  IndianRupee, Clock, User, Phone, CreditCard, Banknote, Smartphone,
+  Clock, User, Phone, CreditCard, Banknote, Smartphone,
 } from 'lucide-react';
 import type {
   RoomChartEntry, Room, RoomCategory, HotelSettings,
@@ -18,6 +18,7 @@ interface GuestFolioProps {
   rooms: Room[];
   categories: RoomCategory[];
   settings: HotelSettings | null;
+  booking?: { guestName?: string; phone?: string; email?: string };
   onClose: () => void;
 }
 
@@ -39,7 +40,7 @@ const fmtDateTime = (iso: string): string => {
     ' · ' + dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 };
 
-export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, onClose }: GuestFolioProps) => {
+export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking, onClose }: GuestFolioProps) => {
   const [timeline, setTimeline] = useState<BookingTimelineEvent[]>([]);
   const [charges, setCharges] = useState<FolioCharge[]>([]);
   const [shifts, setShifts] = useState<RoomShift[]>([]);
@@ -75,9 +76,13 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, onClose
   const balance = Math.max(0, grandTotal - received);
 
   const handleWhatsApp = () => {
-    const phone = (entry.guest_name || '').replace(/\D/g, '');
-    if (!phone) return;
-    const msg = `Guest Folio - ${settings?.hotel_name ?? 'Hotel'}\n\nGuest: ${entry.guest_name}\nRoom: ${roomNo}\nCheck-in: ${entry.arrival ?? entry.report_date}\nCheck-out: ${entry.departure ?? '—'}\nNights: ${entry.nights}\n\nRoom Charges: ₹${fmtMoney(roomCharges)}\nExtra Charges: ₹${fmtMoney(extraTotal)}\nGST: ₹${fmtMoney(gstAmount)}\nTotal: ₹${fmtMoney(grandTotal)}\nReceived: ₹${fmtMoney(received)}\nBalance: ₹${fmtMoney(balance)}`;
+    const rawPhone = booking?.phone || '';
+    const phone = rawPhone.replace(/\D/g, '');
+    if (!phone) {
+      alert('No guest mobile number available for WhatsApp.');
+      return;
+    }
+    const msg = `Guest Folio - ${settings?.hotel_name ?? 'Hotel'}\n\nGuest: ${booking?.guestName || entry.guest_name}\nRoom: ${roomNo}\nCheck-in: ${entry.arrival ?? entry.report_date}\nCheck-out: ${entry.departure ?? '—'}\nNights: ${entry.nights}\n\nRoom Charges: ₹${fmtMoney(roomCharges)}\nExtra Charges: ₹${fmtMoney(extraTotal)}\nGST: ₹${fmtMoney(gstAmount)}\nTotal: ₹${fmtMoney(grandTotal)}\nReceived: ₹${fmtMoney(received)}\nBalance: ₹${fmtMoney(balance)}`;
     window.open(`https://wa.me/${phone.length === 10 ? `91${phone}` : phone}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
@@ -94,7 +99,7 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, onClose
             </div>
             <div>
               <h2 className="text-base font-semibold text-white">Guest Folio</h2>
-              <p className="text-xs text-brand-navy-300">{entry.guest_name} · Room {roomNo}</p>
+              <p className="text-xs text-brand-navy-300">{booking?.guestName || entry.guest_name} · Room {roomNo}</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-brand-navy-300">
@@ -115,8 +120,32 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, onClose
                 <div className="flex items-center gap-1.5 text-sm">
                   <User className="w-3.5 h-3.5 text-slate-400" />
                   <span className="text-slate-500">Guest</span>
-                  <span className="font-semibold text-slate-800 ml-auto">{entry.guest_name}</span>
+                  <span className="font-semibold text-slate-800 ml-auto">{booking?.guestName || entry.guest_name}</span>
                 </div>
+                {booking?.phone && (
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <Phone className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-slate-500">Mobile</span>
+                    <span className="font-medium text-slate-800 ml-auto">{booking.phone}</span>
+                  </div>
+                )}
+                {booking?.email && (
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <Mail className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-slate-500">Email</span>
+                    <span className="font-medium text-slate-800 ml-auto">{booking.email}</span>
+                  </div>
+                )}
+                {entry.id_proof_type && entry.id_proof_type !== 'None' && (
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <FileText className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-slate-500">ID Proof</span>
+                    <span className="font-medium text-slate-800 ml-auto">
+                      {entry.id_proof_type}{entry.id_proof_number ? ` · ${entry.id_proof_number}` : ''}
+                      {entry.id_proof_verified ? ' (Verified)' : ''}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center gap-1.5 text-sm">
                   <BedDouble className="w-3.5 h-3.5 text-slate-400" />
                   <span className="text-slate-500">Room</span>

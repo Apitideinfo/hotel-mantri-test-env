@@ -425,6 +425,7 @@ export interface RoomChartEntry {
   checked_in_at: string | null;
   checked_out_at: string | null;
   reservation_id: string | null;
+  guest_id?: string | null;
 }
 
 export type RoomChartEntryInput = Omit<RoomChartEntry, 'id' | 'hotel_id'>;

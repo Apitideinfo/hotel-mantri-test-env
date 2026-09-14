@@ -1,13 +1,12 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany } from './api';
 import { updateReservationStatus } from './api-reservations';
-import { toNum, calcGstFull } from './calc';
+import { toNum, calcGstFull, calcStayNights } from './calc';
 import type {
   RoomChartEntry, RoomChartEntryInput, Room, HousekeepingStatus,
   BookingTimelineEvent, TimelineEventType, FolioCharge, FolioChargeInput,
   RoomShift, SourceCategory, PayMode, GstType, GstSlab, MealPlan,
 } from './types';
-import type { Reservation } from './types-reservations';
 
 // ── Timeline ──
 
@@ -95,9 +94,7 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     throw new Error('Guest is already checked in for this date.');
   }
 
-  const nights = Math.max(1, Math.round(
-    (new Date(params.checkOut + 'T00:00:00').getTime() - new Date(params.checkIn + 'T00:00:00').getTime()) / 86400000,
-  ));
+  const nights = calcStayNights(params.checkIn, params.checkOut);
   const subtotal = params.rate * nights;
   const discount = toNum(params.discount);
   const afterDiscount = Math.max(0, subtotal - discount);
@@ -109,6 +106,65 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
 
   const totalReceived = toNum(params.payCash) + toNum(params.payUpi) + toNum(params.payCard) + toNum(params.payBank);
   const balance = Math.max(0, invoiceTotal - totalReceived);
+
+  let guestId: string | null = null;
+  const cleanName = (params.guestName ?? '').trim();
+  const cleanPhone = (params.phone ?? '').trim();
+  const cleanEmail = (params.email ?? '').trim();
+
+  if (cleanName) {
+    try {
+      let existingGuest: { id: string } | null = null;
+      if (cleanPhone) {
+        const { data: g } = await supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .eq('mobile', cleanPhone)
+          .maybeSingle();
+        existingGuest = g;
+      }
+      if (!existingGuest) {
+        const { data: g } = await supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .ilike('name', cleanName)
+          .maybeSingle();
+        existingGuest = g;
+      }
+
+      if (existingGuest) {
+        guestId = existingGuest.id;
+        await supabase
+          .from('guests')
+          .update({
+            mobile: cleanPhone || undefined,
+            email: cleanEmail || undefined,
+            id_proof_type: params.idProofType || undefined,
+            id_proof_number: params.idProofNumber || undefined,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingGuest.id);
+      } else {
+        const { data: newG } = await supabase
+          .from('guests')
+          .insert({
+            hotel_id: hotelId,
+            name: cleanName,
+            mobile: cleanPhone,
+            email: cleanEmail,
+            id_proof_type: params.idProofType ?? '',
+            id_proof_number: params.idProofNumber ?? '',
+          })
+          .select('id')
+          .single();
+        if (newG) guestId = newG.id;
+      }
+    } catch {
+      // Non-blocking guest sync
+    }
+  }
 
   const entryInput: RoomChartEntryInput = {
     report_date: params.checkIn,
@@ -150,6 +206,7 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     checked_in_at: new Date().toISOString(),
     checked_out_at: null,
     reservation_id: params.reservationId ?? null,
+    guest_id: guestId,
   };
 
   const saved = await saveRoomChartRow(entryInput, sources);
@@ -386,9 +443,7 @@ export const extendStay = async (params: {
   }
 
   // Recalculate billing
-  const newNights = Math.max(1, Math.round(
-    (new Date(params.newCheckOut + 'T00:00:00').getTime() - new Date((entry.arrival ?? entry.report_date) + 'T00:00:00').getTime()) / 86400000,
-  ));
+  const newNights = calcStayNights(entry.arrival ?? entry.report_date, params.newCheckOut);
   const newSubtotal = toNum(entry.room_rate) * newNights;
   const afterDiscount = Math.max(0, newSubtotal - 0);
   const { taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, entry.gst_type, entry.gst_slab);
