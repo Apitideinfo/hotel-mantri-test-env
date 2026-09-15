@@ -753,7 +753,10 @@ export interface OnboardingResult {
   attempt_id?: string;
   completed_steps?: string[];
   failed_step?: string;
+  code?: string;
+  message?: string;
   error?: string;
+  retryable?: boolean;
 }
 
 export const checkExistingOnboarding = async (
@@ -814,21 +817,36 @@ export const onboardHotelAtomically = async (payload: {
   state: string;
   property_code: string | null;
   password: string;
+  plan_id?: string | null;
   categories: { name: string; tariff: number; extra_bed: number }[];
   rooms: { room_no: string; category_name: string | null; floor: string | null; tariff: number; extra_bed: number; is_active: boolean }[];
   features: Record<string, boolean>;
 }): Promise<OnboardingResult> => {
   try {
     const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) {
+      return {
+        success: false,
+        code: 'AUTH_REQUIRED',
+        message: 'Your session has expired. Please log in again.',
+        error: 'Your session has expired. Please log in again.',
+        failed_step: 'auth',
+        attempt_id: 'N/A',
+        retryable: false,
+      };
+    }
+
     const res = await fetch(`${SUPABASE_URL}/functions/v1/hotel-onboarding`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${session.data.session?.access_token ?? ANON_KEY}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ action: 'onboard_hotel', ...payload }),
     });
-    const result = await res.json();
+
+    const result = await res.json().catch(() => ({}));
     if (res.ok && result.success) {
       return {
         success: true,
@@ -838,18 +856,26 @@ export const onboardHotelAtomically = async (payload: {
       };
     }
 
+    const safeMessage = result.message || result.error || 'Onboarding failed. Please retry.';
     return {
       success: false,
-      error: result.error || 'Onboarding failed',
-      failed_step: result.failed_step || 'unknown',
+      code: result.code || 'ONBOARDING_FAILED',
+      message: safeMessage,
+      error: safeMessage,
+      failed_step: result.failed_step || result.step || 'unknown',
       attempt_id: result.attempt_id || 'N/A',
+      hotel_id: result.hotel_id,
+      retryable: result.retryable ?? true,
     };
   } catch (err) {
     return {
       success: false,
+      code: 'NETWORK_ERROR',
+      message: err instanceof Error ? err.message : 'Network error during onboarding. Please check your connection.',
       error: err instanceof Error ? err.message : 'Network error during onboarding',
       failed_step: 'network',
       attempt_id: 'N/A',
+      retryable: true,
     };
   }
 };

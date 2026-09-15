@@ -79,13 +79,56 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  const generateRoomsForCount = (targetCount: number, cats: CatRow[]): RoomRow[] => {
+    if (targetCount <= 0) return [];
+    const validCats = cats.filter((c) => c.name.trim());
+    const fallbackCats: CatRow[] = validCats.length > 0 ? validCats : [{ name: 'Standard', tariff: 999, extraBed: 200 }];
+    const newRooms: RoomRow[] = [];
+    const roomsPerFloor = Math.min(20, Math.ceil(targetCount / Math.max(1, Math.ceil(targetCount / 20))));
+    let floorNum = 1;
+    let roomInFloor = 1;
+
+    for (let i = 0; i < targetCount; i++) {
+      const roomNo = String(floorNum * 100 + roomInFloor);
+      const cat = fallbackCats[i % fallbackCats.length];
+      const floorStr = floorNum === 1 ? '1st' : floorNum === 2 ? '2nd' : floorNum === 3 ? '3rd' : `${floorNum}th`;
+
+      newRooms.push({
+        roomNo,
+        categoryId: cat.name,
+        floor: floorStr,
+        tariff: cat.tariff,
+        extraBed: cat.extraBed,
+        isActive: true,
+      });
+
+      roomInFloor++;
+      if (roomInFloor > roomsPerFloor) {
+        floorNum++;
+        roomInFloor = 1;
+      }
+    }
+    return newRooms;
+  };
+
+  // Auto-generate rooms if navigating to step 4 with no rooms configured
+  useEffect(() => {
+    if (step === 4 && rooms.length === 0 && totalRooms > 0) {
+      setRooms(generateRoomsForCount(totalRooms, categories));
+    }
+  }, [step, totalRooms, categories]);
+
+  const handleAutoGenerateRooms = () => {
+    setRooms(generateRoomsForCount(totalRooms, categories));
+  };
+
   const canProceed = () => {
     switch (step) {
-      case 0: return !!hotelName.trim();
+      case 0: return !!hotelName.trim() && totalRooms >= 1;
       case 1: return !!ownerName.trim() && !!ownerEmail.trim();
       case 2: return true;
       case 3: return categories.length > 0 && categories.every((c) => c.name.trim());
-      case 4: return true;
+      case 4: return rooms.length === totalRooms && rooms.length > 0 && rooms.every((r) => r.roomNo.trim());
       case 5: return true;
       case 6: return true;
       case 7: return !!password.trim() && password.length >= 6 && password === confirmPassword;
@@ -98,7 +141,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
   const updateCategory = (idx: number, patch: Partial<CatRow>) =>
     setCategories(categories.map((c, i) => i === idx ? { ...c, ...patch } : c));
 
-  const addRoom = () => setRooms([...rooms, { roomNo: '', categoryId: '', floor: '', tariff: 0, extraBed: 0, isActive: true }]);
+  const addRoom = () => setRooms([...rooms, { roomNo: '', categoryId: categories[0]?.name || '', floor: '1st', tariff: categories[0]?.tariff || 0, extraBed: categories[0]?.extraBed || 0, isActive: true }]);
   const removeRoom = (idx: number) => setRooms(rooms.filter((_, i) => i !== idx));
   const updateRoom = (idx: number, patch: Partial<RoomRow>) =>
     setRooms(rooms.map((r, i) => i === idx ? { ...r, ...patch } : r));
@@ -160,6 +203,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
         state: stateName.trim(),
         property_code: propertyCode.trim() || null,
         password,
+        plan_id: planId || null,
         categories: categories.map(c => ({ name: c.name.trim(), tariff: c.tariff, extra_bed: c.extraBed })),
         rooms: rooms.map(r => ({
           room_no: r.roomNo,
@@ -174,7 +218,8 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
 
       if (!result.success) {
         const stepName = result.failed_step ? formatStepName(result.failed_step) : 'unknown step';
-        setError(`Onboarding incomplete. Failed at: ${stepName}\n\nBackend error: ${result.error ?? 'Unknown error'}\n\nOnboarding attempt ID: ${result.attempt_id ?? 'N/A'}\n\nClick "Retry" to resume from this step — no duplicate hotel will be created.`);
+        const retryNote = result.retryable !== false ? '\n\nClick "Retry" to resume from this step — no duplicate hotel will be created.' : '';
+        setError(`Onboarding incomplete. Failed at: ${stepName}\n\n${result.message || result.error || 'Unknown error'}\n\nOnboarding attempt ID: ${result.attempt_id ?? 'N/A'}${retryNote}`);
         return;
       }
 
@@ -379,8 +424,33 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
         )}
         {step === 4 && (
           <div className="space-y-3">
-            <h2 className="text-base font-bold text-slate-800 flex items-center gap-2"><BedDouble className="w-4 h-4" /> Room Numbers / Inventory</h2>
-            <p className="text-sm text-slate-500">Add rooms individually or use bulk create. These rooms will appear in the hotel's Daily Entry Room Chart.</p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-bold text-slate-800 flex items-center gap-2"><BedDouble className="w-4 h-4" /> Room Numbers / Inventory</h2>
+                <p className="text-sm text-slate-500">Physical rooms will appear in the hotel's Daily Entry Room Chart and Operation Board.</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                  rooms.length === totalRooms ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                }`}>
+                  {rooms.length} / {totalRooms} rooms
+                </span>
+                <button
+                  type="button"
+                  onClick={handleAutoGenerateRooms}
+                  className="flex items-center gap-1 text-xs bg-sky-50 text-sky-700 font-semibold px-2.5 py-1.5 rounded-lg border border-sky-200 hover:bg-sky-100 transition"
+                  title="Generate all rooms evenly distributed across categories and floors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> Auto-Generate {totalRooms}
+                </button>
+              </div>
+            </div>
+
+            {rooms.length !== totalRooms && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 font-medium">
+                Please configure all {totalRooms} rooms to match the hotel size before proceeding ({rooms.length} currently configured). Click "Auto-Generate {totalRooms}" to create them automatically.
+              </p>
+            )}
 
             {/* Bulk create */}
             <div className="bg-slate-50 rounded-xl p-3 space-y-2">
@@ -426,7 +496,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
                 ))}
               </div>
             )}
-            {rooms.length === 0 && <p className="text-sm text-slate-400 text-center py-2">No rooms added yet. Use bulk create above or add individually.</p>}
+            {rooms.length === 0 && <p className="text-sm text-slate-400 text-center py-2">No rooms added yet. Use bulk create above, click "Auto-Generate {totalRooms}", or add individually.</p>}
             <button onClick={addRoom} className="flex items-center gap-1.5 text-sm text-sky-600 font-medium hover:underline"><Plus className="w-4 h-4" /> Add Single Room</button>
           </div>
         )}
@@ -435,7 +505,12 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
             <h2 className="text-base font-bold text-slate-800 flex items-center gap-2"><CreditCard className="w-4 h-4" /> Subscription Plan</h2>
             <p className="text-sm text-slate-500">The hotel will start with a 14-day trial. You can change the plan after activation.</p>
             <SelectInput label="Select Plan" value={planId} onChange={setPlanId}
-              options={[{ value: '', label: 'Trial (14 days)' }, { value: 'starter', label: 'Starter' }, { value: 'professional', label: 'Professional' }, { value: 'enterprise', label: 'Enterprise' }]} />
+              options={[
+                { value: '', label: 'Trial (14 days)' },
+                { value: 'ec1d17b8-a049-4e04-81f7-25d81d99d09c', label: 'Basic' },
+                { value: '0c0c3769-9ad3-47b3-9542-1a243f725904', label: 'Standard' },
+                { value: 'fd549c0b-2722-47de-8b8f-09c76b782d6e', label: 'Pro' },
+              ]} />
           </div>
         )}
         {step === 6 && (
@@ -496,7 +571,12 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
             <div><span className="text-slate-500">Rooms:</span> <span className="font-semibold">{totalRooms}</span></div>
             <div><span className="text-slate-500">Categories:</span> <span className="font-semibold">{categories.length}</span></div>
             <div><span className="text-slate-500">Room Inventory:</span> <span className="font-semibold">{rooms.length} rooms</span></div>
-            <div><span className="text-slate-500">Plan:</span> <span className="font-semibold">Trial (14 days)</span></div>
+            <div><span className="text-slate-500">Plan:</span> <span className="font-semibold">
+              {planId === 'ec1d17b8-a049-4e04-81f7-25d81d99d09c' ? 'Basic' :
+               planId === '0c0c3769-9ad3-47b3-9542-1a243f725904' ? 'Standard' :
+               planId === 'fd549c0b-2722-47de-8b8f-09c76b782d6e' ? 'Pro' :
+               'Trial (14 days)'}
+            </span></div>
           </div>
         </Card>
       )}
