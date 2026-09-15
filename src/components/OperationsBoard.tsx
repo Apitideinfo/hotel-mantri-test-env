@@ -394,16 +394,18 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         if (roomKey && roomKey !== 'tbd' && roomKey !== 'unassigned') {
           occupiedRoomNos.add(roomKey);
         }
-        // Recognize nightly room revenue on this business date
-        todayRevenue += toNum(b.rate);
+        // Recognize nightly room revenue on this business date (exclude complimentary rooms)
+        if (!b.isComplimentary && b.status !== 'complimentary') {
+          todayRevenue += toNum(b.rate);
+        }
 
         // Missing tariff check
-        if (toNum(b.rate) === 0 && !b.isComplimentary) {
+        if (toNum(b.rate) === 0 && !b.isComplimentary && b.status !== 'complimentary') {
           missingTariffCount++;
         }
 
         // Missing payment check (exclude OTA/prepaid/complimentary)
-        const isOtaOrPrepaid = b.sourceCategory === 'OTA' || b.paymentMode === 'OTA' || b.isComplimentary;
+        const isOtaOrPrepaid = b.sourceCategory === 'OTA' || b.paymentMode === 'OTA' || b.isComplimentary || b.status === 'complimentary';
         if (!isOtaOrPrepaid && !b.hasPayment) {
           missingPaymentCount++;
         }
@@ -416,15 +418,14 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     // Arrivals on selectedDate: eligible confirmed arrivals who have not checked in yet
     const arrivals = allBookings.filter((b) => 
       b.checkIn === selectedDate && 
-      b.status === 'confirmed'
+      (b.status === 'confirmed' || b.status === 'checked_in' || b.status === 'complimentary')
     ).length;
 
     // Departures on selectedDate: staying guests checking out on selectedDate
     const departures = allBookings.filter((b) => 
       b.checkOut === selectedDate && 
       b.status !== 'cancelled' && 
-      b.status !== 'no_show' && 
-      b.status !== 'checked_out'
+      b.status !== 'no_show'
     ).length;
 
     // Future confirmed bookings strictly after selectedDate

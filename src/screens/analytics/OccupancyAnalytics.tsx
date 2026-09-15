@@ -45,14 +45,14 @@ export const OccupancyAnalytics = ({ onBack }: { onBack: () => void }) => {
       byDate.set(d, day);
     }
     const uniqueDays = new Set(entries.map((e) => e.report_date)).size;
-    const avgOcc = uniqueDays > 0 && totalRooms > 0 ? (occupied / (totalRooms * uniqueDays)) * 100 : 0;
+    const totalOccupied = occupied + complimentary;
+    const avgOcc = uniqueDays > 0 && totalRooms > 0 ? (totalOccupied / (totalRooms * uniqueDays)) * 100 : 0;
     return { occupied, complimentary, totalEntries, uniqueDays, avgOcc };
   }, [entries, totalRooms]);
 
   const dailyTrend = useMemo(() => {
     const byDate = new Map<string, number>();
     for (const e of entries) {
-      if (e.is_complimentary) continue;
       byDate.set(e.report_date, (byDate.get(e.report_date) ?? 0) + 1);
     }
     return Array.from(byDate.entries()).sort((a, b) => a[0] < b[0] ? -1 : 1).map(([d, v]) => ({
