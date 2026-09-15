@@ -130,7 +130,8 @@ export const aggregatePeriod = (reports: DailyReport[], totalRooms: number, peri
     miscRevenue += toNum(r.other_income);
   }
   const totalRevenue = roomRevenue + fbRevenue + miscRevenue;
-  const arr = roomsSold > 0 ? roomRevenue / roomsSold : 0;
+  const paidRooms = Math.max(0, roomsSold - complimentary);
+  const arr = paidRooms > 0 ? roomRevenue / paidRooms : 0;
   const occ = totalRooms > 0 && periodDays > 0 ? (roomsSold / (totalRooms * periodDays)) * 100 : 0;
   return {
     totalRooms,
@@ -556,7 +557,7 @@ export const buildMtdYtdFromDaily = (
     arr: 0, occupancy: 0, revpar: 0, // recalculated below
   };
   mtd.arr = mtd.rooms_sold > 0 ? mtd.room_revenue / mtd.rooms_sold : 0;
-  mtd.occupancy = totalRooms > 0 && mtdDays > 0 ? (mtd.rooms_sold / (totalRooms * mtdDays)) * 100 : 0;
+  mtd.occupancy = totalRooms > 0 && mtdDays > 0 ? ((mtd.rooms_sold + mtd.complimentary) / (totalRooms * mtdDays)) * 100 : 0;
   mtd.revpar = totalRooms > 0 && mtdDays > 0 ? mtd.room_revenue / (totalRooms * mtdDays) : 0;
 
   // YTD: add daily to prev YTD, then recalculate ratios
@@ -582,7 +583,7 @@ export const buildMtdYtdFromDaily = (
     arr: 0, occupancy: 0, revpar: 0,
   };
   ytd.arr = ytd.rooms_sold > 0 ? ytd.room_revenue / ytd.rooms_sold : 0;
-  ytd.occupancy = totalRooms > 0 && ytdDays > 0 ? (ytd.rooms_sold / (totalRooms * ytdDays)) * 100 : 0;
+  ytd.occupancy = totalRooms > 0 && ytdDays > 0 ? ((ytd.rooms_sold + ytd.complimentary) / (totalRooms * ytdDays)) * 100 : 0;
   ytd.revpar = totalRooms > 0 && ytdDays > 0 ? ytd.room_revenue / (totalRooms * ytdDays) : 0;
 
   return { mtd, ytd };
@@ -664,7 +665,7 @@ export const aggregateDerived = (reports: DerivedReport[], totalRooms: number, p
   }
   const totalRevenue = roomRevenue + fbRevenue + miscRevenue + otherRevenueEntries;
   const arr = roomsSold > 0 ? roomRevenue / roomsSold : 0;
-  const occ = totalRooms > 0 && periodDays > 0 ? (roomsSold / (totalRooms * periodDays)) * 100 : 0;
+  const occ = totalRooms > 0 && periodDays > 0 ? ((roomsSold + complimentary) / (totalRooms * periodDays)) * 100 : 0;
   const revpar = totalRooms > 0 && periodDays > 0 ? roomRevenue / (totalRooms * periodDays) : 0;
   const totalExpenses = reports.reduce((s, r) => s + calcTotalExpenses(r), 0);
   const financeExpenseByCategory = Array.from(financeCatMap.entries())
