@@ -52,6 +52,9 @@ export const calcArr = (roomSale: number, roomsOccupied: number): number =>
 export const calcOcc = (roomsOccupied: number, totalRooms: number): number =>
   totalRooms > 0 ? (toNum(roomsOccupied) / totalRooms) * 100 : 0;
 
+export const calcRevpar = (roomRevenue: number, totalRooms: number, periodDays: number = 1): number =>
+  totalRooms > 0 && periodDays > 0 ? toNum(roomRevenue) / (totalRooms * periodDays) : 0;
+
 export const calcTotalRevenue = (r: { room_sale_amount: number; kitchen: number; other_income: number; other_revenue_entries?: number }): number =>
   toNum(r.room_sale_amount) + toNum(r.kitchen) + toNum(r.other_income) + toNum(r.other_revenue_entries);
 
@@ -679,6 +682,7 @@ export const aggregateDerived = (reports: DerivedReport[], totalRooms: number, p
     ota, direct, corp, phone, cash, bank,
     taxableRevenue, gstCollected, netRevenue,
     payCash, payUpi, payCard, payBank, payAdvance, payBalance,
+    totalCollections: payCash + payBank + payUpi + payCard,
     financeExpenses, financeExpenseByCategory, totalExpenses,
     otherRevenueEntries, otherRevenueByCategory,
   };
@@ -735,3 +739,182 @@ export const buildCompanyLedger = (
   rows.sort((a, b) => (a.date < b.date ? 1 : -1));
   return { name, category, totalBookings, totalRoomNights, totalRoomRevenue, rows };
 };
+
+// ── Financial Reconciliation Engine ─────────────────────────────────────────
+// Mathematically bridges Accrual Revenue (earned occupied room nights)
+// with Cash Basis Collections (money actually received on payment dates)
+// and itemizes every rupee of timing differences and receivables.
+export interface FinancialReconciliation {
+  period: { start: string; end: string };
+  // Accrual Revenue
+  roomRevenue: number;
+  fbRevenue: number;
+  miscRevenue: number;
+  otherRevenue: number;
+  totalRevenue: number;
+  // Cash Basis Collections
+  payCash: number;
+  payBank: number;
+  payUpi: number;
+  payCard: number;
+  totalCollections: number;
+  // Matched Scope breakdown of Earned Revenue:
+  // Revenue = EarnedRevenueCollected + EarnedRevenueOutstanding (holds exactly)
+  earnedRevenueCollected: number;
+  earnedRevenueOutstanding: number;
+  // Receivables & Outstanding metrics
+  mtdUncollectedBookings: number;
+  currentInHouseDue: number;
+  // Timing differences
+  timingDifference: number; // totalRevenue - totalCollections
+  collectionsForOtherPeriods: number; // Stays from prior months or future advances paid in this period
+  uncollectedPeriodRevenue: number; // Earned period revenue not yet paid
+}
+
+export const reconcilePeriodFinances = (
+  combinedEntries: RoomChartEntry[],
+  dateRange: { start: string; end: string },
+  liveInHouseDue: number = 0,
+  otherDailyRev: { fb: number; misc: number; other: number } = { fb: 0, misc: 0, other: 0 }
+): FinancialReconciliation => {
+  const { start, end } = dateRange;
+  let roomRevenue = 0;
+  let payCash = 0;
+  let payBank = 0;
+  let payUpi = 0;
+  let payCard = 0;
+  let mtdUncollectedBookings = 0;
+  let earnedRevenueCollected = 0;
+  let earnedRevenueOutstanding = 0;
+  let collectionsForOtherPeriods = 0;
+
+  interface BookingGroup {
+    key: string;
+    stayTotal: number;
+    earnedRev: number;
+    totalPaid: number;
+    isPaymentInPeriod: boolean;
+  }
+
+  const groupMap = new Map<string, BookingGroup>();
+
+  for (const e of combinedEntries) {
+    const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+    const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+    const repDate = (e.report_date || arr).slice(0, 10);
+
+    // Count nights occupied in date range [start, end]
+    let occupiedNights = 0;
+    const [sy, sm, sd] = start.split('-').map(Number);
+    const [ey, em, ed] = end.split('-').map(Number);
+    const dtCur = new Date(Date.UTC(sy, sm - 1, sd));
+    const dtEnd = new Date(Date.UTC(ey, em - 1, ed));
+
+    while (dtCur <= dtEnd) {
+      const curIso = dtCur.toISOString().slice(0, 10);
+      if (isStayOccupiedOnDate(e, curIso)) occupiedNights++;
+      dtCur.setUTCDate(dtCur.getUTCDate() + 1);
+    }
+
+    const nightsCount = Math.max(1, toNum(e.nights) || 1);
+    const nightlyRate = nightsCount > 1
+      ? (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (toNum(e.total) / nightsCount))
+      : (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : toNum(e.total));
+
+    const earnedRev = e.is_complimentary ? 0 : (nightlyRate * occupiedNights);
+    roomRevenue += earnedRev;
+
+    // Payments posted in this period
+    const isPaymentInPeriod = repDate >= start && repDate <= end;
+    let cashAmt = toNum(e.pay_cash);
+    let upiAmt = toNum(e.pay_upi);
+    let cardAmt = toNum(e.pay_card);
+    let bankAmt = toNum(e.pay_bank);
+    const advAmt = toNum(e.pay_advance);
+    if (advAmt > 0 && cashAmt === 0 && bankAmt === 0 && upiAmt === 0 && cardAmt === 0) {
+      const mode = (e.pay_mode as string) || '';
+      if (mode === 'Cash') cashAmt = advAmt;
+      else if (mode === 'UPI') upiAmt = advAmt;
+      else if (mode === 'Card') cardAmt = advAmt;
+      else bankAmt = advAmt;
+    }
+
+    if (isPaymentInPeriod) {
+      payCash += cashAmt;
+      payBank += bankAmt;
+      payUpi += upiAmt;
+      payCard += cardAmt;
+      mtdUncollectedBookings += toNum(e.pay_balance);
+    }
+
+    const totalPaidOnEntry = cashAmt + upiAmt + cardAmt + bankAmt;
+    const stayTotal = toNum(e.total) || (nightlyRate * nightsCount);
+
+    // Group by reservation_id if present, or by (guest_name + arrival + departure) for multi-room bookings
+    const trimmedGuest = (e.guest_name || '').trim().toLowerCase();
+    const groupKey = e.reservation_id
+      ? `resv_${e.reservation_id}`
+      : trimmedGuest && trimmedGuest !== 'no name'
+        ? `guest_${trimmedGuest}_${arr}_${dep}`
+        : `entry_${e.id}`;
+
+    if (!groupMap.has(groupKey)) {
+      groupMap.set(groupKey, {
+        key: groupKey,
+        stayTotal: 0,
+        earnedRev: 0,
+        totalPaid: 0,
+        isPaymentInPeriod: false,
+      });
+    }
+
+    const grp = groupMap.get(groupKey)!;
+    grp.stayTotal += stayTotal;
+    grp.earnedRev += earnedRev;
+    grp.totalPaid += totalPaidOnEntry;
+    if (isPaymentInPeriod) grp.isPaymentInPeriod = true;
+  }
+
+  // Allocate payments and recognize collected vs outstanding at the reservation/folio group level
+  for (const grp of groupMap.values()) {
+    if (grp.earnedRev > 0) {
+      const fractionEarned = grp.stayTotal > 0 ? Math.min(1, grp.earnedRev / grp.stayTotal) : 1;
+      const earnedPaid = Math.min(grp.earnedRev, grp.totalPaid * fractionEarned);
+      const earnedDue = Math.max(0, grp.earnedRev - earnedPaid);
+      earnedRevenueCollected += earnedPaid;
+      earnedRevenueOutstanding += earnedDue;
+
+      if (grp.isPaymentInPeriod && grp.totalPaid > earnedPaid) {
+        collectionsForOtherPeriods += (grp.totalPaid - earnedPaid);
+      }
+    } else if (grp.isPaymentInPeriod && grp.totalPaid > 0) {
+      collectionsForOtherPeriods += grp.totalPaid;
+    }
+  }
+
+  const totalRevenue = roomRevenue + otherDailyRev.fb + otherDailyRev.misc + otherDailyRev.other;
+  const totalCollections = payCash + payBank + payUpi + payCard;
+  const timingDifference = totalRevenue - totalCollections;
+
+  return {
+    period: dateRange,
+    roomRevenue,
+    fbRevenue: otherDailyRev.fb,
+    miscRevenue: otherDailyRev.misc,
+    otherRevenue: otherDailyRev.other,
+    totalRevenue,
+    payCash,
+    payBank,
+    payUpi,
+    payCard,
+    totalCollections,
+    earnedRevenueCollected,
+    earnedRevenueOutstanding,
+    mtdUncollectedBookings,
+    currentInHouseDue: liveInHouseDue,
+    timingDifference,
+    collectionsForOtherPeriods,
+    uncollectedPeriodRevenue: earnedRevenueOutstanding,
+  };
+};
+

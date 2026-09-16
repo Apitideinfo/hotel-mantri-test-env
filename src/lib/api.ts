@@ -6,7 +6,7 @@ import type {
   RoomCategory, Room, RoomInput, PayMode, MealPlan, GstType, GstSlab,
 } from './types';
 import type { Reservation } from './types-reservations';
-import { calcCashClosing, toNum, buildDerivedReport, aggregateRoomChart, buildMtdYtdFromDaily, buildCashFlow, calcTotalRevenue, aggregateDerived, getTodayLocal, calcStayNights, isStayOccupiedOnDate, addDays } from './calc';
+import { calcCashClosing, toNum, buildDerivedReport, aggregateRoomChart, buildMtdYtdFromDaily, buildCashFlow, calcTotalRevenue, aggregateDerived, getTodayLocal, calcStayNights, isStayOccupiedOnDate, addDays, reconcilePeriodFinances } from './calc';
 
 import { getExpenseEntriesForDate, getExpenseEntriesForDateRange, getRevenueEntriesForDate, getRevenueEntriesForDateRange } from './api-finance';
 import type { ExpenseEntry, RevenueEntry } from './types-finance';
@@ -698,6 +698,7 @@ export const getDerivedReportsForMonth = async (
     runningClosing = dr.cash_closing;
     reports.push(dr);
   }
+  (reports as any).combinedEntries = combinedEntries;
   return reports;
 };
 
@@ -926,16 +927,21 @@ export interface DashboardSummary {
   settings: HotelSettings;
   today: DerivedReport;
   mtd: {
-    roomRevenue: number; totalRevenue: number; occ: number; arr: number; revpar: number; roomNights: number;
+    roomRevenue: number; totalRevenue: number; totalCollections: number; occ: number; arr: number; revpar: number; roomNights: number;
     cash: number; bank: number; totalExpenses: number; netIncome: number;
     payCash: number; payUpi: number; payCard: number; payBank: number;
     payAdvance: number; payBalance: number;
+    currentInHouseDue: number;
+    earnedRevenueCollected: number;
+    earnedRevenueOutstanding: number;
+    timingDifference: number;
+    collectionsForOtherPeriods?: number;
     ota: number; direct: number; corp: number; phone: number;
     fbRevenue: number; miscRevenue: number; otherRevenue: number;
     expenseByCategory: { category: string; amount: number }[];
   };
   ytd: {
-    roomRevenue: number; totalRevenue: number; occ: number; arr: number; revpar: number; roomNights: number;
+    roomRevenue: number; totalRevenue: number; totalCollections: number; occ: number; arr: number; revpar: number; roomNights: number;
     cash: number; bank: number; totalExpenses: number; netIncome: number;
     payCash: number; payUpi: number; payCard: number; payBank: number;
   };
@@ -943,7 +949,7 @@ export interface DashboardSummary {
   lastClosedDate: string | null;
   ranking: { name: string; category: SourceCategory; revenue: number; bookings: number }[];
   roomPreview: { categories: { name: string; total: number; occupied: number; reserved: number; blocked: number; maintenance: number; outOfOrder: number }[] };
-  opsToday: { arrivals: number; departures: number; inHouse: number; available: number; occupied: number; dueCheckouts: number; todayCheckins: number };
+  opsToday: { arrivals: number; departures: number; inHouse: number; available: number; occupied: number; dueCheckouts: number; todayCheckins: number; inHouseDue?: number };
   cashFlow?: CashFlowData;
 }
 
@@ -1001,6 +1007,7 @@ const getMockDashboardSummary = (s: HotelSettings, todayStr: string): DashboardS
     mtd: {
       roomRevenue: 288000,
       totalRevenue: 348000,
+      totalCollections: 348000,
       occ: 65,
       arr: 1800,
       revpar: 1170,
@@ -1015,6 +1022,10 @@ const getMockDashboardSummary = (s: HotelSettings, todayStr: string): DashboardS
       payBank: 80000,
       payAdvance: 0,
       payBalance: 0,
+      currentInHouseDue: 0,
+      earnedRevenueCollected: 288000,
+      earnedRevenueOutstanding: 0,
+      timingDifference: 0,
       ota: 80000,
       direct: 160000,
       corp: 60000,
@@ -1031,6 +1042,7 @@ const getMockDashboardSummary = (s: HotelSettings, todayStr: string): DashboardS
     ytd: {
       roomRevenue: 1440000,
       totalRevenue: 1740000,
+      totalCollections: 1740000,
       occ: 62,
       arr: 1800,
       revpar: 1116,
@@ -1129,11 +1141,11 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       getRoomCategories().catch(() => []),
       Promise.resolve(
         supabase.from('reservations')
-          .select('id,room_no,check_in_date,check_out_date,status')
+          .select('id,room_no,check_in_date,check_out_date,status,invoice_total,rate,nights,advance_paid,pay_cash,pay_bank,pay_upi,pay_card')
           .eq('hotel_id', getCurrentHotelId())
           .in('status', ['confirmed', 'checked_in'])
           .or(`and(check_in_date.lte.${todayStr},check_out_date.gte.${todayStr})`)
-      ).then(({ data }) => (data as { id: string; room_no: string; check_in_date: string; check_out_date: string; status: string }[]) ?? []).catch(() => []),
+      ).then(({ data }) => (data as { id: string; room_no: string; check_in_date: string; check_out_date: string; status: string; invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number }[]) ?? []).catch(() => []),
       Promise.resolve(
         supabase.from('room_blocks')
           .select('room_no,block_type,start_date,end_date')
@@ -1257,6 +1269,18 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
     const departures = todayReservations.filter((r: { check_out_date: string; status: string }) => r.check_out_date === todayStr && r.status !== 'cancelled' && r.status !== 'no_show').length;
     const inHouse = todayEntries.length;
     const available = Math.max(0, activeRooms.length - inHouse);
+
+    // Live in-house folio due across currently active reservations & in-house room chart entries
+    const inHouseResvDue = todayReservations.reduce((sum: number, r: { invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number }) => {
+      const inv = toNum(r.invoice_total) || (toNum(r.rate) * Math.max(1, toNum(r.nights) || 1));
+      const paid = toNum(r.advance_paid) + toNum(r.pay_cash) + toNum(r.pay_bank) + toNum(r.pay_upi) + toNum(r.pay_card);
+      return sum + Math.max(0, inv - paid);
+    }, 0);
+    const inHouseEntryDue = todayEntries.reduce((sum: number, e: RoomChartEntry) => {
+      return sum + toNum(e.pay_balance);
+    }, 0);
+    const currentInHouseDue = Math.max(inHouseResvDue, inHouseEntryDue);
+
     const opsToday = {
       arrivals,
       departures,
@@ -1265,7 +1289,19 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       occupied: inHouse,
       dueCheckouts: departures,
       todayCheckins: arrivals,
+      inHouseDue: currentInHouseDue,
     };
+
+    const combinedEntries: RoomChartEntry[] = (monthReports as unknown as { combinedEntries?: RoomChartEntry[] }).combinedEntries ?? [];
+    const recon = reconcilePeriodFinances(
+      combinedEntries,
+      { start: monthStart, end: todayStr },
+      currentInHouseDue,
+      { fb: mtdAgg.fbRevenue, misc: mtdAgg.miscRevenue, other: mtdAgg.otherRevenueEntries }
+    );
+
+    const totalMtdCollections = (mtdAgg.payCash ?? 0) + (mtdAgg.payBank ?? 0) + (mtdAgg.payUpi ?? 0) + (mtdAgg.payCard ?? 0);
+    const totalYtdCollections = (ytdAgg.payCash ?? 0) + (ytdAgg.payBank ?? 0) + (ytdAgg.payUpi ?? 0) + (ytdAgg.payCard ?? 0);
 
     return {
       settings: s,
@@ -1273,6 +1309,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       mtd: {
         roomRevenue: mtdAgg.roomRevenue,
         totalRevenue: mtdAgg.totalRevenue,
+        totalCollections: totalMtdCollections,
         occ: mtdAgg.occ,
         arr: mtdAgg.arr,
         revpar: mtdAgg.revpar,
@@ -1287,6 +1324,11 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
         payBank: mtdAgg.payBank,
         payAdvance: mtdAgg.payAdvance,
         payBalance: mtdAgg.payBalance,
+        currentInHouseDue,
+        earnedRevenueCollected: recon.earnedRevenueCollected,
+        earnedRevenueOutstanding: recon.earnedRevenueOutstanding,
+        timingDifference: recon.timingDifference,
+        collectionsForOtherPeriods: recon.collectionsForOtherPeriods,
         ota: mtdAgg.ota,
         direct: mtdAgg.direct,
         corp: mtdAgg.corp,
@@ -1299,6 +1341,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       ytd: {
         roomRevenue: ytdAgg.roomRevenue,
         totalRevenue: ytdAgg.totalRevenue,
+        totalCollections: totalYtdCollections,
         occ: ytdAgg.occ,
         arr: ytdAgg.arr,
         revpar: ytdAgg.revpar,

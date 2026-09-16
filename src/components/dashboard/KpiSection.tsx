@@ -58,7 +58,7 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       <KpiCardItem
         label="Total Income"
         value={rs(mtd?.totalRevenue ?? 0)}
-        sub="MTD Total"
+        sub="MTD Earned Revenue"
         icon={<DollarSign className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-brand-600"
         iconBg="bg-brand-50 text-brand-600"
@@ -67,7 +67,7 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       <KpiCardItem
         label="Cash"
         value={rs(mtd?.cash ?? 0)}
-        sub="MTD Collection"
+        sub="MTD Cash Received"
         icon={<Wallet className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-emerald-600"
         iconBg="bg-emerald-50 text-emerald-600"
@@ -76,7 +76,7 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       <KpiCardItem
         label="Bank / OTA"
         value={rs(mtd?.bank ?? 0)}
-        sub="MTD Collection"
+        sub="MTD Bank/OTA Received"
         icon={<Banknote className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-slate-800"
         iconBg="bg-slate-100 text-slate-700"
@@ -94,7 +94,7 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       <KpiCardItem
         label="Net Income"
         value={rs(mtd?.netIncome ?? 0)}
-        sub="MTD Net Profit"
+        sub="MTD Earned Profit"
         icon={<TrendingUp className="w-4 h-4 sm:w-5 sm:h-5" />}
         color={isPositiveNet ? 'text-emerald-600' : 'text-rose-600'}
         iconBg={isPositiveNet ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}
