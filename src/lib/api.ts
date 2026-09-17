@@ -948,7 +948,7 @@ export interface DashboardSummary {
   weekReports: DerivedReport[];
   lastClosedDate: string | null;
   ranking: { name: string; category: SourceCategory; revenue: number; bookings: number }[];
-  roomPreview: { categories: { name: string; total: number; occupied: number; reserved: number; blocked: number; maintenance: number; outOfOrder: number }[] };
+  roomPreview: { categories: { name: string; total: number; occupied: number; reserved: number; blocked: number; maintenance: number; outOfOrder: number; available?: number }[] };
   opsToday: { arrivals: number; departures: number; inHouse: number; available: number; occupied: number; dueCheckouts: number; todayCheckins: number; inHouseDue?: number };
   cashFlow?: CashFlowData;
 }
@@ -1119,7 +1119,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const yearStart = `${year}-01-01`;
 
-    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, yearReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks] = await Promise.all([
+    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, yearReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks, todayRestrictions] = await Promise.all([
       getRoomChart(todayStr).catch(() => []),
       getOtherEntries(todayStr).catch(() => null),
       getExpenseEntriesForDate(todayStr).catch(() => []),
@@ -1152,6 +1152,12 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
           .eq('hotel_id', getCurrentHotelId())
           .or(`and(start_date.lte.${todayStr},end_date.gte.${todayStr})`)
       ).then(({ data }) => (data as { room_no: string; block_type: string; start_date: string; end_date: string }[]) ?? []).catch(() => []),
+      Promise.resolve(
+        supabase.from('channel_inventory_restrictions')
+          .select('room_category_id,availability,stop_sell')
+          .eq('hotel_id', getCurrentHotelId())
+          .eq('date', todayStr)
+      ).then(({ data }) => (data as { room_category_id: string; availability: number; stop_sell: boolean }[]) ?? []).catch(() => []),
     ]);
 
     const prevDay = new Date(now);
@@ -1261,14 +1267,27 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
           else if (maintenanceRoomNos.has(rn)) maintenance++;
           else if (oooRoomNos.has(rn)) outOfOrder++;
         }
-        return { name: cat.name, total: catRooms.length, occupied, reserved, blocked, maintenance, outOfOrder };
+        const calcAvail = Math.max(0, catRooms.length - occupied - reserved - blocked - maintenance - outOfOrder);
+        const restr = todayRestrictions.find((r: { room_category_id: string }) => r.room_category_id === cat.id);
+        let manualAvailable = calcAvail;
+        if (restr) {
+          if (restr.stop_sell) manualAvailable = 0;
+          else if (restr.availability !== undefined && restr.availability !== null && String(restr.availability) !== '') {
+            const mVal = Number(restr.availability);
+            if (!isNaN(mVal)) manualAvailable = Math.max(0, mVal);
+          }
+        }
+        return { name: cat.name, total: catRooms.length, occupied, reserved, blocked, maintenance, outOfOrder, available: manualAvailable };
       }),
     };
 
     const arrivals = todayReservations.filter((r: { check_in_date: string; status: string }) => r.check_in_date === todayStr && r.status === 'confirmed').length;
     const departures = todayReservations.filter((r: { check_out_date: string; status: string }) => r.check_out_date === todayStr && r.status !== 'cancelled' && r.status !== 'no_show').length;
     const inHouse = todayEntries.length;
-    const available = Math.max(0, activeRooms.length - inHouse);
+    const totalAuthoritativeAvailable = roomPreview.categories.reduce((sum: number, c: { available?: number }) => sum + (c.available ?? 0), 0);
+    const available = roomPreview.categories.length > 0 && todayRestrictions.length > 0
+      ? totalAuthoritativeAvailable
+      : Math.max(0, activeRooms.length - inHouse);
 
     // Live in-house folio due across currently active reservations & in-house room chart entries
     const inHouseResvDue = todayReservations.reduce((sum: number, r: { invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number }) => {

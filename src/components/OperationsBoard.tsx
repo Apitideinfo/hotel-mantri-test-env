@@ -5,8 +5,15 @@ import {
   Smartphone, AlertCircle, Filter, RefreshCw, Loader2, CheckCircle2,
   Clock, Phone, Mail, IndianRupee, MessageCircle, Edit3, FileText,
   Sparkles, Play, ClipboardCheck, Wrench, Ban, Star,
-  ArrowRightLeft, CalendarPlus, AlertTriangle,
+  ArrowRightLeft, CalendarPlus, AlertTriangle, Sliders, Check,
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import {
+  getAuthoritativeAvailabilityMatrix,
+  upsertInventoryRestriction,
+  bulkUpdateInventory,
+} from '@/lib/api-channel';
+import type { AuthoritativeMatrixItem } from '@/lib/api-channel';
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, GstType, GstSlab,
@@ -124,6 +131,18 @@ const fmtDateFull = (d: string): string => {
   return dt.toLocaleDateString('en-IN', { timeZone: 'UTC', day: '2-digit', month: 'short', year: 'numeric' });
 };
 
+const daysBetween = (start: string, end: string): string[] => {
+  const days: string[] = [];
+  let cur = start;
+  let guard = 0;
+  while (cur <= end && guard < 100) {
+    days.push(cur);
+    cur = addDays(cur, 1);
+    guard++;
+  }
+  return days;
+};
+
 export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: OperationsBoardProps) => {
   const [settings, setSettings] = useState<HotelSettings | null>(null);
   const [sources, setSources] = useState<CompanySource[]>([]);
@@ -131,6 +150,17 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [rooms, setRooms] = useState<Room[]>([]);
   const [entries, setEntries] = useState<RoomChartEntry[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [categoryAvailability, setCategoryAvailability] = useState<Map<string, AuthoritativeMatrixItem>>(new Map());
+  const [adjustModalData, setAdjustModalData] = useState<{
+    categoryId: string;
+    categoryName: string;
+    startDate: string;
+    endDate: string;
+    availability: number;
+    stopSell: boolean;
+  } | null>(null);
+  const [adjustSaving, setAdjustSaving] = useState(false);
+  const [adjustError, setAdjustError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('week');
@@ -192,16 +222,29 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       setHotSeasons(hs);
 
       const rangeStart = timelineDates[0];
-      const rangeEnd = addDays(timelineDates[timelineDates.length - 1], 1);
+      const rangeEnd = timelineDates[timelineDates.length - 1];
+      const rangeEndInclusive = addDays(rangeEnd, 1);
 
-      const [es, resvs, futCount] = await Promise.all([
-        getRoomChartForDateRange(rangeStart, rangeEnd),
-        getReservationsForDateRange(rangeStart, rangeEnd),
+      const [es, resvs, futCount, matrixData] = await Promise.all([
+        getRoomChartForDateRange(rangeStart, rangeEndInclusive),
+        getReservationsForDateRange(rangeStart, rangeEndInclusive),
         getFutureReservationsCount(centerDate).catch(() => 0),
+        getAuthoritativeAvailabilityMatrix(rangeStart, rangeEnd).catch((err) => {
+          console.warn('[OperationsBoard] matrix fetch failed:', err);
+          return { matrix: [] as AuthoritativeMatrixItem[], source: 'supabase' as const };
+        }),
       ]);
       setEntries(es);
       setReservations(resvs);
       setFutureCount(futCount);
+
+      const map = new Map<string, AuthoritativeMatrixItem>();
+      if (matrixData && Array.isArray(matrixData.matrix)) {
+        for (const item of matrixData.matrix) {
+          map.set(`${item.room_category_id}_${item.date}`, item);
+        }
+      }
+      setCategoryAvailability(map);
 
       // Fetch VIP guests and all guest profiles for contact resolution
       try {
@@ -219,14 +262,81 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
   useEffect(() => { load(); }, [load]);
 
-  // Automatically refresh board when live sync or realtime OTA updates fire
+  // Automatically refresh board when live sync, realtime OTA, or availability updates fire
   useEffect(() => {
     const handleUpdate = () => {
       load();
     };
     window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
-    return () => window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    window.addEventListener('hotel_mantri_availability_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+      window.removeEventListener('hotel_mantri_availability_updated', handleUpdate);
+    };
   }, [load]);
+
+  // Realtime postgres_changes subscription for channel_inventory_restrictions
+  useEffect(() => {
+    if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
+    const channel = supabase
+      .channel(`ops-board-restrictions-${hotelId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'channel_inventory_restrictions',
+          filter: `hotel_id=eq.${hotelId}`,
+        },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [hotelId, hotelStatus, load]);
+
+  const handleSaveAvailability = async (data: {
+    categoryId: string;
+    startDate: string;
+    endDate: string;
+    availability: number;
+    stopSell: boolean;
+  }) => {
+    setAdjustSaving(true);
+    setAdjustError(null);
+    try {
+      const dates = daysBetween(data.startDate, data.endDate);
+      const safeAvail = Math.max(0, Math.floor(data.availability));
+      if (dates.length === 1) {
+        await upsertInventoryRestriction({
+          room_category_id: data.categoryId,
+          date: dates[0],
+          availability: safeAvail,
+          stop_sell: data.stopSell,
+        });
+      } else {
+        await bulkUpdateInventory(
+          dates.map((d) => ({
+            room_category_id: data.categoryId,
+            date: d,
+            availability: safeAvail,
+            stop_sell: data.stopSell,
+          }))
+        );
+      }
+      await load();
+      setAdjustModalData(null);
+    } catch (err: any) {
+      console.error('[OperationsBoard] Failed to save availability:', err);
+      setAdjustError(err.message || 'Failed to update availability');
+    } finally {
+      setAdjustSaving(false);
+    }
+  };
 
   const activeRooms = useMemo(() => rooms.filter((r) => r.is_active), [rooms]);
   const floors = useMemo(
@@ -761,7 +871,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Quick Actions</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-8 gap-2.5">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 2xl:grid-cols-9 gap-2.5">
           <button
             onClick={() => setShowNewBooking(true)}
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl shadow-soft-blue hover:shadow-md transition active:scale-95 shrink-0"
@@ -773,6 +883,28 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
             className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-navy-600 hover:bg-brand-navy-700 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
           >
             <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Walk-In</span>
+          </button>
+          <button
+            onClick={() => {
+              if (categories.length > 0) {
+                const firstCat = categories[0];
+                const item = categoryAvailability.get(`${firstCat.id}_${centerDate}`);
+                const fallbackAvail = activeRooms.filter(r => r.category_id === firstCat.id).length;
+                setAdjustError(null);
+                setAdjustModalData({
+                  categoryId: firstCat.id,
+                  categoryName: firstCat.name,
+                  startDate: centerDate,
+                  endDate: centerDate,
+                  availability: item !== undefined ? item.available : fallbackAvail,
+                  stopSell: Boolean(item?.stop_sell),
+                });
+              }
+            }}
+            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
+            title="Adjust sellable room availability & restrictions"
+          >
+            <Sliders className="w-4 h-4" /> <span className="whitespace-nowrap">Adjust Availability</span>
           </button>
           <button
             onClick={() => selectedBooking && handleCheckIn(selectedBooking)}
@@ -1009,18 +1141,69 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
               const grouped = groupRoomsByCategory(sortedRooms, categories);
               return grouped.map((group) => (
                 <div key={group.cat?.id ?? '__uncategorized'}>
-                  {/* Category header row */}
+                  {/* Category header row with authoritative availability & click-to-edit */}
                   <div className="flex border-b border-slate-200 bg-brand-navy-50 sticky left-0 z-[6]">
                     <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200 bg-brand-navy-50 flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-brand-navy-700 uppercase tracking-wider">
+                      <span className="text-[11px] font-bold text-brand-navy-700 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
                         {group.cat?.name ?? 'Uncategorized'}
                       </span>
-                    </div>
-                    <div className="flex-1 min-w-0 flex items-center px-3">
-                      <span className="text-[10px] font-semibold text-brand-navy-600">
-                        {group.cat?.name ?? 'Uncategorized'} — {group.rooms.length} Room{group.rooms.length !== 1 ? 's' : ''}
+                      <span className="text-[10px] font-bold text-brand-navy-600 bg-white/70 px-1.5 py-0.5 rounded border border-brand-navy-200/80 shadow-2xs">
+                        {group.rooms.length}
                       </span>
                     </div>
+                    {timelineDates.map((d) => {
+                      const catId = group.cat?.id;
+                      const authItem = catId ? categoryAvailability.get(`${catId}_${d}`) : undefined;
+                      const occupiedCount = group.rooms.filter((r) => {
+                        const roomKey = r.room_no.trim().toLowerCase();
+                        const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                        return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                      }).length;
+                      const fallbackAvail = Math.max(0, group.rooms.length - occupiedCount);
+                      const availVal = authItem !== undefined ? authItem.available : fallbackAvail;
+                      const isStopSell = Boolean(authItem?.stop_sell);
+                      const isOverridden = Boolean(authItem?.is_manual || isStopSell);
+
+                      return (
+                        <div
+                          key={d}
+                          className="flex-1 min-w-[90px] sm:min-w-[100px] px-1.5 py-1 border-r border-brand-navy-100 flex items-center justify-center bg-brand-navy-50/70"
+                        >
+                          {catId ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAdjustError(null);
+                                setAdjustModalData({
+                                  categoryId: catId,
+                                  categoryName: group.cat?.name ?? 'Room Category',
+                                  startDate: d,
+                                  endDate: d,
+                                  availability: availVal,
+                                  stopSell: isStopSell,
+                                });
+                              }}
+                              className={`w-full h-7 px-1.5 rounded-md text-[11px] font-bold transition flex items-center justify-between gap-1 shadow-2xs group cursor-pointer ${
+                                isStopSell
+                                  ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                                  : availVal === 0
+                                  ? 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
+                                  : 'bg-emerald-50 text-emerald-800 border border-emerald-200/80 hover:bg-emerald-100 hover:border-emerald-300'
+                              }`}
+                              title={`Category: ${group.cat?.name ?? 'Room'}\nDate: ${d}\nAvailability: ${availVal} sellable (${group.rooms.length} physical)\nStatus: ${isStopSell ? 'Stop Sell' : isOverridden ? 'Manual Override' : 'Standard'}\nClick to adjust`}
+                            >
+                              <span className="truncate flex items-center gap-1">
+                                {isOverridden && <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0" title="Manual restriction active" />}
+                                {isStopSell ? 'Stop Sell' : `${availVal} Avail`}
+                              </span>
+                              <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-brand-600 shrink-0 opacity-70 group-hover:opacity-100" />
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">{availVal} Avail</span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                   {/* Room rows */}
                   {group.rooms.map((room) => {
@@ -1170,15 +1353,24 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                   Available
                 </div>
                 {timelineDates.map((d) => {
-                  const occCount = activeRooms.filter((r) => {
-                    const roomKey = r.room_no.trim().toLowerCase();
-                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
-                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
-                  }).length;
-                  const availCount = Math.max(0, activeRooms.length - occCount);
+                  let totalAvail = 0;
+                  categories.forEach((cat) => {
+                    const authItem = categoryAvailability.get(`${cat.id}_${d}`);
+                    if (authItem !== undefined) {
+                      totalAvail += authItem.available;
+                    } else {
+                      const catRooms = activeRooms.filter((r) => r.category_id === cat.id);
+                      const occCount = catRooms.filter((r) => {
+                        const roomKey = r.room_no.trim().toLowerCase();
+                        const roomBookings = bookingByRoom.get(roomKey) ?? [];
+                        return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
+                      }).length;
+                      totalAvail += Math.max(0, catRooms.length - occCount);
+                    }
+                  });
                   return (
                     <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
-                      {availCount}
+                      {totalAvail}
                     </div>
                   );
                 })}
@@ -1385,6 +1577,239 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           onClose={() => { setShowNewBooking(false); setPreselectRoom(undefined); setPreselectCheckIn(undefined); setPreselectCheckOut(undefined); }}
           onSave={handleSaveReservation}
         />
+      )}
+
+      {/* Availability Adjustment Modal */}
+      {adjustModalData && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-scale-in">
+            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-brand-gold-400">
+                  <Sliders className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Adjust Room Availability</h3>
+                  <p className="text-xs text-slate-400">Update sellable rooms & restrictions</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdjustModalData(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                await handleSaveAvailability({
+                  categoryId: adjustModalData.categoryId,
+                  startDate: adjustModalData.startDate,
+                  endDate: adjustModalData.endDate,
+                  availability: adjustModalData.availability,
+                  stopSell: adjustModalData.stopSell,
+                });
+              }}
+              className="p-5 space-y-4"
+            >
+              {adjustError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{adjustError}</span>
+                </div>
+              )}
+
+              {/* Room Category */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Room Category
+                </label>
+                <select
+                  value={adjustModalData.categoryId}
+                  onChange={(e) => {
+                    const newCatId = e.target.value;
+                    const catObj = categories.find((c) => c.id === newCatId);
+                    const item = categoryAvailability.get(`${newCatId}_${adjustModalData.startDate}`);
+                    const fallbackAvail = activeRooms.filter((r) => r.category_id === newCatId).length;
+                    setAdjustModalData({
+                      ...adjustModalData,
+                      categoryId: newCatId,
+                      categoryName: catObj?.name ?? 'Category',
+                      availability: item !== undefined ? item.available : fallbackAvail,
+                      stopSell: Boolean(item?.stop_sell),
+                    });
+                  }}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
+                >
+                  {categories.map((c) => {
+                    const roomCount = activeRooms.filter((r) => r.category_id === c.id).length;
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({roomCount} physical rooms)
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+
+              {/* Date Range */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Start Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={adjustModalData.startDate}
+                    onChange={(e) => {
+                      const newStart = e.target.value;
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        startDate: newStart,
+                        endDate: adjustModalData.endDate < newStart ? newStart : adjustModalData.endDate,
+                      });
+                    }}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    End Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={adjustModalData.startDate}
+                    value={adjustModalData.endDate}
+                    onChange={(e) =>
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        endDate: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
+                  />
+                </div>
+              </div>
+
+              {/* Availability Count */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Sellable Availability
+                  </label>
+                  {(() => {
+                    const physicalTotal = activeRooms.filter((r) => r.category_id === adjustModalData.categoryId).length;
+                    return (
+                      <span className="text-[11px] font-semibold text-slate-500">
+                        Max Physical: {physicalTotal} rooms
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        availability: Math.max(0, adjustModalData.availability - 1),
+                      })
+                    }
+                    className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-lg flex items-center justify-center transition active:scale-95 cursor-pointer"
+                  >
+                    -
+                  </button>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    required
+                    value={adjustModalData.availability}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        availability: isNaN(v) ? 0 : Math.max(0, v),
+                      });
+                    }}
+                    className="flex-1 text-center py-2 bg-slate-50 border border-slate-200 rounded-xl text-base font-bold text-slate-900 focus:bg-white focus:border-brand-500 focus:outline-none transition tabular-nums"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        availability: adjustModalData.availability + 1,
+                      })
+                    }
+                    className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-lg flex items-center justify-center transition active:scale-95 cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Enter the number of rooms to make available for booking across all channels.
+                </p>
+              </div>
+
+              {/* Stop Sell Toggle */}
+              <div className="pt-2 border-t border-slate-100">
+                <label className="flex items-center gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={adjustModalData.stopSell}
+                    onChange={(e) =>
+                      setAdjustModalData({
+                        ...adjustModalData,
+                        stopSell: e.target.checked,
+                      })
+                    }
+                    className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 border-slate-300"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800">Stop Sell (Close Room Category)</span>
+                    <p className="text-[11px] text-slate-500">
+                      Forces sellable availability to 0 and blocks incoming reservations.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setAdjustModalData(null)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 transition rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={adjustSaving}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-soft-blue transition active:scale-95 cursor-pointer"
+                >
+                  {adjustSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Save Availability</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

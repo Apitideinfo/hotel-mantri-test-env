@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany } from './api';
 import { updateReservationStatus } from './api-reservations';
+import { dispatchChannelEvent } from './api-channel';
 import { toNum, calcGstFull, calcStayNights } from './calc';
 import type {
   RoomChartEntry, RoomChartEntryInput, Room, HousekeepingStatus,
@@ -230,6 +231,12 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     eventData: { room_no: params.roomNo, arrival_time: params.arrivalTime },
   });
 
+  dispatchChannelEvent('CHECK_IN', {
+    startDate: params.checkIn,
+    endDate: params.checkOut,
+    room_no: params.roomNo,
+  }).catch(e => console.warn('[checkInGuest] Auto-sync warning:', e));
+
   return saved;
 };
 
@@ -410,6 +417,12 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
     eventData: { balance_remaining: Math.max(0, grandTotal - (totalReceived + additionalPayment)) },
   });
 
+  dispatchChannelEvent('CHECK_OUT', {
+    startDate: entry.arrival || entry.report_date,
+    endDate: entry.departure,
+    room_no: params.roomNo,
+  }).catch(e => console.warn('[checkOutGuest] Auto-sync warning:', e));
+
   return updated as RoomChartEntry;
 };
 
@@ -468,6 +481,13 @@ export const shiftRoom = async (params: {
     performedBy: params.performedBy,
     eventData: { from: params.fromRoom, to: params.toRoom, reason: params.reason },
   });
+
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: updated.arrival || updated.report_date,
+    endDate: updated.departure,
+    fromRoom: params.fromRoom,
+    toRoom: params.toRoom,
+  }).catch(e => console.warn('[shiftRoom] Auto-sync warning:', e));
 
   return updated as RoomChartEntry;
 };
@@ -569,6 +589,12 @@ export const extendStay = async (params: {
     performedBy: params.performedBy,
     eventData: { new_checkout: params.newCheckOut, new_nights: newNights, new_total: invoiceTotal },
   });
+
+  dispatchChannelEvent('STAY_EXTENDED', {
+    startDate: saved.arrival || saved.report_date,
+    endDate: params.newCheckOut,
+    room_no: saved.room_no,
+  }).catch(e => console.warn('[extendStay] Auto-sync warning:', e));
 
   return updated as RoomChartEntry;
 };

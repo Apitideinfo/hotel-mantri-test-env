@@ -307,28 +307,330 @@ export const getInventoryRestrictions = async (
   return (data as ChannelInventoryRestriction[]) ?? [];
 };
 
+export type InventoryRestrictionInput = Partial<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>> & {
+  room_category_id: string;
+  date: string;
+};
+
+export type ChannelEventType =
+  | 'RATE_CHANGED'
+  | 'AVAILABILITY_CHANGED'
+  | 'INVENTORY_CHANGED'
+  | 'RESERVATION_CREATED'
+  | 'RESERVATION_MODIFIED'
+  | 'RESERVATION_CANCELLED'
+  | 'RESERVATION_CHANGED'
+  | 'CHECK_IN'
+  | 'CHECK_OUT'
+  | 'ROOM_TRANSFER'
+  | 'STAY_EXTENDED'
+  | 'ROOM_BLOCKED'
+  | 'ROOM_UNBLOCKED'
+  | 'MANUAL_SYNC';
+
+export interface DispatchChannelEventDetails {
+  startDate?: string | null;
+  endDate?: string | null;
+  date?: string | null;
+  roomCategoryId?: string | null;
+  roomCategoryIds?: string[] | null;
+  ratePlanIds?: string[] | null;
+  room_no?: string | null;
+  fromRoom?: string | null;
+  toRoom?: string | null;
+  [key: string]: any;
+}
+
+export const dispatchChannelEvent = async (
+  eventType: ChannelEventType,
+  details: DispatchChannelEventDetails = {}
+): Promise<any> => {
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) return null;
+
+  try {
+    const res = await apiFetch('/api/channels/events/dispatch', {
+      method: 'POST',
+      body: JSON.stringify({
+        hotelId,
+        eventType,
+        details,
+      }),
+    });
+    return res;
+  } catch (err: any) {
+    console.warn(`[dispatchChannelEvent] Event ${eventType} sync warning:`, err?.message || err);
+    return { success: false, error: err };
+  }
+};
+
 export const upsertInventoryRestriction = async (
-  input: Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>
+  input: InventoryRestrictionInput
 ): Promise<void> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId(), updated_at: new Date().toISOString() };
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) throw new Error('Hotel context is required to update availability');
+  if (!input.room_category_id) throw new Error('Room category is required');
+  if (!input.date) throw new Error('Date is required');
+
+  const avail = input.availability !== undefined && input.availability !== null && String(input.availability) !== ''
+    ? Math.max(0, Math.round(Number(input.availability) || 0))
+    : 0;
+
+  const payload = {
+    ...input,
+    availability: avail,
+    hotel_id: hotelId,
+    updated_at: new Date().toISOString()
+  };
+
   const { error } = await supabase
     .from('channel_inventory_restrictions')
     .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
-  if (error) throw error;
+
+  if (error) {
+    console.error('[upsertInventoryRestriction] Supabase error:', error);
+    throw new Error(error.message || 'Failed to save availability');
+  }
+
+  // Notify components across current application session
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
+      detail: { hotelId, roomCategoryId: input.room_category_id, date: input.date, availability: avail }
+    }));
+  }
+
+  // Automatic real-time sync to external Channel Manager
+  const hasRate = input.base_rate !== undefined || input.channel_rate !== undefined;
+  const hasInv = input.availability !== undefined || input.stop_sell !== undefined ||
+    input.closed_to_arrival !== undefined || input.closed_to_departure !== undefined ||
+    input.min_stay !== undefined || input.max_stay !== undefined;
+
+  if (hasRate) {
+    dispatchChannelEvent('RATE_CHANGED', {
+      startDate: input.date,
+      endDate: input.date,
+      roomCategoryId: input.room_category_id,
+    }).catch(e => console.warn('[upsertInventoryRestriction] Rate auto-sync error:', e));
+  }
+  if (hasInv) {
+    dispatchChannelEvent('AVAILABILITY_CHANGED', {
+      startDate: input.date,
+      endDate: input.date,
+      roomCategoryId: input.room_category_id,
+    }).catch(e => console.warn('[upsertInventoryRestriction] Inventory auto-sync error:', e));
+  }
 };
 
 export const bulkUpdateInventory = async (
-  updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>>
+  updates: Array<InventoryRestrictionInput>
 ): Promise<void> => {
-  const payload = updates.map((u) => ({
-    ...u,
-    hotel_id: getCurrentHotelId(),
-    updated_at: new Date().toISOString(),
-  }));
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) throw new Error('Hotel context is required to update availability');
+  if (!updates || updates.length === 0) return;
+
+  const payload = updates.map((u) => {
+    const avail = u.availability !== undefined && u.availability !== null && String(u.availability) !== ''
+      ? Math.max(0, Math.round(Number(u.availability) || 0))
+      : 0;
+    return {
+      ...u,
+      availability: avail,
+      hotel_id: hotelId,
+      updated_at: new Date().toISOString(),
+    };
+  });
+
   const { error } = await supabase
     .from('channel_inventory_restrictions')
     .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
-  if (error) throw error;
+
+  if (error) {
+    console.error('[bulkUpdateInventory] Supabase error:', error);
+    throw new Error(error.message || 'Failed to save bulk availability');
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
+      detail: { hotelId, count: updates.length }
+    }));
+  }
+
+  // Automatic real-time sync to external Channel Manager
+  const dates = updates.map((u) => u.date).filter(Boolean).sort();
+  if (dates.length > 0) {
+    const startDate = dates[0];
+    const endDate = dates[dates.length - 1];
+    const catIds = Array.from(new Set(updates.map((u) => u.room_category_id).filter(Boolean)));
+    const hasRate = updates.some((u) => u.base_rate !== undefined || u.channel_rate !== undefined);
+    const hasInv = updates.some((u) => u.availability !== undefined || u.stop_sell !== undefined ||
+      u.closed_to_arrival !== undefined || u.closed_to_departure !== undefined ||
+      u.min_stay !== undefined || u.max_stay !== undefined);
+
+    if (hasRate) {
+      dispatchChannelEvent('RATE_CHANGED', {
+        startDate,
+        endDate,
+        roomCategoryIds: catIds,
+      }).catch(e => console.warn('[bulkUpdateInventory] Rate auto-sync error:', e));
+    }
+    if (hasInv) {
+      dispatchChannelEvent('AVAILABILITY_CHANGED', {
+        startDate,
+        endDate,
+        roomCategoryIds: catIds,
+      }).catch(e => console.warn('[bulkUpdateInventory] Inventory auto-sync error:', e));
+    }
+  }
+};
+
+export interface AuthoritativeMatrixItem {
+  date: string;
+  room_category_id: string;
+  category_name: string;
+  physical: number;
+  occupied: number;
+  blocked: number;
+  calculatedAvailable: number;
+  available: number;
+  stop_sell: boolean;
+  is_manual?: boolean;
+  manual_availability?: number | null;
+  base_rate?: number;
+  min_stay?: number;
+  max_stay?: number;
+  closed_to_arrival?: boolean;
+  closed_to_departure?: boolean;
+}
+
+export const getAuthoritativeAvailabilityMatrix = async (
+  startDate: string,
+  endDate: string
+): Promise<{ matrix: AuthoritativeMatrixItem[]; source: 'api' | 'supabase' }> => {
+  const hotelId = getCurrentHotelId();
+  // 1. Try server matrix endpoint first
+  try {
+    const res = await getInventoryMatrix(startDate, endDate);
+    if (res && res.success && Array.isArray(res.matrix)) {
+      return { matrix: res.matrix, source: 'api' };
+    }
+  } catch {
+    // Fall back to client calculation from Supabase
+  }
+
+  // 2. Client-side authoritative calculation directly from Supabase
+  const [catsRes, roomsRes, resvsRes, blocksRes, restrictionsRes] = await Promise.all([
+    supabase.from('room_categories').select('id, name').eq('hotel_id', hotelId).eq('is_active', true).order('sort_order', { ascending: true }),
+    supabase.from('rooms').select('id, category_id, room_no, is_active').eq('hotel_id', hotelId),
+    supabase.from('reservations').select('id, room_id, room_no, check_in_date, check_out_date, status').eq('hotel_id', hotelId).in('status', ['confirmed', 'checked_in']).lte('check_in_date', endDate).gte('check_out_date', startDate),
+    supabase.from('room_blocks').select('room_no, start_date, end_date, block_type').eq('hotel_id', hotelId).lte('start_date', endDate).gte('end_date', startDate),
+    supabase.from('channel_inventory_restrictions').select('*').eq('hotel_id', hotelId).gte('date', startDate).lte('date', endDate),
+  ]);
+
+  const categories = (catsRes.data ?? []) as Array<{ id: string; name: string }>;
+  const rooms = (roomsRes.data ?? []) as Array<{ id: string; category_id: string; room_no: string; is_active: boolean }>;
+  const reservations = (resvsRes.data ?? []) as Array<{ id: string; room_id: string; room_no: string; check_in_date: string; check_out_date: string; status: string }>;
+  const blocks = (blocksRes.data ?? []) as Array<{ room_no: string; start_date: string; end_date: string; block_type: string }>;
+  const restrictions = (restrictionsRes.data ?? []) as ChannelInventoryRestriction[];
+
+  const physicalCounts: Record<string, number> = {};
+  const roomToCatMap: Record<string, string> = {};
+  const roomNoToCatMap: Record<string, string> = {};
+
+  for (const r of rooms) {
+    if (r.category_id && r.is_active !== false) {
+      roomToCatMap[r.id] = r.category_id;
+      physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
+      if (r.room_no) {
+        roomNoToCatMap[r.room_no.trim().toLowerCase()] = r.category_id;
+      }
+    }
+  }
+
+  const restrictionMap = new Map<string, ChannelInventoryRestriction>();
+  for (const r of restrictions) {
+    restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
+  }
+
+  // Generate date array
+  const dates: string[] = [];
+  let cur = startDate;
+  while (cur <= endDate) {
+    dates.push(cur);
+    const [y, m, d] = cur.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + 1));
+    cur = dt.toISOString().slice(0, 10);
+  }
+
+  const matrix: AuthoritativeMatrixItem[] = [];
+
+  for (const d of dates) {
+    const dTime = new Date(d + 'T12:00:00');
+    const occCounts: Record<string, number> = {};
+    for (const res of reservations) {
+      const ci = new Date(res.check_in_date + 'T12:00:00');
+      const co = new Date(res.check_out_date + 'T12:00:00');
+      if (dTime >= ci && dTime < co) {
+        const catId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+        if (catId) {
+          occCounts[catId] = (occCounts[catId] || 0) + 1;
+        }
+      }
+    }
+
+    const blkCounts: Record<string, number> = {};
+    for (const b of blocks) {
+      const bs = new Date(b.start_date + 'T12:00:00');
+      const be = new Date(b.end_date + 'T12:00:00');
+      if (dTime >= bs && dTime <= be) {
+        const catId = roomNoToCatMap[b.room_no.trim().toLowerCase()];
+        if (catId) {
+          blkCounts[catId] = (blkCounts[catId] || 0) + 1;
+        }
+      }
+    }
+
+    for (const cat of categories) {
+      const physical = physicalCounts[cat.id] || 0;
+      const occupied = occCounts[cat.id] || 0;
+      const blocked = blkCounts[cat.id] || 0;
+      const calculatedAvailable = Math.max(0, physical - occupied - blocked);
+
+      const r = restrictionMap.get(`${cat.id}|${d}`);
+      let sellable = calculatedAvailable;
+
+      if (r) {
+        if (r.stop_sell) {
+          sellable = 0;
+        } else if (r.availability !== undefined && r.availability !== null && String(r.availability) !== '') {
+          const manualVal = Number(r.availability);
+          if (!isNaN(manualVal)) {
+            sellable = Math.max(0, manualVal);
+          }
+        }
+      }
+
+      matrix.push({
+        date: d,
+        room_category_id: cat.id,
+        category_name: cat.name,
+        physical,
+        occupied,
+        blocked,
+        calculatedAvailable,
+        available: sellable,
+        stop_sell: Boolean(r?.stop_sell),
+        is_manual: Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== ''),
+        manual_availability: r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '' ? Number(r.availability) : null,
+        base_rate: r?.base_rate ?? 0,
+        min_stay: r?.min_stay ?? 1,
+        max_stay: r?.max_stay ?? 0,
+        closed_to_arrival: Boolean(r?.closed_to_arrival),
+        closed_to_departure: Boolean(r?.closed_to_departure),
+      });
+    }
+  }
+
+  return { matrix, source: 'supabase' };
 };
 
 // ── Sync Logs ──

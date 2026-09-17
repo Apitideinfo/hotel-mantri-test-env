@@ -622,7 +622,7 @@ function AppInner() {
           {nav.screen === 'analytics-revenue' && <RevenueAnalytics onBack={backToAnalytics} />}
 
           {nav.screen === 'operations' && nav.date && (
-            <OperationsBoard date={nav.date} onBack={back} onSaved={() => go('dashboard')} onNavigate={go} />
+            <OperationsBoard date={nav.date} onBack={back} onSaved={() => {}} onNavigate={go} />
           )}
 
           {nav.screen === 'housekeeping' && (

@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
 import { calcStayNights } from './calc';
+import { dispatchChannelEvent } from './api-channel';
 import type { RoomChartEntry } from './types';
 import type {
   Reservation, ReservationInput, ReservationStatus,
@@ -161,7 +162,14 @@ export const saveReservation = async (
       .select('*')
       .single();
     if (error) throw error;
-    return data as Reservation;
+    const res = data as Reservation;
+    dispatchChannelEvent('RESERVATION_MODIFIED', {
+      startDate: res.check_in_date,
+      endDate: res.check_out_date,
+      room_no: res.room_no,
+      room_id: res.room_id,
+    }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+    return res;
   }
 
   const { data, error } = await supabase
@@ -170,7 +178,14 @@ export const saveReservation = async (
     .select('*')
     .single();
   if (error) throw error;
-  return data as Reservation;
+  const res = data as Reservation;
+  dispatchChannelEvent('RESERVATION_CREATED', {
+    startDate: res.check_in_date,
+    endDate: res.check_out_date,
+    room_no: res.room_no,
+    room_id: res.room_id,
+  }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+  return res;
 };
 
 export const updateReservationStatus = async (
@@ -187,12 +202,36 @@ export const updateReservationStatus = async (
     .select('*')
     .single();
   if (error) throw error;
-  return data as Reservation;
+  const res = data as Reservation;
+  const eventType = status === 'cancelled' ? 'RESERVATION_CANCELLED' :
+    status === 'checked_in' ? 'CHECK_IN' :
+    status === 'checked_out' ? 'CHECK_OUT' : 'RESERVATION_MODIFIED';
+  dispatchChannelEvent(eventType, {
+    startDate: res.check_in_date,
+    endDate: res.check_out_date,
+    room_no: res.room_no,
+    room_id: res.room_id,
+  }).catch(e => console.warn('[updateReservationStatus] Auto-sync warning:', e));
+  return res;
 };
 
 export const deleteReservation = async (id: string): Promise<void> => {
+  const { data: existing } = await supabase
+    .from('reservations')
+    .select('check_in_date, check_out_date, room_no')
+    .eq('id', id)
+    .maybeSingle();
+
   const { error } = await supabase.from('reservations').delete().eq('id', id);
   if (error) throw error;
+
+  if (existing) {
+    dispatchChannelEvent('RESERVATION_CANCELLED', {
+      startDate: existing.check_in_date,
+      endDate: existing.check_out_date,
+      room_no: existing.room_no,
+    }).catch(e => console.warn('[deleteReservation] Auto-sync warning:', e));
+  }
 };
 
 export const checkRoomAvailability = async (
@@ -317,6 +356,12 @@ export const extendReservation = async (params: {
     }
   }
 
+  dispatchChannelEvent('STAY_EXTENDED', {
+    startDate: res.check_in_date,
+    endDate: newCheckOut,
+    room_no: res.room_no,
+  }).catch(e => console.warn('[extendReservation] Auto-sync warning:', e));
+
   return updated as Reservation;
 };
 
@@ -373,6 +418,13 @@ export const moveReservation = async (params: {
     .select('*')
     .single();
   if (error) throw error;
+
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: checkIn,
+    endDate: checkOut,
+    room_no: roomNo,
+  }).catch(e => console.warn('[moveReservation] Auto-sync warning:', e));
+
   return updated as Reservation;
 };
 
@@ -681,12 +733,32 @@ export const createRoomBlock = async (input: RoomBlockInput): Promise<RoomBlock>
     .select('*')
     .single();
   if (error) throw error;
-  return data as RoomBlock;
+  const block = data as RoomBlock;
+  dispatchChannelEvent('ROOM_BLOCKED', {
+    startDate: block.start_date,
+    endDate: block.end_date,
+    room_no: block.room_no,
+  }).catch(e => console.warn('[createRoomBlock] Auto-sync warning:', e));
+  return block;
 };
 
 export const deleteRoomBlock = async (id: string): Promise<void> => {
+  const { data: existing } = await supabase
+    .from('room_blocks')
+    .select('start_date, end_date, room_no')
+    .eq('id', id)
+    .maybeSingle();
+
   const { error } = await supabase.from('room_blocks').delete().eq('id', id);
   if (error) throw error;
+
+  if (existing) {
+    dispatchChannelEvent('ROOM_UNBLOCKED', {
+      startDate: existing.start_date,
+      endDate: existing.end_date,
+      room_no: existing.room_no,
+    }).catch(e => console.warn('[deleteRoomBlock] Auto-sync warning:', e));
+  }
 };
 
 // ── Phase 9: Bulk Operations ──

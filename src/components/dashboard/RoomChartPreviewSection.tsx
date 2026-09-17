@@ -49,7 +49,9 @@ export const RoomChartPreviewSection = ({ roomPreview, todayStr, onNavigate }: R
       {categories.length > 0 ? (
         <div className="space-y-3.5">
           {categories.map((cat) => {
-            const avail = cat.total - cat.occupied - cat.reserved - cat.blocked - cat.maintenance - cat.outOfOrder;
+            const avail = (cat as { available?: number }).available !== undefined
+              ? (cat as { available?: number }).available!
+              : Math.max(0, cat.total - cat.occupied - cat.reserved - cat.blocked - cat.maintenance - cat.outOfOrder);
             return (
               <div
                 key={cat.name}

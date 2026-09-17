@@ -8,8 +8,9 @@ const getEnvVar = (key: string) => {
   } catch {
     // Ignore in non-esm/node context
   }
-  if (typeof process !== 'undefined' && process.env && process.env[key]) {
-    return process.env[key];
+  const gProcess = (globalThis as unknown as { process?: { env?: Record<string, string> } }).process;
+  if (typeof gProcess !== 'undefined' && gProcess.env && gProcess.env[key]) {
+    return gProcess.env[key];
   }
   return '';
 };
@@ -18,7 +19,8 @@ const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
 const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
+  const gProcess = (globalThis as unknown as { process?: { env?: Record<string, string> } }).process;
+  if (!gProcess || gProcess.env?.NODE_ENV !== 'test') {
     console.error('Critical: Missing required Supabase environment variables VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.');
   }
 }
