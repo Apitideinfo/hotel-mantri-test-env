@@ -1,7 +1,9 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
+import { apiFetch } from './api-fetch';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
+import type { BulkInventoryPatch } from './bulkUpdateDraft';
 import { testAiosellConnection as testChannelConnection, checkAiosellStatus as checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
 export { testChannelConnection, checkChannelStatus, fetchChannelMapping };
 
@@ -364,123 +366,240 @@ export const dispatchChannelEvent = async (
   }
 };
 
-export const upsertInventoryRestriction = async (
-  input: InventoryRestrictionInput
-): Promise<void> => {
+export const applyBulkInventoryPatch = async (
+  patches: BulkInventoryPatch[],
+  skipSync = false
+): Promise<{
+  success: boolean;
+  updatedCount: number;
+  allVerified?: boolean;
+  rateSync?: any;
+  inventorySync?: any;
+  message?: string;
+}> => {
   const hotelId = getCurrentHotelId();
-  if (!hotelId) throw new Error('Hotel context is required to update availability');
-  if (!input.room_category_id) throw new Error('Room category is required');
-  if (!input.date) throw new Error('Date is required');
+  if (!hotelId) throw new Error('Hotel context is required to update inventory/rates');
+  if (!patches || patches.length === 0) {
+    return { success: true, updatedCount: 0, message: 'No patches to apply' };
+  }
 
-  const avail = input.availability !== undefined && input.availability !== null && String(input.availability) !== ''
-    ? Math.max(0, Math.round(Number(input.availability) || 0))
-    : 0;
+  // 1. Try server backend endpoint first
+  try {
+    const res = await apiFetch('/api/channels/inventory-restrictions/patch', {
+      method: 'POST',
+      body: JSON.stringify({ updates: patches, skipSync })
+    });
+    if (res && res.success) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
+          detail: { hotelId, count: patches.length }
+        }));
+      }
+      return res;
+    }
+  } catch (err) {
+    console.warn('[applyBulkInventoryPatch] Backend route failed or unavailable, falling back to client-side merge:', err);
+  }
 
-  const payload = {
-    ...input,
-    availability: avail,
-    hotel_id: hotelId,
-    updated_at: new Date().toISOString()
-  };
+  // 2. Client-side resilient non-destructive merge fallback
+  const targetDates = [...new Set(patches.map(p => p.date).filter(Boolean))];
+  const targetCatIds = [...new Set(patches.map(p => p.roomCategoryId).filter(Boolean))];
 
-  const { error } = await supabase
+  const { data: existingRows, error: fetchErr } = await supabase
     .from('channel_inventory_restrictions')
-    .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('date', targetDates)
+    .in('room_category_id', targetCatIds);
 
-  if (error) {
-    console.error('[upsertInventoryRestriction] Supabase error:', error);
-    throw new Error(error.message || 'Failed to save availability');
+  if (fetchErr) {
+    console.error('[applyBulkInventoryPatch] Error fetching existing rows:', fetchErr);
+    throw fetchErr;
   }
 
-  // Notify components across current application session
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
-      detail: { hotelId, roomCategoryId: input.room_category_id, date: input.date, availability: avail }
-    }));
-  }
-
-  // Automatic real-time sync to external Channel Manager
-  const hasRate = input.base_rate !== undefined || input.channel_rate !== undefined;
-  const hasInv = input.availability !== undefined || input.stop_sell !== undefined ||
-    input.closed_to_arrival !== undefined || input.closed_to_departure !== undefined ||
-    input.min_stay !== undefined || input.max_stay !== undefined;
-
-  if (hasRate) {
-    dispatchChannelEvent('RATE_CHANGED', {
-      startDate: input.date,
-      endDate: input.date,
-      roomCategoryId: input.room_category_id,
-    }).catch(e => console.warn('[upsertInventoryRestriction] Rate auto-sync error:', e));
-  }
-  if (hasInv) {
-    dispatchChannelEvent('AVAILABILITY_CHANGED', {
-      startDate: input.date,
-      endDate: input.date,
-      roomCategoryId: input.room_category_id,
-    }).catch(e => console.warn('[upsertInventoryRestriction] Inventory auto-sync error:', e));
-  }
-};
-
-export const bulkUpdateInventory = async (
-  updates: Array<InventoryRestrictionInput>
-): Promise<void> => {
-  const hotelId = getCurrentHotelId();
-  if (!hotelId) throw new Error('Hotel context is required to update availability');
-  if (!updates || updates.length === 0) return;
-
-  const payload = updates.map((u) => {
-    const avail = u.availability !== undefined && u.availability !== null && String(u.availability) !== ''
-      ? Math.max(0, Math.round(Number(u.availability) || 0))
-      : 0;
-    return {
-      ...u,
-      availability: avail,
-      hotel_id: hotelId,
-      updated_at: new Date().toISOString(),
-    };
+  const existingMap = new Map<string, ChannelInventoryRestriction>();
+  (existingRows || []).forEach(r => {
+    existingMap.set(`${r.room_category_id}|${r.date}`, r as ChannelInventoryRestriction);
   });
 
-  const { error } = await supabase
-    .from('channel_inventory_restrictions')
-    .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
+  // Coalesce patches
+  const coalescedMap = new Map<string, BulkInventoryPatch>();
+  for (const p of patches) {
+    const key = `${p.roomCategoryId}|${p.date}`;
+    const prev = coalescedMap.get(key) || { date: p.date, roomCategoryId: p.roomCategoryId };
+    coalescedMap.set(key, { ...prev, ...p });
+  }
 
-  if (error) {
-    console.error('[bulkUpdateInventory] Supabase error:', error);
-    throw new Error(error.message || 'Failed to save bulk availability');
+  const mergedPayload: any[] = [];
+  let hasRate = false;
+  let hasInv = false;
+
+  for (const [key, patch] of coalescedMap.entries()) {
+    const existing = existingMap.get(key);
+    const merged: any = {
+      hotel_id: hotelId,
+      room_category_id: patch.roomCategoryId,
+      date: patch.date,
+      updated_at: new Date().toISOString()
+    };
+
+    if (patch.baseRate !== undefined) {
+      hasRate = true;
+      merged.base_rate = patch.baseRate === null ? 0 : Math.max(0, patch.baseRate);
+    } else if (existing) {
+      merged.base_rate = existing.base_rate ?? 0;
+    } else {
+      merged.base_rate = 0;
+    }
+
+    if (patch.channelRate !== undefined) {
+      hasRate = true;
+      merged.channel_rate = patch.channelRate === null ? 0 : Math.max(0, patch.channelRate);
+    } else if (existing) {
+      merged.channel_rate = existing.channel_rate ?? 0;
+    } else {
+      merged.channel_rate = 0;
+    }
+
+    if (patch.availability !== undefined) {
+      hasInv = true;
+      merged.availability = patch.availability === null ? null : Math.max(0, patch.availability);
+    } else if (existing) {
+      merged.availability = existing.availability;
+    } else {
+      merged.availability = null;
+    }
+
+    if (patch.stopSell !== undefined) {
+      hasInv = true;
+      merged.stop_sell = Boolean(patch.stopSell);
+    } else if (existing) {
+      merged.stop_sell = Boolean(existing.stop_sell);
+    } else {
+      merged.stop_sell = false;
+    }
+
+    if (patch.minStay !== undefined) {
+      hasInv = true;
+      merged.min_stay = patch.minStay === null ? 1 : Math.max(1, patch.minStay);
+    } else if (existing) {
+      merged.min_stay = existing.min_stay ?? 1;
+    } else {
+      merged.min_stay = 1;
+    }
+
+    if (patch.maxStay !== undefined) {
+      hasInv = true;
+      merged.max_stay = patch.maxStay === null ? 0 : Math.max(0, patch.maxStay);
+    } else if (existing) {
+      merged.max_stay = existing.max_stay ?? 0;
+    } else {
+      merged.max_stay = 0;
+    }
+
+    if (patch.closedToArrival !== undefined) {
+      hasInv = true;
+      merged.closed_to_arrival = Boolean(patch.closedToArrival);
+    } else if (existing) {
+      merged.closed_to_arrival = Boolean(existing.closed_to_arrival);
+    } else {
+      merged.closed_to_arrival = false;
+    }
+
+    if (patch.closedToDeparture !== undefined) {
+      hasInv = true;
+      merged.closed_to_departure = Boolean(patch.closedToDeparture);
+    } else if (existing) {
+      merged.closed_to_departure = Boolean(existing.closed_to_departure);
+    } else {
+      merged.closed_to_departure = false;
+    }
+
+    if (existing?.id) {
+      merged.id = existing.id;
+    }
+
+    mergedPayload.push(merged);
+  }
+
+  const { error: upsertErr } = await supabase
+    .from('channel_inventory_restrictions')
+    .upsert(mergedPayload, { onConflict: 'hotel_id,room_category_id,date' });
+
+  if (upsertErr) {
+    console.error('[applyBulkInventoryPatch] Client fallback upsert error:', upsertErr);
+    throw upsertErr;
   }
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
-      detail: { hotelId, count: updates.length }
+      detail: { hotelId, count: mergedPayload.length }
     }));
   }
 
-  // Automatic real-time sync to external Channel Manager
-  const dates = updates.map((u) => u.date).filter(Boolean).sort();
-  if (dates.length > 0) {
+  // Trigger real-time sync if needed
+  if (!skipSync) {
+    const dates = targetDates.sort();
     const startDate = dates[0];
     const endDate = dates[dates.length - 1];
-    const catIds = Array.from(new Set(updates.map((u) => u.room_category_id).filter(Boolean)));
-    const hasRate = updates.some((u) => u.base_rate !== undefined || u.channel_rate !== undefined);
-    const hasInv = updates.some((u) => u.availability !== undefined || u.stop_sell !== undefined ||
-      u.closed_to_arrival !== undefined || u.closed_to_departure !== undefined ||
-      u.min_stay !== undefined || u.max_stay !== undefined);
 
     if (hasRate) {
       dispatchChannelEvent('RATE_CHANGED', {
         startDate,
         endDate,
-        roomCategoryIds: catIds,
-      }).catch(e => console.warn('[bulkUpdateInventory] Rate auto-sync error:', e));
+        roomCategoryIds: targetCatIds,
+      }).catch(e => console.warn('[applyBulkInventoryPatch] Rate auto-sync error:', e));
     }
     if (hasInv) {
       dispatchChannelEvent('AVAILABILITY_CHANGED', {
         startDate,
         endDate,
-        roomCategoryIds: catIds,
-      }).catch(e => console.warn('[bulkUpdateInventory] Inventory auto-sync error:', e));
+        roomCategoryIds: targetCatIds,
+      }).catch(e => console.warn('[applyBulkInventoryPatch] Inventory auto-sync error:', e));
     }
   }
+
+  return {
+    success: true,
+    updatedCount: mergedPayload.length,
+    message: `Saved ${mergedPayload.length} records.`
+  };
+};
+
+export const upsertInventoryRestriction = async (
+  input: InventoryRestrictionInput
+): Promise<void> => {
+  const patch: BulkInventoryPatch = {
+    roomCategoryId: input.room_category_id,
+    date: input.date,
+    ...(input.base_rate !== undefined ? { baseRate: input.base_rate } : {}),
+    ...(input.channel_rate !== undefined ? { channelRate: input.channel_rate } : {}),
+    ...(input.availability !== undefined ? { availability: input.availability } : {}),
+    ...(input.stop_sell !== undefined ? { stopSell: input.stop_sell } : {}),
+    ...(input.min_stay !== undefined ? { minStay: input.min_stay } : {}),
+    ...(input.max_stay !== undefined ? { maxStay: input.max_stay } : {}),
+    ...(input.closed_to_arrival !== undefined ? { closedToArrival: input.closed_to_arrival } : {}),
+    ...(input.closed_to_departure !== undefined ? { closedToDeparture: input.closed_to_departure } : {}),
+  };
+  await applyBulkInventoryPatch([patch]);
+};
+
+export const bulkUpdateInventory = async (
+  updates: Array<InventoryRestrictionInput>
+): Promise<void> => {
+  const patches: BulkInventoryPatch[] = updates.map(u => ({
+    roomCategoryId: u.room_category_id,
+    date: u.date,
+    ...(u.base_rate !== undefined ? { baseRate: u.base_rate } : {}),
+    ...(u.channel_rate !== undefined ? { channelRate: u.channel_rate } : {}),
+    ...(u.availability !== undefined ? { availability: u.availability } : {}),
+    ...(u.stop_sell !== undefined ? { stopSell: u.stop_sell } : {}),
+    ...(u.min_stay !== undefined ? { minStay: u.min_stay } : {}),
+    ...(u.max_stay !== undefined ? { maxStay: u.max_stay } : {}),
+    ...(u.closed_to_arrival !== undefined ? { closedToArrival: u.closed_to_arrival } : {}),
+    ...(u.closed_to_departure !== undefined ? { closedToDeparture: u.closed_to_departure } : {}),
+  }));
+  await applyBulkInventoryPatch(patches);
 };
 
 export interface AuthoritativeMatrixItem {
@@ -735,9 +854,6 @@ export const updateChannelSettingsStatus = async (
 };
 
 // ── Aiosell Endpoints (Proxy to Backend) ──
-
-import { apiFetch } from './api-fetch';
-
 
 
 export const fetchChannelInventory = async (startDate: string, endDate: string): Promise<any> => {

@@ -9,7 +9,7 @@ import {
   RefreshCcw, Download } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
-  bulkUpdateInventory, saveChannelConnection, deleteChannelConnection,
+  bulkUpdateInventory, applyBulkInventoryPatch, saveChannelConnection, deleteChannelConnection,
   saveChannelRateMapping, deleteChannelRateMapping, insertSyncLog,
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
@@ -23,6 +23,11 @@ import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
   ChannelSyncLog, ChannelOtaReservation, ChannelSettings,
 } from '@/lib/api-channel';
+import {
+  getBulkKey, parseBulkKey, mergeBulkDraft, removeDraftItem,
+  clearDraft, buildPatchListFromDraft, summarizeDraft
+} from '@/lib/bulkUpdateDraft';
+import type { BulkDraftItem, BulkDraftMap, BulkInventoryPatch } from '@/lib/bulkUpdateDraft';
 import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
@@ -622,6 +627,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
 type RangePreset = '7' | '14' | '30' | 'custom';
 
 const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; isLiveMode: boolean }) => {
+  const { hotelId } = useHotel();
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState(addDays(todayStr(), 6));
   const [rangePreset, setRangePreset] = useState<RangePreset>('7');
@@ -1061,12 +1067,12 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           categoryName={cellEdit.categoryName}
           restriction={getR(cellEdit.catId, cellEdit.date)}
           onClose={() => setCellEdit(null)}
-          onSave={async (data) => {
+          onSave={async (patch) => {
             await upsertInventoryRestriction({
               room_category_id: cellEdit.catId,
               date: cellEdit.date,
-              ...data,
-            } as Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>);
+              ...patch,
+            });
             setCellEdit(null);
             await load();
           }}
@@ -1079,9 +1085,10 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           categories={categories}
           defaultStart={startDate}
           defaultEnd={endDate}
+          existingRestrictions={restrictions}
+          hotelId={hotelId}
           onClose={() => setBulkOpen(false)}
-          onApply={async (updates) => {
-            await bulkUpdateInventory(updates);
+          onSuccess={async () => {
             setBulkOpen(false);
             await load();
           }}
@@ -1127,15 +1134,23 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   categoryName: string;
   restriction: Partial<ChannelInventoryRestriction>;
   onClose: () => void;
-  onSave: (data: Partial<ChannelInventoryRestriction>) => Promise<void>;
+  onSave: (patch: Partial<ChannelInventoryRestriction>) => Promise<void>;
 }) => {
-  const [availability, setAvailability] = useState(String(toNum(restriction.availability)));
-  const [baseRate, setBaseRate] = useState(String(toNum(restriction.base_rate)));
-  const [minStay, setMinStay] = useState(String(toNum(restriction.min_stay)));
-  const [maxStay, setMaxStay] = useState(String(toNum(restriction.max_stay)));
-  const [stopSell, setStopSell] = useState(Boolean(restriction.stop_sell));
-  const [cta, setCta] = useState(Boolean(restriction.closed_to_arrival));
-  const [ctd, setCtd] = useState(Boolean(restriction.closed_to_departure));
+  const initAvailStr = restriction.availability !== undefined && restriction.availability !== null ? String(restriction.availability) : '';
+  const initRateStr = restriction.base_rate !== undefined && restriction.base_rate !== null && Number(restriction.base_rate) > 0 ? String(restriction.base_rate) : '';
+  const initMinStr = restriction.min_stay !== undefined && restriction.min_stay !== null ? String(restriction.min_stay) : '1';
+  const initMaxStr = restriction.max_stay !== undefined && restriction.max_stay !== null ? String(restriction.max_stay) : '0';
+  const initStop = Boolean(restriction.stop_sell);
+  const initCta = Boolean(restriction.closed_to_arrival);
+  const initCtd = Boolean(restriction.closed_to_departure);
+
+  const [availability, setAvailability] = useState(initAvailStr);
+  const [baseRate, setBaseRate] = useState(initRateStr);
+  const [minStay, setMinStay] = useState(initMinStr);
+  const [maxStay, setMaxStay] = useState(initMaxStr);
+  const [stopSell, setStopSell] = useState(initStop);
+  const [cta, setCta] = useState(initCta);
+  const [ctd, setCtd] = useState(initCtd);
   const [saving, setSaving] = useState(false);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
@@ -1143,16 +1158,31 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
     setSaving(true);
     setSyncState('syncing');
     try {
-      await onSave({
-        availability: parseInt(availability) || 0,
-        base_rate: parseFloat(baseRate) || 0,
-        channel_rate: 0,
-        min_stay: parseInt(minStay) || 1,
-        max_stay: parseInt(maxStay) || 0,
-        stop_sell: stopSell,
-        closed_to_arrival: cta,
-        closed_to_departure: ctd,
-      });
+      const patch: Partial<ChannelInventoryRestriction> = {};
+
+      if (availability !== initAvailStr) {
+        patch.availability = availability.trim() === '' ? (null as any) : Math.max(0, parseInt(availability) || 0);
+      }
+      if (baseRate !== initRateStr) {
+        patch.base_rate = baseRate.trim() === '' ? 0 : Math.max(0, parseFloat(baseRate) || 0);
+      }
+      if (minStay !== initMinStr) {
+        patch.min_stay = Math.max(1, parseInt(minStay) || 1);
+      }
+      if (maxStay !== initMaxStr) {
+        patch.max_stay = Math.max(0, parseInt(maxStay) || 0);
+      }
+      if (stopSell !== initStop) {
+        patch.stop_sell = stopSell;
+      }
+      if (cta !== initCta) {
+        patch.closed_to_arrival = cta;
+      }
+      if (ctd !== initCtd) {
+        patch.closed_to_departure = ctd;
+      }
+
+      await onSave(patch);
       setSyncState('synced');
       setTimeout(() => {
         onClose();
@@ -1178,19 +1208,41 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Availability</label>
-            <input type="number" value={availability} onChange={(e) => setAvailability(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={availability}
+              onChange={(e) => setAvailability(e.target.value)}
+              placeholder="Leave empty for calculated"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Base Rate</label>
-            <input type="number" value={baseRate} onChange={(e) => setBaseRate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Base Rate (₹)</label>
+            <input
+              type="number"
+              value={baseRate}
+              onChange={(e) => setBaseRate(e.target.value)}
+              placeholder="e.g. 14000"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Min Stay (nights)</label>
-            <input type="number" value={minStay} onChange={(e) => setMinStay(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={minStay}
+              onChange={(e) => setMinStay(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Max Stay (nights)</label>
-            <input type="number" value={maxStay} onChange={(e) => setMaxStay(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={maxStay}
+              onChange={(e) => setMaxStay(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
         </div>
 
@@ -1259,23 +1311,7 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// BULK UPDATE DRAWER
-// ══════════════════════════════════════════════════════════════════
-
-type UpdateType = 'availability' | 'base_rate' | 'channel_rate' | 'stop_sell' | 'min_stay' | 'max_stay' | 'cta' | 'ctd';
-type RateMode = 'fixed' | 'inc_abs' | 'dec_abs' | 'inc_pct' | 'dec_pct';
-
-const UPDATE_TYPES: { key: UpdateType; label: string }[] = [
-  { key: 'availability', label: 'Availability' },
-  { key: 'base_rate', label: 'Base Rate' },
-  { key: 'channel_rate', label: 'Channel Rate' },
-  { key: 'stop_sell', label: 'Stop Sell' },
-  { key: 'min_stay', label: 'Minimum Stay' },
-  { key: 'max_stay', label: 'Maximum Stay' },
-  { key: 'cta', label: 'Closed to Arrival' },
-  { key: 'ctd', label: 'Closed to Departure' },
-];
+// ── Bulk Update Drawer ──
 
 const QUICK_RANGES = [
   { label: 'Today', from: 0, to: 0 },
@@ -1287,25 +1323,56 @@ const QUICK_RANGES = [
   { label: 'Next Month', from: 0, to: 30, dynamic: true },
 ];
 
-const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, existingRestrictions, onClose, onApply }: {
+type RateMode = 'fixed' | 'inc_abs' | 'dec_abs' | 'inc_pct' | 'dec_pct';
+
+const BulkUpdateDrawer = ({
+  categories,
+  defaultStart,
+  defaultEnd,
+  existingRestrictions,
+  hotelId,
+  onClose,
+  onSuccess,
+}: {
   categories: RoomCategory[];
   defaultStart: string;
   defaultEnd: string;
   existingRestrictions?: Map<string, ChannelInventoryRestriction>;
+  hotelId?: string | null;
   onClose: () => void;
-  onApply: (updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>>) => Promise<void>;
+  onSuccess: () => Promise<void>;
 }) => {
   const [fromDate, setFromDate] = useState(defaultStart);
   const [toDate, setToDate] = useState(defaultEnd);
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set(categories.map((c) => c.id)));
-  const [updateType, setUpdateType] = useState<UpdateType>('availability');
+
+  // Dimension 1: Rates
+  const [enableRate, setEnableRate] = useState(false);
   const [rateMode, setRateMode] = useState<RateMode>('fixed');
-  const [valueNum, setValueNum] = useState('');
-  const [boolVal, setBoolVal] = useState(true);
-  const [showPreview, setShowPreview] = useState(false);
-  const [applying, setApplying] = useState(false);
+  const [rateValue, setRateValue] = useState('');
+
+  // Dimension 2: Availability
+  const [enableAvail, setEnableAvail] = useState(false);
+  const [availValue, setAvailValue] = useState('');
+
+  // Dimension 3: Restrictions
+  const [enableRestrictions, setEnableRestrictions] = useState(false);
+  const [stopSell, setStopSell] = useState<'keep' | 'on' | 'off'>('keep');
+  const [minStay, setMinStay] = useState('');
+  const [maxStay, setMaxStay] = useState('');
+  const [cta, setCta] = useState<'keep' | 'open' | 'closed'>('keep');
+  const [ctd, setCtd] = useState<'keep' | 'open' | 'closed'>('keep');
+
+  // Multi-edit persistent drafts map
+  const [drafts, setDrafts] = useState<BulkDraftMap>({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'configure' | 'review'>('configure');
 
   const allDays = useMemo(() => daysBetween(fromDate, toDate), [fromDate, toDate]);
+  const summary = useMemo(() => summarizeDraft(drafts), [drafts]);
+  const patchList = useMemo(() => buildPatchListFromDraft(drafts, hotelId || undefined), [drafts, hotelId]);
 
   const toggleCat = (id: string) => {
     const next = new Set(selectedCats);
@@ -1332,236 +1399,649 @@ const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, existingRestri
     }
   };
 
-  // Compute preview
-  const previewData = useMemo(() => {
-    const dates = allDays.length;
-    const cats = selectedCats.size;
-    const total = dates * cats;
-    return { dates, cats, total };
-  }, [allDays, selectedCats]);
-
-  const computeNewValue = (oldVal: number): number => {
-    const v = parseFloat(valueNum) || 0;
-    if (updateType === 'base_rate' || updateType === 'channel_rate') {
-      switch (rateMode) {
-        case 'fixed': return v;
-        case 'inc_abs': return oldVal + v;
-        case 'dec_abs': return Math.max(0, oldVal - v);
-        case 'inc_pct': return Math.round(oldVal * (1 + v / 100));
-        case 'dec_pct': return Math.round(oldVal * (1 - v / 100));
-      }
+  const handleQueueChanges = () => {
+    setSaveError(null);
+    if (allDays.length === 0) {
+      setSaveError('Please select a valid date range.');
+      return;
     }
-    return v;
-  };
+    if (selectedCats.size === 0) {
+      setSaveError('Please select at least one room category.');
+      return;
+    }
+    if (!enableRate && !enableAvail && !enableRestrictions) {
+      setSaveError('Please select at least one dimension to update (Rates, Availability, or Restrictions).');
+      return;
+    }
 
-  const handleApply = async () => {
-    setApplying(true);
-    const updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>> = [];
+    if (enableRate && rateValue.trim() === '') {
+      setSaveError('Please enter a valid rate amount.');
+      return;
+    }
+
+    if (enableAvail && availValue.trim() === '') {
+      setSaveError('Please enter the number of available rooms.');
+      return;
+    }
+
+    const updates: Record<string, Partial<BulkDraftItem>> = {};
+
     for (const catId of selectedCats) {
-      for (const date of allDays) {
-        const existing = existingRestrictions?.get(`${catId}|${date}`);
-        const oldAvail = toNum(existing?.availability);
-        const oldBase = toNum(existing?.base_rate);
-        const oldChannel = toNum(existing?.channel_rate);
-        const oldMin = toNum(existing?.min_stay);
-        const oldMax = toNum(existing?.max_stay);
-        const oldStop = Boolean(existing?.stop_sell);
-        const oldCta = Boolean(existing?.closed_to_arrival);
-        const oldCtd = Boolean(existing?.closed_to_departure);
-        updates.push({
-          room_category_id: catId,
-          date,
-          availability: updateType === 'availability' ? (parseInt(valueNum) || 0) : oldAvail,
-          base_rate: updateType === 'base_rate' ? computeNewValue(oldBase) : oldBase,
-          channel_rate: updateType === 'channel_rate' ? computeNewValue(oldChannel) : oldChannel,
-          min_stay: updateType === 'min_stay' ? (parseInt(valueNum) || 1) : oldMin,
-          max_stay: updateType === 'max_stay' ? (parseInt(valueNum) || 0) : oldMax,
-          stop_sell: updateType === 'stop_sell' ? boolVal : oldStop,
-          closed_to_arrival: updateType === 'cta' ? boolVal : oldCta,
-          closed_to_departure: updateType === 'ctd' ? boolVal : oldCtd,
-        });
+      const category = categories.find((c) => c.id === catId);
+      for (const d of allDays) {
+        const key = getBulkKey(hotelId || '', d, catId, 'all');
+        const existing = existingRestrictions?.get(`${catId}|${d}`);
+        const patch: Partial<BulkDraftItem> = {};
+
+        // 1. Rate
+        if (enableRate) {
+          const v = parseFloat(rateValue);
+          if (!isNaN(v)) {
+            const currentRate = existing?.base_rate ? Number(existing.base_rate) : (category?.default_tariff ? Number(category.default_tariff) : 0);
+            let newRate = v;
+            if (rateMode === 'inc_abs') newRate = currentRate + v;
+            else if (rateMode === 'dec_abs') newRate = Math.max(0, currentRate - v);
+            else if (rateMode === 'inc_pct') newRate = Math.round(currentRate * (1 + v / 100));
+            else if (rateMode === 'dec_pct') newRate = Math.round(currentRate * (1 - v / 100));
+            patch.baseRate = Math.max(0, Math.round(newRate));
+          }
+        }
+
+        // 2. Availability
+        if (enableAvail) {
+          const av = parseInt(availValue);
+          if (!isNaN(av)) {
+            patch.availability = Math.max(0, av);
+          }
+        }
+
+        // 3. Restrictions
+        if (enableRestrictions) {
+          if (stopSell === 'on') patch.stopSell = true;
+          else if (stopSell === 'off') patch.stopSell = false;
+
+          if (minStay.trim() !== '') {
+            const ms = parseInt(minStay);
+            if (!isNaN(ms)) patch.minStay = Math.max(1, ms);
+          }
+          if (maxStay.trim() !== '') {
+            const xs = parseInt(maxStay);
+            if (!isNaN(xs)) patch.maxStay = Math.max(0, xs);
+          }
+
+          if (cta === 'closed') patch.closedToArrival = true;
+          else if (cta === 'open') patch.closedToArrival = false;
+
+          if (ctd === 'closed') patch.closedToDeparture = true;
+          else if (ctd === 'open') patch.closedToDeparture = false;
+        }
+
+        updates[key] = patch;
       }
     }
-    await onApply(updates);
-    setApplying(false);
+
+    setDrafts((prev) => mergeBulkDraft(prev, updates));
+    setFeedbackMsg(`✓ Queued updates for ${allDays.length} dates across ${selectedCats.size} categories.`);
+    setTimeout(() => setFeedbackMsg(null), 3500);
+
+    // Reset entry fields so user can queue another room/date without overwriting
+    setRateValue('');
+    setAvailValue('');
+    setMinStay('');
+    setMaxStay('');
+    setEnableRate(false);
+    setEnableAvail(false);
+    setEnableRestrictions(false);
+    setStopSell('keep');
+    setCta('keep');
+    setCtd('keep');
   };
 
-  const needsNumber = updateType === 'availability' || updateType === 'min_stay' || updateType === 'max_stay' || updateType === 'base_rate' || updateType === 'channel_rate';
-  const needsBool = updateType === 'stop_sell' || updateType === 'cta' || updateType === 'ctd';
-  const needsRateMode = updateType === 'base_rate' || updateType === 'channel_rate';
+  const handleRemoveItem = (key: string) => {
+    setDrafts((prev) => removeDraftItem(prev, key));
+  };
+
+  const handleClearAll = () => {
+    if (window.confirm('Discard all unsaved updates in this draft?')) {
+      setDrafts(clearDraft());
+    }
+  };
+
+  const handleSaveAll = async () => {
+    if (patchList.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+
+    try {
+      const result = await applyBulkInventoryPatch(patchList);
+      if (result && result.success) {
+        setDrafts(clearDraft());
+        await onSuccess();
+      } else {
+        throw new Error(result?.message || 'Failed to apply updates.');
+      }
+    } catch (err: any) {
+      console.error('[BulkUpdateDrawer] Save error:', err);
+      setSaveError(err.message || 'An error occurred while saving bulk updates.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClose = () => {
+    if (summary.hasUnsavedChanges) {
+      if (window.confirm(`You have ${summary.totalItems} unsaved updates in your draft. Are you sure you want to exit and discard them?`)) {
+        onClose();
+      }
+    } else {
+      onClose();
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white w-full max-w-md h-full overflow-y-auto shadow-2xl animate-slide-in-right">
+      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={handleClose} />
+      <div className="relative bg-white w-full max-w-xl h-full flex flex-col shadow-2xl animate-slide-in-right z-10">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-          <h3 className="text-base font-bold text-brand-navy-800">Bulk Update</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+        <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-brand-navy-800">Bulk Inventory & Rate Update</h3>
+              {summary.totalItems > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-100 text-brand-700">
+                  {summary.totalItems} in draft
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Accumulate updates across dates & rooms, then save & sync atomically
+            </p>
+          </div>
+          <button
+            onClick={handleClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="p-5 space-y-5">
-          {/* Date Range */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Date Range</label>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div>
-                <label className="text-[10px] text-slate-400">From</label>
-                <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="text-[10px] text-slate-400">To</label>
-                <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {QUICK_RANGES.map((q) => (
-                <button
-                  key={q.label}
-                  onClick={() => applyQuickRange(q.label)}
-                  className="text-[10px] font-semibold px-2.5 py-1.5 rounded-full border bg-white text-slate-500 border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
-                >
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* Tab Navigation */}
+        <div className="flex border-b border-slate-200 px-4 bg-white">
+          <button
+            onClick={() => setActiveTab('configure')}
+            className={`py-3 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+              activeTab === 'configure'
+                ? 'border-brand-600 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Calendar className="w-4 h-4" />
+            1. Configure Update
+          </button>
+          <button
+            onClick={() => setActiveTab('review')}
+            className={`py-3 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+              activeTab === 'review'
+                ? 'border-brand-600 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            2. Draft Queue ({summary.totalItems})
+          </button>
+        </div>
 
-          {/* Room Categories */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Room Categories</label>
+        {/* Feedback / Save Error Banner */}
+        {feedbackMsg && (
+          <div className="mx-4 mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-medium text-emerald-800 flex items-center gap-2 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>{feedbackMsg}</span>
+          </div>
+        )}
+        {saveError && (
+          <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-800 flex items-center gap-2 animate-fade-in">
+            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <span>{saveError}</span>
+          </div>
+        )}
+
+        {/* Body Content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {activeTab === 'configure' ? (
+            <div className="space-y-4">
+              {/* Date Range Selector */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <CalendarDays className="w-4 h-4 text-brand-600" />
+                    Date Range ({allDays.length} {allDays.length === 1 ? 'day' : 'days'})
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUICK_RANGES.map((q) => (
+                    <button
+                      key={q.label}
+                      onClick={() => applyQuickRange(q.label)}
+                      className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-brand-50 hover:text-brand-600 font-medium transition"
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 block mb-1">From Date</label>
+                    <input
+                      type="date"
+                      value={fromDate}
+                      onChange={(e) => setFromDate(e.target.value)}
+                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 block mb-1">To Date</label>
+                    <input
+                      type="date"
+                      value={toDate}
+                      onChange={(e) => setToDate(e.target.value)}
+                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Room Categories */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-brand-600" />
+                    Target Room Categories ({selectedCats.size} of {categories.length})
+                  </span>
+                  <div className="flex gap-2 text-[11px]">
+                    <button
+                      onClick={() => setSelectedCats(new Set(categories.map((c) => c.id)))}
+                      className="text-brand-600 hover:underline font-semibold"
+                    >
+                      All
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      onClick={() => setSelectedCats(new Set())}
+                      className="text-slate-500 hover:underline font-semibold"
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {categories.map((c) => {
+                    const active = selectedCats.has(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => toggleCat(c.id)}
+                        className={`text-xs px-2.5 py-1.5 rounded-lg border font-medium transition ${
+                          active
+                            ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Dimension 1: Rates Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableRate ? 'bg-blue-50/40 border-blue-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableRate}
+                      onChange={(e) => setEnableRate(e.target.checked)}
+                      className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 1: Update Base Rate</span>
+                  </label>
+                  {enableRate && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableRate && (
+                  <div className="space-y-2.5 pt-2">
+                    <div className="grid grid-cols-5 gap-1">
+                      {(
+                        [
+                          { mode: 'fixed', label: 'Fixed ₹' },
+                          { mode: 'inc_abs', label: '+₹' },
+                          { mode: 'dec_abs', label: '-₹' },
+                          { mode: 'inc_pct', label: '+%' },
+                          { mode: 'dec_pct', label: '-%' },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.mode}
+                          onClick={() => setRateMode(m.mode)}
+                          className={`text-xs py-1.5 rounded-lg border font-semibold transition ${
+                            rateMode === m.mode
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                        {rateMode === 'fixed' ? 'New Base Rate Amount (₹)' : 'Adjustment Value'}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={rateValue}
+                        onChange={(e) => setRateValue(e.target.value)}
+                        placeholder="e.g. 15000"
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 italic">
+                      Note: Rate update leaves Authoritative Room Availability untouched.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Dimension 2: Availability Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableAvail ? 'bg-emerald-50/40 border-emerald-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableAvail}
+                      onChange={(e) => setEnableAvail(e.target.checked)}
+                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 2: Authoritative Room Availability</span>
+                  </label>
+                  {enableAvail && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableAvail && (
+                  <div className="space-y-2 pt-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                        Available Rooms to Sell on OTAs
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={availValue}
+                        onChange={(e) => setAvailValue(e.target.value)}
+                        placeholder="e.g. 1"
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-emerald-400 focus:outline-none"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 italic">
+                      Note: Availability update leaves Base Rate untouched.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Dimension 3: Restrictions Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableRestrictions ? 'bg-amber-50/40 border-amber-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableRestrictions}
+                      onChange={(e) => setEnableRestrictions(e.target.checked)}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 3: Restrictions & Stop Sell</span>
+                  </label>
+                  {enableRestrictions && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableRestrictions && (
+                  <div className="space-y-3 pt-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">Stop Sell</label>
+                      <div className="grid grid-cols-3 gap-1">
+                        {(['keep', 'on', 'off'] as const).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setStopSell(s)}
+                            className={`text-xs py-1.5 rounded-lg border font-semibold capitalize transition ${
+                              stopSell === s
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-white text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">Min Stay</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={minStay}
+                          onChange={(e) => setMinStay(e.target.value)}
+                          placeholder="No change"
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">Max Stay</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={maxStay}
+                          onChange={(e) => setMaxStay(e.target.value)}
+                          placeholder="No change"
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">CTA (Closed to Arrival)</label>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['keep', 'open', 'closed'] as const).map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setCta(m)}
+                              className={`text-[11px] py-1 rounded border capitalize ${cta === m ? 'bg-slate-700 text-white' : 'bg-white text-slate-600'}`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">CTD (Closed to Departure)</label>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['keep', 'open', 'closed'] as const).map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setCtd(m)}
+                              className={`text-[11px] py-1 rounded border capitalize ${ctd === m ? 'bg-slate-700 text-white' : 'bg-white text-slate-600'}`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Queue Button */}
               <button
-                onClick={() => setSelectedCats(selectedCats.size === categories.length ? new Set() : new Set(categories.map((c) => c.id)))}
-                className="text-[10px] font-semibold text-brand-600 hover:text-brand-700"
+                onClick={handleQueueChanges}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs rounded-xl shadow transition"
               >
-                {selectedCats.size === categories.length ? 'Deselect All' : 'Select All'}
+                <Plus className="w-4 h-4" />
+                Add to Draft Queue ({allDays.length * selectedCats.size} cells targeted)
               </button>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {categories.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => toggleCat(c.id)}
-                  className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition ${
-                    selectedCats.has(c.id) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200'
-                  }`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Update Type */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Update Type</label>
-            <div className="grid grid-cols-2 gap-1.5">
-              {UPDATE_TYPES.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setUpdateType(t.key)}
-                  className={`text-xs font-semibold px-3 py-2 rounded-lg border transition ${
-                    updateType === t.key ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Value fields */}
-          {needsRateMode && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Rate Mode</label>
-              <select
-                value={rateMode}
-                onChange={(e) => setRateMode(e.target.value as RateMode)}
-                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              >
-                <option value="fixed">Fixed Rate</option>
-                <option value="inc_abs">Increase by Amount</option>
-                <option value="dec_abs">Decrease by Amount</option>
-                <option value="inc_pct">Increase by Percentage</option>
-                <option value="dec_pct">Decrease by Percentage</option>
-              </select>
-            </div>
-          )}
-
-          {needsNumber && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                {updateType === 'availability' ? 'Rooms Available' : updateType === 'min_stay' || updateType === 'max_stay' ? 'Nights' : 'Amount'}
-              </label>
-              <input
-                type="number"
-                value={valueNum}
-                onChange={(e) => setValueNum(e.target.value)}
-                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-                placeholder={needsRateMode ? 'Enter amount or percentage' : 'Enter value'}
-              />
-            </div>
-          )}
-
-          {needsBool && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Value</label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setBoolVal(true)}
-                  className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${boolVal ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-500 border-slate-200'}`}
-                >
-                  {updateType === 'stop_sell' ? 'On' : 'Closed'}
-                </button>
-                <button
-                  onClick={() => setBoolVal(false)}
-                  className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${!boolVal ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-500 border-slate-200'}`}
-                >
-                  {updateType === 'stop_sell' ? 'Off' : 'Open'}
-                </button>
+          ) : (
+            /* Review & Draft Queue Tab */
+            <div className="space-y-4">
+              {/* Summary Stats */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center">
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-blue-600">{summary.totalRates}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Rates</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-emerald-600">{summary.totalAvailabilities}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Availabilities</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-amber-600">{summary.totalRestrictions}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Restrictions</div>
+                </div>
               </div>
-            </div>
-          )}
 
-          {/* Preview */}
-          {showPreview && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 animate-fade-in">
-              <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Summary</h4>
-              <div className="text-xs space-y-1">
-                <div className="flex justify-between"><span className="text-slate-400">Date Range:</span><span className="font-semibold text-slate-700">{fmtDate(fromDate)} – {fmtDate(toDate)}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Dates Affected:</span><span className="font-semibold text-slate-700">{previewData.dates}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Categories:</span><span className="font-semibold text-slate-700">{previewData.cats}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Update Type:</span><span className="font-semibold text-slate-700">{UPDATE_TYPES.find((t) => t.key === updateType)?.label}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">New Value:</span><span className="font-semibold text-slate-700">
-                  {needsBool ? (boolVal ? (updateType === 'stop_sell' ? 'On' : 'Closed') : (updateType === 'stop_sell' ? 'Off' : 'Open')) : valueNum || '0'}
-                </span></div>
-                <div className="flex justify-between border-t border-slate-200 pt-1 mt-1"><span className="text-slate-400">Total Updates:</span><span className="font-bold text-brand-600">{previewData.total}</span></div>
-              </div>
+              {summary.totalItems === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-slate-600">No updates in draft queue yet</p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Select dates, categories, and values in the Configure tab, then click &quot;Add to Draft Queue&quot;.
+                  </p>
+                  <button
+                    onClick={() => setActiveTab('configure')}
+                    className="mt-3 px-3 py-1.5 bg-brand-50 text-brand-600 font-semibold text-xs rounded-lg hover:bg-brand-100 transition"
+                  >
+                    Go to Configure
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs font-bold text-slate-700">
+                      Queued Changes ({summary.totalItems} target dates/rooms)
+                    </span>
+                    <button
+                      onClick={handleClearAll}
+                      className="text-xs text-red-600 hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Discard All
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                    {Object.entries(drafts).map(([key, item]) => {
+                      const parsed = parseBulkKey(key);
+                      const catName = categories.find((c) => c.id === parsed.roomCategoryId)?.name || 'Room';
+                      return (
+                        <div
+                          key={key}
+                          className="p-3 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-800">{catName}</span>
+                              <span className="text-[11px] text-slate-400 font-mono">{parsed.date}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 text-[11px]">
+                              {item.baseRate !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-100">
+                                  Rate: ₹{fmtMoney(item.baseRate)}
+                                </span>
+                              )}
+                              {item.availability !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100">
+                                  Avail: {item.availability}
+                                </span>
+                              )}
+                              {item.stopSell !== undefined && (
+                                <span className={`px-2 py-0.5 rounded-md font-semibold border ${item.stopSell ? 'bg-red-50 text-red-700 border-red-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
+                                  StopSell: {item.stopSell ? 'ON' : 'OFF'}
+                                </span>
+                              )}
+                              {item.minStay !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  Min: {item.minStay}n
+                                </span>
+                              )}
+                              {item.maxStay !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  Max: {item.maxStay}n
+                                </span>
+                              )}
+                              {item.closedToArrival !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  CTA: {item.closedToArrival ? 'Closed' : 'Open'}
+                                </span>
+                              )}
+                              {item.closedToDeparture !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  CTD: {item.closedToDeparture ? 'Closed' : 'Open'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveItem(key)}
+                            className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-slate-50 transition"
+                            title="Remove this change"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Footer actions */}
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex items-center gap-2">
-          <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-3 transition">Cancel</button>
-          {!showPreview ? (
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3">
+          <button
+            onClick={handleClose}
+            className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+          >
+            Cancel
+          </button>
+          <div className="flex items-center gap-2">
+            {summary.totalItems > 0 && (
+              <button
+                onClick={handleClearAll}
+                className="px-3 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition"
+              >
+                Clear Draft
+              </button>
+            )}
             <button
-              onClick={() => setShowPreview(true)}
-              disabled={selectedCats.size === 0 || allDays.length === 0 || (needsNumber && !valueNum)}
-              className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-slate-600 hover:bg-slate-700 disabled:opacity-50 rounded-xl py-3 transition"
+              onClick={handleSaveAll}
+              disabled={saving || patchList.length === 0}
+              className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl shadow transition"
             >
-              <Eye className="w-4 h-4" /> Preview
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Saving & Syncing...' : `Save & Sync ${summary.totalItems} Updates`}
             </button>
-          ) : (
-            <button
-              onClick={handleApply}
-              disabled={applying}
-              className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-3 transition"
-            >
-              {applying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} Apply ({previewData.total})
-            </button>
-          )}
+          </div>
         </div>
       </div>
     </div>
