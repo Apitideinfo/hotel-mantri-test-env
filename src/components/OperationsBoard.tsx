@@ -590,8 +590,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           i.room_no, i.check_in_date, i.check_out_date, id,
         );
         if (!available) {
-          setError(`Room ${i.room_no} is already booked for the selected dates. Please adjust your selection.`);
-          return;
+          const msg = `Room ${i.room_no} is already booked for part of this stay. Please choose another room or change the dates.`;
+          setError(msg);
+          throw new Error(msg);
         }
       }
       
@@ -602,7 +603,9 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       await load();
       onSaved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed');
+      const msg = e instanceof Error ? e.message : 'Save failed';
+      setError(msg);
+      throw e;
     } finally {
       setSaving(false);
     }

@@ -47,6 +47,22 @@ export const calcStayNights = (arrival?: string | null, departure?: string | nul
 };
 
 /**
+ * Authoritative stay date interval overlap rule:
+ * Two stays overlap if and only if:
+ *   checkInA < checkOutB AND checkOutA > checkInB
+ * Checkout day is NOT an occupied night.
+ * Adjacent checkout/checkin (checkOutA === checkInB) is VALID (does not overlap).
+ */
+export const isStayOverlapping = (inA: string, outA: string, inB: string, outB: string): boolean => {
+  if (!inA || !outA || !inB || !outB) return false;
+  const a1 = inA.slice(0, 10);
+  const a2 = outA.slice(0, 10);
+  const b1 = inB.slice(0, 10);
+  const b2 = outB.slice(0, 10);
+  return a1 < b2 && a2 > b1;
+};
+
+/**
  * Canonical night generator for Hotel Mantri revenue recognition.
  *
  * Business Rule (Source of Truth):

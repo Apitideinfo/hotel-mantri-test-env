@@ -24,7 +24,7 @@ interface NewBookingModalProps {
   preselectCheckOut?: string;
   saving: boolean;
   onClose: () => void;
-  onSave: (input: ReservationInput | ReservationInput[]) => void;
+  onSave: (input: ReservationInput | ReservationInput[]) => Promise<void> | void;
 }
 
 
@@ -65,6 +65,7 @@ export const NewBookingModal = ({
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<ReservationInput[] | null>(null);
 
   const selectedRooms = useMemo(
@@ -182,11 +183,20 @@ export const NewBookingModal = ({
     });
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!validateForm()) return;
     const inputs = buildInputs();
-    onSave(inputs);
-    setSuccess(inputs);
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onSave(inputs);
+      setSuccess(inputs);
+    } catch (err: any) {
+      console.error('[NewBookingModal] Save error:', err);
+      setError(err?.message || 'Failed to create reservation. Please verify room availability.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // ── Success Modal View ──
@@ -824,15 +834,15 @@ export const NewBookingModal = ({
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={saving}
+                disabled={saving || submitting}
                 className="px-6 py-2.5 text-xs sm:text-sm font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-soft-blue transition flex items-center gap-2 disabled:opacity-60"
               >
-                {saving ? (
+                {saving || submitting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <PlusCircle className="w-4 h-4" />
                 )}
-                Create Booking
+                {submitting ? 'Creating Booking…' : 'Create Booking'}
               </button>
             </div>
 

@@ -28,6 +28,9 @@ app.use('/api/integrations/aiosell', aiosellIntegrationRoutes);
 import channelRoutes from './routes/channels.js';
 app.use('/api/channels', channelRoutes);
 
+import reservationRoutes from './routes/reservations.js';
+app.use('/api/reservations', reservationRoutes);
+
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
 

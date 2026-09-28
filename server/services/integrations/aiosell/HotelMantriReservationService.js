@@ -1,6 +1,7 @@
 import { supabaseServiceRole } from '../../../supabaseClient.js';
 import dotenv from 'dotenv';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
+import { checkRoomAvailability, normalizePhysicalRoom } from '../../ReservationConflictService.js';
 dotenv.config();
 
 export const getSupabase = () => supabaseServiceRole;
@@ -209,6 +210,28 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
   delete payload.id;
   delete payload.nights;
   delete payload.room_categories;
+
+  // Validate physical room availability to prevent overlaps
+  const norm = normalizePhysicalRoom(payload.room_no);
+  if (norm) {
+    const avail = await checkRoomAvailability({
+      hotelId: reservationData.hotel_id,
+      roomNo: norm,
+      checkIn: cleanCheckIn,
+      checkOut: cleanCheckOut,
+      excludeReservationId: existing?.id || null,
+    });
+    if (!avail.available) {
+      console.warn(`[OTA Service] Room ${norm} is occupied for ${cleanCheckIn} to ${cleanCheckOut}. Preserving as Unassigned.`);
+      payload.room_no = 'Unassigned';
+      payload.room_id = null;
+    } else {
+      payload.room_no = norm;
+    }
+  } else {
+    payload.room_no = 'Unassigned';
+    payload.room_id = null;
+  }
 
   if (existing) {
     // Preserve existing physical room assignment if already set and new payload didn't assign one

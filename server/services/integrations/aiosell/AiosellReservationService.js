@@ -7,6 +7,7 @@ import {
 } from './HotelMantriReservationService.js';
 import { parseWebhookPayload } from './AiosellPayloadParser.js';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
+import { withOtaLock } from '../../ReservationIdempotencyService.js';
 
 const logSync = async (hotelId, operation, direction, status, message, metadata = null) => {
   try {
@@ -38,91 +39,118 @@ const toDateOnly = (dateVal, fallback) => {
 };
 
 export const processAiosellReservation = async (payload, hotelId) => {
-  const supabase = getSupabase();
   const idempotencyKey = String(payload.bookingId);
+  const channelName = payload.channelName || 'aiosell';
 
-  // 1. Resolve room category mapping (strictly scoped to hotel_id)
-  let roomCategoryId = null;
-  let roomCategoryName = null;
-  let internalRatePlan = payload.rateplanCode || payload.rateplanName || 'OTA';
-  let mappingStatus = 'mapped';
+  return withOtaLock(hotelId, channelName, idempotencyKey, async () => {
+    const supabase = getSupabase();
 
-  if (payload.roomCode) {
-    // Primary: lookup from channel_rate_mappings
-    let mapping = null;
-    if (payload.rateplanCode) {
-      const { data: rateSpecific } = await supabase
-        .from('channel_rate_mappings')
-        .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
-        .eq('hotel_id', hotelId)
-        .eq('external_room_code', payload.roomCode)
-        .eq('external_rate_plan_code', payload.rateplanCode)
-        .not('room_category_id', 'is', null)
-        .limit(1);
-      if (rateSpecific && rateSpecific.length > 0) {
-        mapping = rateSpecific[0];
-      }
-    }
+    // 1. Resolve room category mapping (strictly scoped to hotel_id)
+    let roomCategoryId = null;
+    let roomCategoryName = null;
+    let internalRatePlan = payload.rateplanCode || payload.rateplanName || 'OTA';
+    let mappingStatus = 'mapped';
 
-    if (!mapping) {
-      const { data: anyRoom } = await supabase
-        .from('channel_rate_mappings')
-        .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
-        .eq('hotel_id', hotelId)
-        .eq('external_room_code', payload.roomCode)
-        .not('room_category_id', 'is', null)
-        .limit(1);
-      if (anyRoom && anyRoom.length > 0) {
-        mapping = anyRoom[0];
-      }
-    }
-
-    if (mapping && mapping.room_category_id) {
-      roomCategoryId = mapping.room_category_id;
-      if (mapping.external_rate_plan_code) internalRatePlan = mapping.external_rate_plan_code;
-
-      const { data: cat } = await supabase
-        .from('room_categories')
-        .select('name')
-        .eq('id', roomCategoryId)
-        .limit(1);
-      if (cat && cat.length > 0) roomCategoryName = cat[0].name;
-    } else {
-      // Fallback: lookup room category by name matching external room code or payload room name
-      const searchTerms = [payload.roomCode, payload.roomName].filter(Boolean);
-      for (const term of searchTerms) {
-        const { data: cat } = await supabase
-          .from('room_categories')
-          .select('id, name')
+    if (payload.roomCode) {
+      // Primary: lookup from channel_rate_mappings
+      let mapping = null;
+      if (payload.rateplanCode) {
+        const { data: rateSpecific } = await supabase
+          .from('channel_rate_mappings')
+          .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
           .eq('hotel_id', hotelId)
-          .ilike('name', term)
+          .eq('external_room_code', payload.roomCode)
+          .eq('external_rate_plan_code', payload.rateplanCode)
+          .not('room_category_id', 'is', null)
           .limit(1);
-        if (cat && cat.length > 0) {
-          roomCategoryId = cat[0].id;
-          roomCategoryName = cat[0].name;
-          break;
+        if (rateSpecific && rateSpecific.length > 0) {
+          mapping = rateSpecific[0];
         }
       }
-      if (!roomCategoryId) {
-        mappingStatus = 'mapping_required';
+
+      if (!mapping) {
+        const { data: anyRoom } = await supabase
+          .from('channel_rate_mappings')
+          .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
+          .eq('hotel_id', hotelId)
+          .eq('external_room_code', payload.roomCode)
+          .not('room_category_id', 'is', null)
+          .limit(1);
+        if (anyRoom && anyRoom.length > 0) {
+          mapping = anyRoom[0];
+        }
       }
+
+      if (mapping && mapping.room_category_id) {
+        roomCategoryId = mapping.room_category_id;
+        if (mapping.external_rate_plan_code) internalRatePlan = mapping.external_rate_plan_code;
+
+        const { data: cat } = await supabase
+          .from('room_categories')
+          .select('name')
+          .eq('id', roomCategoryId)
+          .limit(1);
+        if (cat && cat.length > 0) roomCategoryName = cat[0].name;
+      } else {
+        // Fallback: lookup room category by name matching external room code or payload room name
+        const searchTerms = [payload.roomCode, payload.roomName].filter(Boolean);
+        for (const term of searchTerms) {
+          const { data: cat } = await supabase
+            .from('room_categories')
+            .select('id, name')
+            .eq('hotel_id', hotelId)
+            .ilike('name', `%${term}%`)
+            .limit(1);
+          if (cat && cat.length > 0) {
+            roomCategoryId = cat[0].id;
+            roomCategoryName = cat[0].name;
+            break;
+          }
+        }
+        if (!roomCategoryId) {
+          mappingStatus = 'mapping_required';
+        }
+      }
+    } else {
+      mappingStatus = 'mapping_required';
     }
-  } else {
-    mappingStatus = 'mapping_required';
-  }
 
-  // 2. Check existing OTA reservation in channel_ota_reservations
-  const { data: existingOta } = await supabase
-    .from('channel_ota_reservations')
-    .select('id, reservation_id, import_status, booking_status')
-    .eq('hotel_id', hotelId)
-    .eq('ota_booking_id', idempotencyKey)
-    .maybeSingle();
+    // Direct check in reservations table for channel + external_booking_id or idempotency marker
+    const idempotencyMarker = `[OTA_BOOKING_ID: ${idempotencyKey}]`;
+    const { data: directRes } = await supabase
+      .from('reservations')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .or(`internal_note.ilike.%${idempotencyMarker}%,remarks.ilike.%${idempotencyMarker}%`)
+      .limit(1)
+      .maybeSingle();
 
-  // If action is book but already exists, convert to modify to prevent duplicate creation
-  if (existingOta && payload.action === 'book') {
-    payload.action = 'modify';
-  }
+    // 2. Check existing OTA reservation in channel_ota_reservations
+    const { data: existingOta } = await supabase
+      .from('channel_ota_reservations')
+      .select('id, reservation_id, import_status, booking_status')
+      .eq('hotel_id', hotelId)
+      .eq('ota_booking_id', idempotencyKey)
+      .maybeSingle();
+
+    const existingResId = existingOta?.reservation_id || directRes?.id || null;
+
+    // If already imported / reservation exists and action is book, return idempotent response
+    if (existingResId && payload.action === 'book') {
+      return {
+        success: true,
+        status: 'already_imported',
+        idempotent: true,
+        message: 'This booking has already been imported. No duplicate reservation was created.',
+        bookingId: idempotencyKey,
+        reservationId: existingResId,
+      };
+    }
+
+    // If action is book but already exists, convert to modify to prevent duplicate creation
+    if ((existingOta || directRes) && payload.action === 'book') {
+      payload.action = 'modify';
+    }
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const tomorrowStr = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
@@ -230,7 +258,6 @@ export const processAiosellReservation = async (payload, hotelId) => {
   }
 
   // 5. Book or Modify: Resolve physical room and guest
-  const existingResId = existingOta?.reservation_id || null;
 
   // Attempt physical room auto-assignment for mapped category
   const physicalRoom = await findAvailablePhysicalRoom(hotelId, roomCategoryId, ciStr, coStr, existingResId);
@@ -323,6 +350,7 @@ export const processAiosellReservation = async (payload, hotelId) => {
     reservationId: savedReservation?.id || null,
     roomNo: physicalRoom.roomNo
   };
+  });
 };
 
 export const processWebhook = async (rawPayload) => {

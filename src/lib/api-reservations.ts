@@ -1,7 +1,8 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
-import { calcStayNights } from './calc';
+import { calcStayNights, isStayOverlapping } from './calc';
 import { dispatchChannelEvent } from './api-channel';
+import { apiFetch } from './api-fetch';
 import type { RoomChartEntry } from './types';
 import type {
   Reservation, ReservationInput, ReservationStatus,
@@ -12,6 +13,17 @@ import type {
 } from './types-reservations';
 
 export { getRoomChartForDateRange };
+
+/**
+ * Definition of an active reservation status that blocks room inventory.
+ * Confirmed and Checked-in block rooms.
+ * Checked-out, Cancelled, and No-show do NOT block rooms.
+ */
+export const isReservationRoomBlocking = (status?: string | null): boolean => {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return s === 'confirmed' || s === 'checked_in';
+};
 
 export const getReservations = async (
   fromDate?: string,
@@ -94,9 +106,66 @@ export const saveReservation = async (
   id?: string,
 ): Promise<Reservation> => {
   const hotelId = getCurrentHotelId();
-  const rawPayload = { ...input, hotel_id: hotelId };
+  const ci = (input.check_in_date || '').slice(0, 10);
+  const co = (input.check_out_date || '').slice(0, 10);
 
-  // Remove generated/virtual fields that PostgreSQL generated columns forbid inserting into
+  if (!ci || !co) {
+    throw new Error('Please select check-in and check-out dates.');
+  }
+  if (ci >= co) {
+    throw new Error('Check-out date must be strictly after check-in date.');
+  }
+
+  const normRoom = (input.room_no || '').trim().toLowerCase();
+  const isPhysical = normRoom && normRoom !== 'unassigned' && normRoom !== 'tbd';
+
+  if (isPhysical) {
+    const isAvail = await checkRoomAvailability(input.room_no, ci, co, id);
+    if (!isAvail) {
+      throw new Error(`Room ${input.room_no} is already booked for part of this stay. Please choose another room or change the dates.`);
+    }
+  }
+
+  // Try authoritative backend endpoint
+  try {
+    if (id && id.trim() !== '') {
+      const res = await apiFetch(`/api/reservations/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      });
+      if (res?.reservation) {
+        dispatchChannelEvent('RESERVATION_MODIFIED', {
+          startDate: res.reservation.check_in_date,
+          endDate: res.reservation.check_out_date,
+          room_no: res.reservation.room_no,
+          room_id: res.reservation.room_id,
+        }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        return res.reservation;
+      }
+    } else {
+      const res = await apiFetch('/api/reservations', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+      if (res?.reservation) {
+        dispatchChannelEvent('RESERVATION_CREATED', {
+          startDate: res.reservation.check_in_date,
+          endDate: res.reservation.check_out_date,
+          room_no: res.reservation.room_no,
+          room_id: res.reservation.room_id,
+        }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        return res.reservation;
+      }
+    }
+  } catch (err: any) {
+    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'ROOM_ASSIGNMENT_CONFLICT' || err?.code === 'INVALID_STAY_DATES' || err?.code === 'RESERVATION_DUPLICATE') {
+      throw new Error(err.message);
+    }
+    console.warn('[saveReservation] Backend call deferred to direct database update:', err?.message || err);
+  }
+
+  // Direct Supabase fallback
+  const rawPayload = { ...input, hotel_id: hotelId };
   delete (rawPayload as { id?: string }).id;
   delete (rawPayload as { nights?: number }).nights;
 
@@ -161,7 +230,15 @@ export const saveReservation = async (
       .eq('id', id)
       .select('*')
       .single();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+        throw new Error('Check-out date must be after check-in date.');
+      }
+      if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+        throw new Error(`Room ${rawPayload.room_no} is already booked for part of this stay. Please choose another room.`);
+      }
+      throw error;
+    }
     const res = data as Reservation;
     dispatchChannelEvent('RESERVATION_MODIFIED', {
       startDate: res.check_in_date,
@@ -177,7 +254,15 @@ export const saveReservation = async (
     .insert(rawPayload)
     .select('*')
     .single();
-  if (error) throw error;
+  if (error) {
+    if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+      throw new Error('Check-out date must be after check-in date.');
+    }
+    if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      throw new Error(`Room ${rawPayload.room_no} is already booked for part of this stay. Please choose another room.`);
+    }
+    throw error;
+  }
   const res = data as Reservation;
   dispatchChannelEvent('RESERVATION_CREATED', {
     startDate: res.check_in_date,
@@ -240,9 +325,18 @@ export const checkRoomAvailability = async (
   checkOut: string,
   excludeId?: string,
 ): Promise<boolean> => {
+  const roomKey = (roomNo || '').trim().toLowerCase();
+  // Unassigned rooms do not block physical rooms
+  if (!roomKey || roomKey === 'unassigned' || roomKey === 'tbd') {
+    return true;
+  }
+
+  const ci = checkIn.slice(0, 10);
+  const co = checkOut.slice(0, 10);
+  if (ci >= co) return false;
+
   try {
     const hotelId = getCurrentHotelId();
-    const roomKey = roomNo.trim().toLowerCase();
 
     // 1. Check active reservations for overlap
     let resQ = supabase
@@ -269,10 +363,10 @@ export const checkRoomAvailability = async (
 
     const resOverlap = (resData ?? []).some((r) => {
       if ((r.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
-      const ci = (r.check_in_date ?? '').slice(0, 10);
-      const co = (r.check_out_date ?? '').slice(0, 10);
-      if (!ci || !co) return false;
-      return ci < checkOut && co > checkIn;
+      const rCi = (r.check_in_date ?? '').slice(0, 10);
+      const rCo = (r.check_out_date ?? '').slice(0, 10);
+      if (!rCi || !rCo) return false;
+      return isStayOverlapping(ci, co, rCi, rCo);
     });
 
     if (resOverlap) return false;
@@ -281,7 +375,8 @@ export const checkRoomAvailability = async (
     const { data: entryData } = await supabase
       .from('room_chart_entries')
       .select('id, room_no, arrival, departure, reservation_id')
-      .eq('hotel_id', hotelId);
+      .eq('hotel_id', hotelId)
+      .is('checked_out_at', null);
 
     const entryOverlap = (entryData ?? []).some((e: { id?: string; room_no?: string; arrival?: string; departure?: string; report_date?: string; reservation_id?: string }) => {
       if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
@@ -292,7 +387,7 @@ export const checkRoomAvailability = async (
       const a = (e.arrival ?? e.report_date ?? '').slice(0, 10);
       const d = (e.departure ?? e.report_date ?? '').slice(0, 10);
       if (!a || !d) return false;
-      return a < checkOut && d > checkIn;
+      return isStayOverlapping(ci, co, a, d);
     });
 
     return !entryOverlap;
@@ -301,11 +396,105 @@ export const checkRoomAvailability = async (
   }
 };
 
+export const assignPhysicalRoom = async (
+  reservationId: string,
+  roomNo: string,
+  roomId?: string | null,
+): Promise<Reservation> => {
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/assign-room`, {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, roomId }),
+    });
+    if (res?.reservation) {
+      dispatchChannelEvent('ROOM_TRANSFER', {
+        startDate: res.reservation.check_in_date,
+        endDate: res.reservation.check_out_date,
+        room_no: res.reservation.room_no,
+      }).catch(e => console.warn('[assignPhysicalRoom] Auto-sync warning:', e));
+      return res.reservation;
+    }
+  } catch (err: any) {
+    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'ROOM_ASSIGNMENT_CONFLICT') {
+      throw new Error(err.message || `Room ${roomNo} is already occupied for these dates.`);
+    }
+  }
+
+  // Client-side fallback
+  const { data: current, error: fetchErr } = await supabase
+    .from('reservations')
+    .select('check_in_date, check_out_date')
+    .eq('id', reservationId)
+    .single();
+  if (fetchErr || !current) throw new Error('Reservation not found.');
+
+  const norm = roomNo.trim().toLowerCase();
+  if (norm && norm !== 'unassigned' && norm !== 'tbd') {
+    const available = await checkRoomAvailability(roomNo, current.check_in_date, current.check_out_date, reservationId);
+    if (!available) {
+      throw new Error(`Room ${roomNo} is no longer available for these dates. Another reservation was assigned to this room. Please choose another room.`);
+    }
+  }
+
+  const { data: updated, error } = await supabase
+    .from('reservations')
+    .update({
+      room_no: roomNo,
+      room_id: roomId || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', reservationId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  const r = updated as Reservation;
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: r.check_in_date,
+    endDate: r.check_out_date,
+    room_no: r.room_no,
+  }).catch(e => console.warn('[assignPhysicalRoom] Auto-sync warning:', e));
+  return r;
+};
+
+export const checkInReservation = async (reservationId: string): Promise<Reservation> => {
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/check-in`, {
+      method: 'POST',
+    });
+    if (res?.reservation) return res.reservation;
+  } catch (err: any) {
+    throw new Error(err?.message || 'Check-in blocked due to room conflict.');
+  }
+
+  // Fallback
+  return updateReservationStatus(reservationId, 'checked_in');
+};
+
 export const extendReservation = async (params: {
   reservationId: string;
   newCheckOut: string;
 }): Promise<Reservation> => {
   const { reservationId, newCheckOut } = params;
+
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/extend`, {
+      method: 'POST',
+      body: JSON.stringify({ newCheckOut }),
+    });
+    if (res?.reservation) {
+      dispatchChannelEvent('STAY_EXTENDED', {
+        startDate: res.reservation.check_in_date,
+        endDate: res.reservation.check_out_date,
+        room_no: res.reservation.room_no,
+      }).catch(e => console.warn('[extendReservation] Auto-sync warning:', e));
+      return res.reservation;
+    }
+  } catch (err: any) {
+    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'INVALID_STAY_DATES') {
+      throw new Error(err.message);
+    }
+  }
 
   const { data: current, error: fetchErr } = await supabase
     .from('reservations')
@@ -804,39 +993,53 @@ export const getReservationAlerts = async (reservations: Reservation[]): Promise
   const alerts: ReservationAlert[] = [];
   const today = new Date().toISOString().slice(0, 10);
 
-  // Group by room+date to detect overbooking
-  const roomDateMap = new Map<string, Reservation[]>();
-  for (const r of reservations) {
-    if (r.status !== 'confirmed' && r.status !== 'checked_in') continue;
-    const key = `${r.room_no}|${r.check_in_date}`;
-    if (!roomDateMap.has(key)) roomDateMap.set(key, []);
-    roomDateMap.get(key)!.push(r);
+  // Physical room overbooking detection (ignoring unassigned/TBD)
+  const physicalReservations = reservations.filter((r) => {
+    if (!isReservationRoomBlocking(r.status)) return false;
+    const room = (r.room_no || '').trim().toLowerCase();
+    return room && room !== 'unassigned' && room !== 'tbd';
+  });
+
+  const roomGroups = new Map<string, Reservation[]>();
+  for (const r of physicalReservations) {
+    const key = r.room_no.trim();
+    if (!roomGroups.has(key)) roomGroups.set(key, []);
+    roomGroups.get(key)!.push(r);
   }
-  for (const [key, resList] of roomDateMap) {
-    if (resList.length > 1) {
-      const [roomNo, date] = key.split('|');
-      alerts.push({
-        type: 'overbooking',
-        message: `Room ${roomNo} has ${resList.length} overlapping reservations on ${date}`,
-        roomNo,
-        severity: 'error',
-      });
+
+  for (const [roomNo, list] of roomGroups) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          alerts.push({
+            type: 'overbooking',
+            message: `Room ${roomNo} has overlapping bookings: ${a.guest_name} (${a.check_in_date} to ${a.check_out_date}) and ${b.guest_name} (${b.check_in_date} to ${b.check_out_date})`,
+            roomNo,
+            reservationId: a.id,
+            severity: 'error',
+          });
+        }
+      }
     }
   }
 
-  // Duplicate reservation detection (same guest, same dates)
-  const guestDateMap = new Map<string, Reservation[]>();
+  // Duplicate reservation detection: only if same guest, same dates AND same physical room
+  // (Legitimate multiple room bookings for same guest on different rooms are allowed)
+  const guestRoomMap = new Map<string, Reservation[]>();
   for (const r of reservations) {
-    if (r.status !== 'confirmed' && r.status !== 'checked_in') continue;
-    const key = `${r.guest_name.toLowerCase()}|${r.check_in_date}|${r.check_out_date}`;
-    if (!guestDateMap.has(key)) guestDateMap.set(key, []);
-    guestDateMap.get(key)!.push(r);
+    if (!isReservationRoomBlocking(r.status)) continue;
+    const room = (r.room_no || '').trim().toLowerCase();
+    const key = `${r.guest_name.toLowerCase().trim()}|${r.check_in_date}|${r.check_out_date}|${room}`;
+    if (!guestRoomMap.has(key)) guestRoomMap.set(key, []);
+    guestRoomMap.get(key)!.push(r);
   }
-  for (const [, resList] of guestDateMap) {
+  for (const [, resList] of guestRoomMap) {
     if (resList.length > 1) {
       alerts.push({
         type: 'duplicate',
-        message: `Duplicate reservation: ${resList[0].guest_name} has ${resList.length} bookings for the same dates`,
+        message: `Duplicate reservation: ${resList[0].guest_name} has multiple bookings for Room ${resList[0].room_no || 'Unassigned'} on the same dates`,
         reservationId: resList[0].id,
         severity: 'warning',
       });
@@ -1063,3 +1266,154 @@ export const quickReservation = async (params: {
     rate_plan: 'Walk-in',
   });
 };
+
+// ── Phase 10: Server-side Paginated Reservations & Conflict Diagnostic ──
+
+export interface ReservationFilterParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  fromDate?: string;
+  toDate?: string;
+  status?: string;
+  sourceCategory?: string;
+  assignedStatus?: 'all' | 'assigned' | 'unassigned';
+  roomNo?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface PaginatedReservationsResult {
+  reservations: Reservation[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export const getReservationsPaginated = async (
+  params: ReservationFilterParams = {}
+): Promise<PaginatedReservationsResult> => {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.pageSize) query.set('pageSize', String(params.pageSize));
+  if (params.search) query.set('search', params.search);
+  if (params.fromDate) query.set('fromDate', params.fromDate);
+  if (params.toDate) query.set('toDate', params.toDate);
+  if (params.status) query.set('status', params.status);
+  if (params.sourceCategory) query.set('sourceCategory', params.sourceCategory);
+  if (params.assignedStatus) query.set('assignedStatus', params.assignedStatus);
+  if (params.roomNo) query.set('roomNo', params.roomNo);
+  if (params.sortBy) query.set('sortBy', params.sortBy);
+  if (params.sortOrder) query.set('sortOrder', params.sortOrder);
+
+  try {
+    const res = await apiFetch(`/api/reservations?${query.toString()}`);
+    if (res && res.success) {
+      return {
+        reservations: res.reservations || [],
+        totalCount: res.totalCount || 0,
+        page: res.page || 1,
+        pageSize: res.pageSize || 20,
+        totalPages: res.totalPages || 1,
+      };
+    }
+  } catch (err) {
+    console.warn('[getReservationsPaginated] Backend endpoint fallback to Supabase query:', err);
+  }
+
+  // Fallback to direct Supabase query
+  const hotelId = getCurrentHotelId();
+  const pageNum = params.page || 1;
+  const limit = params.pageSize || 20;
+  const offset = (pageNum - 1) * limit;
+
+  let q = supabase
+    .from('reservations')
+    .select('*', { count: 'exact' })
+    .eq('hotel_id', hotelId);
+
+  if (params.status && params.status !== 'all') {
+    q = q.eq('status', params.status);
+  }
+  if (params.sourceCategory && params.sourceCategory !== 'all') {
+    q = q.eq('source_category', params.sourceCategory);
+  }
+  if (params.roomNo && params.roomNo !== 'all') {
+    q = q.ilike('room_no', params.roomNo.trim());
+  }
+  if (params.assignedStatus === 'unassigned') {
+    q = q.or('room_no.is.null,room_no.eq.,room_no.ilike.unassigned,room_no.ilike.tbd');
+  } else if (params.assignedStatus === 'assigned') {
+    q = q.not('room_no', 'is', null).neq('room_no', '').not('room_no', 'ilike', 'unassigned').not('room_no', 'ilike', 'tbd');
+  }
+  if (params.fromDate && params.toDate) {
+    q = q.lt('check_in_date', params.toDate).gt('check_out_date', params.fromDate);
+  } else if (params.fromDate) {
+    q = q.gte('check_out_date', params.fromDate);
+  } else if (params.toDate) {
+    q = q.lte('check_in_date', params.toDate);
+  }
+  if (params.search && params.search.trim()) {
+    const s = params.search.trim();
+    q = q.or(`guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%,guest_email.ilike.%${s}%,room_no.ilike.%${s}%,payment_ref.ilike.%${s}%`);
+  }
+
+  const isAsc = params.sortOrder === 'asc';
+  q = q.order(params.sortBy || 'check_in_date', { ascending: isAsc }).range(offset, offset + limit - 1);
+
+  const { data, count, error } = await q;
+  if (error) throw error;
+
+  return {
+    reservations: (data as Reservation[]) || [],
+    totalCount: count || 0,
+    page: pageNum,
+    pageSize: limit,
+    totalPages: Math.ceil((count || 0) / limit),
+  };
+};
+
+export const getReservationConflicts = async (): Promise<any[]> => {
+  try {
+    const res = await apiFetch('/api/reservations/conflicts');
+    if (res && res.success) {
+      return res.conflicts || [];
+    }
+  } catch (err) {
+    console.warn('[getReservationConflicts] Fallback to client check:', err);
+  }
+
+  // Client-side detection fallback
+  const hotelId = getCurrentHotelId();
+  const { data: res } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .order('check_in_date', { ascending: true });
+
+  const list = (res as Reservation[]) || [];
+  const conflicts: any[] = [];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i];
+      const b = list[j];
+      const rA = (a.room_no || '').trim().toLowerCase();
+      const rB = (b.room_no || '').trim().toLowerCase();
+      if (!rA || rA === 'unassigned' || rA === 'tbd' || !rB || rB === 'unassigned' || rB === 'tbd') continue;
+      if (rA === rB || (a.room_id && b.room_id && a.room_id === b.room_id)) {
+        if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          conflicts.push({
+            type: 'physical_room_overlap',
+            roomNo: a.room_no,
+            reservationA: a,
+            reservationB: b,
+          });
+        }
+      }
+    }
+  }
+  return conflicts;
+};
+

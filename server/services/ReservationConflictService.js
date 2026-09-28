@@ -1,0 +1,374 @@
+/**
+ * HOTEL MANTRI — ReservationConflictService
+ * 
+ * Authoritative business logic for:
+ * 1. Active reservation blocking statuses
+ * 2. Stay date range overlap calculations
+ * 3. Physical room availability verification (against reservations & room_chart_entries)
+ * 4. Room category capacity checking for unassigned bookings
+ * 5. In-process mutex locking per (hotel_id, room_no) to prevent concurrency races
+ * 6. Audit logging of conflicts
+ */
+
+import { supabaseServiceRole } from '../supabaseClient.js';
+
+// In-memory mutex map for room-level operations: key = `${hotelId}::${roomNo.toLowerCase()}`
+const roomLocks = new Map();
+
+/**
+ * Executes an async task while holding an exclusive lock on a specific physical room.
+ * Queues concurrent callers and guarantees strict sequential execution for that room.
+ */
+export const withRoomLock = async (hotelId, roomNo, task) => {
+  if (!hotelId || !roomNo) return task();
+
+  const key = `${hotelId}::${String(roomNo).trim().toLowerCase()}`;
+  const prevLock = roomLocks.get(key) || Promise.resolve();
+
+  let release;
+  const currentLock = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  roomLocks.set(key, prevLock.then(() => currentLock));
+
+  try {
+    await prevLock;
+    return await task();
+  } finally {
+    release();
+    if (roomLocks.get(key) === currentLock) {
+      roomLocks.delete(key);
+    }
+  }
+};
+
+/**
+ * Definition of an active reservation status that blocks room inventory.
+ * Confirmed and Checked-in block rooms.
+ * Checked-out, Cancelled, and No-show do NOT block rooms.
+ */
+export const isReservationRoomBlocking = (status) => {
+  if (!status) return false;
+  const s = String(status).toLowerCase().trim();
+  return s === 'confirmed' || s === 'checked_in';
+};
+
+/**
+ * Determines whether two stays overlap.
+ * Stays overlap if and only if:
+ * checkInA < checkOutB AND checkOutA > checkInB
+ * Checkout day is NOT an occupied night.
+ * Adjacent checkout/checkin (checkOutA === checkInB) is VALID and returns false.
+ */
+export const isStayOverlapping = (checkInA, checkOutA, checkInB, checkOutB) => {
+  if (!checkInA || !checkOutA || !checkInB || !checkOutB) return false;
+  const inA = String(checkInA).slice(0, 10);
+  const outA = String(checkOutA).slice(0, 10);
+  const inB = String(checkInB).slice(0, 10);
+  const outB = String(checkOutB).slice(0, 10);
+
+  return inA < outB && outA > inB;
+};
+
+/**
+ * Normalizes room number string.
+ * Returns null if room is unassigned / TBD.
+ */
+export const normalizePhysicalRoom = (roomNo) => {
+  if (!roomNo) return null;
+  const trimmed = String(roomNo).trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === '' || lower === 'unassigned' || lower === 'tbd' || lower === 'null') {
+    return null;
+  }
+  return trimmed;
+};
+
+/**
+ * Checks whether a physical room is available for the given dates in the given hotel.
+ * Authoritative: checks both active reservations and in-house stays.
+ */
+export const checkRoomAvailability = async ({
+  hotelId,
+  roomNo,
+  checkIn,
+  checkOut,
+  excludeReservationId = null,
+  excludeRoomChartEntryId = null,
+}) => {
+  const normRoom = normalizePhysicalRoom(roomNo);
+  if (!normRoom) {
+    // Unassigned reservations do not conflict on physical room overlap
+    return { available: true };
+  }
+
+  const cleanCheckIn = String(checkIn).slice(0, 10);
+  const cleanCheckOut = String(checkOut).slice(0, 10);
+
+  if (cleanCheckIn >= cleanCheckOut) {
+    return {
+      available: false,
+      code: 'INVALID_STAY_DATES',
+      message: 'Check-out date must be strictly after check-in date.',
+    };
+  }
+
+  const supabase = supabaseServiceRole;
+
+  // 1. Query active reservations for this hotel and physical room
+  let resQuery = supabase
+    .from('reservations')
+    .select('id, guest_name, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in']);
+
+  if (excludeReservationId) {
+    resQuery = resQuery.neq('id', excludeReservationId);
+  }
+
+  const { data: activeRes, error: resErr } = await resQuery;
+  if (resErr) {
+    console.error('[ReservationConflictService] Error querying reservations:', resErr);
+    throw new Error(`Failed to check reservation availability: ${resErr.message}`);
+  }
+
+  const roomKey = normRoom.toLowerCase();
+  const conflictingRes = (activeRes || []).find((r) => {
+    const rRoom = (r.room_no || '').trim().toLowerCase();
+    if (rRoom !== roomKey) return false;
+    return isStayOverlapping(cleanCheckIn, cleanCheckOut, r.check_in_date, r.check_out_date);
+  });
+
+  if (conflictingRes) {
+    return {
+      available: false,
+      code: 'ROOM_ALREADY_BOOKED',
+      message: `Room ${normRoom} is already booked for part of this stay (${conflictingRes.check_in_date} to ${conflictingRes.check_out_date}) by ${conflictingRes.guest_name}. Please choose another room or change the dates.`,
+      conflictingReservation: conflictingRes,
+    };
+  }
+
+  // 2. Query in-house active room chart entries
+  const { data: chartEntries, error: chartErr } = await supabase
+    .from('room_chart_entries')
+    .select('id, guest_name, room_no, arrival, departure, report_date, reservation_id, checked_out_at')
+    .eq('hotel_id', hotelId)
+    .is('checked_out_at', null);
+
+  if (chartErr) {
+    console.error('[ReservationConflictService] Error querying room chart entries:', chartErr);
+    throw new Error(`Failed to check in-house availability: ${chartErr.message}`);
+  }
+
+  const conflictingEntry = (chartEntries || []).find((e) => {
+    if (excludeRoomChartEntryId && e.id === excludeRoomChartEntryId) return false;
+    if (excludeReservationId && e.reservation_id === excludeReservationId) return false;
+
+    const eRoom = (e.room_no || '').trim().toLowerCase();
+    if (eRoom !== roomKey) return false;
+
+    const eIn = (e.arrival || e.report_date || '').slice(0, 10);
+    const eOut = (e.departure || e.report_date || '').slice(0, 10);
+    return isStayOverlapping(cleanCheckIn, cleanCheckOut, eIn, eOut);
+  });
+
+  if (conflictingEntry) {
+    return {
+      available: false,
+      code: 'ROOM_ASSIGNMENT_CONFLICT',
+      message: `Room ${normRoom} is currently occupied by in-house guest ${conflictingEntry.guest_name}. Please choose another room.`,
+      conflictingEntry,
+    };
+  }
+
+  return { available: true };
+};
+
+/**
+ * Checks category capacity for unassigned bookings.
+ */
+export const checkCategoryCapacity = async ({
+  hotelId,
+  categoryId = null,
+  checkIn,
+  checkOut,
+  excludeReservationId = null,
+}) => {
+  if (!hotelId || !checkIn || !checkOut) return { available: true, totalRooms: 0, capacity: 0, booked: 0 };
+
+  const supabase = supabaseServiceRole;
+  const cleanCheckIn = String(checkIn).slice(0, 10);
+  const cleanCheckOut = String(checkOut).slice(0, 10);
+
+  // Total active rooms in this category or whole hotel
+  let roomsQ = supabase
+    .from('rooms')
+    .select('id, room_no, category_id')
+    .eq('hotel_id', hotelId);
+
+  if (categoryId) {
+    roomsQ = roomsQ.eq('category_id', categoryId);
+  }
+
+  const { data: rooms, error: roomsErr } = await roomsQ;
+
+  const totalCapacity = (rooms && rooms.length > 0) ? rooms.length : 0;
+  if (totalCapacity === 0) {
+    return { available: true, totalRooms: 0, capacity: 0, booked: 0 };
+  }
+
+  // Active reservations in date range
+  let q = supabase
+    .from('reservations')
+    .select('id, room_no, room_id, check_in_date, check_out_date')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .lt('check_in_date', cleanCheckOut)
+    .gt('check_out_date', cleanCheckIn);
+
+  if (excludeReservationId) q = q.neq('id', excludeReservationId);
+
+  const { data: resList } = await q;
+
+  // Check each night
+  const inD = new Date(cleanCheckIn + 'T00:00:00');
+  const outD = new Date(cleanCheckOut + 'T00:00:00');
+  let currentD = new Date(inD);
+
+  let maxOccupiedOnAnyNight = 0;
+  while (currentD < outD) {
+    const nightStr = currentD.toISOString().slice(0, 10);
+    const nightOccupied = (resList || []).filter(
+      (r) => r.check_in_date <= nightStr && r.check_out_date > nightStr
+    ).length;
+    if (nightOccupied > maxOccupiedOnAnyNight) {
+      maxOccupiedOnAnyNight = nightOccupied;
+    }
+    currentD.setDate(currentD.getDate() + 1);
+  }
+
+  if (maxOccupiedOnAnyNight >= totalCapacity) {
+    return {
+      available: false,
+      totalRooms: totalCapacity,
+      capacity: totalCapacity,
+      booked: maxOccupiedOnAnyNight,
+      code: 'CATEGORY_CAPACITY_EXCEEDED',
+      message: `Category capacity is full for the requested stay dates (${maxOccupiedOnAnyNight}/${totalCapacity} rooms booked).`,
+    };
+  }
+
+  return {
+    available: true,
+    totalRooms: totalCapacity,
+    capacity: totalCapacity,
+    booked: maxOccupiedOnAnyNight,
+  };
+};
+
+/**
+ * Diagnostic scan: Finds all active historical room conflicts in the database.
+ * Does not mutate or delete anything.
+ */
+export const detectExistingConflicts = async (hotelId) => {
+  const supabase = supabaseServiceRole;
+
+  const { data: reservations, error } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .order('check_in_date', { ascending: true });
+
+  if (error || !reservations) return [];
+
+  const conflicts = [];
+
+  for (let i = 0; i < reservations.length; i++) {
+    for (let j = i + 1; j < reservations.length; j++) {
+      const a = reservations[i];
+      const b = reservations[j];
+
+      const roomA = normalizePhysicalRoom(a.room_no);
+      const roomB = normalizePhysicalRoom(b.room_no);
+
+      // Only physical room assignments can conflict with each other
+      if (!roomA || !roomB) continue;
+
+      if (roomA.toLowerCase() === roomB.toLowerCase() || (a.room_id && b.room_id && a.room_id === b.room_id)) {
+        if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          conflicts.push({
+            type: 'physical_room_overlap',
+            roomNo: roomA,
+            reservationA: {
+              id: a.id,
+              guestName: a.guest_name,
+              checkIn: a.check_in_date,
+              checkOut: a.check_out_date,
+              status: a.status,
+              source: a.source_name || a.source_category,
+            },
+            reservationB: {
+              id: b.id,
+              guestName: b.guest_name,
+              checkIn: b.check_in_date,
+              checkOut: b.check_out_date,
+              status: b.status,
+              source: b.source_name || b.source_category,
+            },
+            overlapNights: `${Math.max(new Date(a.check_in_date).getTime(), new Date(b.check_in_date).getTime())}`,
+          });
+        }
+      }
+    }
+  }
+
+  return conflicts;
+};
+
+/**
+ * Safe audit logger for blocked conflicts.
+ */
+export const logBlockedConflict = async ({
+  hotelId,
+  userId = null,
+  reservationId = null,
+  roomNo = null,
+  operation,
+  reason,
+  details = {},
+}) => {
+  try {
+    console.warn(`[CONFLICT_BLOCKED] Hotel: ${hotelId} | Op: ${operation} | Room: ${roomNo} | Reason: ${reason}`);
+    // Safe logging without credentials or sensitive info
+    const cleanDetails = { ...details };
+    delete cleanDetails.password;
+    delete cleanDetails.apiKey;
+    delete cleanDetails.token;
+    delete cleanDetails.authorization;
+
+    await supabaseServiceRole.from('sync_logs').insert({
+      hotel_id: hotelId,
+      direction: 'inbound',
+      action: operation,
+      status: 'blocked',
+      message: reason,
+      details: cleanDetails,
+    });
+  } catch (err) {
+    // Non-blocking logger
+    console.error('Failed to write conflict audit log:', err.message);
+  }
+};
+
+export default {
+  withRoomLock,
+  isReservationRoomBlocking,
+  isStayOverlapping,
+  normalizePhysicalRoom,
+  checkRoomAvailability,
+  checkCategoryCapacity,
+  detectExistingConflicts,
+  logBlockedConflict,
+};
