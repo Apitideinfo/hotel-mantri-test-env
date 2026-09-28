@@ -829,7 +829,13 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             <input
               type="date"
               value={startDate}
-              onChange={(e) => { setStartDate(e.target.value); setRangePreset('custom'); }}
+              onChange={(e) => {
+                const newFrom = e.target.value;
+                setRangePreset('custom');
+                setStartDate(newFrom);
+                // If the existing endDate is now before the new startDate, clamp it
+                setEndDate((prev) => (!prev || prev < newFrom ? newFrom : prev));
+              }}
               className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
             />
           </div>
@@ -838,7 +844,13 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             <input
               type="date"
               value={endDate}
-              onChange={(e) => { setEndDate(e.target.value); setRangePreset('custom'); }}
+              min={startDate}
+              onChange={(e) => {
+                const newTo = e.target.value;
+                setRangePreset('custom');
+                // Never allow toDate < fromDate
+                setEndDate(newTo >= startDate ? newTo : startDate);
+              }}
               className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
             />
           </div>
@@ -1662,7 +1674,12 @@ const BulkUpdateDrawer = ({
                     <input
                       type="date"
                       value={fromDate}
-                      onChange={(e) => setFromDate(e.target.value)}
+                      onChange={(e) => {
+                        const newFrom = e.target.value;
+                        setFromDate(newFrom);
+                        // Atomically clamp toDate if it would become invalid
+                        setToDate((prev) => (!prev || prev < newFrom ? newFrom : prev));
+                      }}
                       className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
                     />
                   </div>
@@ -1671,7 +1688,12 @@ const BulkUpdateDrawer = ({
                     <input
                       type="date"
                       value={toDate}
-                      onChange={(e) => setToDate(e.target.value)}
+                      min={fromDate}
+                      onChange={(e) => {
+                        const newTo = e.target.value;
+                        // Never allow toDate < fromDate
+                        setToDate(newTo >= fromDate ? newTo : fromDate);
+                      }}
                       className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
                     />
                   </div>

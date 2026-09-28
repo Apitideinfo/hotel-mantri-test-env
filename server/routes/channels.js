@@ -255,6 +255,15 @@ router.post('/sync/rates', checkAuth, async (req, res) => {
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || sDate;
 
+    if (sDate > eDate) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DATE_RANGE',
+        message: 'End date must be on or after start date.',
+        requestId: req.requestId
+      });
+    }
+
     const result = await syncRates({
       hotelId,
       channelId: channelId || null,
@@ -302,6 +311,15 @@ router.post('/sync/inventory', checkAuth, async (req, res) => {
   try {
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || sDate;
+
+    if (sDate > eDate) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DATE_RANGE',
+        message: 'End date must be on or after start date.',
+        requestId: req.requestId
+      });
+    }
 
     const result = await syncInventory({
       hotelId,
