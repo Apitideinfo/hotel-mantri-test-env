@@ -368,7 +368,21 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
   }
 
   try {
-    const targetDates = [...new Set(updates.map(u => u.date).filter(Boolean))];
+    const normalizeDateStr = (dStr) => {
+      if (!dStr || typeof dStr !== 'string') return '';
+      const trimmed = dStr.trim();
+      const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+      if (dmyMatch) {
+        return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+      }
+      const ymdMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+      if (ymdMatch) {
+        return `${ymdMatch[1]}-${ymdMatch[2].padStart(2, '0')}-${ymdMatch[3].padStart(2, '0')}`;
+      }
+      return trimmed;
+    };
+
+    const targetDates = [...new Set(updates.map(u => normalizeDateStr(u.date)).filter(Boolean))];
     const targetCatIds = [...new Set(updates.map(u => u.roomCategoryId || u.room_category_id).filter(Boolean))];
 
     if (targetDates.length === 0 || targetCatIds.length === 0) {
@@ -402,7 +416,7 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
     const coalescedMap = new Map();
     for (const u of updates) {
       const catId = u.roomCategoryId || u.room_category_id;
-      const d = u.date;
+      const d = normalizeDateStr(u.date);
       if (!catId || !d) continue;
       const key = `${catId}|${d}`;
       const prev = coalescedMap.get(key) || {};
@@ -515,9 +529,12 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
         merged.closed_to_departure = false;
       }
 
-      if (existing && existing.id) {
-        merged.id = existing.id;
-      }
+      // DO NOT include id in mergedPayload.
+      // Omission guarantees PostgREST does not inject null for new rows in the batch.
+      // PostgreSQL handles ON CONFLICT (hotel_id, room_category_id, date) DO UPDATE:
+      // - Existing rows retain their database-assigned UUID primary key
+      // - New rows are inserted with database DEFAULT gen_random_uuid()
+      delete merged.id;
 
       mergedPayload.push(merged);
     }
@@ -592,8 +609,9 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
     res.status(500).json({
       success: false,
       error: {
-        code: 'BULK_PATCH_FAILED',
-        message: err.message || 'Failed to apply bulk inventory and rate patches.'
+        code: err.code || 'INVENTORY_PATCH_FAILED',
+        message: err.message || 'Failed to apply bulk inventory and rate patches.',
+        details: err.details || (err.hint ? { hint: err.hint } : undefined)
       },
       requestId: req.requestId
     });

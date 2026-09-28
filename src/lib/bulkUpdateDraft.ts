@@ -33,6 +33,63 @@ export interface BulkInventoryPatch {
 }
 
 /**
+ * Normalizes user date input into standard YYYY-MM-DD format.
+ * Supports DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD, and YYYY/MM/DD formats.
+ */
+export const normalizeToISODate = (dStr: string): string => {
+  if (!dStr || typeof dStr !== 'string') return '';
+  const trimmed = dStr.trim();
+  const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (dmyMatch) {
+    const day = dmyMatch[1].padStart(2, '0');
+    const month = dmyMatch[2].padStart(2, '0');
+    const year = dmyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+  const ymdMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (ymdMatch) {
+    const year = ymdMatch[1];
+    const month = ymdMatch[2].padStart(2, '0');
+    const day = ymdMatch[3].padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return '';
+};
+
+/**
+ * Pure UTC-based date addition. Eliminates browser and timezone shifts.
+ */
+export const addDays = (dateStr: string, n: number): string => {
+  const norm = normalizeToISODate(dateStr);
+  if (!norm) return '';
+  const [y, m, d] = norm.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + n));
+  const rY = dt.getUTCFullYear();
+  const rM = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const rD = String(dt.getUTCDate()).padStart(2, '0');
+  return `${rY}-${rM}-${rD}`;
+};
+
+/**
+ * Generates an inclusive array of YYYY-MM-DD dates between start and end.
+ * Handles single day, cross-month, cross-year, and December dates cleanly.
+ */
+export const daysBetween = (start: string, end: string): string[] => {
+  const s = normalizeToISODate(start);
+  const e = normalizeToISODate(end);
+  if (!s || !e || s > e) return [];
+  const days: string[] = [];
+  let cur = s;
+  let guard = 0;
+  while (cur <= e && guard < 400) {
+    days.push(cur);
+    cur = addDays(cur, 1);
+    guard++;
+  }
+  return days;
+};
+
+/**
  * Creates a unique deterministic composite business key for an editable rate/inventory tuple.
  */
 export const getBulkKey = (
@@ -42,9 +99,10 @@ export const getBulkKey = (
   ratePlanId?: string | null
 ): string => {
   const safeHotel = hotelId || 'hotel';
+  const safeDate = normalizeToISODate(date) || date;
   const safeCat = roomCategoryId || 'cat';
   const safePlan = ratePlanId && ratePlanId !== 'default' ? ratePlanId : 'all';
-  return `${safeHotel}|${date}|${safeCat}|${safePlan}`;
+  return `${safeHotel}|${safeDate}|${safeCat}|${safePlan}`;
 };
 
 /**
@@ -59,7 +117,7 @@ export const parseBulkKey = (key: string): {
   const parts = key.split('|');
   return {
     hotelId: parts[0] || '',
-    date: parts[1] || '',
+    date: normalizeToISODate(parts[1] || '') || parts[1] || '',
     roomCategoryId: parts[2] || '',
     ratePlanId: parts[3] === 'all' || !parts[3] ? null : parts[3],
   };

@@ -4,6 +4,7 @@ import { apiFetch } from './api-fetch';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
 import type { BulkInventoryPatch } from './bulkUpdateDraft';
+import { normalizeToISODate } from './bulkUpdateDraft';
 import { testAiosellConnection as testChannelConnection, checkAiosellStatus as checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
 export { testChannelConnection, checkChannelStatus, fetchChannelMapping };
 
@@ -397,12 +398,24 @@ export const applyBulkInventoryPatch = async (
       }
       return res;
     }
-  } catch (err) {
-    console.warn('[applyBulkInventoryPatch] Backend route failed or unavailable, falling back to client-side merge:', err);
+  } catch (err: any) {
+    const isNetworkOr404 =
+      err?.status === 404 ||
+      err?.code === 'API_ROUTE_NOT_FOUND' ||
+      err?.error === 'NETWORK_ERROR' ||
+      err?.code === 'ERR_NETWORK_FAILURE' ||
+      err?.code === 'ERR_INTERNET_DISCONNECTED';
+
+    if (!isNetworkOr404) {
+      console.error('[applyBulkInventoryPatch] Backend route returned error (not falling back):', err);
+      throw new Error(err?.message || (typeof err?.error === 'string' ? err.error : 'Failed to apply bulk inventory and rate updates.'));
+    }
+
+    console.warn('[applyBulkInventoryPatch] Backend route unavailable/offline (404/network), falling back to client-side merge:', err);
   }
 
   // 2. Client-side resilient non-destructive merge fallback
-  const targetDates = [...new Set(patches.map(p => p.date).filter(Boolean))];
+  const targetDates = [...new Set(patches.map(p => normalizeToISODate(p.date)).filter(Boolean))];
   const targetCatIds = [...new Set(patches.map(p => p.roomCategoryId).filter(Boolean))];
 
   const { data: existingRows, error: fetchErr } = await supabase
@@ -425,9 +438,11 @@ export const applyBulkInventoryPatch = async (
   // Coalesce patches
   const coalescedMap = new Map<string, BulkInventoryPatch>();
   for (const p of patches) {
-    const key = `${p.roomCategoryId}|${p.date}`;
-    const prev = coalescedMap.get(key) || { date: p.date, roomCategoryId: p.roomCategoryId };
-    coalescedMap.set(key, { ...prev, ...p });
+    const d = normalizeToISODate(p.date);
+    if (!d || !p.roomCategoryId) continue;
+    const key = `${p.roomCategoryId}|${d}`;
+    const prev = coalescedMap.get(key) || { date: d, roomCategoryId: p.roomCategoryId };
+    coalescedMap.set(key, { ...prev, ...p, date: d });
   }
 
   const mergedPayload: any[] = [];
@@ -515,9 +530,12 @@ export const applyBulkInventoryPatch = async (
       merged.closed_to_departure = false;
     }
 
-    if (existing?.id) {
-      merged.id = existing.id;
-    }
+    // NEVER include id in the upsert payload.
+    // Omission guarantees PostgREST does not inject null for new rows in the batch.
+    // PostgreSQL handles ON CONFLICT (hotel_id, room_category_id, date) DO UPDATE:
+    // - Existing rows retain their database-assigned UUID primary key
+    // - New rows are inserted with database DEFAULT gen_random_uuid()
+    delete merged.id;
 
     mergedPayload.push(merged);
   }
@@ -528,7 +546,7 @@ export const applyBulkInventoryPatch = async (
 
   if (upsertErr) {
     console.error('[applyBulkInventoryPatch] Client fallback upsert error:', upsertErr);
-    throw upsertErr;
+    throw new Error(upsertErr.message || 'Client fallback upsert failed.');
   }
 
   if (typeof window !== 'undefined') {
@@ -571,7 +589,7 @@ export const upsertInventoryRestriction = async (
 ): Promise<void> => {
   const patch: BulkInventoryPatch = {
     roomCategoryId: input.room_category_id,
-    date: input.date,
+    date: normalizeToISODate(input.date) || input.date,
     ...(input.base_rate !== undefined ? { baseRate: input.base_rate } : {}),
     ...(input.channel_rate !== undefined ? { channelRate: input.channel_rate } : {}),
     ...(input.availability !== undefined ? { availability: input.availability } : {}),
@@ -589,7 +607,7 @@ export const bulkUpdateInventory = async (
 ): Promise<void> => {
   const patches: BulkInventoryPatch[] = updates.map(u => ({
     roomCategoryId: u.room_category_id,
-    date: u.date,
+    date: normalizeToISODate(u.date) || u.date,
     ...(u.base_rate !== undefined ? { baseRate: u.base_rate } : {}),
     ...(u.channel_rate !== undefined ? { channelRate: u.channel_rate } : {}),
     ...(u.availability !== undefined ? { availability: u.availability } : {}),

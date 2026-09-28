@@ -25,7 +25,8 @@ import type {
 } from '@/lib/api-channel';
 import {
   getBulkKey, parseBulkKey, mergeBulkDraft, removeDraftItem,
-  clearDraft, buildPatchListFromDraft, summarizeDraft
+  clearDraft, buildPatchListFromDraft, summarizeDraft,
+  normalizeToISODate, addDays, daysBetween
 } from '@/lib/bulkUpdateDraft';
 import type { BulkDraftItem, BulkDraftMap, BulkInventoryPatch } from '@/lib/bulkUpdateDraft';
 import type { RoomCategory } from '@/lib/types';
@@ -49,48 +50,30 @@ const HOTEL_OWNER_TABS: Tab[] = ['overview', 'channels', 'inventory', 'reservati
 
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
-const addDays = (dateStr: string, n: number): string => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + n);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
 const todayStr = (): string => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const now = new Date();
+  return now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 };
 
 const fmtDate = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  const norm = normalizeToISODate(d);
+  if (!norm) return d;
+  const [y, m, day] = norm.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
 };
 
 const fmtDateLong = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  const norm = normalizeToISODate(d);
+  if (!norm) return d;
+  const [y, m, day] = norm.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'long', year: 'numeric' });
 };
 
 const fmtDateTime = (d: string): string => {
   const dt = new Date(d);
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-};
-
-const daysBetween = (start: string, end: string): string[] => {
-  const days: string[] = [];
-  let cur = start;
-  let guard = 0;
-  while (cur <= end && guard < 400) {
-    days.push(cur);
-    cur = addDays(cur, 1);
-    guard++;
-  }
-  return days;
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -1321,6 +1304,7 @@ const QUICK_RANGES = [
   { label: 'Next 30 Days', from: 0, to: 29 },
   { label: 'This Month', from: 0, to: 30, dynamic: true },
   { label: 'Next Month', from: 0, to: 30, dynamic: true },
+  { label: 'December', from: 0, to: 31, dynamic: true },
 ];
 
 type RateMode = 'fixed' | 'inc_abs' | 'dec_abs' | 'inc_pct' | 'dec_pct';
@@ -1345,6 +1329,35 @@ const BulkUpdateDrawer = ({
   const [fromDate, setFromDate] = useState(defaultStart);
   const [toDate, setToDate] = useState(defaultEnd);
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set(categories.map((c) => c.id)));
+
+  // Prefetched authoritative restrictions for the selected drawer date range
+  const [rangeRestrictions, setRangeRestrictions] = useState<Map<string, ChannelInventoryRestriction>>(new Map());
+
+  useEffect(() => {
+    const s = normalizeToISODate(fromDate);
+    const e = normalizeToISODate(toDate);
+    if (!s || !e || s > e) return;
+
+    let active = true;
+    getInventoryRestrictions(s, e)
+      .then((rows) => {
+        if (!active) return;
+        setRangeRestrictions((prev) => {
+          const next = new Map(prev);
+          for (const r of rows) {
+            next.set(`${r.room_category_id}|${r.date}`, r);
+          }
+          return next;
+        });
+      })
+      .catch((err) => {
+        console.warn('[BulkUpdateDrawer] Prefetch restrictions error:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [fromDate, toDate]);
 
   // Dimension 1: Rates
   const [enableRate, setEnableRate] = useState(false);
@@ -1382,17 +1395,22 @@ const BulkUpdateDrawer = ({
 
   const applyQuickRange = (label: string) => {
     const today = todayStr();
+    const [y, m] = today.split('-').map(Number);
     if (label === 'This Month') {
-      const d = new Date();
-      const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - 1;
+      const lastD = new Date(Date.UTC(y, m, 0)).getUTCDate();
       setFromDate(today);
-      setToDate(addDays(today, last - d.getDate() + 1));
+      setToDate(`${y}-${String(m).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`);
     } else if (label === 'Next Month') {
-      const d = new Date();
-      const firstNext = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-      const lastNext = new Date(d.getFullYear(), d.getMonth() + 2, 0);
-      setFromDate(firstNext.toISOString().slice(0, 10));
-      setToDate(lastNext.toISOString().slice(0, 10));
+      const nextM = m === 12 ? 1 : m + 1;
+      const nextY = m === 12 ? y + 1 : y;
+      const firstNext = `${nextY}-${String(nextM).padStart(2, '0')}-01`;
+      const lastNextD = new Date(Date.UTC(nextY, nextM, 0)).getUTCDate();
+      const lastNext = `${nextY}-${String(nextM).padStart(2, '0')}-${String(lastNextD).padStart(2, '0')}`;
+      setFromDate(firstNext);
+      setToDate(lastNext);
+    } else if (label === 'December') {
+      setFromDate(`${y}-12-01`);
+      setToDate(`${y}-12-31`);
     } else {
       const qr = QUICK_RANGES.find((q) => q.label === label);
       if (qr) { setFromDate(addDays(today, qr.from)); setToDate(addDays(today, qr.to)); }
@@ -1401,6 +1419,16 @@ const BulkUpdateDrawer = ({
 
   const handleQueueChanges = () => {
     setSaveError(null);
+    const s = normalizeToISODate(fromDate);
+    const e = normalizeToISODate(toDate);
+    if (!s || !e) {
+      setSaveError('Please select both a valid From Date and To Date.');
+      return;
+    }
+    if (s > e) {
+      setSaveError(`From Date (${s}) cannot be after To Date (${e}).`);
+      return;
+    }
     if (allDays.length === 0) {
       setSaveError('Please select a valid date range.');
       return;
@@ -1430,7 +1458,7 @@ const BulkUpdateDrawer = ({
       const category = categories.find((c) => c.id === catId);
       for (const d of allDays) {
         const key = getBulkKey(hotelId || '', d, catId, 'all');
-        const existing = existingRestrictions?.get(`${catId}|${d}`);
+        const existing = rangeRestrictions.get(`${catId}|${d}`) || existingRestrictions?.get(`${catId}|${d}`);
         const patch: Partial<BulkDraftItem> = {};
 
         // 1. Rate

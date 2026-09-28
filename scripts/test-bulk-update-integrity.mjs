@@ -1,132 +1,73 @@
 import assert from 'assert';
+import express from 'express';
+import cors from 'cors';
 import { supabaseServiceRole } from '../server/supabaseClient.js';
-
-// Import pure draft logic functions (re-implemented or imported)
-function getBulkKey(hotelId, date, roomCategoryId, ratePlanId = 'all') {
-  return `${hotelId || 'default'}:${date}:${roomCategoryId}:${ratePlanId}`;
-}
-
-function parseBulkKey(key) {
-  const parts = key.split(':');
-  return {
-    hotelId: parts[0],
-    date: parts[1],
-    roomCategoryId: parts[2],
-    ratePlanId: parts[3] || 'all',
-  };
-}
-
-function mergeBulkDraft(currentDraft, incomingUpdates) {
-  const nextDraft = { ...currentDraft };
-  for (const [key, patch] of Object.entries(incomingUpdates)) {
-    const existing = nextDraft[key];
-    if (!existing) {
-      nextDraft[key] = { ...patch };
-    } else {
-      nextDraft[key] = {
-        ...existing,
-        ...patch,
-      };
-    }
-  }
-  return nextDraft;
-}
-
-function removeDraftItem(currentDraft, key) {
-  const nextDraft = { ...currentDraft };
-  delete nextDraft[key];
-  return nextDraft;
-}
-
-function clearDraft() {
-  return {};
-}
-
-function buildPatchListFromDraft(drafts, hotelId) {
-  const patches = [];
-  for (const [key, item] of Object.entries(drafts)) {
-    const parsed = parseBulkKey(key);
-    const safeHotelId = hotelId || parsed.hotelId;
-    const patch = {
-      hotelId: safeHotelId,
-      date: parsed.date,
-      roomCategoryId: parsed.roomCategoryId,
-      ratePlanId: parsed.ratePlanId,
-    };
-    let hasChange = false;
-    if (item.baseRate !== undefined) { patch.baseRate = item.baseRate; hasChange = true; }
-    if (item.channelRate !== undefined) { patch.channelRate = item.channelRate; hasChange = true; }
-    if (item.availability !== undefined) { patch.availability = item.availability; hasChange = true; }
-    if (item.stopSell !== undefined) { patch.stopSell = item.stopSell; hasChange = true; }
-    if (item.minStay !== undefined) { patch.minStay = item.minStay; hasChange = true; }
-    if (item.maxStay !== undefined) { patch.maxStay = item.maxStay; hasChange = true; }
-    if (item.closedToArrival !== undefined) { patch.closedToArrival = item.closedToArrival; hasChange = true; }
-    if (item.closedToDeparture !== undefined) { patch.closedToDeparture = item.closedToDeparture; hasChange = true; }
-
-    if (hasChange) patches.push(patch);
-  }
-  return patches.sort((a, b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    if (a.roomCategoryId !== b.roomCategoryId) return a.roomCategoryId.localeCompare(b.roomCategoryId);
-    return (a.ratePlanId || '').localeCompare(b.ratePlanId || '');
-  });
-}
-
-function summarizeDraft(drafts) {
-  const keys = Object.keys(drafts);
-  const dates = new Set();
-  const categories = new Set();
-  let rateChangesCount = 0;
-  let availabilityChangesCount = 0;
-  let restrictionChangesCount = 0;
-
-  for (const [key, item] of Object.entries(drafts)) {
-    const parsed = parseBulkKey(key);
-    if (parsed.date) dates.add(parsed.date);
-    if (parsed.roomCategoryId) categories.add(parsed.roomCategoryId);
-    if (item.baseRate !== undefined || item.channelRate !== undefined) rateChangesCount++;
-    if (item.availability !== undefined) availabilityChangesCount++;
-    if (
-      item.stopSell !== undefined ||
-      item.minStay !== undefined ||
-      item.maxStay !== undefined ||
-      item.closedToArrival !== undefined ||
-      item.closedToDeparture !== undefined
-    ) restrictionChangesCount++;
-  }
-
-  return {
-    totalItems: keys.length,
-    uniqueDates: dates.size,
-    uniqueCategories: categories.size,
-    rateChangesCount,
-    availabilityChangesCount,
-    restrictionChangesCount,
-    hasUnsavedChanges: keys.length > 0,
-  };
-}
+import channelRoutes from '../server/routes/channels.js';
+import {
+  normalizeToISODate,
+  addDays,
+  daysBetween,
+  getBulkKey,
+  parseBulkKey,
+  mergeBulkDraft,
+  removeDraftItem,
+  clearDraft,
+  buildPatchListFromDraft,
+  summarizeDraft,
+} from '../src/lib/bulkUpdateDraft.ts';
 
 const HOTEL_ID = 'a93139f5-baa0-47a4-87ca-81ee7e106d9c';
 const SUITE_ID = '9e82c94b-bfc0-4c86-94f9-940b3df4769f';
 const DELUXE_ID = 'ca773df6-63e4-43ed-963b-05bbc2494499';
 const FOURBED_ID = 'b2b5b71b-72e5-494f-a906-824b87dfd88b';
 
-async function sendPatch(patches) {
-  const res = await fetch('http://localhost:5000/api/channels/inventory-restrictions/patch', {
+let testServer;
+let testPort = 5000;
+
+async function setupServer() {
+  try {
+    const res = await fetch(`http://localhost:5000/api/channels/catalog`, {
+      headers: { 'x-hotel-id': HOTEL_ID },
+    });
+    if (res.status < 500) {
+      testPort = 5000;
+      return;
+    }
+  } catch {
+    // Port 5000 not active, start in-process test server on port 5123
+  }
+
+  testPort = 5123;
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
+  app.use('/api/channels', channelRoutes);
+
+  await new Promise((resolve) => {
+    testServer = app.listen(testPort, () => {
+      resolve();
+    });
+  });
+}
+
+async function sendPatch(patches, skipSync = true) {
+  const res = await fetch(`http://localhost:${testPort}/api/channels/inventory-restrictions/patch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-hotel-id': HOTEL_ID,
     },
-    body: JSON.stringify({ patches }),
+    body: JSON.stringify({ patches, skipSync }),
   });
   return res.json();
 }
 
 async function runTests() {
   console.log('===============================================================');
-  console.log('      HOTEL MANTRI BULK UPDATE INTEGRITY VERIFICATION SUITE    ');
+  console.log('      HOTEL MANTRI MASTER FORENSIC VERIFICATION SUITE         ');
   console.log('===============================================================\n');
+
+  await setupServer();
 
   let passed = 0;
   let total = 0;
@@ -155,9 +96,11 @@ async function runTests() {
     }
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 1: Frontend Draft Accumulation & Immutability
+  // ─────────────────────────────────────────────────────────────
   console.log('--- SUITE 1: Frontend Draft Accumulation & Immutability ---');
 
-  // Test A: Multiple rates across multiple dates accumulate
   test('Test A: Multiple dates accumulate without erasing previous entries', () => {
     let draft = {};
     const key1 = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
@@ -178,7 +121,6 @@ async function runTests() {
     assert.strictEqual(Object.keys(draft).length, 3);
   });
 
-  // Test B: Rate then Availability on same cell
   test('Test B: Setting Base Rate then Availability preserves BOTH values', () => {
     let draft = {};
     const key = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
@@ -192,7 +134,6 @@ async function runTests() {
     assert.strictEqual(draft[key]?.availability, 1, 'Availability was not stored!');
   });
 
-  // Test C: Availability then Rate on same cell (reverse order)
   test('Test C: Setting Availability then Base Rate preserves BOTH values', () => {
     let draft = {};
     const key = getBulkKey(HOTEL_ID, '2026-12-20', DELUXE_ID);
@@ -206,7 +147,6 @@ async function runTests() {
     assert.strictEqual(draft[key]?.baseRate, 8000);
   });
 
-  // Test D: Multiple room categories independence
   test('Test D: Multiple room category updates do not collide', () => {
     let draft = {};
     const kSuite = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
@@ -223,40 +163,32 @@ async function runTests() {
     assert.strictEqual(draft[kFourbed]?.baseRate, 9500);
   });
 
-  // Test E: Date range then sub-range update
   test('Test E: Full range rate update followed by sub-range availability', () => {
     let draft = {};
     const dates = ['2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23', '2026-12-24', '2026-12-25'];
-    
-    // Step 1: Set Rate 12000 for 20-25 Dec
+
     const step1Updates = {};
     for (const d of dates) {
       step1Updates[getBulkKey(HOTEL_ID, d, SUITE_ID)] = { baseRate: 12000 };
     }
     draft = mergeBulkDraft(draft, step1Updates);
 
-    // Step 2: Set Availability 3 for 22-24 Dec
     const step2Updates = {};
     for (const d of ['2026-12-22', '2026-12-23', '2026-12-24']) {
       step2Updates[getBulkKey(HOTEL_ID, d, SUITE_ID)] = { availability: 3 };
     }
     draft = mergeBulkDraft(draft, step2Updates);
 
-    // Assertions
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID)]?.baseRate, 12000);
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID)]?.availability, undefined);
-
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-22', SUITE_ID)]?.baseRate, 12000, 'Sub-range wiped rate on 22 Dec!');
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-22', SUITE_ID)]?.availability, 3);
-
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-24', SUITE_ID)]?.baseRate, 12000);
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-24', SUITE_ID)]?.availability, 3);
-
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-25', SUITE_ID)]?.baseRate, 12000);
     assert.strictEqual(draft[getBulkKey(HOTEL_ID, '2026-12-25', SUITE_ID)]?.availability, undefined);
   });
 
-  // Test F: Restriction independence
   test('Test F: Restriction updates leave rates and availability untouched', () => {
     let draft = {};
     const key = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
@@ -269,7 +201,6 @@ async function runTests() {
     assert.strictEqual(draft[key]?.minStay, 2);
   });
 
-  // Test G: Rapid successive edits converge
   test('Test G: Rapid edits on same cell converge to final value', () => {
     let draft = {};
     const key = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
@@ -279,13 +210,12 @@ async function runTests() {
     assert.strictEqual(draft[key]?.baseRate, 12000);
   });
 
-  // Test H: Item removal and draft clear
   test('Test H: Item removal removes only target item and clearDraft resets all', () => {
     let draft = {};
     const k1 = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
     const k2 = getBulkKey(HOTEL_ID, '2026-12-21', SUITE_ID);
     draft = mergeBulkDraft(draft, { [k1]: { baseRate: 10000 }, [k2]: { baseRate: 11000 } });
-    
+
     draft = removeDraftItem(draft, k1);
     assert.strictEqual(draft[k1], undefined);
     assert.strictEqual(draft[k2]?.baseRate, 11000);
@@ -294,7 +224,51 @@ async function runTests() {
     assert.deepStrictEqual(draft, {});
   });
 
-  console.log('\n--- SUITE 2: Backend Non-Destructive PATCH Semantics ---');
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 2: Date Range Generation & Timezone Isolation
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 2: Date Range Generation & Timezone Isolation ---');
+
+  test('Date Test 1: December 20 to 31 generates exactly 12 dates (no 19 Dec, no 01 Jan)', () => {
+    const days = daysBetween('2026-12-20', '2026-12-31');
+    assert.strictEqual(days.length, 12, `Expected 12 dates, got ${days.length}`);
+    assert.strictEqual(days[0], '2026-12-20');
+    assert.strictEqual(days[11], '2026-12-31');
+    assert.ok(!days.includes('2026-12-19'), 'Contained 19 Dec!');
+    assert.ok(!days.includes('2027-01-01'), 'Contained 01 Jan!');
+  });
+
+  test('Date Test 2: DD-MM-YYYY format input (20-12-2026 to 31-12-2026) generates exact 12 dates', () => {
+    const days = daysBetween('20-12-2026', '31-12-2026');
+    assert.strictEqual(days.length, 12);
+    assert.strictEqual(days[0], '2026-12-20');
+    assert.strictEqual(days[11], '2026-12-31');
+  });
+
+  test('Date Test 3: Cross-Year Boundary (28-12-2026 to 05-01-2027) generates exactly 9 dates', () => {
+    const days = daysBetween('2026-12-28', '2027-01-05');
+    assert.strictEqual(days.length, 9);
+    assert.deepStrictEqual(days, [
+      '2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31',
+      '2027-01-01', '2027-01-02', '2027-01-03', '2027-01-04', '2027-01-05'
+    ]);
+  });
+
+  test('Date Test 4: Single day range returns exactly 1 date', () => {
+    const days = daysBetween('2026-12-20', '2026-12-20');
+    assert.strictEqual(days.length, 1);
+    assert.strictEqual(days[0], '2026-12-20');
+  });
+
+  test('Date Test 5: Inverted date range (fromDate > toDate) returns empty array', () => {
+    const days = daysBetween('2026-12-31', '2026-12-20');
+    assert.strictEqual(days.length, 0);
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 3: Backend Non-Destructive PATCH Semantics
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 3: Backend Non-Destructive PATCH Semantics ---');
 
   // Clean test date records before starting backend tests
   await supabaseServiceRole
@@ -303,7 +277,6 @@ async function runTests() {
     .eq('hotel_id', HOTEL_ID)
     .in('date', ['2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23']);
 
-  // Test J: Rate-only patch creates record with availability = null (never 0!)
   await testAsync('Test J: Rate-only patch persists baseRate and leaves availability NULL', async () => {
     const res = await sendPatch([{
       hotelId: HOTEL_ID,
@@ -323,9 +296,9 @@ async function runTests() {
 
     assert.strictEqual(Number(data.base_rate), 13500);
     assert.strictEqual(data.availability, null, 'Availability defaulted to 0 instead of NULL on brand new rate!');
+    assert.ok(data.id, 'Record missing database-generated UUID');
   });
 
-  // Test K: Subsequent Availability-only patch preserves existing baseRate
   await testAsync('Test K: Subsequent Availability patch preserves existing baseRate', async () => {
     const res = await sendPatch([{
       hotelId: HOTEL_ID,
@@ -347,7 +320,6 @@ async function runTests() {
     assert.strictEqual(Number(data.availability), 1);
   });
 
-  // Test L: Subsequent Rate update preserves existing availability
   await testAsync('Test L: Subsequent Rate update preserves existing availability', async () => {
     const res = await sendPatch([{
       hotelId: HOTEL_ID,
@@ -369,7 +341,6 @@ async function runTests() {
     assert.strictEqual(Number(data.availability), 1, 'Availability was destroyed when updating rate!');
   });
 
-  // Test M: Restriction update preserves both Rate and Availability
   await testAsync('Test M: Restriction update preserves both Rate and Availability', async () => {
     const res = await sendPatch([{
       hotelId: HOTEL_ID,
@@ -394,93 +365,257 @@ async function runTests() {
     assert.strictEqual(data.stop_sell, false);
   });
 
-  // Test N: No-op patch
   await testAsync('Test N: Empty patch returns successfully with updatedCount = 0', async () => {
     const res = await sendPatch([]);
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.updatedCount, 0);
   });
 
-  console.log('\n--- SUITE 3: Section 34 Hotel Mantri Master Scenario ---');
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 4: December 20-31 Mixed Existing + Missing Records & ID Integrity
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 4: December 20-31 Mixed Existing + Missing Records & ID Integrity ---');
 
-  // Clean state for Section 34 test
+  const decDates = daysBetween('2026-12-20', '2026-12-31');
+
+  // Clean all 12 dates first
   await supabaseServiceRole
     .from('channel_inventory_restrictions')
     .delete()
     .eq('hotel_id', HOTEL_ID)
-    .in('date', ['2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23']);
+    .in('date', decDates);
 
-  await testAsync('Section 34 Scenario: Queue 5 multi-room/multi-date edits, save atomically', async () => {
-    // 1. Suite 20 Dec Rate ₹13,500
-    // 2. Suite 21 Dec Rate ₹14,000
-    // 3. Suite 20 Dec Avail 1
-    // 4. Deluxe 22 Dec Rate ₹7,500
-    // 5. Fourbed 23 Dec Avail 1
+  // Pre-seed 2 dates (24 and 25 Dec) to simulate existing records
+  const { data: seed24 } = await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .insert({
+      hotel_id: HOTEL_ID,
+      room_category_id: SUITE_ID,
+      date: '2026-12-24',
+      base_rate: 11000,
+      availability: 5,
+    })
+    .select()
+    .single();
 
-    let draft = {};
-    const kSuite20 = getBulkKey(HOTEL_ID, '2026-12-20', SUITE_ID);
-    const kSuite21 = getBulkKey(HOTEL_ID, '2026-12-21', SUITE_ID);
-    const kDeluxe22 = getBulkKey(HOTEL_ID, '2026-12-22', DELUXE_ID);
-    const kFourbed23 = getBulkKey(HOTEL_ID, '2026-12-23', FOURBED_ID);
+  const { data: seed25 } = await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .insert({
+      hotel_id: HOTEL_ID,
+      room_category_id: SUITE_ID,
+      date: '2026-12-25',
+      base_rate: 11500,
+      availability: 4,
+    })
+    .select()
+    .single();
 
-    // Queue edit 1
-    draft = mergeBulkDraft(draft, { [kSuite20]: { baseRate: 13500 } });
-    // Queue edit 2
-    draft = mergeBulkDraft(draft, { [kSuite21]: { baseRate: 14000 } });
-    // Queue edit 3
-    draft = mergeBulkDraft(draft, { [kSuite20]: { availability: 1 } });
-    // Queue edit 4
-    draft = mergeBulkDraft(draft, { [kDeluxe22]: { baseRate: 7500 } });
-    // Queue edit 5
-    draft = mergeBulkDraft(draft, { [kFourbed23]: { availability: 1 } });
+  const originalId24 = seed24.id;
+  const originalId25 = seed25.id;
+  assert.ok(originalId24 && originalId25, 'Seed rows failed to generate IDs');
 
-    // Validate Draft summary
-    const summary = summarizeDraft(draft);
-    assert.strictEqual(summary.totalItems, 4, 'Expected 4 items in draft queue (Suite 20 Dec merged into 1 item)');
-    assert.strictEqual(summary.rateChangesCount, 3, 'Expected 3 rate changes in draft (Suite 20, Suite 21, Deluxe 22)');
-    assert.strictEqual(summary.availabilityChangesCount, 2, 'Expected 2 availability changes (Suite 20, Fourbed 23)');
+  await testAsync('December 20–31 (12 days) Bulk Update with mixed missing + existing rows', async () => {
+    // Construct 12 patches: updates 20 Dec to 31 Dec
+    const patches = decDates.map((date) => ({
+      hotelId: HOTEL_ID,
+      roomCategoryId: SUITE_ID,
+      date,
+      baseRate: 14000,
+      availability: 2,
+    }));
 
-    // Build patches
-    const patches = buildPatchListFromDraft(draft, HOTEL_ID);
-    assert.strictEqual(patches.length, 4);
+    const result = await sendPatch(patches);
+    assert.strictEqual(result.success, true, `Backend failed: ${JSON.stringify(result.error)}`);
+    assert.strictEqual(result.updatedCount, 12, 'Expected 12 records updated');
 
-    // Send save request
-    const saveResult = await sendPatch(patches);
-    assert.strictEqual(saveResult.success, true);
-    assert.strictEqual(saveResult.updatedCount, 4);
+    // Query database for all 12 dates
+    const { data: rows, error: qErr } = await supabaseServiceRole
+      .from('channel_inventory_restrictions')
+      .select('*')
+      .eq('hotel_id', HOTEL_ID)
+      .eq('room_category_id', SUITE_ID)
+      .in('date', decDates);
 
-    // Direct database validation
+    assert.strictEqual(qErr, null);
+    assert.strictEqual(rows.length, 12, 'Expected exactly 12 records in database');
+
+    // Verify 0 null IDs
+    const nullIdRows = rows.filter((r) => !r.id);
+    assert.strictEqual(nullIdRows.length, 0, 'Found rows with NULL id in database!');
+
+    // Verify existing rows kept their exact primary key UUIDs
+    const row24 = rows.find((r) => r.date === '2026-12-24');
+    const row25 = rows.find((r) => r.date === '2026-12-25');
+    assert.strictEqual(row24.id, originalId24, 'Row 2026-12-24 primary key changed on update!');
+    assert.strictEqual(row25.id, originalId25, 'Row 2026-12-25 primary key changed on update!');
+
+    // Verify newly inserted rows have valid UUIDs
+    const row20 = rows.find((r) => r.date === '2026-12-20');
+    assert.ok(row20.id && row20.id.length > 20, 'Newly inserted row 2026-12-20 has invalid ID');
+    assert.strictEqual(Number(row20.base_rate), 14000);
+    assert.strictEqual(Number(row20.availability), 2);
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 5: Cross-Month and Cross-Year Boundary Test
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 5: Cross-Month and Cross-Year Boundary Test ---');
+
+  const crossYearDates = ['2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02'];
+  await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .delete()
+    .eq('hotel_id', HOTEL_ID)
+    .in('date', crossYearDates);
+
+  await testAsync('Cross-Year (30 Dec 2026 -> 02 Jan 2027): Saves across year boundary without year shift', async () => {
+    const patches = crossYearDates.map((date) => ({
+      hotelId: HOTEL_ID,
+      roomCategoryId: DELUXE_ID,
+      date,
+      baseRate: 9000,
+      availability: 3,
+    }));
+
+    const result = await sendPatch(patches);
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.updatedCount, 4);
+
     const { data: rows } = await supabaseServiceRole
       .from('channel_inventory_restrictions')
       .select('*')
       .eq('hotel_id', HOTEL_ID)
-      .in('date', ['2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23']);
+      .eq('room_category_id', DELUXE_ID)
+      .in('date', crossYearDates);
 
-    assert.strictEqual(rows.length, 4, 'Expected exactly 4 rows in database');
+    assert.strictEqual(rows.length, 4);
+    assert.ok(rows.every((r) => Boolean(r.id)), 'Some cross-year rows had null IDs');
+    assert.ok(rows.some((r) => r.date === '2026-12-31'), 'Missing 2026-12-31');
+    assert.ok(rows.some((r) => r.date === '2027-01-01'), 'Missing 2027-01-01');
+  });
 
-    const rSuite20 = rows.find(r => r.date === '2026-12-20' && r.room_category_id === SUITE_ID);
-    const rSuite21 = rows.find(r => r.date === '2026-12-21' && r.room_category_id === SUITE_ID);
-    const rDeluxe22 = rows.find(r => r.date === '2026-12-22' && r.room_category_id === DELUXE_ID);
-    const rFourbed23 = rows.find(r => r.date === '2026-12-23' && r.room_category_id === FOURBED_ID);
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 6: Multiple Room Categories Coexistence
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 6: Multiple Room Categories Coexistence ---');
 
-    // 1 & 3: Suite 20 Dec has BOTH Rate 13500 AND Avail 1
-    assert.ok(rSuite20, 'Suite 20 Dec missing from DB');
-    assert.strictEqual(Number(rSuite20.base_rate), 13500, 'Suite 20 Dec base_rate mismatch');
-    assert.strictEqual(Number(rSuite20.availability), 1, 'Suite 20 Dec availability mismatch');
+  const threeDates = ['2026-12-20', '2026-12-21', '2026-12-22'];
+  await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .delete()
+    .eq('hotel_id', HOTEL_ID)
+    .in('date', threeDates);
 
-    // 2: Suite 21 Dec has Rate 14000 and availability = null (not 0)
-    assert.ok(rSuite21, 'Suite 21 Dec missing from DB');
-    assert.strictEqual(Number(rSuite21.base_rate), 14000);
-    assert.strictEqual(rSuite21.availability, null, 'Suite 21 Dec availability should be null');
+  await testAsync('Multiple Rooms (Suite, Deluxe, Fourbed across 3 dates = 9 records)', async () => {
+    const patches = [];
+    for (const catId of [SUITE_ID, DELUXE_ID, FOURBED_ID]) {
+      for (const d of threeDates) {
+        patches.push({
+          hotelId: HOTEL_ID,
+          roomCategoryId: catId,
+          date: d,
+          baseRate: catId === SUITE_ID ? 15000 : catId === DELUXE_ID ? 8000 : 9500,
+          availability: 2,
+        });
+      }
+    }
 
-    // 4: Deluxe 22 Dec has Rate 7500 and availability = null (not 0)
-    assert.ok(rDeluxe22, 'Deluxe 22 Dec missing from DB');
-    assert.strictEqual(Number(rDeluxe22.base_rate), 7500);
-    assert.strictEqual(rDeluxe22.availability, null);
+    assert.strictEqual(patches.length, 9);
+    const result = await sendPatch(patches);
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.updatedCount, 9);
 
-    // 5: Fourbed 23 Dec has availability 1 and base_rate = 0 (or default)
-    assert.ok(rFourbed23, 'Fourbed 23 Dec missing from DB');
-    assert.strictEqual(Number(rFourbed23.availability), 1);
+    const { data: rows } = await supabaseServiceRole
+      .from('channel_inventory_restrictions')
+      .select('*')
+      .eq('hotel_id', HOTEL_ID)
+      .in('date', threeDates);
+
+    assert.strictEqual(rows.length, 9, 'Expected exactly 9 rows (3 rooms x 3 dates)');
+    const suiteRows = rows.filter((r) => r.room_category_id === SUITE_ID);
+    const deluxeRows = rows.filter((r) => r.room_category_id === DELUXE_ID);
+    const fourbedRows = rows.filter((r) => r.room_category_id === FOURBED_ID);
+
+    assert.strictEqual(suiteRows.length, 3);
+    assert.strictEqual(deluxeRows.length, 3);
+    assert.strictEqual(fourbedRows.length, 3);
+    assert.strictEqual(Number(suiteRows[0].base_rate), 15000);
+    assert.strictEqual(Number(deluxeRows[0].base_rate), 8000);
+    assert.strictEqual(Number(fourbedRows[0].base_rate), 9500);
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 7: Idempotent Duplicate Save Test
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 7: Idempotent Duplicate Save Test ---');
+
+  await testAsync('Duplicate Save: Submitting identical patch twice causes 0 duplicate rows', async () => {
+    const patches = threeDates.map((d) => ({
+      hotelId: HOTEL_ID,
+      roomCategoryId: SUITE_ID,
+      date: d,
+      baseRate: 16000,
+      availability: 1,
+    }));
+
+    // Save 1
+    const res1 = await sendPatch(patches);
+    assert.strictEqual(res1.success, true);
+
+    // Save 2 (identical payload)
+    const res2 = await sendPatch(patches);
+    assert.strictEqual(res2.success, true);
+
+    // Verify row count has NOT grown
+    const { data: rows } = await supabaseServiceRole
+      .from('channel_inventory_restrictions')
+      .select('*')
+      .eq('hotel_id', HOTEL_ID)
+      .eq('room_category_id', SUITE_ID)
+      .in('date', threeDates);
+
+    assert.strictEqual(rows.length, 3, 'Duplicate rows detected! Count should be exactly 3');
+    assert.strictEqual(Number(rows[0].base_rate), 16000);
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // SUITE 8: All Three Dimensions Coexistence
+  // ─────────────────────────────────────────────────────────────
+  console.log('\n--- SUITE 8: All Three Dimensions Coexistence ---');
+
+  await testAsync('Three Dimensions: Rate, Availability, Restrictions updated in one workflow', async () => {
+    const targetDate = '2026-12-20';
+    const patch = [{
+      hotelId: HOTEL_ID,
+      roomCategoryId: SUITE_ID,
+      date: targetDate,
+      baseRate: 17500,
+      availability: 4,
+      stopSell: true,
+      minStay: 2,
+      maxStay: 7,
+      closedToArrival: true,
+      closedToDeparture: false,
+    }];
+
+    const res = await sendPatch(patch);
+    assert.strictEqual(res.success, true);
+
+    const { data: row } = await supabaseServiceRole
+      .from('channel_inventory_restrictions')
+      .select('*')
+      .eq('hotel_id', HOTEL_ID)
+      .eq('room_category_id', SUITE_ID)
+      .eq('date', targetDate)
+      .single();
+
+    assert.strictEqual(Number(row.base_rate), 17500);
+    assert.strictEqual(Number(row.availability), 4);
+    assert.strictEqual(row.stop_sell, true);
+    assert.strictEqual(Number(row.min_stay), 2);
+    assert.strictEqual(Number(row.max_stay), 7);
+    assert.strictEqual(row.closed_to_arrival, true);
+    assert.strictEqual(row.closed_to_departure, false);
   });
 
   console.log('\n===============================================================');
@@ -489,12 +624,18 @@ async function runTests() {
     console.log(' ALL BULK UPDATE INTEGRITY TESTS PASSED PERFECTLY!');
   } else {
     console.error(` ${total - passed} TESTS FAILED!`);
+    if (testServer) testServer.close();
     process.exit(1);
   }
   console.log('===============================================================\n');
+
+  if (testServer) {
+    testServer.close();
+  }
 }
 
 runTests().then(() => process.exit(0)).catch((err) => {
   console.error('Fatal test error:', err);
+  if (testServer) testServer.close();
   process.exit(1);
 });
