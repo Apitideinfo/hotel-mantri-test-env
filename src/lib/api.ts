@@ -294,17 +294,27 @@ export const classifyCompany = (
 
 export const getRoomChart = async (date: string): Promise<RoomChartEntry[]> => {
   const hotelId = getCurrentHotelId();
-  const lookbackDate = addDays(date, -60);
-  const lookaheadDate = addDays(date, 7);
+  // Wide lookback: 180 days before the target date ensures backdated bookings
+  // (entered weeks or months after the stay) are always fetched.
+  // The +30 lookahead catches advance bookings entered before stay starts.
+  const lookbackDate = addDays(date, -180);
+  const lookaheadDate = addDays(date, 30);
   const { data, error } = await supabase
     .from('room_chart_entries')
     .select('*')
     .eq('hotel_id', hotelId)
+    // Fetch entries whose report_date is in the window OR whose stay covers `date`.
+    // We use the report_date window as the primary filter (for performance),
+    // then isStayOccupiedOnDate for the precise revenue match.
     .gte('report_date', lookbackDate)
     .lte('report_date', lookaheadDate)
     .order('created_at', { ascending: true });
   if (error) throw error;
   const entries = (data as RoomChartEntry[]) ?? [];
+  // Include only entries that are:
+  //   (a) actually occupied on `date` (revenue-basis: arrival <= date < departure), OR
+  //   (b) have their report_date on `date` (payment/collection date match)
+  // This keeps revenue and payment attribution correct and separate.
   return entries.filter((e) => isStayOccupiedOnDate(e, date) || e.report_date === date);
 };
 
@@ -372,8 +382,8 @@ export const getRoomChartForMonth = async (year: number, month: number): Promise
   const start = `${year}-${String(month).padStart(2, '0')}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  const lookbackDate = addDays(start, -60);
-  const lookaheadDate = addDays(end, 7);
+  const lookbackDate = addDays(start, -180);
+  const lookaheadDate = addDays(end, 30);
   const { data, error } = await supabase
     .from('room_chart_entries')
     .select('*')
@@ -447,17 +457,19 @@ export const getPrevCashClosingDerived = async (
   prev.setDate(prev.getDate() - 1);
   const prevStr = prev.toISOString().slice(0, 10);
 
-  // Batch-fetch all data from the start of the month up to the previous day.
-  // This replaces the old recursive approach that made 5+ API calls per day
-  // walking backward, which caused thousands of sequential requests.
+  // Batch-fetch all data from the start of the month (with a lookback for
+  // cross-month stays) up to the previous day.
+  // CRITICAL: lookback must be wide enough to catch bookings whose report_date
+  // is before the month start but whose arrival falls within the month.
   const monthStart = `${prevStr.slice(0, 8)}01`;
+  const lookbackForMonth = addDays(monthStart, -180);
   const settings = await getSettings();
   const totalRooms = settings.total_rooms;
 
   const [allEntries, allOther, allFinance, allRevenue] = await Promise.all([
     supabase.from('room_chart_entries').select('*')
       .eq('hotel_id', getCurrentHotelId())
-      .gte('report_date', monthStart).lte('report_date', prevStr)
+      .gte('report_date', lookbackForMonth).lte('report_date', prevStr)
       .order('report_date', { ascending: true }).then(({ data, error }) => {
         if (error) throw error;
         return (data as RoomChartEntry[]) ?? [];
@@ -473,13 +485,9 @@ export const getPrevCashClosingDerived = async (
     getRevenueEntriesForDateRange(monthStart, prevStr),
   ]);
 
-  // Group by date for in-memory lookup
-  const entriesByDate = new Map<string, RoomChartEntry[]>();
-  for (const e of allEntries) {
-    const arr = entriesByDate.get(e.report_date) ?? [];
-    arr.push(e);
-    entriesByDate.set(e.report_date, arr);
-  }
+  // NOTE: Do NOT group allEntries by report_date (old entriesByDate map).
+  // That pattern caused multi-night stays (report_date=01-Sep, arrival=31-Aug)
+  // to be invisible on 31-Aug. We now resolve each day via isStayOccupiedOnDate.
   const otherByDate = new Map<string, OtherDailyEntries>();
   for (const o of allOther) {
     otherByDate.set(o.report_date, o);
@@ -497,13 +505,17 @@ export const getPrevCashClosingDerived = async (
     revenueByDate.set(re.entry_date, arr);
   }
 
-  // Walk backward from the previous day to find the most recent day with data.
-  // Then walk forward from the month start, computing cash closing for each day
-  // using the same buildDerivedReport formula.
+  // Walk forward from the month start, computing cash closing for each day.
+  // CRITICAL: each day's entries are determined by isStayOccupiedOnDate (revenue)
+  // OR report_date match (payment date) — NOT by report_date grouping alone.
+  // This ensures a 2-night stay entered on 01-Sep (report_date=01-Sep, arrival=31-Aug)
+  // contributes revenue to BOTH 31-Aug AND 01-Sep, not only to 01-Sep.
+  const allCombined = allEntries; // already hotel-scoped
   const datesWithData: string[] = [];
   for (let day = 1; day <= parseInt(prevStr.slice(8, 10), 10); day++) {
     const ds = `${prevStr.slice(0, 8)}${String(day).padStart(2, '0')}`;
-    if (entriesByDate.has(ds) || otherByDate.has(ds)) {
+    const hasDayEntries = allCombined.some((e) => isStayOccupiedOnDate(e, ds) || e.report_date === ds);
+    if (hasDayEntries || otherByDate.has(ds)) {
       datesWithData.push(ds);
     }
   }
@@ -511,7 +523,8 @@ export const getPrevCashClosingDerived = async (
 
   let runningClosing = openingBalance;
   for (const ds of datesWithData) {
-    const dayEntries = entriesByDate.get(ds) ?? [];
+    // Assign entries to this day by stay-date (revenue) OR report_date (payment)
+    const dayEntries = allCombined.filter((e) => isStayOccupiedOnDate(e, ds) || e.report_date === ds);
     const other = otherByDate.get(ds) ?? {
       report_date: ds, kitchen: 0, other_income: 0, housekeeping_supply: 0,
       other_expense: 0, salary_advance: 0, maintenance_bill: 0,
@@ -789,20 +802,48 @@ export const getCompanyLedger = async (
 };
 
 // All distinct companies with their revenue for ranking.
+// Revenue is computed as per-night rate (room_rate priority, then total÷nights)
+// multiplied by the number of nights that fall within the requested date range.
+// This prevents a 2-night booking from contributing ₹2,400 in a period where
+// only 1 night overlaps.
 export const getCompanyRevenueRanking = async (
   fromDate: string, toDate: string
 ): Promise<{ name: string; category: SourceCategory; revenue: number; bookings: number }[]> => {
+  // Wide lookback to catch backdated entries
+  const lookback = addDays(fromDate, -180);
   const { data, error } = await supabase
     .from('room_chart_entries')
-    .select('company, source_category, total, room_rate, is_complimentary')
+    .select('company, source_category, total, room_rate, nights, arrival, departure, report_date, is_complimentary')
     .eq('hotel_id', getCurrentHotelId())
-    .gte('report_date', fromDate)
-    .lte('report_date', toDate);
+    .gte('report_date', lookback)
+    .lte('report_date', addDays(toDate, 30));
   if (error) throw error;
   const map = new Map<string, { name: string; category: SourceCategory; revenue: number; bookings: number }>();
   for (const r of (data ?? []) as RoomChartEntry[]) {
     if (r.is_complimentary) continue;
-    const amt = toNum(r.total) > 0 ? toNum(r.total) : toNum(r.room_rate);
+    // Count only nights that fall within the requested [fromDate, toDate] window
+    const arr = (r.arrival && r.arrival.trim() ? r.arrival : r.report_date).slice(0, 10);
+    const dep = (r.departure && r.departure.trim() ? r.departure : r.report_date).slice(0, 10);
+    const nightlyRate = toNum(r.room_rate) > 0
+      ? toNum(r.room_rate)
+      : (toNum(r.total) > 0
+        ? toNum(r.total) / Math.max(1, arr < dep ? calcStayNights(arr, dep) : (toNum(r.nights) || 1))
+        : 0);
+    // Count how many occupied nights of this booking fall within [fromDate, toDate]
+    let nightsInPeriod = 0;
+    if (arr < dep) {
+      // Multi-night: count days in [max(arr,fromDate), min(dep,toDate+1))
+      const effectiveStart = arr >= fromDate ? arr : fromDate;
+      const effectiveEnd = dep <= addDays(toDate, 1) ? dep : addDays(toDate, 1);
+      if (effectiveStart < effectiveEnd) {
+        nightsInPeriod = calcStayNights(effectiveStart, effectiveEnd);
+      }
+    } else {
+      // Single-day: count if that day is in range
+      if (arr >= fromDate && arr <= toDate) nightsInPeriod = 1;
+    }
+    if (nightsInPeriod <= 0) continue;
+    const amt = nightlyRate * nightsInPeriod;
     const key = r.company || 'Unknown';
     const existing = map.get(key) ?? { name: key, category: r.source_category, revenue: 0, bookings: 0 };
     existing.revenue += amt;
@@ -897,24 +938,44 @@ export const saveReport = async (
 };
 
 export const getMtdForDate = async (date: string): Promise<{ revenue: number; occupancy: number }> => {
+  // Always compute MTD from live room-chart entries (authoritative, stay-date-based),
+  // NOT from the daily_reports table (stale saved snapshots that may contain
+  // incorrectly allocated revenue from report_date-based calculations).
   const d = new Date(date + 'T00:00:00');
-  const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-  const { data, error } = await supabase
-    .from('daily_reports')
-    .select('room_sale_amount, kitchen, other_income, rooms_occupied')
-    .eq('hotel_id', getCurrentHotelId())
-    .gte('report_date', start)
-    .lte('report_date', date);
-  if (error) throw error;
-  let revenue = 0;
-  let occupancy = 0;
-  for (const r of data ?? []) {
-    revenue += toNum((r as { room_sale_amount: number }).room_sale_amount)
-      + toNum((r as { kitchen: number }).kitchen)
-      + toNum((r as { other_income: number }).other_income);
-    occupancy += toNum((r as { rooms_occupied: number }).rooms_occupied);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const settings = await getSettings();
+  const totalRooms = settings.total_rooms;
+  try {
+    const reports = await getDerivedReportsForMonth(year, month, totalRooms, settings.opening_cash_balance);
+    let revenue = 0;
+    let occupancy = 0;
+    for (const r of reports) {
+      if (r.report_date <= date) {
+        revenue += toNum(r.room_sale_amount) + toNum(r.kitchen) + toNum(r.other_income);
+        occupancy += toNum(r.rooms_occupied);
+      }
+    }
+    return { revenue, occupancy };
+  } catch {
+    // Fallback to legacy daily_reports on API error (read-only, never for revenue computation)
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    const { data, error } = await supabase
+      .from('daily_reports')
+      .select('room_sale_amount, kitchen, other_income, rooms_occupied')
+      .eq('hotel_id', getCurrentHotelId())
+      .gte('report_date', start)
+      .lte('report_date', date);
+    if (error) return { revenue: 0, occupancy: 0 };
+    let revenue = 0; let occupancy = 0;
+    for (const r of data ?? []) {
+      revenue += toNum((r as { room_sale_amount: number }).room_sale_amount)
+        + toNum((r as { kitchen: number }).kitchen)
+        + toNum((r as { other_income: number }).other_income);
+      occupancy += toNum((r as { rooms_occupied: number }).rooms_occupied);
+    }
+    return { revenue, occupancy };
   }
-  return { revenue, occupancy };
 };
 
 // Re-export aggregateRoomChart for convenience

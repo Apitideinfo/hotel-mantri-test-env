@@ -46,6 +46,47 @@ export const calcStayNights = (arrival?: string | null, departure?: string | nul
   return diffDays > 0 ? diffDays : 1;
 };
 
+/**
+ * Canonical night generator for Hotel Mantri revenue recognition.
+ *
+ * Business Rule (Source of Truth):
+ *   Room revenue is recognized for each night the guest occupies the room.
+ *   checkInDate  → INCLUDED  (first occupied night)
+ *   checkOutDate → EXCLUDED  (departure / check-out morning)
+ *
+ * Example: checkIn=2026-08-31, checkOut=2026-09-02
+ *   → ['2026-08-31', '2026-09-01']
+ *   → NOT '2026-09-02'
+ *
+ * Timezone safety: all arithmetic uses UTC integers (YYYY-MM-DD string parts),
+ * never new Date(string) local conversion.
+ */
+export const generateOccupiedNights = (checkIn: string, checkOut: string): string[] => {
+  const nights: string[] = [];
+  if (!checkIn || !checkOut) return nights;
+  const ci = checkIn.slice(0, 10);
+  const co = checkOut.slice(0, 10);
+  if (ci >= co) {
+    // Same-day / day-use: single business date is the check-in date
+    nights.push(ci);
+    return nights;
+  }
+  // Walk from checkIn up to (but not including) checkOut
+  const [sy, sm, sd] = ci.split('-').map(Number);
+  let cursor = Date.UTC(sy, sm - 1, sd);
+  const [ey, em, ed] = co.split('-').map(Number);
+  const end = Date.UTC(ey, em - 1, ed);
+  while (cursor < end) {
+    const d = new Date(cursor);
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    nights.push(`${yyyy}-${mm}-${dd}`);
+    cursor += 86400000;
+  }
+  return nights;
+};
+
 export const calcArr = (roomSale: number, roomsOccupied: number): number =>
   roomsOccupied > 0 ? toNum(roomSale) / roomsOccupied : 0;
 
@@ -230,13 +271,47 @@ const SOURCE_KEYS: Record<SourceCategory, keyof RoomChartAggregate> = {
   'Phonebook': 'phonebook',
 };
 
+/**
+ * Revenue recognition test: is this room-night entry occupied on `date`?
+ *
+ * Business Rule:
+ *   arrival  (checkInDate)  → INCLUDED
+ *   departure (checkOutDate) → EXCLUDED
+ *
+ * Falls back to report_date when arrival/departure are absent (single-night entry).
+ * Uses string comparison (YYYY-MM-DD) — timezone-safe, no Date() conversion.
+ */
 export const isStayOccupiedOnDate = (e: RoomChartEntry, date: string): boolean => {
   const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
   const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
   if (arr >= dep) {
+    // Same-day stay (day-use) or missing departure: occupied only on arr
     return arr === date;
   }
+  // Standard multi-night: checkIn INCLUDED, checkOut EXCLUDED
   return arr <= date && dep > date;
+};
+
+/**
+ * Returns the authoritative per-night room revenue for a single entry.
+ *
+ * Priority:
+ *   1. room_rate  — explicit per-night rate set at booking time
+ *   2. total / nights — derived rate when room_rate is absent
+ *
+ * This function NEVER returns the entire booking total for a multi-night stay.
+ * That would incorrectly assign ₹2,400 to a single business date.
+ */
+export const getNightlyRoomRevenue = (e: RoomChartEntry): number => {
+  if (e.is_complimentary) return 0;
+  const rr = toNum(e.room_rate);
+  if (rr > 0) return rr;
+  const tot = toNum(e.total);
+  // Derive nights from dates when possible (authoritative), else e.nights
+  const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+  const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+  const n = arr < dep ? Math.max(1, calcStayNights(arr, dep)) : Math.max(1, toNum(e.nights) || 1);
+  return tot > 0 ? tot / n : 0;
 };
 
 export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: string): RoomChartAggregate => {
@@ -256,22 +331,30 @@ export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: strin
       if (dep === targetDate) agg.departures += 1;
     }
 
+    // ─── Revenue Date ─────────────────────────────────────────────────────────
+    // Revenue is earned on each OCCUPIED STAY NIGHT (arr <= date < dep).
+    // It is NEVER driven by report_date, payment_date, or created_at.
     const isOccupied = targetDate ? isStayOccupiedOnDate(e, targetDate) : true;
+
+    // ─── Payment / Collection Date ────────────────────────────────────────────
+    // Payment is attributed to business_date (explicit collection date) or
+    // report_date (the date the booking was entered / payment was received).
+    // This is PERMANENTLY SEPARATE from room revenue recognition.
+    const paymentDate = ((e as unknown as Record<string, unknown>).business_date as string | null)
+      || e.report_date || arr;
     const isPaymentDay = targetDate
-      ? ((e.report_date && e.report_date === targetDate) || (!e.report_date && arr === targetDate))
+      ? (paymentDate.slice(0, 10) === targetDate)
       : true;
 
     if (isOccupied) {
-      const nightsCount = Math.max(1, toNum(e.nights) || 1);
-      const nightlyRate = targetDate && nightsCount > 1
-        ? (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (toNum(e.total) / nightsCount))
-        : (toNum(e.room_rate) > 0 ? toNum(e.room_rate) : toNum(e.total));
-      const nightlyTaxable = targetDate && nightsCount > 1
-        ? (toNum(e.taxable_amount) > 0 ? toNum(e.taxable_amount) / nightsCount : nightlyRate)
-        : toNum(e.taxable_amount);
-      const nightlyGst = targetDate && nightsCount > 1
-        ? (toNum(e.gst_amount) > 0 ? toNum(e.gst_amount) / nightsCount : 0)
-        : toNum(e.gst_amount);
+      // Use getNightlyRoomRevenue: room_rate takes priority, then total÷nights.
+      // This guarantees ₹1,200 per night for a 2-night/₹1,200 booking, not ₹2,400 on one date.
+      const nightlyRate = getNightlyRoomRevenue(e);
+
+      // GST split: also per-night to stay consistent with revenue allocation
+      const derivedNights = arr < dep ? Math.max(1, calcStayNights(arr, dep)) : Math.max(1, toNum(e.nights) || 1);
+      const nightlyTaxable = toNum(e.taxable_amount) > 0 ? toNum(e.taxable_amount) / derivedNights : nightlyRate;
+      const nightlyGst = toNum(e.gst_amount) > 0 ? toNum(e.gst_amount) / derivedNights : 0;
 
       if (e.is_complimentary) {
         agg.complimentary += 1;
@@ -429,20 +512,17 @@ export const buildDerivedReport = (
   const gstSplit = splitGst(agg.gstCollected);
   const netRevenue = agg.roomRevenue - agg.gstCollected;
   const invoiceTotal = agg.roomRevenue;
-  const getEntryNightlyRate = (e: RoomChartEntry): number => {
-    if (e.is_complimentary) return 0;
-    const nightsCount = Math.max(1, toNum(e.nights) || 1);
-    return toNum(e.room_rate) > 0 ? toNum(e.room_rate) : (toNum(e.total) / nightsCount);
-  };
+  // Use the canonical per-night revenue function \u2014 room_rate priority, then total\u00f7nights.
+  // Nights are derived from arrival/departure dates (authoritative), not e.nights field.
   const roomRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && (e.revenue_category || 'Room Revenue') === 'Room Revenue')
-    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
   const fbRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'F&B Revenue')
-    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
   const miscRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'Misc Revenue')
-    .reduce((s, e) => s + getEntryNightlyRate(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
   return {
     report_date: date,
     rooms_occupied: agg.roomsOccupied + agg.complimentary,
