@@ -596,12 +596,15 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         }
       }
       
+      const created = [];
       for (const i of inputs) {
-        await saveReservation(i, id);
+        const res = await saveReservation(i, id);
+        created.push(res);
       }
       
       await load();
       onSaved();
+      return created;
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Save failed';
       setError(msg);

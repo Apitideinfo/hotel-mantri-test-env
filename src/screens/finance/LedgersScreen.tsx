@@ -11,6 +11,7 @@ import {
   getExpenseEntriesForDateRange, getRevenueEntriesForDateRange,
 } from '@/lib/api-finance';
 import { toNum, fmtMoney, splitGst } from '@/lib/calc';
+import { generateRoomRevenueLedger, reconcilePaymentLedger } from '@/lib/financialLedger';
 import { ScreenHeader, SectionCard, Banner } from '@/components/finance-ui';
 
 type LedgerType = 'cash' | 'bank' | 'expense' | 'revenue' | 'payment' | 'gst' | 'guest';
@@ -70,7 +71,7 @@ export const LedgersScreen = ({ onBack }: { onBack: () => void }) => {
         getExpenseEntriesForDateRange(fromDate, toDate),
         getRevenueEntriesForDateRange(fromDate, toDate),
       ]);
-      const r = buildLedger(ledgerType, entries, expenses, revenues);
+      const r = buildLedger(ledgerType, entries, expenses, revenues, fromDate, toDate);
       setRows(r);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
@@ -229,23 +230,26 @@ function buildLedger(
   entries: RoomChartEntry[],
   expenses: ExpenseEntry[],
   revenues: RevenueEntry[],
+  fromDate: string,
+  toDate: string,
 ): LedgerRow[] {
   const rows: LedgerRow[] = [];
   let balance = 0;
 
+  const paymentTransactions = reconcilePaymentLedger({ roomChartEntries: entries });
+
   if (type === 'cash') {
-    entries.filter((e) => !e.is_complimentary).forEach((e) => {
-      const amt = toNum(e.pay_cash);
-      if (amt > 0) {
-        balance += amt;
+    paymentTransactions
+      .filter((tx) => tx.payment_method === 'Cash' && tx.payment_date >= fromDate && tx.payment_date <= toDate)
+      .forEach((tx) => {
+        balance += tx.amount;
         rows.push({
-          date: e.report_date,
-          description: `Room ${e.room_no} — ${e.guest_name}`,
-          reference: e.company || '—',
-          debit: 0, credit: amt, balance,
+          date: tx.payment_date,
+          description: `Room Collection — ${tx.notes || tx.reference || 'Cash Payment'}`,
+          reference: tx.reference || 'Cash',
+          debit: 0, credit: tx.amount, balance,
         });
-      }
-    });
+      });
     revenues.forEach((r) => {
       if (r.payment_mode === 'Cash') {
         balance += toNum(r.amount);
@@ -269,18 +273,17 @@ function buildLedger(
       }
     });
   } else if (type === 'bank') {
-    entries.filter((e) => !e.is_complimentary).forEach((e) => {
-      const amt = toNum(e.pay_bank);
-      if (amt > 0) {
-        balance += amt;
+    paymentTransactions
+      .filter((tx) => tx.payment_method !== 'Cash' && tx.payment_date >= fromDate && tx.payment_date <= toDate)
+      .forEach((tx) => {
+        balance += tx.amount;
         rows.push({
-          date: e.report_date,
-          description: `Room ${e.room_no} — ${e.guest_name}`,
-          reference: e.company || '—',
-          debit: 0, credit: amt, balance,
+          date: tx.payment_date,
+          description: `Collection (${tx.payment_method}) — ${tx.notes || tx.reference || 'Bank/UPI'}`,
+          reference: tx.reference || tx.payment_method,
+          debit: 0, credit: tx.amount, balance,
         });
-      }
-    });
+      });
     revenues.forEach((r) => {
       if (r.payment_mode === 'Bank') {
         balance += toNum(r.amount);
@@ -313,14 +316,30 @@ function buildLedger(
       });
     });
   } else if (type === 'revenue') {
+    // Room Revenue: Each occupied night gets its exact nightly room revenue
     entries.filter((e) => !e.is_complimentary).forEach((e) => {
-      const amt = toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate);
-      rows.push({
-        date: e.report_date,
-        description: `Room Revenue — Room ${e.room_no} — ${e.guest_name}`,
-        reference: e.company || '—',
-        debit: 0, credit: amt, balance: 0,
+      const stayLedger = generateRoomRevenueLedger({
+        hotel_id: e.hotel_id,
+        check_in_date: (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10),
+        check_out_date: (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10),
+        rate: toNum(e.room_rate),
+        invoice_total: toNum(e.total) || toNum(e.invoice_total),
+        room_no: e.room_no,
+        guest_name: e.guest_name,
+        source_category: e.source_category,
+        is_complimentary: e.is_complimentary,
       });
+
+      for (const revItem of stayLedger) {
+        if (revItem.business_date >= fromDate && revItem.business_date <= toDate) {
+          rows.push({
+            date: revItem.business_date,
+            description: `Room Revenue — Room ${revItem.room_no} — ${revItem.guest_name}`,
+            reference: revItem.source_category || '—',
+            debit: 0, credit: revItem.amount, balance: 0,
+          });
+        }
+      }
     });
     revenues.forEach((r) => {
       rows.push({
@@ -331,29 +350,16 @@ function buildLedger(
       });
     });
   } else if (type === 'payment') {
-    entries.filter((e) => !e.is_complimentary).forEach((e) => {
-      const cash = toNum(e.pay_cash);
-      const upi = toNum(e.pay_upi);
-      const card = toNum(e.pay_card);
-      const bank = toNum(e.pay_bank);
-      const advance = toNum(e.pay_advance);
-      const total = cash + upi + card + bank + advance;
-      if (total > 0) {
-        const modes = [
-          cash > 0 && `Cash ₹${fmtMoney(cash)}`,
-          upi > 0 && `UPI ₹${fmtMoney(upi)}`,
-          card > 0 && `Card ₹${fmtMoney(card)}`,
-          bank > 0 && `Bank ₹${fmtMoney(bank)}`,
-          advance > 0 && `Advance ₹${fmtMoney(advance)}`,
-        ].filter(Boolean).join(' · ');
+    paymentTransactions
+      .filter((tx) => tx.payment_date >= fromDate && tx.payment_date <= toDate)
+      .forEach((tx) => {
         rows.push({
-          date: e.report_date,
-          description: `Room ${e.room_no} — ${e.guest_name}`,
-          reference: modes,
-          debit: 0, credit: total, balance: 0,
+          date: tx.payment_date,
+          description: `Payment (${tx.payment_method}) — ${tx.notes || tx.reference || 'Guest Payment'}`,
+          reference: tx.reference || tx.payment_method,
+          debit: 0, credit: tx.amount, balance: 0,
         });
-      }
-    });
+      });
   } else if (type === 'gst') {
     entries.filter((e) => !e.is_complimentary && toNum(e.gst_amount) > 0).forEach((e) => {
       const gst = toNum(e.gst_amount);
@@ -370,7 +376,7 @@ function buildLedger(
       const amt = toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate);
       const received = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance);
       rows.push({
-        date: e.report_date,
+        date: (e.arrival || e.report_date).slice(0, 10),
         description: `${e.guest_name} — Room ${e.room_no}`,
         reference: e.company || 'Direct',
         debit: amt, credit: received, balance: amt - received,

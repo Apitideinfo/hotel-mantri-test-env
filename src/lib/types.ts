@@ -85,6 +85,11 @@ export interface HotelSettings {
   default_gst_slab: GstSlab;
   // POS
   restaurant_pos_enabled: boolean;
+  // Dynamic Hotel Branding & Confirmation Settings
+  check_in_time?: string;
+  check_out_time?: string;
+  cancellation_policy?: string;
+  important_notes?: string;
 }
 
 // ── POS Menu Management types ──

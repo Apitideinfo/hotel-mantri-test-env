@@ -7,6 +7,7 @@ import type {
 } from './types';
 import type { Reservation } from './types-reservations';
 import { calcCashClosing, toNum, buildDerivedReport, aggregateRoomChart, buildMtdYtdFromDaily, buildCashFlow, calcTotalRevenue, aggregateDerived, getTodayLocal, calcStayNights, isStayOccupiedOnDate, addDays, reconcilePeriodFinances } from './calc';
+import { reconcilePaymentLedger, type PaymentTransaction } from './financialLedger';
 
 import { getExpenseEntriesForDate, getExpenseEntriesForDateRange, getRevenueEntriesForDate, getRevenueEntriesForDateRange } from './api-finance';
 import type { ExpenseEntry, RevenueEntry } from './types-finance';
@@ -290,32 +291,109 @@ export const classifyCompany = (
   return 'Corporate/Agent';
 };
 
-// ---- Room chart ----
+// ---- Room chart & authoritative stay synthesis ----
+
+export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
+  const ci = (r.check_in_date ?? '').slice(0, 10);
+  const co = (r.check_out_date ?? '').slice(0, 10);
+  const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
+  const rate = toNum(r.rate);
+  const invTotal = toNum(r.invoice_total) || (rate * n);
+  const isComplimentary = Boolean(
+    (r as any).is_complimentary ||
+    r.payment_mode === 'Complimentary' ||
+    (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
+  );
+
+  return {
+    id: r.id,
+    hotel_id: r.hotel_id,
+    report_date: ci,
+    room_no: r.room_no || 'Unassigned',
+    guest_name: r.guest_name,
+    arrival: ci,
+    departure: co,
+    nights: n,
+    room_rate: isComplimentary ? 0 : rate,
+    total: isComplimentary ? 0 : invTotal,
+    company: r.source_name || '',
+    source_category: (r.source_category as SourceCategory) || 'Direct/Walking',
+    pay_mode: (r.payment_mode as PayMode) || 'Cash',
+    description: '',
+    is_complimentary: isComplimentary,
+    meal_plan: (r.meal_plan as MealPlan) || 'EP',
+    gst_mode: 'Exclusive',
+    gst_type: (r.gst_type as GstType) || 'No Scope',
+    gst_slab: (r.gst_slab as GstSlab) || 0,
+    gst_amount: toNum(r.gst_amount),
+    taxable_amount: toNum(r.taxable_amount),
+    invoice_total: isComplimentary ? 0 : invTotal,
+    revenue_category: 'Room Revenue',
+    remarks: r.remarks || '',
+    created_by: r.created_by ?? '',
+    business_date: ci,
+    room_category: (r as any).room_category || 'Standard',
+    pay_cash: toNum(r.pay_cash),
+    pay_upi: toNum(r.pay_upi),
+    pay_card: toNum(r.pay_card),
+    pay_bank: toNum(r.pay_bank),
+    pay_advance: toNum(r.advance_paid),
+    pay_balance: Math.max(0, invTotal - (toNum(r.advance_paid) + toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank))),
+    id_proof_type: '',
+    id_proof_number: '',
+    id_proof_verified: false,
+    arrival_time: '',
+    checkout_time: '',
+    checked_in_at: null,
+    checked_out_at: null,
+    reservation_id: r.id,
+  };
+};
+
+export const mergeReservationsWithRoomChart = (
+  entries: RoomChartEntry[],
+  reservations: Reservation[]
+): RoomChartEntry[] => {
+  const linkedResvIds = new Set(entries.map((e) => e.reservation_id).filter(Boolean));
+  const linkedEntryIds = new Set(reservations.map((r) => r.room_chart_entry_id).filter(Boolean));
+
+  const unlinkedResvs = reservations.filter((r) => {
+    const status = (r.status || '').toLowerCase();
+    if (status === 'cancelled' || status === 'no_show') return false;
+    if (linkedResvIds.has(r.id)) return false;
+    if (r.room_chart_entry_id && linkedEntryIds.has(r.room_chart_entry_id)) return false;
+    return true;
+  });
+
+  const synthesized = unlinkedResvs.map(reservationToRoomChartEntry);
+  return [...entries, ...synthesized];
+};
 
 export const getRoomChart = async (date: string): Promise<RoomChartEntry[]> => {
   const hotelId = getCurrentHotelId();
-  // Wide lookback: 180 days before the target date ensures backdated bookings
-  // (entered weeks or months after the stay) are always fetched.
-  // The +30 lookahead catches advance bookings entered before stay starts.
   const lookbackDate = addDays(date, -180);
   const lookaheadDate = addDays(date, 30);
-  const { data, error } = await supabase
-    .from('room_chart_entries')
-    .select('*')
-    .eq('hotel_id', hotelId)
-    // Fetch entries whose report_date is in the window OR whose stay covers `date`.
-    // We use the report_date window as the primary filter (for performance),
-    // then isStayOccupiedOnDate for the precise revenue match.
-    .gte('report_date', lookbackDate)
-    .lte('report_date', lookaheadDate)
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  const entries = (data as RoomChartEntry[]) ?? [];
-  // Include only entries that are:
-  //   (a) actually occupied on `date` (revenue-basis: arrival <= date < departure), OR
-  //   (b) have their report_date on `date` (payment/collection date match)
-  // This keeps revenue and payment attribution correct and separate.
-  return entries.filter((e) => isStayOccupiedOnDate(e, date) || e.report_date === date);
+  const [chartRes, resvRes] = await Promise.all([
+    supabase
+      .from('room_chart_entries')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .gte('report_date', lookbackDate)
+      .lte('report_date', lookaheadDate)
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .in('status', ['confirmed', 'checked_in', 'checked_out'])
+      .lte('check_in_date', date)
+      .gt('check_out_date', date),
+  ]);
+  if (chartRes.error) throw chartRes.error;
+  const entries = (chartRes.data as RoomChartEntry[]) ?? [];
+  const reservations = (resvRes.data as Reservation[]) ?? [];
+  const combined = mergeReservationsWithRoomChart(entries, reservations);
+  return combined.filter((e) => isStayOccupiedOnDate(e, date));
 };
 
 export const saveRoomChartRow = async (
@@ -456,26 +534,37 @@ export const getPrevCashClosingDerived = async (
   const prev = new Date(d);
   prev.setDate(prev.getDate() - 1);
   const prevStr = prev.toISOString().slice(0, 10);
+  const hotelId = getCurrentHotelId();
+
+  // If yesterday is already closed, respect the closed record's cash closing
+  const closedPrev = await Promise.resolve(
+    supabase.from('day_close_records').select('cash_closing')
+      .eq('hotel_id', hotelId)
+      .eq('business_date', prevStr)
+      .eq('status', 'closed')
+      .maybeSingle()
+  ).then(({ data }) => data).catch(() => null);
+  if (closedPrev && closedPrev.cash_closing !== undefined && closedPrev.cash_closing !== null) {
+    return toNum(closedPrev.cash_closing);
+  }
 
   // Batch-fetch all data from the start of the month (with a lookback for
   // cross-month stays) up to the previous day.
-  // CRITICAL: lookback must be wide enough to catch bookings whose report_date
-  // is before the month start but whose arrival falls within the month.
   const monthStart = `${prevStr.slice(0, 8)}01`;
   const lookbackForMonth = addDays(monthStart, -180);
   const settings = await getSettings();
   const totalRooms = settings.total_rooms;
 
-  const [allEntries, allOther, allFinance, allRevenue] = await Promise.all([
+  const [allEntries, allOther, allFinance, allRevenue, timelineEvents, reservations] = await Promise.all([
     supabase.from('room_chart_entries').select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', hotelId)
       .gte('report_date', lookbackForMonth).lte('report_date', prevStr)
       .order('report_date', { ascending: true }).then(({ data, error }) => {
         if (error) throw error;
         return (data as RoomChartEntry[]) ?? [];
       }),
     supabase.from('other_daily_entries').select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', hotelId)
       .gte('report_date', monthStart).lte('report_date', prevStr)
       .then(({ data, error }) => {
         if (error) throw error;
@@ -483,19 +572,31 @@ export const getPrevCashClosingDerived = async (
       }),
     getExpenseEntriesForDateRange(monthStart, prevStr),
     getRevenueEntriesForDateRange(monthStart, prevStr),
+    Promise.resolve(
+      supabase.from('booking_timeline').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => data ?? []).catch(() => []),
+    Promise.resolve(
+      supabase.from('reservations').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
   ]);
 
-  // NOTE: Do NOT group allEntries by report_date (old entriesByDate map).
-  // That pattern caused multi-night stays (report_date=01-Sep, arrival=31-Aug)
-  // to be invisible on 31-Aug. We now resolve each day via isStayOccupiedOnDate.
+  const paymentTransactions = reconcilePaymentLedger({
+    timelineEvents: timelineEvents as any[],
+    reservations: reservations as Reservation[],
+    roomChartEntries: allEntries,
+    hotelId,
+  });
+
   const otherByDate = new Map<string, OtherDailyEntries>();
   for (const o of allOther) {
     otherByDate.set(o.report_date, o);
   }
-  const financeByDate = new Map<string, { category: string; amount: number }[]>();
+  const financeByDate = new Map<string, { category: string; amount: number; payment_mode?: string }[]>();
   for (const fe of allFinance) {
     const arr = financeByDate.get(fe.entry_date) ?? [];
-    arr.push({ category: fe.category_name, amount: fe.amount });
+    arr.push({ category: fe.category_name, amount: fe.amount, payment_mode: fe.payment_mode });
     financeByDate.set(fe.entry_date, arr);
   }
   const revenueByDate = new Map<string, { category: string; amount: number }[]>();
@@ -505,17 +606,13 @@ export const getPrevCashClosingDerived = async (
     revenueByDate.set(re.entry_date, arr);
   }
 
-  // Walk forward from the month start, computing cash closing for each day.
-  // CRITICAL: each day's entries are determined by isStayOccupiedOnDate (revenue)
-  // OR report_date match (payment date) — NOT by report_date grouping alone.
-  // This ensures a 2-night stay entered on 01-Sep (report_date=01-Sep, arrival=31-Aug)
-  // contributes revenue to BOTH 31-Aug AND 01-Sep, not only to 01-Sep.
-  const allCombined = allEntries; // already hotel-scoped
+  const allCombined = mergeReservationsWithRoomChart(allEntries, reservations);
   const datesWithData: string[] = [];
   for (let day = 1; day <= parseInt(prevStr.slice(8, 10), 10); day++) {
     const ds = `${prevStr.slice(0, 8)}${String(day).padStart(2, '0')}`;
-    const hasDayEntries = allCombined.some((e) => isStayOccupiedOnDate(e, ds) || e.report_date === ds);
-    if (hasDayEntries || otherByDate.has(ds)) {
+    const hasDayEntries = allCombined.some((e) => isStayOccupiedOnDate(e, ds));
+    const hasPayment = paymentTransactions.some((tx) => tx.payment_date === ds);
+    if (hasDayEntries || hasPayment || otherByDate.has(ds)) {
       datesWithData.push(ds);
     }
   }
@@ -523,8 +620,7 @@ export const getPrevCashClosingDerived = async (
 
   let runningClosing = openingBalance;
   for (const ds of datesWithData) {
-    // Assign entries to this day by stay-date (revenue) OR report_date (payment)
-    const dayEntries = allCombined.filter((e) => isStayOccupiedOnDate(e, ds) || e.report_date === ds);
+    const dayEntries = allCombined.filter((e) => isStayOccupiedOnDate(e, ds));
     const other = otherByDate.get(ds) ?? {
       report_date: ds, kitchen: 0, other_income: 0, housekeeping_supply: 0,
       other_expense: 0, salary_advance: 0, maintenance_bill: 0,
@@ -532,7 +628,7 @@ export const getPrevCashClosingDerived = async (
     };
     const finance = financeByDate.get(ds);
     const revenue = revenueByDate.get(ds);
-    const dr = buildDerivedReport(ds, dayEntries, other, runningClosing, totalRooms, finance, revenue);
+    const dr = buildDerivedReport(ds, dayEntries, other, runningClosing, totalRooms, finance, revenue, paymentTransactions);
     runningClosing = dr.cash_closing;
   }
   return runningClosing;
@@ -541,7 +637,8 @@ export const getPrevCashClosingDerived = async (
 export const getDerivedReport = async (
   date: string, totalRooms: number, openingBalance: number
 ): Promise<DerivedReport> => {
-  const [entries, other, prevClosing, financeEntries, revenueEntries, closeRecord] = await Promise.all([
+  const hotelId = getCurrentHotelId();
+  const [entries, other, prevClosing, financeEntries, revenueEntries, closeRecord, timelineEvents, reservations] = await Promise.all([
     getRoomChart(date),
     getOtherEntries(date).then((o) => o ?? {
       report_date: date, kitchen: 0, other_income: 0, housekeeping_supply: 0,
@@ -553,15 +650,29 @@ export const getDerivedReport = async (
     getRevenueEntriesForDate(date),
     Promise.resolve(
       supabase.from('day_close_records').select('status')
-        .eq('hotel_id', getCurrentHotelId())
+        .eq('hotel_id', hotelId)
         .eq('business_date', date)
         .eq('status', 'closed')
         .maybeSingle()
     ).then(({ data }) => data).catch(() => null),
+    Promise.resolve(
+      supabase.from('booking_timeline').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => data ?? []).catch(() => []),
+    Promise.resolve(
+      supabase.from('reservations').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
   ]);
-  const financeAgg = (financeEntries as ExpenseEntry[]).map((e: ExpenseEntry) => ({ category: e.category_name, amount: e.amount }));
+  const financeAgg = (financeEntries as ExpenseEntry[]).map((e: ExpenseEntry) => ({ category: e.category_name, amount: e.amount, payment_mode: e.payment_mode }));
   const revenueAgg = (revenueEntries as RevenueEntry[]).map((e: RevenueEntry) => ({ category: e.revenue_head, amount: e.amount }));
-  const dr = buildDerivedReport(date, entries, other, prevClosing, totalRooms, financeAgg, revenueAgg);
+  const paymentTransactions = reconcilePaymentLedger({
+    timelineEvents: timelineEvents as any[],
+    reservations: reservations as Reservation[],
+    roomChartEntries: entries,
+    hotelId,
+  });
+  const dr = buildDerivedReport(date, entries, other, prevClosing, totalRooms, financeAgg, revenueAgg, paymentTransactions);
   if (closeRecord) {
     dr.day_status = 'closed';
   }
@@ -571,15 +682,16 @@ export const getDerivedReport = async (
 export const getDerivedReportsForMonth = async (
   year: number, month: number, totalRooms: number, openingBalance: number
 ): Promise<DerivedReport[]> => {
+  const hotelId = getCurrentHotelId();
   const entries = await getRoomChartForMonth(year, month);
   const start = `${year}-${String(month).padStart(2, '0')}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  const [financeEntries, revenueEntries, otherEntries, closedRecords, monthReservations] = await Promise.all([
+  const [financeEntries, revenueEntries, otherEntries, closedRecords, monthReservations, timelineEntries] = await Promise.all([
     getExpenseEntriesForDateRange(start, end),
     getRevenueEntriesForDateRange(start, end),
     supabase.from('other_daily_entries').select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', hotelId)
       .gte('report_date', start).lte('report_date', end)
       .then(({ data, error }) => {
         if (error) throw error;
@@ -587,23 +699,27 @@ export const getDerivedReportsForMonth = async (
       }),
     Promise.resolve(
       supabase.from('day_close_records').select('business_date')
-        .eq('hotel_id', getCurrentHotelId())
+        .eq('hotel_id', hotelId)
         .eq('status', 'closed')
         .gte('business_date', start).lte('business_date', end)
     ).then(({ data }) => (data as { business_date: string }[]) ?? []).catch(() => []),
     Promise.resolve(
       supabase.from('reservations').select('*')
-        .eq('hotel_id', getCurrentHotelId())
-        .in('status', ['confirmed', 'checked_in'])
+        .eq('hotel_id', hotelId)
+        .in('status', ['confirmed', 'checked_in', 'checked_out'])
         .lte('check_in_date', end)
         .gte('check_out_date', start)
     ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
+    Promise.resolve(
+      supabase.from('booking_timeline').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => data ?? []).catch(() => []),
   ]);
   const closedDates = new Set(closedRecords.map((r: { business_date: string }) => r.business_date));
-  const financeByDate = new Map<string, { category: string; amount: number }[]>();
+  const financeByDate = new Map<string, { category: string; amount: number; payment_mode?: string }[]>();
   for (const fe of financeEntries) {
     const arr = financeByDate.get(fe.entry_date) ?? [];
-    arr.push({ category: fe.category_name, amount: fe.amount });
+    arr.push({ category: fe.category_name, amount: fe.amount, payment_mode: fe.payment_mode });
     financeByDate.set(fe.entry_date, arr);
   }
   const revenueByDate = new Map<string, { category: string; amount: number }[]>();
@@ -618,75 +734,14 @@ export const getDerivedReportsForMonth = async (
   }
 
   // Synthesize reservations that aren't already linked to a room_chart_entry
-  const linkedResvIds = new Set(entries.map(e => e.reservation_id).filter(Boolean));
-  const linkedEntryIds = new Set(monthReservations.map(r => r.room_chart_entry_id).filter(Boolean));
-  const unlinkedResvs = monthReservations.filter(r => !linkedResvIds.has(r.id) && (!r.room_chart_entry_id || !linkedEntryIds.has(r.room_chart_entry_id)));
+  const combinedEntries = mergeReservationsWithRoomChart(entries, monthReservations);
 
-  const synthesizedEntries: RoomChartEntry[] = unlinkedResvs.map(r => {
-    const ci = (r.check_in_date ?? '').slice(0, 10);
-    const co = (r.check_out_date ?? '').slice(0, 10);
-    const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
-    const rate = toNum(r.rate);
-    const invTotal = toNum(r.invoice_total) || (rate * n);
-    return {
-      id: r.id,
-      hotel_id: r.hotel_id,
-      report_date: ci,
-      room_no: r.room_no || 'TBD',
-      guest_name: r.guest_name,
-      arrival: ci,
-      departure: co,
-      nights: n,
-      room_rate: rate,
-      total: invTotal,
-      company: r.source_name || '',
-      source_category: (r.source_category as SourceCategory) || 'Direct/Walking',
-      pay_mode: (r.payment_mode as PayMode) || 'Cash',
-      description: '',
-      is_complimentary: false,
-      meal_plan: (r.meal_plan as MealPlan) || 'EP',
-      gst_mode: 'Exclusive',
-      gst_type: (r.gst_type as GstType) || 'No Scope',
-      gst_slab: (r.gst_slab as GstSlab) || 0,
-      gst_amount: toNum(r.gst_amount),
-      taxable_amount: toNum(r.taxable_amount),
-      invoice_total: invTotal,
-      revenue_category: 'Room Revenue',
-      remarks: r.remarks || '',
-      created_by: r.created_by ?? '',
-      business_date: ci,
-      room_category: 'Standard',
-      pay_cash: (() => {
-        const adv = toNum(r.advance_paid);
-        const pc = toNum(r.pay_cash);
-        if (pc > 0) return pc;
-        if (adv > 0 && r.payment_mode === 'Cash') return adv;
-        return 0;
-      })(),
-      pay_upi: toNum(r.pay_upi),
-      pay_card: toNum(r.pay_card),
-      pay_bank: (() => {
-        const adv = toNum(r.advance_paid);
-        const pb = toNum(r.pay_bank);
-        if (pb > 0) return pb;
-        const isOtaOrBank = r.source_category === 'OTA' || r.payment_mode === 'OTA' || r.payment_mode === 'Bank';
-        if (adv > 0 && isOtaOrBank) return adv;
-        return 0;
-      })(),
-      pay_advance: toNum(r.advance_paid),
-      pay_balance: Math.max(0, invTotal - toNum(r.advance_paid)),
-      id_proof_type: '',
-      id_proof_number: '',
-      id_proof_verified: false,
-      arrival_time: '',
-      checkout_time: '',
-      checked_in_at: null,
-      checked_out_at: null,
-      reservation_id: r.id,
-    };
+  const paymentTransactions = reconcilePaymentLedger({
+    timelineEvents: timelineEntries as any[],
+    reservations: monthReservations,
+    roomChartEntries: combinedEntries,
+    hotelId,
   });
-
-  const combinedEntries = [...entries, ...synthesizedEntries];
 
   // Compute cash closing forward in a single pass instead of calling
   // getPrevCashClosingDerived for each day (which re-walked the whole month).
@@ -694,9 +749,10 @@ export const getDerivedReportsForMonth = async (
   const reports: DerivedReport[] = [];
   for (let day = 1; day <= lastDay; day++) {
     const d = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayEntries = combinedEntries.filter((e) => isStayOccupiedOnDate(e, d) || e.report_date === d);
+    const dayEntries = combinedEntries.filter((e) => isStayOccupiedOnDate(e, d));
     const hasOther = otherByDate.has(d);
-    if (dayEntries.length === 0 && !hasOther) continue;
+    const hasPayments = paymentTransactions.some((tx) => tx.payment_date === d);
+    if (dayEntries.length === 0 && !hasOther && !hasPayments) continue;
     const other = otherByDate.get(d) ?? {
       report_date: d, kitchen: 0, other_income: 0, housekeeping_supply: 0,
       other_expense: 0, salary_advance: 0, maintenance_bill: 0,
@@ -704,7 +760,7 @@ export const getDerivedReportsForMonth = async (
     };
     const finance = financeByDate.get(d);
     const revenue = revenueByDate.get(d);
-    const dr = buildDerivedReport(d, dayEntries, other, runningClosing, totalRooms, finance, revenue);
+    const dr = buildDerivedReport(d, dayEntries, other, runningClosing, totalRooms, finance, revenue, paymentTransactions);
     if (closedDates.has(d)) {
       dr.day_status = 'closed';
     }
@@ -718,38 +774,57 @@ export const getDerivedReportsForMonth = async (
 export const getDerivedReportsForYear = async (
   year: number, totalRooms: number, openingBalance: number
 ): Promise<DerivedReport[]> => {
-  // Fetch entire year in 4 parallel queries instead of 48 sequential (12 months × 4).
+  const hotelId = getCurrentHotelId();
+  // Fetch entire year in parallel queries
   const start = `${year}-01-01`;
   const end = `${year}-12-31`;
   const lookbackDate = addDays(start, -60);
   const lookaheadDate = addDays(end, 7);
-  const [allEntries, allOther, allFinance, allRevenue, closedRecords] = await Promise.all([
+  const [allEntries, allOther, allFinance, allRevenue, closedRecords, timelineEntries, allReservations] = await Promise.all([
     supabase.from('room_chart_entries').select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', hotelId)
       .gte('report_date', lookbackDate).lte('report_date', lookaheadDate)
       .order('report_date', { ascending: true })
       .then(({ data, error }) => { if (error) throw error; return (data as RoomChartEntry[]) ?? []; }),
     supabase.from('other_daily_entries').select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', hotelId)
       .gte('report_date', start).lte('report_date', end)
       .then(({ data, error }) => { if (error) throw error; return (data as OtherDailyEntries[]) ?? []; }),
     getExpenseEntriesForDateRange(start, end),
     getRevenueEntriesForDateRange(start, end),
     Promise.resolve(
       supabase.from('day_close_records').select('business_date')
-        .eq('hotel_id', getCurrentHotelId())
+        .eq('hotel_id', hotelId)
         .eq('status', 'closed')
         .gte('business_date', start).lte('business_date', end)
     ).then(({ data }) => (data as { business_date: string }[]) ?? []).catch(() => []),
+    Promise.resolve(
+      supabase.from('booking_timeline').select('*')
+        .eq('hotel_id', hotelId)
+    ).then(({ data }) => data ?? []).catch(() => []),
+    Promise.resolve(
+      supabase.from('reservations').select('*')
+        .eq('hotel_id', hotelId)
+        .in('status', ['confirmed', 'checked_in', 'checked_out'])
+    ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
   ]);
   const closedDatesYear = new Set(closedRecords.map((r: { business_date: string }) => r.business_date));
 
+  const combinedEntries = mergeReservationsWithRoomChart(allEntries, allReservations);
+
+  const paymentTransactions = reconcilePaymentLedger({
+    timelineEvents: timelineEntries as any[],
+    reservations: allReservations,
+    roomChartEntries: combinedEntries,
+    hotelId,
+  });
+
   const otherByDate = new Map<string, OtherDailyEntries>();
   for (const o of allOther) otherByDate.set(o.report_date, o);
-  const financeByDate = new Map<string, { category: string; amount: number }[]>();
+  const financeByDate = new Map<string, { category: string; amount: number; payment_mode?: string }[]>();
   for (const fe of allFinance) {
     const arr = financeByDate.get(fe.entry_date) ?? [];
-    arr.push({ category: fe.category_name, amount: fe.amount });
+    arr.push({ category: fe.category_name, amount: fe.amount, payment_mode: fe.payment_mode });
     financeByDate.set(fe.entry_date, arr);
   }
   const revenueByDate = new Map<string, { category: string; amount: number }[]>();
@@ -766,15 +841,16 @@ export const getDerivedReportsForYear = async (
     const lastDay = new Date(year, month, 0).getDate();
     for (let day = 1; day <= lastDay; day++) {
       const d = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const dayEntries = allEntries.filter((e) => isStayOccupiedOnDate(e, d) || e.report_date === d);
+      const dayEntries = combinedEntries.filter((e) => isStayOccupiedOnDate(e, d));
       const hasOther = otherByDate.has(d);
-      if (dayEntries.length === 0 && !hasOther) continue;
+      const hasPayments = paymentTransactions.some((tx) => tx.payment_date === d);
+      if (dayEntries.length === 0 && !hasOther && !hasPayments) continue;
       const other = otherByDate.get(d) ?? {
         report_date: d, kitchen: 0, other_income: 0, housekeeping_supply: 0,
         other_expense: 0, salary_advance: 0, maintenance_bill: 0,
         cash_handover_md: 0, bank_cash_deposit: 0,
       };
-      const dr = buildDerivedReport(d, dayEntries, other, runningClosing, totalRooms, financeByDate.get(d), revenueByDate.get(d));
+      const dr = buildDerivedReport(d, dayEntries, other, runningClosing, totalRooms, financeByDate.get(d), revenueByDate.get(d), paymentTransactions);
       if (closedDatesYear.has(d)) {
         dr.day_status = 'closed';
       }
@@ -1180,7 +1256,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const yearStart = `${year}-01-01`;
 
-    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, yearReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks, todayRestrictions] = await Promise.all([
+    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, yearReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks, todayRestrictions, todayTimeline] = await Promise.all([
       getRoomChart(todayStr).catch(() => []),
       getOtherEntries(todayStr).catch(() => null),
       getExpenseEntriesForDate(todayStr).catch(() => []),
@@ -1219,6 +1295,11 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
           .eq('hotel_id', getCurrentHotelId())
           .eq('date', todayStr)
       ).then(({ data }) => (data as { room_category_id: string; availability: number; stop_sell: boolean }[]) ?? []).catch(() => []),
+      Promise.resolve(
+        supabase.from('booking_timeline')
+          .select('*')
+          .eq('hotel_id', getCurrentHotelId())
+      ).then(({ data }) => data ?? []).catch(() => []),
     ]);
 
     const prevDay = new Date(now);
@@ -1232,10 +1313,17 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       other_expense: 0, salary_advance: 0, maintenance_bill: 0,
       cash_handover_md: 0, bank_cash_deposit: 0,
     };
+    const todayPayments = reconcilePaymentLedger({
+      timelineEvents: todayTimeline as any[],
+      reservations: todayReservations as any[],
+      roomChartEntries: todayEntries,
+      hotelId: getCurrentHotelId(),
+    });
     const todayReport = buildDerivedReport(
       todayStr, todayEntries, otherDefault, prevClosing, totalRooms,
-      todayFinance.map((e: ExpenseEntry) => ({ category: e.category_name, amount: e.amount })),
+      todayFinance.map((e: ExpenseEntry) => ({ category: e.category_name, amount: e.amount, payment_mode: e.payment_mode })),
       todayRevenue.map((e: RevenueEntry) => ({ category: e.revenue_head, amount: e.amount })),
+      todayPayments,
     );
 
     const closedMtdReports = monthReports.filter((r: DerivedReport) => r.day_status === 'closed');

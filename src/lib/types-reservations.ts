@@ -232,3 +232,12 @@ export const RESERVATION_STATUS_COLORS: Record<ReservationStatus, string> = {
   'cancelled': 'bg-red-100 text-red-700',
   'no_show': 'bg-orange-100 text-orange-700',
 };
+
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+
+export const isValidEmail = (email?: string | null): boolean => {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  if (!trimmed) return false;
+  return EMAIL_REGEX.test(trimmed);
+};

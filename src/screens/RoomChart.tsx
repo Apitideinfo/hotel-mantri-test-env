@@ -287,7 +287,22 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     }
   };
 
-  const agg = useMemo(() => aggregateRoomChart(entries, selectedDate), [entries, selectedDate]);
+  const agg = useMemo(() => {
+    const baseAgg = aggregateRoomChart(entries, selectedDate);
+    if (derived && derived.report_date === selectedDate) {
+      return {
+        ...baseAgg,
+        cash: derived.cash,
+        bank: derived.bank,
+        payCash: derived.pay_cash,
+        payBank: derived.pay_bank,
+        payUpi: derived.pay_upi,
+        payCard: derived.pay_card,
+        roomRevenue: derived.room_sale_amount,
+      };
+    }
+    return baseAgg;
+  }, [entries, selectedDate, derived]);
   const occupiedTotal = agg.roomsOccupied + agg.complimentary;
   const occ = calcOcc(occupiedTotal, totalRooms);
   const closingRooms = calcClosingRooms(occupiedTotal, totalRooms);
@@ -631,12 +646,12 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     catch (e) { setError(e instanceof Error ? e.message : 'Failed to delete revenue'); }
   };
 
-  // Load derived report when switching to review tab
+  // Load derived report when switching to review tab or date changes
   useEffect(() => {
-    if (tab === 'review' && !derived && !derivedLoading) {
+    if (tab === 'review') {
       loadDerived(selectedDate);
     }
-  }, [tab, derived, derivedLoading, selectedDate, loadDerived]);
+  }, [tab, selectedDate, loadDerived]);
 
   const totalReceived = panelRow
     ? toNum(panelRow.pay_cash) + toNum(panelRow.pay_upi) + toNum(panelRow.pay_card) + toNum(panelRow.pay_bank)

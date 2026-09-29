@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import {
   X, Loader2, User, Phone, BedDouble, Calendar, Clock,
   AlertCircle, CheckCircle2, ChevronRight, ChevronLeft, Wallet,
-  Smartphone, CreditCard, Banknote, IndianRupee,
+  Smartphone, CreditCard, Banknote, IndianRupee, Mail,
 } from 'lucide-react';
 import type {
   Room, RoomCategory, CompanySource, HotelSettings,
@@ -12,6 +12,7 @@ import type {
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
 import { fmtMoney, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { walkInCheckIn, validateCheckIn, getVacantRooms } from '@/lib/api-frontoffice';
+import { isValidEmail } from '@/lib/types-reservations';
 import { brand } from '@/lib/theme';
 
 interface WalkInModalProps {
@@ -52,6 +53,7 @@ export const WalkInModal = ({
   const [performedBy, setPerformedBy] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [vacantRooms, setVacantRooms] = useState<Room[]>([]);
 
@@ -94,8 +96,52 @@ export const WalkInModal = ({
     return groupRoomsByCategory(sorted, categories);
   }, [vacantRooms, categories]);
 
+  const validateEmailInput = (val: string): boolean => {
+    const trimmed = (val || '').trim();
+    if (!trimmed) {
+      setEmailError('Guest email is required.');
+      return false;
+    }
+    if (!isValidEmail(trimmed)) {
+      setEmailError('Please enter a valid email address.');
+      return false;
+    }
+    setEmailError(null);
+    return true;
+  };
+
+  const handleNext = () => {
+    setError(null);
+    if (step === 0) {
+      if (!guestName.trim()) {
+        setError('Guest name is required.');
+        return;
+      }
+      if (!validateEmailInput(email)) {
+        setError(email ? 'Please enter a valid email address.' : 'Guest email is required.');
+        return;
+      }
+    }
+    if (step === 1) {
+      if (!roomNo.trim()) {
+        setError('Please select a room.');
+        return;
+      }
+      if (toNum(rate) <= 0) {
+        setError('Please enter a valid room rate.');
+        return;
+      }
+    }
+    setStep((s) => Math.min(3, s + 1) as 0 | 1 | 2 | 3);
+  };
+
   const handleCheckIn = async () => {
     setError(null);
+    if (!validateEmailInput(email)) {
+      setError(email ? 'Please enter a valid email address.' : 'Guest email is required.');
+      setStep(0);
+      return;
+    }
     const params = {
       roomNo,
       guestName,
@@ -214,10 +260,24 @@ export const WalkInModal = ({
                         placeholder="Phone" />
                     </div>
                   </Field>
-                  <Field label="Email">
-                    <input value={email} onChange={(e) => setEmail(e.target.value)} type="email"
-                      className="w-full px-3 py-2 text-sm text-slate-900 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30"
-                      placeholder="Email (optional)" />
+                  <Field label="Guest Email *">
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <input
+                        value={email}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          if (emailError) validateEmailInput(e.target.value);
+                        }}
+                        onBlur={() => validateEmailInput(email)}
+                        type="email"
+                        className={`w-full pl-9 pr-3 py-2 text-sm text-slate-900 border ${
+                          emailError ? 'border-red-400 focus:ring-red-400' : 'border-slate-200 focus:ring-brand-500/30'
+                        } rounded-lg focus:outline-none focus:ring-2`}
+                        placeholder="guest@example.com"
+                      />
+                    </div>
+                    {emailError && <p className="text-xs text-red-500 mt-1">{emailError}</p>}
                   </Field>
                 </div>
                 <Field label="Source Category">
@@ -390,7 +450,7 @@ export const WalkInModal = ({
             </button>
             <span className="text-xs text-slate-400">Step {step + 1} of 4</span>
             {step < 3 ? (
-              <button onClick={() => setStep((s) => Math.min(3, s + 1) as 0 | 1 | 2 | 3)}
+              <button onClick={handleNext}
                 className="flex items-center gap-1 px-4 py-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 rounded-lg transition">
                 Next <ChevronRight className="w-4 h-4" />
               </button>

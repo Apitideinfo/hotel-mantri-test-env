@@ -18,6 +18,7 @@ import {
   logBlockedConflict,
 } from './ReservationConflictService.js';
 import { checkManualDuplicate } from './ReservationIdempotencyService.js';
+import { isValidEmail } from './emailService.js';
 
 /**
  * Upserts a guest in the PMS guests table.
@@ -133,6 +134,26 @@ export const createReservationsAtomically = async ({
       }
       assignedPhysicalRooms.add(key);
     }
+
+    // Mandatory Guest Email Check for manual reservations
+    const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
+    const cleanEmail = (item.guest_email || '').trim();
+    if (!isOta) {
+      if (!cleanEmail) {
+        throw {
+          status: 422,
+          code: 'GUEST_EMAIL_REQUIRED',
+          message: 'Guest email is required to create a reservation.',
+        };
+      }
+      if (!isValidEmail(cleanEmail)) {
+        throw {
+          status: 422,
+          code: 'INVALID_GUEST_EMAIL',
+          message: 'Please provide a valid guest email address.',
+        };
+      }
+    }
   }
 
   // 2. Lock rooms sequentially and validate
@@ -207,6 +228,8 @@ export const createReservationsAtomically = async ({
       const payload = {
         ...item,
         hotel_id: hotelId,
+        guest_email: item.guest_email || '',
+        guest_phone: item.guest_phone || '',
         room_no: norm || 'Unassigned',
         room_id: norm ? item.room_id : null,
         guest_id: guestId || null,
@@ -240,6 +263,27 @@ export const createReservationsAtomically = async ({
           };
         }
         throw { status: 500, code: 'RESERVATION_SAVE_FAILED', message: 'Failed to create reservation in database.' };
+      }
+
+      if (Number(inserted.advance_paid) > 0) {
+        const todayDate = (new Date()).toISOString().slice(0, 10);
+        await supabaseServiceRole.from('booking_timeline').insert({
+          hotel_id: hotelId,
+          reservation_id: inserted.id,
+          event_type: 'advance_payment',
+          event_description: `Advance payment for reservation: ${inserted.guest_name}`,
+          event_amount: Number(inserted.advance_paid),
+          event_data: {
+            payment_date: todayDate,
+            business_date: todayDate,
+            payment_method: inserted.payment_mode || 'Cash',
+            pay_cash: inserted.pay_cash || 0,
+            pay_bank: inserted.pay_bank || 0,
+            pay_upi: inserted.pay_upi || 0,
+            pay_card: inserted.pay_card || 0,
+          },
+          performed_by: userId || 'STAFF',
+        }).catch(err => console.warn('[RoomAssignmentService] Timeline insert warning:', err.message));
       }
 
       createdRecords.push(inserted);

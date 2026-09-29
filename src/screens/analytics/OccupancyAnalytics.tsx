@@ -3,7 +3,7 @@ import { BedDouble, Loader2 } from 'lucide-react';
 import type { HotelSettings, RoomChartEntry } from '@/lib/types';
 import { getSettings } from '@/lib/api';
 import { getRoomChartForDateRange } from '@/lib/api-reservations';
-import { toNum, fmtMoney, fmtInt, calcOcc } from '@/lib/calc';
+import { toNum, fmtMoney, fmtInt, calcOcc, generateOccupiedStayNights } from '@/lib/calc';
 import { BarChart, DonutChart, LineChart } from '@/components/charts';
 import { ScreenHeader, SectionCard, Banner } from '@/components/finance-ui';
 import { DateRangeFilter, LoadingSpinner, EmptyState } from './BookingSourceAnalytics';
@@ -35,31 +35,42 @@ export const OccupancyAnalytics = ({ onBack }: { onBack: () => void }) => {
     const byDate = new Map<string, { occ: number; comp: number; total: number }>();
     for (const e of entries) {
       totalEntries += 1;
-      if (e.is_complimentary) complimentary += 1;
-      else occupied += 1;
-      const d = e.report_date;
-      const day = byDate.get(d) ?? { occ: 0, comp: 0, total: 0 };
-      if (e.is_complimentary) day.comp += 1;
-      else day.occ += 1;
-      day.total += 1;
-      byDate.set(d, day);
+      const ci = (e.arrival || e.report_date).slice(0, 10);
+      const co = (e.departure || e.report_date).slice(0, 10);
+      const occupiedNights = generateOccupiedStayNights(ci, co);
+      for (const d of occupiedNights) {
+        if (d < fromDate || d > toDate) continue;
+        if (e.is_complimentary) complimentary += 1;
+        else occupied += 1;
+        const day = byDate.get(d) ?? { occ: 0, comp: 0, total: 0 };
+        if (e.is_complimentary) day.comp += 1;
+        else day.occ += 1;
+        day.total += 1;
+        byDate.set(d, day);
+      }
     }
-    const uniqueDays = new Set(entries.map((e) => e.report_date)).size;
+    const uniqueDays = byDate.size || Math.max(1, new Set(entries.map((e) => e.report_date)).size);
     const avgOcc = uniqueDays > 0 && totalRooms > 0 ? (occupied / (totalRooms * uniqueDays)) * 100 : 0;
     return { occupied, complimentary, totalEntries, uniqueDays, avgOcc };
-  }, [entries, totalRooms]);
+  }, [entries, totalRooms, fromDate, toDate]);
 
   const dailyTrend = useMemo(() => {
     const byDate = new Map<string, number>();
     for (const e of entries) {
       if (e.is_complimentary) continue;
-      byDate.set(e.report_date, (byDate.get(e.report_date) ?? 0) + 1);
+      const ci = (e.arrival || e.report_date).slice(0, 10);
+      const co = (e.departure || e.report_date).slice(0, 10);
+      const occupiedNights = generateOccupiedStayNights(ci, co);
+      for (const d of occupiedNights) {
+        if (d < fromDate || d > toDate) continue;
+        byDate.set(d, (byDate.get(d) ?? 0) + 1);
+      }
     }
     return Array.from(byDate.entries()).sort((a, b) => a[0] < b[0] ? -1 : 1).map(([d, v]) => ({
       label: d.slice(5),
       value: totalRooms > 0 ? Math.round((v / totalRooms) * 100) : 0,
     }));
-  }, [entries, totalRooms]);
+  }, [entries, totalRooms, fromDate, toDate]);
 
   const statusDonut = [
     { label: 'Occupied', value: stats.occupied, color: COLORS[0] },

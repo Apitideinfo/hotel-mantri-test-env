@@ -3,6 +3,7 @@ import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany
 import { updateReservationStatus } from './api-reservations';
 import { dispatchChannelEvent } from './api-channel';
 import { toNum, calcGstFull, calcStayNights } from './calc';
+import { isValidEmail } from './types-reservations';
 import type {
   RoomChartEntry, RoomChartEntryInput, Room, HousekeepingStatus,
   BookingTimelineEvent, TimelineEventType, FolioCharge, FolioChargeInput,
@@ -228,7 +229,17 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     description: `Check-in: ${params.guestName} → Room ${params.roomNo}`,
     amount: totalReceived,
     performedBy: params.performedBy,
-    eventData: { room_no: params.roomNo, arrival_time: params.arrivalTime },
+    eventData: {
+      room_no: params.roomNo,
+      arrival_time: params.arrivalTime,
+      payment_date: params.checkIn,
+      business_date: params.checkIn,
+      payment_method: params.paymentMode || 'Cash',
+      pay_cash: params.payCash ?? 0,
+      pay_upi: params.payUpi ?? 0,
+      pay_card: params.payCard ?? 0,
+      pay_bank: params.payBank ?? 0,
+    },
   });
 
   dispatchChannelEvent('CHECK_IN', {
@@ -294,12 +305,24 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
       })
       .eq('hotel_id', hotelId)
       .eq('room_no', params.roomNo);
+    const checkoutDate = (new Date()).toISOString().slice(0, 10);
+    const checkoutAmount = toNum(params.collectCash) + toNum(params.collectUpi) + toNum(params.collectCard) + toNum(params.collectBank);
     await addTimelineEvent({
       reservationId: res.id,
       eventType: 'checkout',
       description: `Check-out: ${res.guest_name} from Room ${params.roomNo}`,
-      amount: toNum(params.collectCash) + toNum(params.collectUpi) + toNum(params.collectCard) + toNum(params.collectBank),
+      amount: checkoutAmount,
       performedBy: params.performedBy,
+      eventData: {
+        room_no: params.roomNo,
+        payment_date: checkoutDate,
+        business_date: checkoutDate,
+        payment_method: toNum(params.collectCash) > 0 ? 'Cash' : toNum(params.collectUpi) > 0 ? 'UPI' : toNum(params.collectCard) > 0 ? 'Card' : 'Bank',
+        pay_cash: params.collectCash ?? 0,
+        pay_upi: params.collectUpi ?? 0,
+        pay_card: params.collectCard ?? 0,
+        pay_bank: params.collectBank ?? 0,
+      },
     });
     return {
       id: res.id,
@@ -408,13 +431,24 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
   }
 
   // Add timeline event
+  const checkoutDate = (new Date()).toISOString().slice(0, 10);
   await addTimelineEvent({
     entryId: params.entryId,
     eventType: 'checkout',
     description: `Check-out: ${entry.guest_name} from Room ${params.roomNo}`,
     amount: additionalPayment,
     performedBy: params.performedBy,
-    eventData: { balance_remaining: Math.max(0, grandTotal - (totalReceived + additionalPayment)) },
+    eventData: {
+      room_no: params.roomNo,
+      balance_remaining: Math.max(0, grandTotal - (totalReceived + additionalPayment)),
+      payment_date: checkoutDate,
+      business_date: checkoutDate,
+      payment_method: toNum(params.collectCash) > 0 ? 'Cash' : toNum(params.collectUpi) > 0 ? 'UPI' : toNum(params.collectCard) > 0 ? 'Card' : 'Bank',
+      pay_cash: params.collectCash ?? 0,
+      pay_upi: params.collectUpi ?? 0,
+      pay_card: params.collectCard ?? 0,
+      pay_bank: params.collectBank ?? 0,
+    },
   });
 
   dispatchChannelEvent('CHECK_OUT', {
@@ -676,6 +710,9 @@ export const getRoomShifts = async (entryId: string): Promise<RoomShift[]> => {
 
 export const validateCheckIn = (params: CheckInParams): string | null => {
   if (!params.guestName?.trim()) return 'Guest name is required.';
+  const cleanEmail = (params.email || '').trim();
+  if (!cleanEmail) return 'Guest email is required.';
+  if (!isValidEmail(cleanEmail)) return 'Please enter a valid email address.';
   if (!params.roomNo?.trim()) return 'Room number is required.';
   if (!params.checkIn || !params.checkOut) return 'Check-in and check-out dates are required.';
   if (new Date(params.checkOut + 'T00:00:00') <= new Date(params.checkIn + 'T00:00:00')) {

@@ -3,7 +3,7 @@ import {
   Calendar, List, LogIn, LogOut, Clock, AlertCircle, Plus, X,
   ChevronLeft, ChevronRight, Loader2, Users, Phone, Star, RefreshCw,
   ArrowRight, CheckCircle2, Ban, Filter, BedDouble, AlertTriangle,
-  Search, SlidersHorizontal, Tag, MoreHorizontal, ChevronDown, Check,
+  Search, SlidersHorizontal, Tag, MoreHorizontal, ChevronDown, Check, FileText,
 } from 'lucide-react';
 import type { RoomChartEntry, Room, RoomCategory, CompanySource, HotelSettings } from '@/lib/types';
 import type { Reservation, ReservationStatus, ReservationAlert } from '@/lib/types-reservations';
@@ -20,6 +20,7 @@ import type { HotSeason } from '@/lib/types';
 import { AssignRoomModal, ExtendStayModal } from './ReservationModals';
 import { ReservationConflictsModal } from './ReservationConflictsModal';
 import { NewBookingModal } from '@/components/NewBookingModal';
+import { ReservationConfirmationModal } from '@/components/reservations/ReservationConfirmationModal';
 
 type ViewMode = 'list' | 'timeline' | 'calendar' | 'arrival' | 'departure';
 
@@ -83,6 +84,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   // Action Modals
   const [selectedForAssign, setSelectedForAssign] = useState<Reservation | null>(null);
   const [selectedForExtend, setSelectedForExtend] = useState<Reservation | null>(null);
+  const [selectedForConfirmation, setSelectedForConfirmation] = useState<Reservation | null>(null);
   const [showNewBookingModal, setShowNewBookingModal] = useState(false);
   const [showQuickRes, setShowQuickRes] = useState<{ roomNo: string; date: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -785,6 +787,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                         {/* Actions */}
                         <td className="px-4 py-3 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1.5">
+                            {/* Reservation Confirmation PDF & Delivery */}
+                            <button
+                              onClick={() => setSelectedForConfirmation(r)}
+                              className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold rounded-lg text-[11px] transition flex items-center gap-1"
+                              title="Reservation Confirmation PDF, Email, WhatsApp"
+                            >
+                              <FileText className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Confirmation</span>
+                            </button>
+
                             {/* Assign or Change Room */}
                             <button
                               onClick={() => setSelectedForAssign(r)}
@@ -1094,10 +1106,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onClose={() => setShowNewBookingModal(false)}
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
+            const created = [];
             for (const item of list) {
-              await saveReservation(item);
+              const res = await saveReservation(item);
+              created.push(res);
             }
             refreshAll();
+            return created;
           }}
         />
       )}
@@ -1122,6 +1137,19 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onClose={() => setSelectedForExtend(null)}
           onSuccess={() => {
             setSuccessMsg('Stay extended successfully.');
+            refreshAll();
+          }}
+        />
+      )}
+
+      {/* ── Reservation Confirmation Modal ── */}
+      {selectedForConfirmation && (
+        <ReservationConfirmationModal
+          reservation={selectedForConfirmation}
+          settings={settings}
+          onClose={() => setSelectedForConfirmation(null)}
+          onUpdated={() => {
+            setSuccessMsg('Reservation confirmation updated.');
             refreshAll();
           }}
         />

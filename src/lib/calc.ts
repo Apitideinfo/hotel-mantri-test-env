@@ -1,4 +1,7 @@
 import type { DailyReport, DailyReportInput, RoomChartEntry, OtherDailyEntriesInput, SourceCategory, DerivedReport, GstMode, GstType, GstSlab, MtdYtdData, CashFlowData } from './types';
+import type { PaymentTransaction } from './financialLedger';
+import { reconcilePaymentLedger } from './financialLedger';
+export { generateOccupiedStayNights } from './authoritativeRevenue';
 
 export const toNum = (v: unknown): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -318,8 +321,11 @@ export const isStayOccupiedOnDate = (e: RoomChartEntry, date: string): boolean =
  * This function NEVER returns the entire booking total for a multi-night stay.
  * That would incorrectly assign ₹2,400 to a single business date.
  */
-export const getNightlyRoomRevenue = (e: RoomChartEntry): number => {
+export const getNightlyRoomRevenue = (e: RoomChartEntry, date?: string): number => {
   if (e.is_complimentary) return 0;
+  if (date && (e as any).variable_nightly_rates && (e as any).variable_nightly_rates[date] !== undefined) {
+    return toNum((e as any).variable_nightly_rates[date]);
+  }
   const rr = toNum(e.room_rate);
   if (rr > 0) return rr;
   const tot = toNum(e.total);
@@ -330,7 +336,11 @@ export const getNightlyRoomRevenue = (e: RoomChartEntry): number => {
   return tot > 0 ? tot / n : 0;
 };
 
-export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: string): RoomChartAggregate => {
+export const aggregateRoomChart = (
+  entries: RoomChartEntry[],
+  targetDate?: string,
+  paymentTransactions?: PaymentTransaction[]
+): RoomChartAggregate => {
   const agg: RoomChartAggregate = {
     roomsOccupied: 0, complimentary: 0, roomRevenue: 0,
     ota: 0, directWalking: 0, corporateAgent: 0, phonebook: 0,
@@ -338,6 +348,8 @@ export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: strin
     taxableRevenue: 0, gstCollected: 0,
     payCash: 0, payUpi: 0, payCard: 0, payBank: 0, payAdvance: 0, payBalance: 0,
   };
+
+  // 1. REVENUE ACCRUAL: Strictly across occupied nights [checkIn, checkOut)
   for (const e of entries) {
     const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
     const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
@@ -347,27 +359,11 @@ export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: strin
       if (dep === targetDate) agg.departures += 1;
     }
 
-    // ─── Revenue Date ─────────────────────────────────────────────────────────
-    // Revenue is earned on each OCCUPIED STAY NIGHT (arr <= date < dep).
-    // It is NEVER driven by report_date, payment_date, or created_at.
-    const isOccupied = targetDate ? isStayOccupiedOnDate(e, targetDate) : true;
-
-    // ─── Payment / Collection Date ────────────────────────────────────────────
-    // Payment is attributed to business_date (explicit collection date) or
-    // report_date (the date the booking was entered / payment was received).
-    // This is PERMANENTLY SEPARATE from room revenue recognition.
-    const paymentDate = ((e as unknown as Record<string, unknown>).business_date as string | null)
-      || e.report_date || arr;
-    const isPaymentDay = targetDate
-      ? (paymentDate.slice(0, 10) === targetDate)
-      : true;
+    const isOccupied = targetDate ? isStayOccupiedOnDate(e, targetDate) : false;
 
     if (isOccupied) {
-      // Use getNightlyRoomRevenue: room_rate takes priority, then total÷nights.
-      // This guarantees ₹1,200 per night for a 2-night/₹1,200 booking, not ₹2,400 on one date.
-      const nightlyRate = getNightlyRoomRevenue(e);
-
-      // GST split: also per-night to stay consistent with revenue allocation
+      const isRoomRev = !e.revenue_category || e.revenue_category === 'Room Revenue';
+      const nightlyRate = getNightlyRoomRevenue(e, targetDate);
       const derivedNights = arr < dep ? Math.max(1, calcStayNights(arr, dep)) : Math.max(1, toNum(e.nights) || 1);
       const nightlyTaxable = toNum(e.taxable_amount) > 0 ? toNum(e.taxable_amount) / derivedNights : nightlyRate;
       const nightlyGst = toNum(e.gst_amount) > 0 ? toNum(e.gst_amount) / derivedNights : 0;
@@ -376,43 +372,62 @@ export const aggregateRoomChart = (entries: RoomChartEntry[], targetDate?: strin
         agg.complimentary += 1;
       } else {
         agg.roomsOccupied += 1;
-        agg.roomRevenue += nightlyRate;
-        const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
-        (agg[key] as number) += nightlyRate;
-        agg.taxableRevenue += nightlyTaxable;
-        agg.gstCollected += nightlyGst;
-      }
-    }
-
-    if (isPaymentDay) {
-      let cashAmt = toNum(e.pay_cash);
-      let upiAmt = toNum(e.pay_upi);
-      let cardAmt = toNum(e.pay_card);
-      let bankAmt = toNum(e.pay_bank);
-      const advAmt = toNum(e.pay_advance);
-
-      // If a payment was logged in advance_paid without specific column split,
-      // attribute to the appropriate mode (Cash, UPI, Card, or Bank/OTA)
-      if (advAmt > 0 && cashAmt === 0 && bankAmt === 0 && upiAmt === 0 && cardAmt === 0) {
-        const mode = (e.pay_mode as string) || '';
-        if (mode === 'Cash') cashAmt = advAmt;
-        else if (mode === 'UPI') upiAmt = advAmt;
-        else if (mode === 'Card') cardAmt = advAmt;
-        else bankAmt = advAmt; // Bank or OTA
-      }
-
-      agg.payCash += cashAmt;
-      agg.payUpi += upiAmt;
-      agg.payCard += cardAmt;
-      agg.payBank += bankAmt;
-      agg.payAdvance += advAmt;
-      agg.payBalance += toNum(e.pay_balance);
-      if (!e.is_complimentary) {
-        agg.cash += cashAmt;
-        agg.bank += upiAmt + cardAmt + bankAmt;
+        if (isRoomRev) {
+          agg.roomRevenue += nightlyRate;
+          const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
+          (agg[key] as number) += nightlyRate;
+          agg.taxableRevenue += nightlyTaxable;
+          agg.gstCollected += nightlyGst;
+        }
       }
     }
   }
+
+  // 2. PAYMENT / COLLECTION: Strictly across actual payment dates
+  const transactions = (paymentTransactions && paymentTransactions.length > 0)
+    ? paymentTransactions
+    : reconcilePaymentLedger({ roomChartEntries: entries });
+
+  for (const tx of transactions) {
+    const txDate = tx.payment_date ? tx.payment_date.slice(0, 10) : '';
+    if (targetDate && txDate !== targetDate) continue;
+    if (tx.status !== 'successful') continue;
+
+    const amt = toNum(tx.amount);
+    switch (tx.payment_method) {
+      case 'Cash':
+        agg.payCash += amt;
+        agg.cash += amt;
+        break;
+      case 'UPI':
+        agg.payUpi += amt;
+        agg.bank += amt;
+        break;
+      case 'Card':
+        agg.payCard += amt;
+        agg.bank += amt;
+        break;
+      case 'Bank':
+      case 'Gateway':
+      case 'OTA':
+      case 'Cheque':
+        agg.payBank += amt;
+        agg.bank += amt;
+        break;
+      default:
+        agg.payCash += amt;
+        agg.cash += amt;
+    }
+  }
+
+  // Calculate uncollected balance for active entries
+  for (const e of entries) {
+    if (targetDate ? isStayOccupiedOnDate(e, targetDate) : true) {
+      agg.payBalance += toNum(e.pay_balance);
+      agg.payAdvance += toNum(e.pay_advance);
+    }
+  }
+
   return agg;
 };
 
@@ -462,19 +477,12 @@ export const calcTomorrowStatus = (entries: RoomChartEntry[], reportDate: string
   for (const e of entries) {
     if (e.departure && e.departure === reportDate) departures += 1;
   }
-  // Expected arrivals: entries dated tomorrow (arrival == nextStr). These represent
-  // bookings for the next night that will check in tomorrow.
   for (const e of entries) {
     if (e.arrival && e.arrival === nextStr) expectedArrivals += 1;
   }
   return { departures, expectedArrivals };
 };
 
-// Build a DerivedReport from room chart entries + other entries + prev cash closing.
-// financeExpenses is an optional list of { category, amount } from the Finance Management
-// module (expense_entries table). Overlapping categories already captured in Other Daily
-// Entries (Housekeeping, Maintenance, Salary Advance, Salary) are excluded to prevent
-// double counting.
 const OVERLAP_CATEGORIES = new Set(['Housekeeping', 'Housekeeping Supply', 'Maintenance', 'Maintenance Bill', 'Salary', 'Salary Advance']);
 
 export const buildDerivedReport = (
@@ -485,8 +493,9 @@ export const buildDerivedReport = (
   totalRooms: number,
   financeExpenses?: { category: string; amount: number }[],
   otherRevenueEntries?: { category: string; amount: number }[],
+  paymentTransactions?: PaymentTransaction[],
 ): DerivedReport => {
-  const agg = aggregateRoomChart(entries, date);
+  const agg = aggregateRoomChart(entries, date, paymentTransactions);
   const { departures, expectedArrivals } = calcTomorrowStatus(entries, date);
 
   // Aggregate finance expenses, skipping categories already tracked in Other Daily Entries
@@ -532,18 +541,18 @@ export const buildDerivedReport = (
   // Nights are derived from arrival/departure dates (authoritative), not e.nights field.
   const roomRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && (e.revenue_category || 'Room Revenue') === 'Room Revenue')
-    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e, date), 0);
   const fbRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'F&B Revenue')
-    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e, date), 0);
   const miscRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && e.revenue_category === 'Misc Revenue')
-    .reduce((s, e) => s + getNightlyRoomRevenue(e), 0);
+    .reduce((s, e) => s + getNightlyRoomRevenue(e, date), 0);
   return {
     report_date: date,
     rooms_occupied: agg.roomsOccupied + agg.complimentary,
     complimentary_room: agg.complimentary,
-    room_sale_amount: agg.roomRevenue,
+    room_sale_amount: roomRevenueCat,
     ota: agg.ota,
     direct_walking: agg.directWalking,
     corporate_agent: agg.corporateAgent,

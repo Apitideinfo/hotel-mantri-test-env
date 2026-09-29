@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
-import { calcStayNights, isStayOverlapping } from './calc';
+import { toNum, calcStayNights, isStayOverlapping } from './calc';
 import { dispatchChannelEvent } from './api-channel';
 import { apiFetch } from './api-fetch';
 import type { RoomChartEntry } from './types';
@@ -11,6 +11,7 @@ import type {
   WaitlistEntry, WaitlistInput, WaitlistStatus,
   RoomBlock, RoomBlockInput, BlockType,
 } from './types-reservations';
+import { isValidEmail } from './types-reservations';
 
 export { getRoomChartForDateRange };
 
@@ -116,6 +117,23 @@ export const saveReservation = async (
     throw new Error('Check-out date must be strictly after check-in date.');
   }
 
+  const isNew = !id || id.trim() === '';
+  const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+  const cleanEmail = (input.guest_email ?? '').trim();
+
+  if (isNew && !isOta) {
+    if (!cleanEmail) {
+      throw new Error('Guest email is required.');
+    }
+    if (!isValidEmail(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+  } else if (!isNew && !isOta && input.guest_email !== undefined && input.guest_email !== null) {
+    if (cleanEmail && !isValidEmail(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+  }
+
   const normRoom = (input.room_no || '').trim().toLowerCase();
   const isPhysical = normRoom && normRoom !== 'unassigned' && normRoom !== 'tbd';
 
@@ -140,7 +158,11 @@ export const saveReservation = async (
           room_no: res.reservation.room_no,
           room_id: res.reservation.room_id,
         }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
-        return res.reservation;
+        return {
+          ...res.reservation,
+          _emailDelivery: res.emailDelivery,
+          _emailStatus: res.emailStatus,
+        };
       }
     } else {
       const res = await apiFetch('/api/reservations', {
@@ -154,12 +176,24 @@ export const saveReservation = async (
           room_no: res.reservation.room_no,
           room_id: res.reservation.room_id,
         }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
-        return res.reservation;
+        return {
+          ...res.reservation,
+          _emailDelivery: res.emailDelivery,
+          _emailStatus: res.emailStatus,
+        };
       }
     }
   } catch (err: any) {
-    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'ROOM_ASSIGNMENT_CONFLICT' || err?.code === 'INVALID_STAY_DATES' || err?.code === 'RESERVATION_DUPLICATE') {
-      throw new Error(err.message);
+    if (
+      err?.code === 'ROOM_ALREADY_BOOKED' ||
+      err?.code === 'ROOM_ASSIGNMENT_CONFLICT' ||
+      err?.code === 'INVALID_STAY_DATES' ||
+      err?.code === 'RESERVATION_DUPLICATE' ||
+      err?.code === 'GUEST_EMAIL_REQUIRED' ||
+      err?.code === 'INVALID_GUEST_EMAIL' ||
+      err?.status === 422
+    ) {
+      throw new Error(err.message || 'Validation error');
     }
     console.warn('[saveReservation] Backend call deferred to direct database update:', err?.message || err);
   }
@@ -168,6 +202,15 @@ export const saveReservation = async (
   const rawPayload = { ...input, hotel_id: hotelId };
   delete (rawPayload as { id?: string }).id;
   delete (rawPayload as { nights?: number }).nights;
+
+  if (isNew && !isOta) {
+    if (!cleanEmail) {
+      throw new Error('Guest email is required.');
+    }
+    if (!isValidEmail(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+  }
 
   // Sync guest into guests master table if name or phone provided
   try {
@@ -246,6 +289,28 @@ export const saveReservation = async (
       room_no: res.room_no,
       room_id: res.room_id,
     }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+
+    if (toNum(res.advance_paid) > 0) {
+      const todayStr = (new Date()).toISOString().slice(0, 10);
+      Promise.resolve(supabase.from('booking_timeline').insert({
+        hotel_id: hotelId,
+        reservation_id: res.id,
+        event_type: 'advance_payment',
+        event_description: `Advance payment for reservation: ${res.guest_name}`,
+        event_amount: toNum(res.advance_paid),
+        event_data: {
+          payment_date: todayStr,
+          business_date: todayStr,
+          payment_method: res.payment_mode || 'Cash',
+          pay_cash: res.pay_cash ?? 0,
+          pay_bank: res.pay_bank ?? 0,
+          pay_upi: res.pay_upi ?? 0,
+          pay_card: res.pay_card ?? 0,
+        },
+        performed_by: 'STAFF',
+      })).catch(() => {});
+    }
+
     return res;
   }
 
@@ -270,6 +335,28 @@ export const saveReservation = async (
     room_no: res.room_no,
     room_id: res.room_id,
   }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+
+  if (toNum(res.advance_paid) > 0) {
+    const todayStr = (new Date()).toISOString().slice(0, 10);
+    Promise.resolve(supabase.from('booking_timeline').insert({
+      hotel_id: hotelId,
+      reservation_id: res.id,
+      event_type: 'advance_payment',
+      event_description: `Advance payment for reservation: ${res.guest_name}`,
+      event_amount: toNum(res.advance_paid),
+      event_data: {
+        payment_date: todayStr,
+        business_date: todayStr,
+        payment_method: res.payment_mode || 'Cash',
+        pay_cash: res.pay_cash ?? 0,
+        pay_bank: res.pay_bank ?? 0,
+        pay_upi: res.pay_upi ?? 0,
+        pay_card: res.pay_card ?? 0,
+      },
+      performed_by: 'STAFF',
+    })).catch(() => {});
+  }
+
   return res;
 };
 

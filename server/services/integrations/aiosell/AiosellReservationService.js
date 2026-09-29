@@ -9,6 +9,7 @@ import { parseWebhookPayload } from './AiosellPayloadParser.js';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
 import { withOtaLock } from '../../ReservationIdempotencyService.js';
 import { sendOtaNewReservationEmail, sendOtaNewReservationWhatsApp } from '../../notificationService.js';
+import { generateAndDeliverConfirmation } from '../../reservationDeliveryService.js';
 
 const logSync = async (hotelId, operation, direction, status, message, metadata = null) => {
   try {
@@ -249,6 +250,17 @@ export const processAiosellReservation = async (payload, hotelId) => {
       });
     }
 
+    if (cancelledRes?.id) {
+      generateAndDeliverConfirmation({
+        hotelId,
+        reservationId: cancelledRes.id,
+        reservation: cancelledRes,
+        eventType: 'RESERVATION_CANCELLED',
+      }).catch(err => {
+        console.error('[AiosellReservationService] OTA cancellation delivery error (non-blocking):', err.message);
+      });
+    }
+
     return { 
       success: true, 
       status: 'cancelled', 
@@ -344,37 +356,34 @@ export const processAiosellReservation = async (payload, hotelId) => {
 
   const finalStatus = payload.action === 'modify' ? 'updated' : 'imported';
 
-  // ── Trigger Owner Email ONLY for NEW reservations (not modify/cancel/duplicate)
-  // This runs AFTER the reservation is committed to the DB — never before.
-  // The notificationService uses a unique constraint to prevent duplicate emails
-  // even if this webhook is retried multiple times.
+  // ── Trigger Authoritative Reservation Confirmation PDF + Delivery (Email & WhatsApp)
+  // This runs strictly AFTER the reservation is committed to the DB — never before.
   if (
     importStatus !== 'failed' &&
-    payload.action === 'book' &&
-    savedReservation?.id &&
-    finalStatus === 'imported'
+    savedReservation?.id
   ) {
-    // Fire-and-forget: do not block the webhook response on email sending.
-    // The notification is durably recorded in notification_outbox before sending.
-    sendOtaNewReservationEmail({
-      hotelId,
-      reservationId: savedReservation.id,
-      reservation: savedReservation,
-      otaBookingId: idempotencyKey,
-      bookingSource: payload.channelName || 'OTA',
-    }).catch(err => {
-      console.error('[AiosellReservationService] OTA owner email error (non-blocking):', err.message);
-    });
-
-    sendOtaNewReservationWhatsApp({
-      hotelId,
-      reservationId: savedReservation.id,
-      reservation: savedReservation,
-      otaBookingId: idempotencyKey,
-      bookingSource: payload.channelName || 'OTA',
-    }).catch(err => {
-      console.error('[AiosellReservationService] OTA owner WhatsApp error (non-blocking):', err.message);
-    });
+    if ((payload.action === 'book' || !payload.action) && finalStatus === 'imported') {
+      // New OTA Booking Confirmation
+      generateAndDeliverConfirmation({
+        hotelId,
+        reservationId: savedReservation.id,
+        reservation: savedReservation,
+        eventType: 'NEW_OTA_RESERVATION',
+      }).catch(err => {
+        console.error('[AiosellReservationService] OTA confirmation delivery error (non-blocking):', err.message);
+      });
+    } else if (payload.action === 'modify' || finalStatus === 'updated') {
+      // OTA Modification Confirmation (Version incremented)
+      generateAndDeliverConfirmation({
+        hotelId,
+        reservationId: savedReservation.id,
+        reservation: savedReservation,
+        eventType: 'RESERVATION_MODIFIED',
+        forceNewVersion: true,
+      }).catch(err => {
+        console.error('[AiosellReservationService] OTA modification confirmation delivery error (non-blocking):', err.message);
+      });
+    }
   }
 
   return {

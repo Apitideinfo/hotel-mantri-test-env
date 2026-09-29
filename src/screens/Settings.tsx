@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Save, Lock, Plus, Trash2, Building2, Upload, X, Eye,
   Phone, Mail, Globe, MapPin, FileText, User, Landmark, CreditCard,
-  CheckCircle2, AlertCircle, Pencil, ChevronUp, ChevronDown, UtensilsCrossed,
+  CheckCircle2, AlertCircle, Pencil, ChevronUp, ChevronDown, UtensilsCrossed, Clock,
 } from 'lucide-react';
 import type { HotelSettings, CompanySource, SourceCategory, GstMode, GstType, GstSlab, RoomCategory } from '@/lib/types';
 import { SOURCE_CATEGORIES, GST_SLABS, GST_MODES, GST_TYPES } from '@/lib/types';
@@ -11,6 +11,7 @@ import {
   upsertCompanySource, deleteCompanySource, uploadHotelLogo,
   getRoomCategories, upsertRoomCategory, deleteRoomCategory, reorderRoomCategories,
 } from '@/lib/api';
+import { apiFetch } from '@/lib/api-fetch';
 import { getPosEnabled, setPosEnabled } from '@/lib/api-pos';
 import { getHotSeasons, addHotSeason, deleteHotSeason } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
@@ -105,6 +106,16 @@ export const Settings = ({ onBack }: SettingsProps) => {
   const [logoError, setLogoError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /* Dynamic Branding & Policies */
+  const [checkInTime, setCheckInTime] = useState('12:00 Hrs');
+  const [checkOutTime, setCheckOutTime] = useState('10:00 Hrs');
+  const [cancellationPolicy, setCancellationPolicy] = useState(
+    'Cancellation requests must be received 24 hours prior to check-in for a full refund. Cancellations made within 24 hours are subject to standard retention charges.'
+  );
+  const [importantNotes, setImportantNotes] = useState(
+    'Valid Government Photo ID (Aadhaar / Passport / Driving Licence) required at check-in for all adult guests. PAN Card is not accepted as address proof.'
+  );
+
   /* Company sources */
   const [sources, setSources] = useState<CompanySource[]>([]);
 
@@ -136,9 +147,23 @@ export const Settings = ({ onBack }: SettingsProps) => {
     let mounted = true;
     (async () => {
       try {
-        const [s, srcs, cats, posOn, seasons] = await Promise.all([getSettings(), getCompanySources(), getRoomCategories(), getPosEnabled(), getHotSeasons()]);
+        const [s, srcs, cats, posOn, seasons, brandRes] = await Promise.all([
+          getSettings(),
+          getCompanySources(),
+          getRoomCategories(),
+          getPosEnabled(),
+          getHotSeasons(),
+          apiFetch('/api/hotel-branding').catch(() => null),
+        ]);
         if (!mounted) return;
         applySettings(s);
+        if (brandRes?.branding) {
+          if (brandRes.branding.checkInTime) setCheckInTime(brandRes.branding.checkInTime);
+          if (brandRes.branding.checkOutTime) setCheckOutTime(brandRes.branding.checkOutTime);
+          if (brandRes.branding.cancellationPolicy) setCancellationPolicy(brandRes.branding.cancellationPolicy);
+          if (brandRes.branding.importantNotes) setImportantNotes(brandRes.branding.importantNotes);
+          if (brandRes.branding.logoUrl && !s.logo_url) setLogoUrl(brandRes.branding.logoUrl);
+        }
         setSources(srcs);
         setCategories(cats);
         setPosEnabledState(posOn);
@@ -183,6 +208,10 @@ export const Settings = ({ onBack }: SettingsProps) => {
     setAccountNumber(s.account_number ?? '');
     setIfsc(s.ifsc_code ?? '');
     setLogoUrl(s.logo_url ?? '');
+    if (s.check_in_time) setCheckInTime(s.check_in_time);
+    if (s.check_out_time) setCheckOutTime(s.check_out_time);
+    if (s.cancellation_policy) setCancellationPolicy(s.cancellation_policy);
+    if (s.important_notes) setImportantNotes(s.important_notes);
   };
 
   /* save */
@@ -222,6 +251,28 @@ export const Settings = ({ onBack }: SettingsProps) => {
         account_number: accountNumber.trim(),
         ifsc_code: ifsc.trim(),
       });
+
+      // Synchronize dynamic branding, stay timings and policies
+      await apiFetch('/api/hotel-branding', {
+        method: 'PUT',
+        body: JSON.stringify({
+          hotel_name: hotelName.trim() || settings.hotel_name,
+          logo_url: logoUrl,
+          check_in_time: checkInTime.trim(),
+          check_out_time: checkOutTime.trim(),
+          cancellation_policy: cancellationPolicy.trim(),
+          important_notes: importantNotes.trim(),
+          address: address.trim(),
+          city: city.trim(),
+          state_name: stateName.trim(),
+          pin_code: pinCode.trim(),
+          phone: phone.trim(),
+          email: email.trim(),
+          website: website.trim(),
+          gst_number: gst.trim(),
+        }),
+      }).catch((e) => console.warn('Could not sync hotel branding API:', e.message));
+
       applySettings(updated);
       setSavedOk(true);
       setUnlocked(false);
@@ -560,6 +611,53 @@ export const Settings = ({ onBack }: SettingsProps) => {
                   )}
                 </div>
               </div>
+            </SectionCard>
+
+            {/* ── 2b. HOTEL STAY TIMINGS & CONFIRMATION POLICIES ── */}
+            <SectionCard title="Stay Timings & Confirmation Policies" icon={<Clock className="w-4 h-4" />}>
+              <p className="text-xs text-slate-500 mb-2">
+                These timings and policies dynamically appear on all official Reservation Confirmation PDFs.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <Label>Standard Check-In Time</Label>
+                  <input
+                    className={input}
+                    value={checkInTime}
+                    onChange={(e) => setCheckInTime(e.target.value)}
+                    placeholder="e.g. 12:00 Hrs"
+                  />
+                </Field>
+                <Field>
+                  <Label>Standard Check-Out Time</Label>
+                  <input
+                    className={input}
+                    value={checkOutTime}
+                    onChange={(e) => setCheckOutTime(e.target.value)}
+                    placeholder="e.g. 10:00 Hrs"
+                  />
+                </Field>
+              </div>
+              <Field>
+                <Label>Cancellation & Retention Policy</Label>
+                <textarea
+                  className={`${input} resize-none`}
+                  rows={3}
+                  value={cancellationPolicy}
+                  onChange={(e) => setCancellationPolicy(e.target.value)}
+                  placeholder="e.g. Cancellation requests must be received 24 hours prior to check-in for a full refund."
+                />
+              </Field>
+              <Field>
+                <Label>Check-in Instructions & ID Requirements</Label>
+                <textarea
+                  className={`${input} resize-none`}
+                  rows={2}
+                  value={importantNotes}
+                  onChange={(e) => setImportantNotes(e.target.value)}
+                  placeholder="e.g. Valid Government Photo ID required at check-in for all adult guests. PAN Card not accepted."
+                />
+              </Field>
             </SectionCard>
 
             {/* ── 3. CONTACT DETAILS ── */}

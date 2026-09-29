@@ -18,6 +18,7 @@
 
 import { supabaseServiceRole } from '../supabaseClient.js';
 import { normalizeWhatsAppPhone } from './whatsappService.js';
+import { generateAuthoritativeNightlyRevenue, reconcilePaymentLedger } from './authoritativeRevenue.js';
 
 const supabase = supabaseServiceRole;
 
@@ -127,6 +128,7 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
     { data: roomChartEntries },
     { data: otherDaily },
     { data: dayClose },
+    { data: timelineEvents },
   ] = await Promise.all([
     supabase.from('hotels').select('*').eq('id', hotelId).maybeSingle(),
     supabase.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle(),
@@ -135,6 +137,7 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
     supabase.from('room_chart_entries').select('*').eq('hotel_id', hotelId),
     supabase.from('other_daily_entries').select('*').eq('hotel_id', hotelId).eq('report_date', businessDate).maybeSingle(),
     supabase.from('day_close_records').select('*').eq('hotel_id', hotelId).eq('business_date', businessDate).eq('status', 'closed').maybeSingle(),
+    supabase.from('booking_timeline').select('*').eq('hotel_id', hotelId),
   ]);
 
   const hotelName = settings?.hotel_name || hotel?.hotel_name || 'Hotel Property';
@@ -258,40 +261,54 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
   const availableCount = Math.max(0, totalRooms - occupiedCount - outOfOrderCount - blockedCount);
 
   // ─── 5. Revenue Calculation ─────────────────────────────────────────────────
-  // Room revenue belongs to the occupied night on businessDate
-  const roomRevenue = occupiedStays.reduce((sum, s) => sum + toNum(s.rate), 0);
+  // Room revenue belongs strictly to the occupied night on businessDate
+  const nightlyRevenues = generateAuthoritativeNightlyRevenue({
+    hotelId,
+    reservations: resList,
+    roomChartEntries: chartList,
+    fromDate: targetDate,
+    toDate: targetDate,
+  });
+  const roomRevenue = nightlyRevenues.reduce((sum, nr) => sum + toNum(nr.gross_room_revenue), 0);
   const kitchenRevenue = toNum(otherDaily?.kitchen);
   const otherIncome = toNum(otherDaily?.other_income);
   const otherRevenue = kitchenRevenue + otherIncome;
   const grossRevenue = roomRevenue + otherRevenue;
 
   // ─── 6. Collection Calculation ──────────────────────────────────────────────
-  // Collections made on businessDate
+  // Collections made on businessDate (strictly by actual payment transaction date)
+  const paymentTransactions = reconcilePaymentLedger({
+    timelineEvents: timelineEvents || [],
+    reservations: resList,
+    roomChartEntries: chartList,
+    hotelId,
+  });
+
   let cashCollection = 0;
   let digitalCollection = 0;
   let otaCollection = 0;
   let pendingDue = 0;
 
-  // Collections from room_chart_entries on report_date = businessDate
-  const todayChartPayments = chartList.filter((e) => (e.report_date || '').slice(0, 10) === targetDate);
-  for (const e of todayChartPayments) {
-    cashCollection += toNum(e.pay_cash);
-    digitalCollection += toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank);
-  }
-
-  // Collections from reservations on businessDate
-  for (const r of activeReservations) {
-    const isChartLinked = todayChartPayments.some((c) => c.reservation_id === r.id);
-    if (!isChartLinked) {
-      cashCollection += toNum(r.pay_cash);
-      digitalCollection += toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
-    }
-    const source = (r.source_name || r.source_category || '').toLowerCase();
-    if (source.includes('ota') || source.includes('booking') || source.includes('agoda') || source.includes('makemytrip') || source.includes('goibibo')) {
-      const payMode = (r.payment_mode || '').toLowerCase();
-      if (payMode.includes('ota') || payMode.includes('channel') || !payMode) {
-        otaCollection += toNum(r.rate) || (toNum(r.invoice_total) / Math.max(1, toNum(r.nights) || 1));
-      }
+  for (const tx of paymentTransactions) {
+    if (tx.payment_date !== targetDate) continue;
+    if (tx.status !== 'successful') continue;
+    const amt = toNum(tx.amount);
+    switch (tx.payment_method) {
+      case 'Cash':
+        cashCollection += amt;
+        break;
+      case 'UPI':
+      case 'Card':
+      case 'Bank':
+      case 'Gateway':
+      case 'Cheque':
+        digitalCollection += amt;
+        break;
+      case 'OTA':
+        otaCollection += amt;
+        break;
+      default:
+        cashCollection += amt;
     }
   }
 

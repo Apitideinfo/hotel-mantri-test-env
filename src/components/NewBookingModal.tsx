@@ -3,15 +3,16 @@ import {
   X, Loader2, Calendar, BedDouble, ChevronDown, Check,
   Users, Wallet, Banknote, Smartphone, CreditCard, AlertCircle,
   User, Phone, Mail, MapPin, FileText, Settings,
-  CheckCircle2, MessageCircle, Mail as MailIcon, PlusCircle, Lock,
+  CheckCircle2, MessageCircle, Mail as MailIcon, PlusCircle, Lock, RefreshCw,
 } from 'lucide-react';
 import type {
   HotelSettings, CompanySource, RoomCategory, Room, SourceCategory,
   MealPlan, GstType, GstSlab,
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
-import type { ReservationInput } from '@/lib/types-reservations';
+import { isValidEmail, type ReservationInput } from '@/lib/types-reservations';
 import { fmtMoney, toNum, calcGstFull, addDays, calcStayNights } from '@/lib/calc';
+import { apiFetch } from '@/lib/api-fetch';
 
 interface NewBookingModalProps {
   rooms: Room[];
@@ -24,7 +25,7 @@ interface NewBookingModalProps {
   preselectCheckOut?: string;
   saving: boolean;
   onClose: () => void;
-  onSave: (input: ReservationInput | ReservationInput[]) => Promise<void> | void;
+  onSave: (input: ReservationInput | ReservationInput[]) => Promise<any> | any;
 }
 
 
@@ -65,8 +66,12 @@ export const NewBookingModal = ({
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<ReservationInput[] | null>(null);
+  const [savedReservationId, setSavedReservationId] = useState<string | null>(null);
+  const [emailStatus, setEmailStatus] = useState<'EMAIL_SENT' | 'EMAIL_FAILED' | 'EMAIL_NOT_CONFIGURED' | null>(null);
+  const [emailDelivery, setEmailDelivery] = useState<{ recipientEmail?: string; error?: string } | null>(null);
 
   const selectedRooms = useMemo(
     () => rooms.filter((r) => roomNos.includes(r.room_no.trim())),
@@ -117,7 +122,22 @@ export const NewBookingModal = ({
 
   const validateForm = (): boolean => {
     setError(null);
+    setEmailError(null);
     if (!guestName.trim()) { setError('Please enter guest name.'); return false; }
+    // Mandatory email validation
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      const msg = 'Guest email is required.';
+      setEmailError(msg);
+      setError(msg);
+      return false;
+    }
+    if (!isValidEmail(cleanEmail)) {
+      const msg = 'Please enter a valid email address.';
+      setEmailError(msg);
+      setError(msg);
+      return false;
+    }
     if (roomNos.length === 0) { setError('Please select at least one room.'); return false; }
     if (!checkIn || !checkOut) { setError('Please select check-in and check-out dates.'); return false; }
     if (new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
@@ -183,13 +203,46 @@ export const NewBookingModal = ({
     });
   };
 
+  const [retryingEmail, setRetryingEmail] = useState(false);
+
+  const handleRetryEmail = async () => {
+    if (!savedReservationId) return;
+    setRetryingEmail(true);
+    try {
+      const res = await apiFetch(`/api/reservations/${savedReservationId}/confirmation/send-email`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      if (res.success) {
+        setEmailStatus('EMAIL_SENT');
+        setEmailDelivery({ recipientEmail: email.trim() });
+      } else {
+        setEmailStatus('EMAIL_FAILED');
+        setEmailDelivery({ recipientEmail: email.trim(), error: res.message });
+      }
+    } catch (err: any) {
+      setEmailStatus('EMAIL_FAILED');
+      setEmailDelivery({ recipientEmail: email.trim(), error: err?.message });
+    } finally {
+      setRetryingEmail(false);
+    }
+  };
+
   const handleConfirm = async () => {
     if (!validateForm()) return;
     const inputs = buildInputs();
     setSubmitting(true);
     setError(null);
     try {
-      await onSave(inputs);
+      const result = await onSave(inputs);
+      // result may be array of saved reservations with email metadata
+      const savedList = Array.isArray(result) ? result : [];
+      const firstSaved = savedList[0];
+      if (firstSaved?.id) setSavedReservationId(firstSaved.id);
+      if (firstSaved?._emailStatus) {
+        setEmailStatus(firstSaved._emailStatus as any);
+        setEmailDelivery(firstSaved._emailDelivery || { recipientEmail: email.trim() });
+      }
       setSuccess(inputs);
     } catch (err: any) {
       console.error('[NewBookingModal] Save error:', err);
@@ -201,6 +254,10 @@ export const NewBookingModal = ({
 
   // ── Success Modal View ──
   if (success) {
+    const shortId = savedReservationId ? savedReservationId.slice(0, 8).toUpperCase() : '';
+    const confirmNo = shortId ? `HM-RES-${shortId}` : '';
+    const recipientEmail = emailDelivery?.recipientEmail || email.trim();
+
     return (
       <>
         <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
@@ -211,9 +268,32 @@ export const NewBookingModal = ({
                 <CheckCircle2 className="w-9 h-9" />
               </div>
               <h2 className="text-xl font-bold text-slate-900">Booking Created Successfully!</h2>
+              {confirmNo && (
+                <p className="text-xs font-mono text-sky-600 mt-0.5 font-semibold">{confirmNo}</p>
+              )}
               <p className="text-xs text-slate-500 mt-1">
                 Reservation for <span className="font-semibold text-slate-800">{success[0].guest_name}</span> · Room {success.map(s => s.room_no).join(', ')}
               </p>
+
+              {/* Email delivery status badge */}
+              {emailStatus && (
+                <div className={`mt-3 mx-auto max-w-sm rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center gap-2 ${
+                  emailStatus === 'EMAIL_SENT'
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : emailStatus === 'EMAIL_NOT_CONFIGURED'
+                    ? 'bg-amber-50 border border-amber-200 text-amber-800'
+                    : 'bg-rose-50 border border-rose-200 text-rose-800'
+                }`}>
+                  {emailStatus === 'EMAIL_SENT' ? (
+                    <><CheckCircle2 className="w-4 h-4 shrink-0" /><span>Confirmation email sent to {recipientEmail}</span></>
+                  ) : emailStatus === 'EMAIL_NOT_CONFIGURED' ? (
+                    <><AlertCircle className="w-4 h-4 shrink-0" /><span>Email not configured — PDF still available to download</span></>
+                  ) : (
+                    <><AlertCircle className="w-4 h-4 shrink-0" /><span>Confirmation email could not be sent to {recipientEmail}</span></>
+                  )}
+                </div>
+              )}
+
               <div className="mt-4 bg-slate-50 rounded-2xl p-4 text-left space-y-2 border border-slate-200/80 text-xs">
                 <SuccessRow label="Check-in" value={success[0].check_in_date} />
                 <SuccessRow label="Check-out" value={success[0].check_out_date} />
@@ -223,18 +303,29 @@ export const NewBookingModal = ({
                 <SuccessRow label="Advance Received" value={`₹${fmtMoney(totalReceived)}`} color="emerald" />
                 <SuccessRow label="Balance Due" value={`₹${fmtMoney(balance)}`} color={balance > 0 ? 'amber' : 'slate'} />
               </div>
-              <div className="mt-5 grid grid-cols-2 gap-2">
-                <button className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
-                  <FileText className="w-4 h-4 text-slate-500" /> Confirmation PDF
-                </button>
-                <button className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition">
-                  <MailIcon className="w-4 h-4 text-slate-500" /> Email
-                </button>
-                <button className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-emerald-700 border border-emerald-200 rounded-xl hover:bg-emerald-50 transition">
-                  <MessageCircle className="w-4 h-4 text-emerald-600" /> WhatsApp
-                </button>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {savedReservationId && (
+                  <a
+                    href={`/api/reservations/${savedReservationId}/confirmation/pdf`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition"
+                  >
+                    <FileText className="w-4 h-4 text-slate-500" /> Download PDF
+                  </a>
+                )}
+                {(emailStatus === 'EMAIL_FAILED' || emailStatus === 'EMAIL_NOT_CONFIGURED') && savedReservationId && (
+                  <button
+                    onClick={handleRetryEmail}
+                    disabled={retryingEmail}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-rose-700 border border-rose-200 rounded-xl hover:bg-rose-50 transition disabled:opacity-60"
+                  >
+                    {retryingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                    {emailStatus === 'EMAIL_NOT_CONFIGURED' ? 'Configure Email' : 'Retry Email'}
+                  </button>
+                )}
                 <button onClick={onClose}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-soft-blue transition">
+                  className="col-span-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-soft-blue transition">
                   <BedDouble className="w-4 h-4" /> Go to Board
                 </button>
               </div>
@@ -244,6 +335,7 @@ export const NewBookingModal = ({
       </>
     );
   }
+
 
   return (
     <>
@@ -331,7 +423,43 @@ export const NewBookingModal = ({
                 </div>
               </div>
 
-              {/* Row 2: Check-in, Check-out, Nights Widget */}
+              {/* Row 1b: Guest Email — MANDATORY */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Guest Email <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (emailError) {
+                        const v = e.target.value.trim();
+                        if (v && isValidEmail(v)) setEmailError(null);
+                      }
+                    }}
+                    onBlur={() => {
+                      const v = email.trim();
+                      if (!v) setEmailError('Guest email is required.');
+                      else if (!isValidEmail(v)) setEmailError('Please enter a valid email address.');
+                      else setEmailError(null);
+                    }}
+                    placeholder="guest@example.com"
+                    className={`w-full pl-9 pr-3.5 py-2.5 text-xs sm:text-sm text-slate-900 bg-white border ${
+                      emailError ? 'border-rose-400 focus:ring-rose-400/30' : 'border-slate-200 focus:ring-sky-500/30 focus:border-sky-500'
+                    } rounded-xl focus:outline-none focus:ring-2 transition`}
+                  />
+                </div>
+                {emailError && (
+                  <p className="text-xs text-rose-600 mt-1 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 shrink-0" />{emailError}
+                  </p>
+                )}
+              </div>
+
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -760,16 +888,6 @@ export const NewBookingModal = ({
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
-                      <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
-                      <input
-                        type="email"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="guest@example.com"
-                        className="w-full px-3 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500/30"
-                      />
-                    </div>
-                    <div>
                       <label className="block font-semibold text-slate-700 mb-1">Company GSTIN</label>
                       <input
                         type="text"
@@ -780,6 +898,7 @@ export const NewBookingModal = ({
                       />
                     </div>
                   </div>
+
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <div>
