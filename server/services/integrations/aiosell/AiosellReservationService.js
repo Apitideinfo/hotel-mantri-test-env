@@ -8,6 +8,7 @@ import {
 import { parseWebhookPayload } from './AiosellPayloadParser.js';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
 import { withOtaLock } from '../../ReservationIdempotencyService.js';
+import { sendOtaNewReservationEmail, sendOtaNewReservationWhatsApp } from '../../notificationService.js';
 
 const logSync = async (hotelId, operation, direction, status, message, metadata = null) => {
   try {
@@ -342,6 +343,40 @@ export const processAiosellReservation = async (payload, hotelId) => {
   }
 
   const finalStatus = payload.action === 'modify' ? 'updated' : 'imported';
+
+  // ── Trigger Owner Email ONLY for NEW reservations (not modify/cancel/duplicate)
+  // This runs AFTER the reservation is committed to the DB — never before.
+  // The notificationService uses a unique constraint to prevent duplicate emails
+  // even if this webhook is retried multiple times.
+  if (
+    importStatus !== 'failed' &&
+    payload.action === 'book' &&
+    savedReservation?.id &&
+    finalStatus === 'imported'
+  ) {
+    // Fire-and-forget: do not block the webhook response on email sending.
+    // The notification is durably recorded in notification_outbox before sending.
+    sendOtaNewReservationEmail({
+      hotelId,
+      reservationId: savedReservation.id,
+      reservation: savedReservation,
+      otaBookingId: idempotencyKey,
+      bookingSource: payload.channelName || 'OTA',
+    }).catch(err => {
+      console.error('[AiosellReservationService] OTA owner email error (non-blocking):', err.message);
+    });
+
+    sendOtaNewReservationWhatsApp({
+      hotelId,
+      reservationId: savedReservation.id,
+      reservation: savedReservation,
+      otaBookingId: idempotencyKey,
+      bookingSource: payload.channelName || 'OTA',
+    }).catch(err => {
+      console.error('[AiosellReservationService] OTA owner WhatsApp error (non-blocking):', err.message);
+    });
+  }
+
   return {
     success: importStatus !== 'failed',
     status: importStatus === 'failed' ? 'failed' : finalStatus,

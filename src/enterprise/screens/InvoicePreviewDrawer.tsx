@@ -13,6 +13,7 @@ import type { InvoiceWithDetails, InvoiceItem, InvoicePayment, BillingSettings }
 import { hasPermission } from '../permissions';
 import { Badge, LoadingState, ErrorState, fmtMoney, fmtDate, fmtDateTime } from '../ui';
 import { InvoicePreview } from './InvoicePreview';
+import { apiFetch } from '@/lib/api-fetch';
 
 interface Props {
   invoiceId: string;
@@ -39,6 +40,11 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
   const canIssue = hasPermission(companyRole, 'invoices.issue');
   const canPayment = hasPermission(companyRole, 'invoices.payment');
   const canCancel = hasPermission(companyRole, 'invoices.cancel');
+
+  // Email / WhatsApp send state
+  const [emailSending, setEmailSending] = useState(false);
+  const [whatsappSending, setWhatsappSending] = useState(false);
+  const [showEmailModal, setShowEmailModal] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -97,6 +103,99 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
   const handleDelete = async () => {
     setActing(true);
     try { await deleteDraftInvoice(invoiceId); onClose(); onChanged(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); } finally { setActing(false); }
+  };
+
+  // ── Send Invoice by Email ──────────────────────────────────────────────────
+  const handleEmailInvoice = async (recipientEmail: string, guestName: string) => {
+    if (emailSending || !invoice) return;
+    setEmailSending(true); setError(null); setSuccessMsg(null);
+    try {
+      // 1. Generate PDF client-side using html2canvas + jsPDF
+      if (!previewRef.current) throw new Error('Invoice preview not available.');
+      const { default: html2canvas } = await import('html2canvas');
+      const { default: jsPDF } = await import('jspdf');
+      const canvas = await html2canvas(previewRef.current, { scale: 2, useCORS: true, backgroundColor: '#fff' });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pdfWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pdfHeight;
+      while (heightLeft > 0) {
+        position -= pdfHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pdfHeight;
+      }
+      // Convert to base64 for backend transmission
+      const pdfBase64 = pdf.output('datauristring').split(',')[1];
+
+      if (!pdfBase64 || pdfBase64.length < 100) {
+        throw new Error('PDF generation failed — output was empty.');
+      }
+
+      const invNum = invoice.invoice_number ?? 'draft';
+      const filename = `Hotel-Mantri-Invoice-${invNum}.pdf`;
+
+      // 2. Send via backend SMTP
+      const result = await apiFetch('/api/notifications/invoice/email', {
+        method: 'POST',
+        body: JSON.stringify({
+          invoiceId,
+          pdfBase64,
+          filename,
+          recipientEmail,
+          guestName,
+        }),
+      });
+
+      if (result.success) {
+        setSuccessMsg(`Invoice emailed successfully to ${recipientEmail}`);
+        setShowEmailModal(false);
+        setTimeout(() => setSuccessMsg(null), 5000);
+      } else {
+        setError(result.message || 'Failed to send invoice email.');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : (typeof e === 'object' && e !== null && 'message' in e ? (e as any).message : 'Failed to send invoice email.');
+      setError(`Invoice email failed: ${msg}`);
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
+  // ── Send Invoice via WhatsApp ──────────────────────────────────────────────
+  const handleWhatsAppInvoice = async () => {
+    if (whatsappSending || !invoice) return;
+    setWhatsappSending(true); setError(null); setSuccessMsg(null);
+    try {
+      const result = await apiFetch('/api/notifications/invoice/whatsapp', {
+        method: 'POST',
+        body: JSON.stringify({
+          invoiceId,
+          phoneNumber: (invoice as any).guest_mobile || (invoice as any).mobile || '',
+        }),
+      });
+
+      if (result.success && result.whatsappUrl) {
+        // Open WhatsApp with the server-generated URL
+        window.open(result.whatsappUrl, '_blank', 'noopener,noreferrer');
+        setSuccessMsg('WhatsApp opened with invoice details.');
+        setTimeout(() => setSuccessMsg(null), 4000);
+      } else {
+        // Fallback: show share modal
+        setShowShare(true);
+      }
+    } catch (e) {
+      // Fallback to share modal on error
+      setShowShare(true);
+    } finally {
+      setWhatsappSending(false);
+    }
   };
 
   const handleDownloadPDF = async () => {
@@ -176,7 +275,20 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
           )}
           <ActionPill icon={<Download className="w-3.5 h-3.5" />} label="PDF" onClick={handleDownloadPDF} disabled={acting} color="slate" />
           <ActionPill icon={<Printer className="w-3.5 h-3.5" />} label="Print" onClick={handlePrint} color="slate" />
-          <ActionPill icon={<Share2 className="w-3.5 h-3.5" />} label="WhatsApp" onClick={() => setShowShare(true)} color="green" />
+          <ActionPill
+            icon={whatsappSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+            label={whatsappSending ? 'Sending…' : 'WhatsApp'}
+            onClick={handleWhatsAppInvoice}
+            disabled={acting || whatsappSending}
+            color="green"
+          />
+          <ActionPill
+            icon={emailSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+            label={emailSending ? 'Sending…' : 'Email'}
+            onClick={() => setShowEmailModal(true)}
+            disabled={acting || emailSending}
+            color="sky"
+          />
           <ActionPill icon={<Copy className="w-3.5 h-3.5" />} label="Duplicate" onClick={handleDuplicate} disabled={acting} color="slate" />
           {isIssued && invoice.status !== 'Cancelled' && invoice.status !== 'Paid' && canCancel && (
             <ActionPill icon={<XCircle className="w-3.5 h-3.5" />} label="Cancel" onClick={() => setShowCancel(true)} color="red" />
@@ -275,6 +387,16 @@ export const InvoicePreviewDrawer = ({ invoiceId, onClose, onChanged, onDuplicat
       {/* Share Modal */}
       {showShare && invoice && (
         <ShareModal invoice={invoice} hotelName={invoice.hotel_name ?? ''} onClose={() => setShowShare(false)} />
+      )}
+
+      {/* Email Invoice Modal */}
+      {showEmailModal && invoice && (
+        <EmailInvoiceModal
+          invoice={invoice}
+          onClose={() => setShowEmailModal(false)}
+          onSend={handleEmailInvoice}
+          sending={emailSending}
+        />
       )}
     </DrawerShell>
   );
@@ -428,6 +550,100 @@ const ShareModal = ({ invoice, hotelName, onClose }: { invoice: InvoiceWithDetai
           </a>
           <button onClick={handleCopy} className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold py-2.5 px-4 rounded-xl text-sm">
             {copied ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />} {copied ? 'Copied' : 'Copy'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Email Invoice Modal ───────────────────────────────────────────────────────
+
+const EmailInvoiceModal = ({
+  invoice, onClose, onSend, sending,
+}: {
+  invoice: InvoiceWithDetails;
+  onClose: () => void;
+  onSend: (email: string, name: string) => Promise<void>;
+  sending: boolean;
+}) => {
+  // Pre-fill with hotel admin email if available (subscription invoice to hotel)
+  const [recipientEmail, setRecipientEmail] = useState((invoice as any).admin_email ?? '');
+  const [guestName, setGuestName] = useState((invoice as any).hotel_name ?? '');
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    setLocalError(null);
+    const email = recipientEmail.trim();
+    if (!email || !email.includes('@')) {
+      setLocalError('Please enter a valid recipient email address.');
+      return;
+    }
+    await onSend(email, guestName.trim() || 'Guest');
+  };
+
+  return (
+    <div className="fixed inset-0 bg-slate-900/50 z-[60] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-slate-900">Email Invoice</h3>
+          <button onClick={onClose} disabled={sending} className="text-slate-400 hover:text-slate-600 disabled:opacity-50">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="bg-sky-50 border border-sky-200 rounded-lg p-3 text-sm text-sky-700">
+          <strong>Invoice {invoice.invoice_number ?? 'Draft'}</strong> will be sent as a PDF attachment.
+        </div>
+
+        {localError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-2 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" /> {localError}
+          </div>
+        )}
+
+        <label className="block">
+          <span className="block text-sm font-medium text-slate-700 mb-1">Recipient Name</span>
+          <input
+            type="text"
+            value={guestName}
+            onChange={(e) => setGuestName(e.target.value)}
+            placeholder="e.g. Hotel Manager / Guest Name"
+            disabled={sending}
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm disabled:opacity-60"
+          />
+        </label>
+
+        <label className="block">
+          <span className="block text-sm font-medium text-slate-700 mb-1">Recipient Email *</span>
+          <input
+            type="email"
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.target.value)}
+            placeholder="recipient@example.com"
+            disabled={sending}
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm disabled:opacity-60"
+          />
+        </label>
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={handleSubmit}
+            disabled={sending}
+            className="flex-1 flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-700 disabled:opacity-60 text-white font-semibold py-2.5 rounded-xl text-sm transition"
+          >
+            {sending ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> Sending…</>
+            ) : (
+              <><Mail className="w-4 h-4" /> Send Invoice PDF</>
+            )}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={sending}
+            className="bg-slate-100 hover:bg-slate-200 disabled:opacity-60 text-slate-700 font-semibold py-2.5 px-4 rounded-xl text-sm"
+          >
+            Cancel
           </button>
         </div>
       </div>

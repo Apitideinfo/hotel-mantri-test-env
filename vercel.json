@@ -1,5 +1,15 @@
 {
   "version": 2,
+  "crons": [
+    {
+      "path": "/api/notifications/whatsapp/cron?type=morning",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/notifications/whatsapp/cron?type=evening",
+      "schedule": "0 22 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/(.*)",

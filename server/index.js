@@ -31,6 +31,11 @@ app.use('/api/channels', channelRoutes);
 import reservationRoutes from './routes/reservations.js';
 app.use('/api/reservations', reservationRoutes);
 
+import notificationRoutes from './routes/notifications.js';
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/reports/whatsapp', notificationRoutes);
+app.use('/api/reports', notificationRoutes);
+
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
 
