@@ -20,17 +20,19 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const DATA_DIR = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+  ? path.join('/tmp', 'hotel-mantri-data')
+  : path.join(__dirname, '..', 'data');
 const DOCS_DIR = path.join(DATA_DIR, 'documents');
 const DOCS_METADATA_FILE = path.join(DATA_DIR, 'reservation_documents.json');
 
 // Ensure local document directory exists
-if (!fs.existsSync(DOCS_DIR)) {
-  try {
+try {
+  if (!fs.existsSync(DOCS_DIR)) {
     fs.mkdirSync(DOCS_DIR, { recursive: true });
-  } catch (err) {
-    console.warn('[DOCUMENT_SERVICE] Could not create storage directory:', err.message);
   }
+} catch (err) {
+  console.warn('[DOCUMENT_SERVICE] Could not create storage directory:', err.message);
 }
 
 // ─── Local Metadata Fallback Helpers ──────────────────────────────────────────
@@ -130,26 +132,34 @@ export const savePdfToStorage = async ({
   buffer,
   filename,
 }) => {
-  const relativeDir = path.join('reservations', String(hotelId), String(reservationId));
-  const fullDir = path.join(DOCS_DIR, relativeDir);
-
-  if (!fs.existsSync(fullDir)) {
-    fs.mkdirSync(fullDir, { recursive: true });
-  }
-
   const fileBaseName = filename || `confirmation-v${version}.pdf`;
-  const diskPath = path.join(fullDir, fileBaseName);
-
-  fs.writeFileSync(diskPath, buffer);
-
   const logicalStoragePath = `reservations/${hotelId}/${reservationId}/${fileBaseName}`;
-  console.log(`[DOCUMENT_STORAGE] Saved PDF to ${diskPath} (${buffer.length} bytes)`);
 
-  return {
-    storagePath: logicalStoragePath,
-    diskPath,
-    fileSize: buffer.length,
-  };
+  try {
+    const relativeDir = path.join('reservations', String(hotelId), String(reservationId));
+    const fullDir = path.join(DOCS_DIR, relativeDir);
+
+    if (!fs.existsSync(fullDir)) {
+      fs.mkdirSync(fullDir, { recursive: true });
+    }
+
+    const diskPath = path.join(fullDir, fileBaseName);
+    fs.writeFileSync(diskPath, buffer);
+    console.log(`[DOCUMENT_STORAGE] Saved PDF to ${diskPath} (${buffer.length} bytes)`);
+
+    return {
+      storagePath: logicalStoragePath,
+      diskPath,
+      fileSize: buffer.length,
+    };
+  } catch (fsErr) {
+    console.warn(`[DOCUMENT_STORAGE] Non-fatal: unable to write PDF to local disk (serverless mode):`, fsErr.message);
+    return {
+      storagePath: logicalStoragePath,
+      diskPath: null,
+      fileSize: buffer?.length || 0,
+    };
+  }
 };
 
 /**

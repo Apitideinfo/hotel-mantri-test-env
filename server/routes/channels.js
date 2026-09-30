@@ -1019,33 +1019,39 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     };
     const errors = [];
 
-    // 5. Process each reservation idempotently
-    for (const raw of list) {
-      try {
-        const payload = parseWebhookPayload({
-          ...raw,
-          hotelCode: config.hotelCode,
-          action: raw.action || (raw.status === 'cancelled' ? 'cancel' : 'book')
-        });
+    // 5. Process reservations idempotently in parallel batches to stay well within serverless timeouts
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < list.length; i += BATCH_SIZE) {
+      const chunk = list.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        chunk.map(async (raw) => {
+          try {
+            const payload = parseWebhookPayload({
+              ...raw,
+              hotelCode: config.hotelCode,
+              action: raw.action || (raw.status === 'cancelled' ? 'cancel' : 'book')
+            });
 
-        const resResult = await processAiosellReservation(payload, hotelId);
-        if (resResult.status === 'mapping_required') {
-          stats.unmapped++;
-        } else if (resResult.status === 'imported') {
-          stats.created++;
-        } else if (resResult.status === 'updated') {
-          stats.updated++;
-        } else if (resResult.status === 'cancelled') {
-          stats.cancelled++;
-        } else if (resResult.status === 'failed') {
-          stats.failed++;
-        } else {
-          stats.updated++;
-        }
-      } catch (err) {
-        stats.failed++;
-        errors.push(err.message || 'Processing error');
-      }
+            const resResult = await processAiosellReservation(payload, hotelId, { isLiveSync: true });
+            if (resResult.status === 'mapping_required') {
+              stats.unmapped++;
+            } else if (resResult.status === 'imported') {
+              stats.created++;
+            } else if (resResult.status === 'updated') {
+              stats.updated++;
+            } else if (resResult.status === 'cancelled') {
+              stats.cancelled++;
+            } else if (resResult.status === 'failed') {
+              stats.failed++;
+            } else {
+              stats.updated++;
+            }
+          } catch (err) {
+            stats.failed++;
+            errors.push(err.message || 'Processing error');
+          }
+        })
+      );
     }
 
     // 6. Determine final sync status
@@ -1061,27 +1067,35 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed (${durationMs}ms)`;
 
     // 7. Update channel connections timestamps
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        ...(overallStatus !== 'FAILED' ? { last_successful_sync_at: now } : {}),
-        last_sync_status: overallStatus.toLowerCase(),
-        last_error: errors.length > 0 ? errors[0] : null,
-        updated_at: now
-      })
-      .eq('hotel_id', hotelId);
+    try {
+      await supabaseServiceRole
+        .from('channel_connections')
+        .update({
+          last_sync_at: now,
+          ...(overallStatus !== 'FAILED' ? { last_successful_sync_at: now } : {}),
+          last_sync_status: overallStatus.toLowerCase(),
+          last_error: errors.length > 0 ? errors[0] : null,
+          updated_at: now
+        })
+        .eq('hotel_id', hotelId);
+    } catch (connErr) {
+      console.warn('[live-sync] Could not update channel_connections:', connErr.message);
+    }
 
     // 8. Log to channel_sync_logs
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      log_type: 'LIVE_SYNC',
-      direction: 'inbound',
-      status: overallStatus,
-      message: summaryMsg,
-      date_range: `${startDate} to ${endDate}`,
-      error_detail: errors.length > 0 ? JSON.stringify(errors.slice(0, 5)) : null
-    });
+    try {
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'LIVE_SYNC',
+        direction: 'inbound',
+        status: overallStatus,
+        message: summaryMsg,
+        date_range: `${startDate} to ${endDate}`,
+        error_detail: errors.length > 0 ? JSON.stringify(errors.slice(0, 5)) : null
+      });
+    } catch (logErr) {
+      console.warn('[live-sync] Could not insert channel_sync_logs:', logErr.message);
+    }
 
     return res.json({
       success: overallStatus === 'SUCCESS' || overallStatus === 'PARTIAL_SUCCESS',
@@ -1104,15 +1118,18 @@ router.post('/live-sync', checkAuth, async (req, res) => {
 
   } catch (err) {
     console.error('Error executing live sync:', err);
-    const now = new Date().toISOString();
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      log_type: 'LIVE_SYNC',
-      direction: 'inbound',
-      status: 'FAILED',
-      message: 'Live sync failed with server error',
-      error_detail: err.message || 'Unknown server error'
-    });
+    try {
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'LIVE_SYNC',
+        direction: 'inbound',
+        status: 'FAILED',
+        message: 'Live sync failed with server error',
+        error_detail: err.message || 'Unknown server error'
+      });
+    } catch (logErr) {
+      console.warn('[live-sync] Could not write failure log:', logErr.message);
+    }
 
     return res.status(200).json({
       success: false,

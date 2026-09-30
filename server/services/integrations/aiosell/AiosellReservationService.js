@@ -40,7 +40,7 @@ const toDateOnly = (dateVal, fallback) => {
   return fallback;
 };
 
-export const processAiosellReservation = async (payload, hotelId) => {
+export const processAiosellReservation = async (payload, hotelId, options = {}) => {
   const idempotencyKey = String(payload.bookingId);
   const channelName = payload.channelName || 'aiosell';
 
@@ -250,14 +250,16 @@ export const processAiosellReservation = async (payload, hotelId) => {
       });
     }
 
-    if (cancelledRes?.id) {
-      generateAndDeliverConfirmation({
-        hotelId,
-        reservationId: cancelledRes.id,
-        reservation: cancelledRes,
-        eventType: 'RESERVATION_CANCELLED',
-      }).catch(err => {
-        console.error('[AiosellReservationService] OTA cancellation delivery error (non-blocking):', err.message);
+    if (cancelledRes?.id && !options?.isLiveSync) {
+      setImmediate(() => {
+        generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: cancelledRes.id,
+          reservation: cancelledRes,
+          eventType: 'RESERVATION_CANCELLED',
+        }).catch(err => {
+          console.error('[AiosellReservationService] OTA cancellation delivery error (non-blocking):', err.message);
+        });
       });
     }
 
@@ -360,28 +362,33 @@ export const processAiosellReservation = async (payload, hotelId) => {
   // This runs strictly AFTER the reservation is committed to the DB — never before.
   if (
     importStatus !== 'failed' &&
-    savedReservation?.id
+    savedReservation?.id &&
+    !options?.skipDelivery
   ) {
     if ((payload.action === 'book' || !payload.action) && finalStatus === 'imported') {
-      // New OTA Booking Confirmation
-      generateAndDeliverConfirmation({
-        hotelId,
-        reservationId: savedReservation.id,
-        reservation: savedReservation,
-        eventType: 'NEW_OTA_RESERVATION',
-      }).catch(err => {
-        console.error('[AiosellReservationService] OTA confirmation delivery error (non-blocking):', err.message);
+      // New OTA Booking Confirmation: deliver detached
+      setImmediate(() => {
+        generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: savedReservation.id,
+          reservation: savedReservation,
+          eventType: 'NEW_OTA_RESERVATION',
+        }).catch(err => {
+          console.error('[AiosellReservationService] OTA confirmation delivery error (non-blocking):', err.message);
+        });
       });
-    } else if (payload.action === 'modify' || finalStatus === 'updated') {
-      // OTA Modification Confirmation (Version incremented)
-      generateAndDeliverConfirmation({
-        hotelId,
-        reservationId: savedReservation.id,
-        reservation: savedReservation,
-        eventType: 'RESERVATION_MODIFIED',
-        forceNewVersion: true,
-      }).catch(err => {
-        console.error('[AiosellReservationService] OTA modification confirmation delivery error (non-blocking):', err.message);
+    } else if (payload.action === 'modify' && !options?.isLiveSync) {
+      // OTA Modification Confirmation only on genuine webhook modify, not live-sync scan
+      setImmediate(() => {
+        generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: savedReservation.id,
+          reservation: savedReservation,
+          eventType: 'RESERVATION_MODIFIED',
+          forceNewVersion: true,
+        }).catch(err => {
+          console.error('[AiosellReservationService] OTA modification confirmation delivery error (non-blocking):', err.message);
+        });
       });
     }
   }
