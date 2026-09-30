@@ -16,19 +16,22 @@ import { supabaseServiceRole } from '../supabaseClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless
+  ? path.join('/tmp', 'hotel-mantri-data')
+  : path.join(__dirname, '..', 'data');
 const BRANDING_FILE = path.join(DATA_DIR, 'hotel_branding.json');
 const LOGOS_DIR = path.join(DATA_DIR, 'logos');
 
 // Ensure storage directories exist
-for (const dir of [DATA_DIR, LOGOS_DIR]) {
-  if (!fs.existsSync(dir)) {
-    try {
+try {
+  for (const dir of [DATA_DIR, LOGOS_DIR]) {
+    if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
-    } catch (err) {
-      console.warn(`[BRANDING_SERVICE] Could not create directory ${dir}:`, err.message);
     }
   }
+} catch (err) {
+  console.warn('[BRANDING_SERVICE] Could not create storage directory (non-fatal):', err.message);
 }
 
 // ─── Local Branding Store Helpers ──────────────────────────────────────────

@@ -21,10 +21,18 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LOGOS_DIR = path.join(__dirname, '..', 'data', 'logos');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless
+  ? path.join('/tmp', 'hotel-mantri-data')
+  : path.join(__dirname, '..', 'data');
+const LOGOS_DIR = path.join(DATA_DIR, 'logos');
 
-if (!fs.existsSync(LOGOS_DIR)) {
-  fs.mkdirSync(LOGOS_DIR, { recursive: true });
+try {
+  if (!fs.existsSync(LOGOS_DIR)) {
+    fs.mkdirSync(LOGOS_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.warn('[HOTEL_BRANDING] Could not create logos directory (non-fatal):', err.message);
 }
 
 const router = express.Router();

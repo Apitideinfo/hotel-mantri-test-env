@@ -164,14 +164,14 @@ app.post(['/api/verify-payment', '/verify-payment'], (req, res) => {
   }
 });
 
-// Global 404 handler for API routes
-app.use(['/api', '/Test/api', '/test/api'], (req, res) => {
+// Global 404 handler for all unmatched API routes
+app.use((req, res) => {
   const requestId = req.requestId || `HM-REQ-${Date.now().toString(36).toUpperCase()}`;
   res.status(404).json({
     success: false,
     error: {
       code: 'API_ROUTE_NOT_FOUND',
-      message: `The requested API route ${req.method} ${req.originalUrl || req.url} does not exist.`,
+      message: `The requested route ${req.method} ${req.originalUrl || req.url} does not exist.`,
       requestId
     }
   });

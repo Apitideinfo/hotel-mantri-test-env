@@ -21,16 +21,19 @@ import { supabaseServiceRole } from '../supabaseClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, '..', 'data');
+const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+const DATA_DIR = isServerless
+  ? path.join('/tmp', 'hotel-mantri-data')
+  : path.join(__dirname, '..', 'data');
 const OUTBOX_FILE = path.join(DATA_DIR, 'whatsapp_outbox.json');
 
 // Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  try {
+try {
+  if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-  } catch (err) {
-    console.warn('[OUTBOX] Could not create server/data directory:', err.message);
   }
+} catch (err) {
+  console.warn('[OUTBOX] Could not create storage directory (non-fatal):', err.message);
 }
 
 // ─── Local Outbox Helpers ─────────────────────────────────────────────────────
