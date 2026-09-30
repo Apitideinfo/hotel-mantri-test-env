@@ -170,6 +170,7 @@ export const request = async (endpoint, options = {}, hotelConfig = {}, retries 
       ...defaultHeaders,
       ...options.headers,
     },
+    signal: options.signal || AbortSignal.timeout(10000),
   };
 
   logProviderDiagnostic({

@@ -127,11 +127,13 @@ export const apiFetch = async (
         status: response.status
       } as ApiError;
     }
+    const reqId = response.headers.get('x-request-id') || response.headers.get('x-vercel-id');
     if (response.status >= 500) {
       throw {
         success: false,
         error: 'SERVER_ERROR',
-        message: 'Server error occurred (HTML response returned).',
+        message: reqId ? `Backend returned an unexpected server error. Request ID: ${reqId}` : 'Backend returned an unexpected server error.',
+        requestId: reqId || undefined,
         status: response.status
       } as ApiError;
     }

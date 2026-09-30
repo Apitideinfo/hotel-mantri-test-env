@@ -24,6 +24,15 @@ export const resolveAuthorizedHotel = async (req) => {
   }
 
   const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.body?.hotel_id || req.body?.hotelId;
+  if (!requestedHotelId) {
+    return {
+      success: false,
+      status: 400,
+      code: 'HOTEL_CONTEXT_REQUIRED',
+      message: 'Hotel context is required for this operation. Please select a hotel.',
+    };
+  }
+
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
@@ -312,6 +321,11 @@ export const requireHotelAccess = async (req, res, next) => {
 
       return res.status(resolution.status).json({
         success: false,
+        error: {
+          code: resolution.code,
+          message: resolution.message,
+          requestId
+        },
         code: resolution.code,
         message: resolution.message,
         requestId,

@@ -16,9 +16,14 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 app.use((req, res, next) => {
+  const incomingReqId = req.headers['x-request-id'];
+  const requestId = incomingReqId || `HM-REQ-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+
   const start = Date.now();
   res.on('finish', () => {
-    console.log(`[HTTP] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - start}ms)`);
+    console.log(`[HTTP ${requestId}] ${req.method} ${req.originalUrl || req.url} -> ${res.statusCode} (${Date.now() - start}ms)`);
   });
   next();
 });
@@ -126,24 +131,41 @@ app.post('/api/verify-payment', (req, res) => {
 
 // Global 404 handler for API routes
 app.use('/api', (req, res) => {
+  const requestId = req.requestId || `HM-REQ-${Date.now().toString(36).toUpperCase()}`;
   res.status(404).json({
     success: false,
-    error: 'API_ROUTE_NOT_FOUND',
-    message: 'The requested API route does not exist.'
+    error: {
+      code: 'API_ROUTE_NOT_FOUND',
+      message: `The requested API route ${req.method} ${req.originalUrl || req.url} does not exist.`,
+      requestId
+    }
   });
 });
 
 // Global Error handler
 app.use((err, req, res, next) => {
-  console.error('Unhandled Server Error:', err);
-  res.status(err.status || 500).json({
+  const requestId = req.requestId || `HM-REQ-${Date.now().toString(36).toUpperCase()}`;
+  console.error('[Unhandled Server Error]', {
+    requestId,
+    route: req.originalUrl || req.url,
+    method: req.method,
+    error: err?.message || String(err),
+    code: err?.code || 'INTERNAL_SERVER_ERROR',
+    stack: err?.stack
+  });
+
+  const statusCode = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  res.status(statusCode).json({
     success: false,
-    error: err.code || 'SERVER_ERROR',
-    message: err.message || 'An unexpected internal server error occurred.'
+    error: {
+      code: err?.code || 'INTERNAL_SERVER_ERROR',
+      message: err?.message || 'An unexpected internal server error occurred.',
+      requestId
+    }
   });
 });
 
-if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);
   });

@@ -29,11 +29,8 @@ const getDates = (start, end) => getCleanDateList(start, end);
 let supabaseInstance = null;
 const getSupabase = () => {
   if (!supabaseInstance) {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://mtfycmdoqzzyxhjmfvuv.supabase.co';
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
-    if (!supabaseKey) {
-      throw new Error("Supabase key is not set in environment variables");
-    }
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || 'https://mtfycmdoqzzyxhjmfvuv.supabase.co';
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im10ZnljbWRvcXp6eXhoam1mdnV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2OTI2NDcsImV4cCI6MjEwMjI2ODY0N30.oDelVfbf0DEYi5c5k8jgVBNjyNNwOnVzZYyMybNpfJs';
     supabaseInstance = createClient(supabaseUrl, supabaseKey);
   }
   return supabaseInstance;
@@ -77,51 +74,103 @@ const getHotelAiosellConfig = async (hotelId, requestId = null) => {
 };
 
 router.get('/status', async (req, res) => {
+  const requestId = req.requestId || `HM-STAT-${Date.now().toString(36).toUpperCase()}`;
   try {
     const hotelId = (req.hotelId || req.auth?.hotelId);
     if (!hotelId) {
-      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'HOTEL_CONTEXT_REQUIRED',
+          message: 'Hotel context is required to check channel manager status.',
+          requestId
+        }
+      });
     }
 
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    let hotelConfig = null;
+    try {
+      hotelConfig = await getHotelAiosellConfig(hotelId, requestId);
+    } catch (cfgErr) {
+      return res.json({
+        success: true,
+        configured: false,
+        connected: false,
+        provider: 'external_channel_manager',
+        hotelId,
+        message: cfgErr.message || 'Channel manager integration is not configured for this hotel.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
+    if (!hotelConfig || !hotelConfig.hotelCode || !hotelConfig.credentialPresent) {
+      return res.json({
+        success: true,
+        configured: false,
+        connected: false,
+        provider: 'external_channel_manager',
+        hotelId,
+        message: 'Channel integration credentials or property code not configured.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
     const result = await aiosellService.testConnection(hotelConfig);
     
     if (result.success) {
-      res.json({
+      return res.json({
         success: true,
-        status: 'connected',
+        configured: true,
         connected: true,
-        hotelId: hotelId,
+        status: 'connected',
+        provider: 'external_channel_manager',
+        hotelId,
         environment: result.environment || hotelConfig.environment,
         hotelCode: result.hotelCode || hotelConfig.hotelCode,
         partnerId: result.partnerId || hotelConfig.partnerId,
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
         latencyMs: result.responseTimeMs,
-        authentication: 'success',
-        errorMessage: null,
-        requestId: req.requestId
+        lastCheckedAt: new Date().toISOString(),
+        requestId
       });
     } else {
-      res.status(result.status || 500).json({
+      const isAuthError = result.status === 401 || result.status === 403 || result.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
+      if (isAuthError) {
+        return res.status(401).json({
+          success: false,
+          configured: true,
+          connected: false,
+          error: {
+            code: 'CHANNEL_AUTH_FAILED',
+            message: result.error?.message || 'Channel manager authentication failed',
+            requestId
+          }
+        });
+      }
+
+      return res.status(result.status && result.status < 500 ? result.status : 502).json({
         success: false,
-        status: 'error',
+        configured: true,
         connected: false,
-        hotelId: hotelId,
-        environment: result.diagnostic?.environment || hotelConfig.environment,
-        hotelCode: result.diagnostic?.hotelCode || hotelConfig.hotelCode,
-        partnerId: result.diagnostic?.partnerId || hotelConfig.partnerId,
-        code: result.error?.code || 'API_ERROR',
-        message: result.error?.message || 'Channel integration connection failed',
-        errorMessage: result.error?.message || 'Channel integration connection failed',
-        requestId: req.requestId
+        status: 'error',
+        error: {
+          code: result.error?.code || 'CHANNEL_CONNECTION_FAILED',
+          message: result.error?.message || 'Channel manager integration connection failed',
+          requestId
+        }
       });
     }
   } catch (err) {
+    console.error(`[GET /api/aiosell/status] Error:`, err);
     res.status(err.status || 500).json({
       success: false,
-      code: err.code || 'SERVER_ERROR',
-      message: err.message || 'Failed to verify channel integration status',
-      requestId: req.requestId
+      error: {
+        code: err.code || 'SERVER_ERROR',
+        message: err.message || 'Failed to verify channel integration status',
+        requestId
+      }
     });
   }
 });
@@ -447,11 +496,55 @@ router.post('/inventory/fetch', async (req, res) => {
 
 router.post('/inventory/matrix', async (req, res) => {
   const hotelId = (req.hotelId || req.auth?.hotelId);
+  const requestId = req.requestId || `HM-MTX-${Date.now().toString(36).toUpperCase()}`;
+
+  if (!hotelId) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context is required to query inventory matrix.',
+        requestId
+      }
+    });
+  }
+
   try {
-    const { startDate, endDate } = req.body;
+    const { startDate, endDate } = req.body || {};
     if (!startDate || !endDate) {
-      return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: 'startDate and endDate are required.',
+          requestId
+        }
+      });
     }
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(startDate) || !dateRegex.test(endDate)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_DATE_FORMAT',
+          message: 'Dates must be formatted as YYYY-MM-DD.',
+          requestId
+        }
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_DATE_RANGE',
+          message: 'startDate must be on or before endDate.',
+          requestId
+        }
+      });
+    }
+
     const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
     res.json({
       success: true,
@@ -460,14 +553,18 @@ router.post('/inventory/matrix', async (req, res) => {
       physicalCounts,
       categories,
       mappings,
-      matrix
+      matrix,
+      requestId
     });
   } catch (err) {
     console.error('[POST /inventory/matrix] Error:', err);
     res.status(err.status || 500).json({
       success: false,
-      code: err.code || 'MATRIX_ERROR',
-      message: err.message || 'Failed to calculate inventory matrix'
+      error: {
+        code: err.code || 'MATRIX_ERROR',
+        message: err.message || 'Failed to calculate inventory matrix',
+        requestId
+      }
     });
   }
 });

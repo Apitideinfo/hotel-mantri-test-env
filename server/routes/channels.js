@@ -355,33 +355,59 @@ router.post('/sync/inventory', checkAuth, async (req, res) => {
 });
 
 /**
- * POST /api/channels/inventory-restrictions/patch
+ * POST /api/channels/inventory-restrictions/patch and /api/channels/invent_restrictions/patch
  * Atomic, non-destructive bulk patch for inventory and rates.
- * Reads existing records for target (hotel_id, room_category_id, date),
- * merges ONLY changed properties (leaving untouched dimensions intact),
- * updates database, triggers appropriate sync(s), and returns verified results.
+ * Validates payload strictly, reads existing records, merges changes, updates DB,
+ * triggers external channel sync if configured, and returns separate local/external sync statuses.
  */
-router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
+router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], checkAuth, async (req, res) => {
   const hotelId = req.hotelId || req.auth?.hotelId;
-  const rawList = req.body.updates || req.body.patches;
+  const requestId = req.requestId || `HM-PATCH-${Date.now().toString(36).toUpperCase()}`;
+  const rawList = req.body?.updates || req.body?.patches;
   const updates = Array.isArray(rawList) ? rawList : [];
-  const { skipSync = false } = req.body;
+  const { skipSync = false } = req.body || {};
 
   if (!hotelId) {
     return res.status(400).json({
       success: false,
-      code: 'HOTEL_CONTEXT_REQUIRED',
-      message: 'Hotel context is required.',
-      requestId: req.requestId
+      error: {
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context is required to update inventory/rates.',
+        requestId
+      }
     });
+  }
+
+  // 1. Verify hotel exists in database
+  try {
+    const { data: hotelRecord, error: hotelErr } = await supabaseServiceRole
+      .from('hotels')
+      .select('id, hotel_name')
+      .eq('id', hotelId)
+      .maybeSingle();
+
+    if (hotelErr || !hotelRecord) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'HOTEL_NOT_FOUND',
+          message: 'The specified hotel property does not exist.',
+          requestId
+        }
+      });
+    }
+  } catch (hErr) {
+    console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
   }
 
   if (updates.length === 0) {
     return res.json({
       success: true,
       updatedCount: 0,
+      localUpdate: { success: true, count: 0 },
+      externalSync: { success: true, status: 'NOT_NEEDED', message: 'No updates provided.' },
       message: 'No updates provided.',
-      requestId: req.requestId
+      requestId
     });
   }
 
@@ -400,19 +426,178 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
       return trimmed;
     };
 
-    const targetDates = [...new Set(updates.map(u => normalizeDateStr(u.date)).filter(Boolean))];
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+    // 2. Strict Payload Validation
+    for (let i = 0; i < updates.length; i++) {
+      const item = updates[i];
+      if (!item || typeof item !== 'object') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Update item at index ${i} must be an object.`,
+            requestId
+          }
+        });
+      }
+
+      const rawDate = item.date;
+      const catId = item.roomCategoryId || item.room_category_id;
+      const normDate = normalizeDateStr(rawDate);
+
+      if (!normDate || !dateRegex.test(normDate) || isNaN(Date.parse(normDate))) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Invalid date '${rawDate}' at index ${i}. Dates must be valid calendar dates formatted as YYYY-MM-DD.`,
+            requestId
+          }
+        });
+      }
+
+      if (!catId || typeof catId !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Update item at index ${i} must contain a valid roomCategoryId string.`,
+            requestId
+          }
+        });
+      }
+
+      // Base rate validation
+      if (item.baseRate !== undefined && item.baseRate !== null && item.baseRate !== '') {
+        const val = Number(item.baseRate);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Base rate at index ${i} must be a non-negative number. Received: ${item.baseRate}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Channel rate validation
+      if (item.channelRate !== undefined && item.channelRate !== null && item.channelRate !== '') {
+        const val = Number(item.channelRate);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Channel rate at index ${i} must be a non-negative number. Received: ${item.channelRate}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Availability validation
+      if (item.availability !== undefined && item.availability !== null && item.availability !== '') {
+        const val = Number(item.availability);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Availability at index ${i} must be a non-negative integer. Received: ${item.availability}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Min stay validation
+      if (item.minStay !== undefined && item.minStay !== null && item.minStay !== '') {
+        const val = Number(item.minStay);
+        if (isNaN(val) || val < 1) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Min stay at index ${i} must be an integer >= 1. Received: ${item.minStay}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Max stay validation
+      if (item.maxStay !== undefined && item.maxStay !== null && item.maxStay !== '') {
+        const val = Number(item.maxStay);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Max stay at index ${i} must be a non-negative integer. Received: ${item.maxStay}`,
+              requestId
+            }
+          });
+        }
+      }
+    }
+
+    const targetDates = [...new Set(updates.map(u => normalizeDateStr(u.date)).filter(Boolean))].sort();
     const targetCatIds = [...new Set(updates.map(u => u.roomCategoryId || u.room_category_id).filter(Boolean))];
 
     if (targetDates.length === 0 || targetCatIds.length === 0) {
       return res.status(400).json({
         success: false,
-        code: 'INVALID_PATCH_PAYLOAD',
-        message: 'Each update item must contain date and roomCategoryId.',
-        requestId: req.requestId
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: 'Each update item must contain a valid date and roomCategoryId.',
+          requestId
+        }
       });
     }
 
-    // Query existing records for target tuples
+    const minDate = targetDates[0];
+    const maxDate = targetDates[targetDates.length - 1];
+    if (minDate > maxDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: 'Start date must be on or before end date.',
+          requestId
+        }
+      });
+    }
+
+    // 3. Verify target room categories belong to this hotel
+    const { data: dbCategories, error: catFetchErr } = await supabaseServiceRole
+      .from('room_categories')
+      .select('id, name')
+      .eq('hotel_id', hotelId)
+      .in('id', targetCatIds);
+
+    if (catFetchErr) {
+      console.error('[inventory-restrictions/patch] Error fetching room categories:', catFetchErr);
+      throw catFetchErr;
+    }
+
+    const foundCatIds = new Set((dbCategories || []).map(c => c.id));
+    const missingCatIds = targetCatIds.filter(id => !foundCatIds.has(id));
+    if (missingCatIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: `One or more room categories do not exist for this hotel: ${missingCatIds.join(', ')}`,
+          missingCategories: missingCatIds,
+          requestId
+        }
+      });
+    }
+
+    // 4. Query existing records for target tuples
     const { data: existingRows, error: fetchErr } = await supabaseServiceRole
       .from('channel_inventory_restrictions')
       .select('*')
@@ -430,7 +615,7 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
       existingMap.set(`${row.room_category_id}|${row.date}`, row);
     });
 
-    // Deduplicate / coalesce updates by (room_category_id, date)
+    // 5. Deduplicate / coalesce updates by (room_category_id, date)
     const coalescedMap = new Map();
     for (const u of updates) {
       const catId = u.roomCategoryId || u.room_category_id;
@@ -441,7 +626,7 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
       coalescedMap.set(key, { ...prev, ...u, room_category_id: catId, date: d });
     }
 
-    // Construct merged payload with true patch semantics
+    // 6. Construct merged payload with true patch semantics
     const mergedPayload = [];
     let hasRate = false;
     let hasInv = false;
@@ -489,7 +674,7 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
       } else if (existing) {
         merged.availability = existing.availability;
       } else {
-        merged.availability = null; // Default null so calculated physical availability is preserved
+        merged.availability = null;
       }
 
       // Stop Sell: only update if provided
@@ -547,17 +732,11 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
         merged.closed_to_departure = false;
       }
 
-      // DO NOT include id in mergedPayload.
-      // Omission guarantees PostgREST does not inject null for new rows in the batch.
-      // PostgreSQL handles ON CONFLICT (hotel_id, room_category_id, date) DO UPDATE:
-      // - Existing rows retain their database-assigned UUID primary key
-      // - New rows are inserted with database DEFAULT gen_random_uuid()
       delete merged.id;
-
       mergedPayload.push(merged);
     }
 
-    // Atomic Upsert into database
+    // 7. Atomic Upsert into database
     const { error: upsertErr } = await supabaseServiceRole
       .from('channel_inventory_restrictions')
       .upsert(mergedPayload, { onConflict: 'hotel_id,room_category_id,date' });
@@ -567,14 +746,36 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
       throw upsertErr;
     }
 
-    // Automatic Channel Manager Sync
+    // 8. Determine external channel manager configuration state
+    let isChannelConfigured = false;
+    try {
+      const config = await getChannelProviderConfig(hotelId, requestId);
+      if (config && config.hotelCode && config.credentialPresent) {
+        isChannelConfigured = true;
+      }
+    } catch {
+      isChannelConfigured = false;
+    }
+
+    // 9. Automatic Channel Manager Sync (only if configured and not skipped)
     let rateSyncResult = null;
     let invSyncResult = null;
-    const sortedDates = targetDates.sort();
-    const minDate = sortedDates[0];
-    const maxDate = sortedDates[sortedDates.length - 1];
+    let externalSync = null;
 
-    if (!skipSync) {
+    if (!isChannelConfigured) {
+      externalSync = {
+        success: false,
+        status: 'NOT_CONFIGURED',
+        message: 'Channel manager integration is not configured for this hotel.'
+      };
+    } else if (skipSync) {
+      externalSync = {
+        success: true,
+        status: 'SKIPPED',
+        message: 'External channel synchronization skipped by request.'
+      };
+    } else {
+      let syncHadFailure = false;
       if (hasRate) {
         try {
           rateSyncResult = await syncRates({
@@ -587,6 +788,7 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
         } catch (rErr) {
           console.warn('[inventory-restrictions/patch] Rate sync non-fatal warning:', rErr.message);
           rateSyncResult = { success: false, error: rErr.message };
+          syncHadFailure = true;
         }
       }
 
@@ -602,8 +804,16 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
         } catch (iErr) {
           console.warn('[inventory-restrictions/patch] Inventory sync non-fatal warning:', iErr.message);
           invSyncResult = { success: false, error: iErr.message };
+          syncHadFailure = true;
         }
       }
+
+      externalSync = {
+        success: !syncHadFailure,
+        status: syncHadFailure ? 'PARTIAL_SUCCESS' : 'VERIFIED',
+        rateSync: rateSyncResult,
+        inventorySync: invSyncResult
+      };
     }
 
     const allVerified =
@@ -613,25 +823,29 @@ router.post('/inventory-restrictions/patch', checkAuth, async (req, res) => {
     res.json({
       success: true,
       updatedCount: mergedPayload.length,
+      localUpdate: {
+        success: true,
+        count: mergedPayload.length
+      },
+      externalSync,
       hasRate,
       hasInv,
       dateRange: `${minDate} to ${maxDate}`,
       allVerified,
       rateSync: rateSyncResult,
       inventorySync: invSyncResult,
-      message: `Successfully saved ${mergedPayload.length} record updates.${allVerified ? ' All channel manager updates verified.' : ''}`,
-      requestId: req.requestId
+      message: `Successfully saved ${mergedPayload.length} record updates.${isChannelConfigured && allVerified ? ' All channel manager updates verified.' : ''}`,
+      requestId
     });
   } catch (err) {
     console.error('[POST /api/channels/inventory-restrictions/patch] Fatal error:', err);
-    res.status(500).json({
+    res.status(err.status || 500).json({
       success: false,
       error: {
         code: err.code || 'INVENTORY_PATCH_FAILED',
         message: err.message || 'Failed to apply bulk inventory and rate patches.',
-        details: err.details || (err.hint ? { hint: err.hint } : undefined)
-      },
-      requestId: req.requestId
+        requestId
+      }
     });
   }
 });
@@ -766,8 +980,29 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
     const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
 
-    // 4. Fetch reservations from provider
-    const rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
+    // 4. Fetch reservations from provider safely
+    let rawReservations = [];
+    try {
+      rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
+    } catch (fetchErr) {
+      console.warn(`[live-sync] Error fetching reservations:`, fetchErr.message);
+      return res.status(200).json({
+        success: false,
+        status: 'FAILED',
+        code: fetchErr.code || 'UPSTREAM_FETCH_FAILED',
+        message: fetchErr.message || 'Failed to fetch reservations from channel provider.',
+        stats: {
+          records_fetched: 0,
+          records_created: 0,
+          records_updated: 0,
+          records_cancelled: 0,
+          records_unmapped: 0,
+          records_failed: 0
+        },
+        requestId
+      });
+    }
+
     let list = [];
     if (Array.isArray(rawReservations)) list = rawReservations;
     else if (rawReservations && Array.isArray(rawReservations.data)) list = rawReservations.data;
