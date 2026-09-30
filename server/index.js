@@ -10,6 +10,13 @@ import aiosellIntegrationRoutes from './services/integrations/aiosell/AiosellWeb
 
 dotenv.config();
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Promise Rejection (non-fatal):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception (non-fatal):', err);
+});
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -26,8 +33,8 @@ app.use((req, res, next) => {
   // URL Normalization Middleware: ensure /Test/api and /test/api, or stripped /api routes reach their handlers
   const original = req.url || '';
   if (req.url === '/api/index.js' || req.url.startsWith('/api/index.js?')) {
-    const matched = req.headers['x-matched-path'] || req.headers['x-forwarded-uri'] || req.headers['x-vercel-matched-path'];
-    if (matched && matched.startsWith('/api')) {
+    const matched = req.headers['x-forwarded-uri'] || req.headers['x-invoke-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-matched-path'];
+    if (matched && matched.startsWith('/api') && !matched.startsWith('/api/index.js')) {
       req.url = matched;
     }
   } else if (req.url.startsWith('/Test/api')) {
