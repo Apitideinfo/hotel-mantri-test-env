@@ -40,10 +40,14 @@ router.all(['/status', '/health'], async (req, res) => {
     try {
       hotelConfig = await getHotelAiosellConfig(hotelId, requestId);
     } catch (cfgErr) {
+      const isPropMissing = cfgErr.code === 'PROVIDER_PROPERTY_NOT_FOUND' || cfgErr.message?.includes('property code');
+      const statusType = isPropMissing ? 'PROPERTY_NOT_CONFIGURED' : 'CONFIGURATION_MISSING';
       return res.status(200).json({
         success: true,
         configured: false,
         connected: false,
+        status: statusType,
+        code: statusType,
         provider: 'external_channel_manager',
         hotelId,
         message: cfgErr.message || 'Channel manager integration is not configured for this hotel.',
@@ -52,14 +56,31 @@ router.all(['/status', '/health'], async (req, res) => {
       });
     }
 
-    if (!hotelConfig || !hotelConfig.hotelCode || !hotelConfig.credentialPresent) {
+    if (!hotelConfig || !hotelConfig.credentialPresent) {
       return res.status(200).json({
         success: true,
         configured: false,
         connected: false,
+        status: 'CONFIGURATION_MISSING',
+        code: 'CONFIGURATION_MISSING',
         provider: 'external_channel_manager',
         hotelId,
-        message: 'Channel integration credentials or property code not configured.',
+        message: 'Channel manager server credentials are not configured.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
+    if (!hotelConfig.hotelCode) {
+      return res.status(200).json({
+        success: true,
+        configured: false,
+        connected: false,
+        status: 'PROPERTY_NOT_CONFIGURED',
+        code: 'PROPERTY_NOT_CONFIGURED',
+        provider: 'external_channel_manager',
+        hotelId,
+        message: 'External property code is not configured for this hotel in Channel Settings.',
         lastCheckedAt: new Date().toISOString(),
         requestId
       });
@@ -72,7 +93,8 @@ router.all(['/status', '/health'], async (req, res) => {
         success: true,
         configured: true,
         connected: true,
-        status: 'connected',
+        status: 'CONNECTED',
+        code: 'CONNECTED',
         provider: 'external_channel_manager',
         hotelId,
         environment: result.environment || hotelConfig.environment,
@@ -86,28 +108,35 @@ router.all(['/status', '/health'], async (req, res) => {
     } else {
       const isAuthError = result.status === 401 || result.status === 403 || result.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
       if (isAuthError) {
-        return res.status(401).json({
+        return res.status(200).json({
           success: false,
           configured: true,
           connected: false,
+          status: 'AUTH_ERROR',
+          code: 'AUTH_ERROR',
           error: {
             code: 'CHANNEL_AUTH_FAILED',
-            message: result.error?.message || 'Channel manager authentication failed',
+            message: result.error?.message || 'Channel manager authentication failed. Please verify server-side credentials.',
             requestId
-          }
+          },
+          message: result.error?.message || 'Channel manager authentication failed. Please verify server-side credentials.',
+          requestId
         });
       }
 
-      return res.status(result.status && result.status < 500 ? result.status : 502).json({
+      return res.status(200).json({
         success: false,
         configured: true,
         connected: false,
-        status: 'error',
+        status: 'EXTERNAL_PROVIDER_UNAVAILABLE',
+        code: 'EXTERNAL_PROVIDER_UNAVAILABLE',
         error: {
           code: result.error?.code || 'CHANNEL_CONNECTION_FAILED',
           message: result.error?.message || 'Channel manager integration connection failed',
           requestId
-        }
+        },
+        message: result.error?.message || 'Channel manager integration connection failed',
+        requestId
       });
     }
   } catch (err) {

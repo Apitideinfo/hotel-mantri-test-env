@@ -1019,20 +1019,63 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     };
     const errors = [];
 
-    // 5. Process reservations idempotently in parallel batches to stay well within serverless timeouts
+    // 5. Pre-fetch existing OTA reservations for this hotel in one batch to eliminate N+1 round trips
+    const bookingIds = list.map(r => String(r.bookingId || r.reservation_id || r.id)).filter(Boolean);
+    const existingMap = new Map();
+    if (bookingIds.length > 0) {
+      try {
+        const { data: existingRecords } = await supabaseServiceRole
+          .from('channel_ota_reservations')
+          .select('id, ota_booking_id, booking_status, amount, check_in_date, check_out_date, reservation_id')
+          .eq('hotel_id', hotelId)
+          .in('ota_booking_id', bookingIds);
+        if (existingRecords) {
+          for (const rec of existingRecords) {
+            existingMap.set(String(rec.ota_booking_id), rec);
+          }
+        }
+      } catch (prefetchErr) {
+        console.warn('[live-sync] Could not prefetch existing OTA records:', prefetchErr.message);
+      }
+    }
+
+    // Process reservations in parallel batches; unchanged existing records are confirmed immediately
     const BATCH_SIZE = 4;
     for (let i = 0; i < list.length; i += BATCH_SIZE) {
       const chunk = list.slice(i, i + BATCH_SIZE);
       await Promise.all(
         chunk.map(async (raw) => {
           try {
+            const bId = String(raw.bookingId || raw.reservation_id || raw.id);
+            const existing = existingMap.get(bId);
+            const rawStatus = (raw.status || '').toLowerCase();
+            const isCancelled = rawStatus === 'cancelled' || raw.action === 'cancel';
+
+            // Fast-path: If reservation already exists and has identical state, avoid repeating 5 DB operations
+            if (existing && existing.reservation_id) {
+              const existingCancelled = existing.booking_status === 'cancelled';
+              if (isCancelled && existingCancelled) {
+                stats.cancelled++;
+                return;
+              }
+              if (!isCancelled && existing.booking_status === 'confirmed') {
+                const ciMatch = !raw.startDate || raw.startDate.slice(0, 10) === existing.check_in_date;
+                const coMatch = !raw.endDate || raw.endDate.slice(0, 10) === existing.check_out_date;
+                if (ciMatch && coMatch) {
+                  stats.updated++;
+                  return;
+                }
+              }
+            }
+
+            // New reservation or genuine status/date change: execute full idempotent sync
             const payload = parseWebhookPayload({
               ...raw,
               hotelCode: config.hotelCode,
-              action: raw.action || (raw.status === 'cancelled' ? 'cancel' : 'book')
+              action: raw.action || (isCancelled ? 'cancel' : 'book')
             });
 
-            const resResult = await processAiosellReservation(payload, hotelId, { isLiveSync: true });
+            const resResult = await processAiosellReservation(payload, hotelId, { isLiveSync: true, skipDelivery: true });
             if (resResult.status === 'mapping_required') {
               stats.unmapped++;
             } else if (resResult.status === 'imported') {

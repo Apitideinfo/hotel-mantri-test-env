@@ -342,9 +342,14 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">Not Connected:</span> {isHotelOwner
-              ? 'Channel Manager credentials are not yet configured. Please contact Superadmin to configure integration.'
-              : 'Channel Manager credentials are not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.'}
+            <span className="font-semibold">{overview.channelStatus?.status === 'PROPERTY_NOT_CONFIGURED' ? 'Property Mapping Pending:' : overview.channelStatus?.status === 'AUTH_ERROR' ? 'Authentication Required:' : 'Channel Sync Notice:'}</span>{' '}
+            {overview.channelStatus?.message || (
+              overview.settings?.aiosell_hotel_code
+                ? 'Channel Manager is syncing with upstream distribution network. Click Sync Now to refresh.'
+                : (isHotelOwner
+                    ? 'Channel Manager property code is not yet configured. Please contact Superadmin to configure integration.'
+                    : 'Channel Manager property code is not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.')
+            )}
           </p>
         </div>
       )}
@@ -440,7 +445,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
     { label: 'Connected Channels', value: `${connected}`, sub: `${overview.connections.length} total`, icon: <Wifi className="w-5 h-5" />, color: 'text-brand-600', bg: 'bg-brand-50' },
     { label: 'Today OTA Bookings', value: `${todayOtaBookings}`, sub: 'New today', icon: <FileText className="w-5 h-5" />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
     { label: 'OTA Revenue Today', value: rs(otaRevenueToday), sub: 'From OTA bookings', icon: <Zap className="w-5 h-5" />, color: 'text-brand-gold-600', bg: 'bg-brand-gold-50' },
-    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : 'Not Connected', sub: overview.isLiveMode ? 'Live' : 'Disconnected', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
+    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : (overview.channelStatus?.status === 'CONNECTED' ? 'Healthy' : (overview.channelStatus?.status || 'Not Connected')), sub: overview.isLiveMode ? 'Live' : 'Disconnected', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
     { label: 'Pending Actions', value: `${pendingActions}`, sub: 'Needs attention', icon: <Clock className="w-5 h-5" />, color: pendingActions > 0 ? 'text-orange-600' : 'text-slate-500', bg: pendingActions > 0 ? 'bg-orange-50' : 'bg-slate-100' },
     { label: 'Last Successful Sync', value: lastSync ? fmtDateTime(lastSync.last_sync_at!) : 'Never', sub: lastSync?.channel_name ?? '', icon: <Radio className="w-5 h-5" />, color: 'text-brand-navy-700', bg: 'bg-brand-navy-50' },
   ];

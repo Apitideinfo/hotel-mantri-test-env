@@ -941,6 +941,12 @@ export interface ChannelManagerOverview {
   syncLogs: ChannelSyncLog[];
   settings: ChannelSettings | null;
   isLiveMode: boolean;
+  channelStatus?: {
+    configured: boolean;
+    connected: boolean;
+    status: string;
+    message?: string;
+  };
 }
 
 export const getChannelManagerOverview = async (): Promise<ChannelManagerOverview> => {
@@ -972,12 +978,35 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     getChannelSettings(),
   ]);
 
-  let isLiveMode = false;
+  const dbConnected = settings?.aiosell_status === 'connected' && Boolean(settings?.aiosell_hotel_code);
+  let isLiveMode = dbConnected;
+  let channelStatus = {
+    configured: Boolean(settings?.channel_manager_enabled && settings?.aiosell_hotel_code),
+    connected: dbConnected,
+    status: dbConnected ? 'CONNECTED' : (settings?.aiosell_status || 'NOT_CONFIGURED').toUpperCase(),
+    message: ''
+  };
+
   try {
     const data = await checkChannelStatus();
-    isLiveMode = data.connected === true;
+    if (data) {
+      const isConnected = data.connected === true || String(data.status).toUpperCase() === 'CONNECTED';
+      isLiveMode = isConnected || dbConnected;
+      channelStatus = {
+        configured: data.configured ?? channelStatus.configured,
+        connected: isLiveMode,
+        status: (data.status || (isLiveMode ? 'CONNECTED' : 'DISCONNECTED')).toUpperCase(),
+        message: data.message || ''
+      };
+    }
   } catch (err) {
-    console.error('Failed to check channel status', err);
+    console.warn('Backend channel status ping non-fatal check:', err);
+    // If backend check had a transient error, retain authoritative DB state
+    if (dbConnected) {
+      isLiveMode = true;
+      channelStatus.connected = true;
+      channelStatus.status = 'CONNECTED';
+    }
   }
 
   return {
@@ -989,6 +1018,7 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     mappings,
     syncLogs,
     isLiveMode,
+    channelStatus,
   };
 };
 

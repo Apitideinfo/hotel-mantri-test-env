@@ -363,7 +363,8 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
   if (
     importStatus !== 'failed' &&
     savedReservation?.id &&
-    !options?.skipDelivery
+    !options?.skipDelivery &&
+    !options?.isLiveSync
   ) {
     if ((payload.action === 'book' || !payload.action) && finalStatus === 'imported') {
       // New OTA Booking Confirmation: deliver detached
