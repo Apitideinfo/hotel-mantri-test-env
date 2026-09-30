@@ -135,7 +135,7 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export const request = async (endpoint, options = {}, hotelConfig = {}, retries = 2) => {
+export const request = async (endpoint, options = {}, hotelConfig = {}, retries = 1) => {
   const config = await resolveConfig(hotelConfig);
   const url = `${config.baseUrl}${endpoint}`;
   const authHeader = buildBasicAuthHeader(config.username, config.password);
@@ -170,7 +170,7 @@ export const request = async (endpoint, options = {}, hotelConfig = {}, retries 
       ...defaultHeaders,
       ...options.headers,
     },
-    signal: options.signal || AbortSignal.timeout(10000),
+    signal: options.signal || AbortSignal.timeout(8000),
   };
 
   logProviderDiagnostic({

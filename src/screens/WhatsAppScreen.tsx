@@ -289,7 +289,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
             <div className="flex items-center gap-2">
               <h1 className="text-base font-semibold leading-tight tracking-tight">WhatsApp Hotel Summary</h1>
               <span className="bg-emerald-800/80 text-emerald-200 text-[10px] font-medium px-2 py-0.5 rounded-full border border-emerald-600/60">
-                {data?.hotelName || 'Hotel Gopal'}
+                {data?.hotelName || 'Hotel Mantri'}
               </span>
             </div>
             <p className="text-emerald-200 text-xs flex items-center gap-1.5 mt-0.5">

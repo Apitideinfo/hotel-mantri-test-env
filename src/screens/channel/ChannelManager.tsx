@@ -300,7 +300,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
               )}
             </div>
             <p className="text-sm text-slate-400 mt-0.5">
-              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
+              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Not Connected'}
               {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
               {!isHotelOwner && <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Superadmin View</span>}
             </p>
@@ -308,7 +308,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${overview?.isLiveMode ? STATUS_STYLES.connected : 'bg-amber-100 text-amber-700 border-amber-300'}`}>
-            {overview?.isLiveMode ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Live Sync</> : <><Clock className="w-3 h-3 inline mr-1" /> Integration Ready</>}
+            {overview?.isLiveMode ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Live Sync</> : <><Clock className="w-3 h-3 inline mr-1" /> Not Connected</>}
           </span>
           <button
             onClick={async () => {
@@ -337,12 +337,12 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </div>
       </div>
 
-      {/* Mock mode banner */}
+      {/* Connection status banner */}
       {overview && !overview.isLiveMode && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">Mock/Test Mode:</span> {isHotelOwner
+            <span className="font-semibold">Not Connected:</span> {isHotelOwner
               ? 'Channel Manager credentials are not yet configured. Please contact Superadmin to configure integration.'
               : 'Channel Manager credentials are not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.'}
           </p>
@@ -440,7 +440,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
     { label: 'Connected Channels', value: `${connected}`, sub: `${overview.connections.length} total`, icon: <Wifi className="w-5 h-5" />, color: 'text-brand-600', bg: 'bg-brand-50' },
     { label: 'Today OTA Bookings', value: `${todayOtaBookings}`, sub: 'New today', icon: <FileText className="w-5 h-5" />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
     { label: 'OTA Revenue Today', value: rs(otaRevenueToday), sub: 'From OTA bookings', icon: <Zap className="w-5 h-5" />, color: 'text-brand-gold-600', bg: 'bg-brand-gold-50' },
-    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : 'Not Connected', sub: overview.isLiveMode ? 'Live' : 'Mock mode', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
+    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : 'Not Connected', sub: overview.isLiveMode ? 'Live' : 'Disconnected', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
     { label: 'Pending Actions', value: `${pendingActions}`, sub: 'Needs attention', icon: <Clock className="w-5 h-5" />, color: pendingActions > 0 ? 'text-orange-600' : 'text-slate-500', bg: pendingActions > 0 ? 'bg-orange-50' : 'bg-slate-100' },
     { label: 'Last Successful Sync', value: lastSync ? fmtDateTime(lastSync.last_sync_at!) : 'Never', sub: lastSync?.channel_name ?? '', icon: <Radio className="w-5 h-5" />, color: 'text-brand-navy-700', bg: 'bg-brand-navy-50' },
   ];

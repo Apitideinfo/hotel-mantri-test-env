@@ -962,55 +962,36 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       });
     }
 
-    // 2. Test connection with upstream provider
-    const connTest = await aiosellService.testConnection(config);
-    if (!connTest.success) {
-      const isAuthErr = connTest.status === 401 || connTest.status === 403 || connTest.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
-      const statusType = isAuthErr ? 'NOT_AUTHORIZED' : 'FAILED';
-      const errorMsg = connTest.error?.message || 'External channel manager is unreachable.';
+    // 2. Define rolling sync window (-7 days to +90 days)
+    const today = new Date();
+    const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+    const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
+
+    // 3. Fetch real OTA reservations from provider safely
+    let rawReservations = [];
+    try {
+      rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
+    } catch (fetchErr) {
+      console.warn(`[live-sync] Upstream error fetching reservations:`, fetchErr.message);
+      const isAuthErr = fetchErr.status === 401 || fetchErr.status === 403 || fetchErr.code === 'PROVIDER_AUTHENTICATION_FAILED';
+      const isNotFound = fetchErr.status === 404 || fetchErr.code === 'PROVIDER_PROPERTY_NOT_FOUND';
+      const statusType = isAuthErr ? 'NOT_AUTHORIZED' : isNotFound ? 'NOT_CONFIGURED' : 'UPSTREAM_ERROR';
+      const errorMsg = fetchErr.message || 'External channel manager reservation fetch failed.';
 
       await supabaseServiceRole.from('channel_sync_logs').insert({
         hotel_id: hotelId,
         log_type: 'LIVE_SYNC',
         direction: 'inbound',
         status: statusType,
-        message: `Sync aborted: ${errorMsg}`,
+        message: `Sync failed: ${errorMsg}`,
         error_detail: errorMsg
       });
 
-      return res.status(connTest.status >= 500 ? 502 : 200).json({
-        success: false,
-        status: statusType,
-        code: connTest.error?.code || 'CONNECTION_FAILED',
-        message: errorMsg,
-        stats: {
-          records_fetched: 0,
-          records_created: 0,
-          records_updated: 0,
-          records_cancelled: 0,
-          records_unmapped: 0,
-          records_failed: 0
-        },
-        requestId
-      });
-    }
-
-    // 3. Define rolling sync window (-7 days to +90 days)
-    const today = new Date();
-    const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-    const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
-
-    // 4. Fetch reservations from provider safely
-    let rawReservations = [];
-    try {
-      rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
-    } catch (fetchErr) {
-      console.warn(`[live-sync] Error fetching reservations:`, fetchErr.message);
       return res.status(200).json({
         success: false,
-        status: 'FAILED',
-        code: fetchErr.code || 'UPSTREAM_FETCH_FAILED',
-        message: fetchErr.message || 'Failed to fetch reservations from channel provider.',
+        status: statusType,
+        code: fetchErr.code || (isAuthErr ? 'PROVIDER_AUTHENTICATION_FAILED' : 'UPSTREAM_FETCH_FAILED'),
+        message: errorMsg,
         stats: {
           records_fetched: 0,
           records_created: 0,
@@ -1133,9 +1114,9 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       error_detail: err.message || 'Unknown server error'
     });
 
-    return res.status(err.status || 500).json({
+    return res.status(200).json({
       success: false,
-      status: 'FAILED',
+      status: 'SERVER_ERROR',
       code: err.code || 'LIVE_SYNC_FAILED',
       message: err.message || 'Failed to execute live synchronization',
       stats: {

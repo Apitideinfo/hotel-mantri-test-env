@@ -1090,131 +1090,6 @@ export interface DashboardSummary {
   cashFlow?: CashFlowData;
 }
 
-const getMockDashboardSummary = (s: HotelSettings, todayStr: string): DashboardSummary => {
-  const mockReport: DerivedReport = {
-    report_date: todayStr,
-    day_status: 'open',
-    report_version: 1,
-    rooms_occupied: 8,
-    complimentary_room: 0,
-    room_sale_amount: 14400,
-    ota: 4000,
-    direct_walking: 8000,
-    corporate_agent: 3000,
-    phonebook: 2400,
-    kitchen: 2200,
-    other_income: 800,
-    housekeeping_supply: 400,
-    other_expense: 600,
-    salary_advance: 0,
-    maintenance_bill: 300,
-    cash_handover_md: 0,
-    bank_cash_deposit: 0,
-    cash_closing: (s.opening_cash_balance || 5000) + 16100,
-    cash: 5400,
-    bank: 4000,
-    pay_cash: 5400,
-    pay_bank: 4000,
-    pay_upi: 6000,
-    pay_card: 2000,
-    pay_advance: 0,
-    pay_balance: 0,
-    taxable_revenue: 17400,
-    gst_collected: 2088,
-    cgst: 1044,
-    sgst: 1044,
-    igst: 0,
-    net_revenue: 17400,
-    invoice_total: 19488,
-    room_revenue: 14400,
-    fb_revenue: 2200,
-    misc_revenue: 800,
-    finance_expenses: 0,
-    finance_expense_by_category: [],
-    other_revenue_entries: 0,
-    other_revenue_by_category: [],
-    departure: 2,
-    expected_arrival: 4,
-    expected_arr: 1800,
-  };
-
-  return {
-    settings: s,
-    today: mockReport,
-    mtd: {
-      roomRevenue: 288000,
-      totalRevenue: 348000,
-      totalCollections: 348000,
-      occ: 65,
-      arr: 1800,
-      revpar: 1170,
-      roomNights: 160,
-      cash: 108000,
-      bank: 80000,
-      totalExpenses: 42000,
-      netIncome: 306000,
-      payCash: 108000,
-      payUpi: 120000,
-      payCard: 40000,
-      payBank: 80000,
-      payAdvance: 0,
-      payBalance: 0,
-      currentInHouseDue: 0,
-      earnedRevenueCollected: 288000,
-      earnedRevenueOutstanding: 0,
-      timingDifference: 0,
-      ota: 80000,
-      direct: 160000,
-      corp: 60000,
-      phone: 48000,
-      fbRevenue: 44000,
-      miscRevenue: 16000,
-      otherRevenue: 0,
-      expenseByCategory: [
-        { category: 'Utilities & Laundry', amount: 18000 },
-        { category: 'Staff Salary & Advances', amount: 15000 },
-        { category: 'Maintenance & Repairs', amount: 9000 },
-      ],
-    },
-    ytd: {
-      roomRevenue: 1440000,
-      totalRevenue: 1740000,
-      totalCollections: 1740000,
-      occ: 62,
-      arr: 1800,
-      revpar: 1116,
-      roomNights: 800,
-      cash: 540000,
-      bank: 400000,
-      totalExpenses: 210000,
-      netIncome: 1530000,
-      payCash: 540000,
-      payUpi: 600000,
-      payCard: 200000,
-      payBank: 400000,
-    },
-    cashFlow: buildCashFlow((s.opening_cash_balance || 5000), mockReport),
-    weekReports: [mockReport],
-    lastClosedDate: null,
-    ranking: [],
-    roomPreview: {
-      categories: [
-        { name: 'Deluxe Suite', total: 10, occupied: 4, reserved: 2, blocked: 0, maintenance: 0, outOfOrder: 0 },
-        { name: 'Executive Room', total: 10, occupied: 4, reserved: 1, blocked: 0, maintenance: 0, outOfOrder: 0 },
-      ],
-    },
-    opsToday: {
-      arrivals: 4,
-      departures: 2,
-      inHouse: 8,
-      available: 12,
-      occupied: 8,
-      dueCheckouts: 2,
-      todayCheckins: 4,
-    },
-  };
-};
-
 export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
   const todayStr = getTodayLocal();
   let hotelId = '';
@@ -1242,7 +1117,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
   };
 
   if (isPlaceholderSupabase) {
-    return getMockDashboardSummary(s as HotelSettings, todayStr);
+    throw new Error('Database connection is unconfigured. A real database connection is required.');
   }
 
   const totalRooms = s.total_rooms || 20;
@@ -1529,8 +1404,9 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       roomPreview,
       opsToday,
     };
-  } catch {
-    return getMockDashboardSummary(s, todayStr);
+  } catch (err) {
+    console.error('[getOperationsBoardData] Real dashboard data fetch failed:', err);
+    throw err;
   }
 };
 
