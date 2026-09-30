@@ -21,29 +21,50 @@ app.use((req, res, next) => {
   req.requestId = requestId;
   res.setHeader('X-Request-Id', requestId);
 
+  // URL Normalization Middleware: ensure /Test/api and /test/api, or stripped /api routes reach their handlers
+  const original = req.url || '';
+  if (req.url.startsWith('/Test/api')) {
+    req.url = req.url.replace(/^\/Test\/api/, '/api');
+  } else if (req.url.startsWith('/test/api')) {
+    req.url = req.url.replace(/^\/test\/api/, '/api');
+  } else if (!req.url.startsWith('/api') && req.url !== '/' && !req.url.startsWith('/index.html') && !req.url.startsWith('/assets/')) {
+    req.url = `/api${req.url.startsWith('/') ? req.url : `/${req.url}`}`;
+  }
+
   const start = Date.now();
   res.on('finish', () => {
-    console.log(`[HTTP ${requestId}] ${req.method} ${req.originalUrl || req.url} -> ${res.statusCode} (${Date.now() - start}ms)`);
+    console.log(`[HTTP ${requestId}] ${req.method} ${original}${original !== req.url ? ` (rewritten: ${req.url})` : ''} -> ${res.statusCode} (${Date.now() - start}ms)`);
   });
   next();
 });
 
-app.use('/api/aiosell', aiosellRoutes);
-app.use('/api/integrations/aiosell', aiosellIntegrationRoutes);
-
 import channelRoutes from './routes/channels.js';
-app.use('/api/channels', channelRoutes);
-
 import reservationRoutes from './routes/reservations.js';
-app.use('/api/reservations', reservationRoutes);
-
 import hotelBrandingRoutes from './routes/hotelBranding.js';
-app.use('/api/hotel-branding', hotelBrandingRoutes);
-
 import notificationRoutes from './routes/notifications.js';
+
+// Mount API routes with both /api prefix and direct path for total serverless compatibility
+app.use('/api/aiosell', aiosellRoutes);
+app.use('/aiosell', aiosellRoutes);
+
+app.use('/api/integrations/aiosell', aiosellIntegrationRoutes);
+app.use('/integrations/aiosell', aiosellIntegrationRoutes);
+
+app.use('/api/channels', channelRoutes);
+app.use('/channels', channelRoutes);
+
+app.use('/api/reservations', reservationRoutes);
+app.use('/reservations', reservationRoutes);
+
+app.use('/api/hotel-branding', hotelBrandingRoutes);
+app.use('/hotel-branding', hotelBrandingRoutes);
+
 app.use('/api/notifications', notificationRoutes);
+app.use('/notifications', notificationRoutes);
 app.use('/api/reports/whatsapp', notificationRoutes);
+app.use('/reports/whatsapp', notificationRoutes);
 app.use('/api/reports', notificationRoutes);
+app.use('/reports', notificationRoutes);
 
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
@@ -57,7 +78,7 @@ const razorpay = new Razorpay({
  * STEP 1: Backend Endpoint to Create Order
  * POST /api/create-order
  */
-app.post('/api/create-order', async (req, res) => {
+app.post(['/api/create-order', '/create-order'], async (req, res) => {
   try {
     const { amount, currency = 'INR', receipt, notes } = req.body;
 
@@ -91,7 +112,7 @@ app.post('/api/create-order', async (req, res) => {
  * STEP 3: Backend Endpoint to Verify Signature
  * POST /api/verify-payment
  */
-app.post('/api/verify-payment', (req, res) => {
+app.post(['/api/verify-payment', '/verify-payment'], (req, res) => {
   try {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
@@ -130,7 +151,7 @@ app.post('/api/verify-payment', (req, res) => {
 });
 
 // Global 404 handler for API routes
-app.use('/api', (req, res) => {
+app.use(['/api', '/Test/api', '/test/api'], (req, res) => {
   const requestId = req.requestId || `HM-REQ-${Date.now().toString(36).toUpperCase()}`;
   res.status(404).json({
     success: false,

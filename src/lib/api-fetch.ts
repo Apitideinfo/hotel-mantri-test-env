@@ -7,9 +7,18 @@ import { supabase } from './supabase';
  * and structured error responses.
  */
 
-// In production on Vercel, requests use same-origin relative paths.
+// In production on Vercel, requests use same-origin relative paths (/api/...).
 // In development, Vite proxies /api to the local backend if configured.
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const rawApiBase = (import.meta.env.VITE_API_URL || '').trim();
+
+// Normalize API_BASE:
+// Strip accidental '/Test', '/test', or /Test suffixes that cause 405 Method Not Allowed on static SPA fallback
+const cleanApiBase = rawApiBase
+  .replace(/^\/?test\/?$/i, '')
+  .replace(/\/+test\/?$/i, '')
+  .replace(/\/+$/, '');
+
+const API_BASE = cleanApiBase;
 
 export interface ApiError {
   success: false;
@@ -51,9 +60,14 @@ export const apiFetch = async (
   }
   
   // Ensure the endpoint starts with a slash
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+  // Strip accidental /Test or /test prefix from endpoint if present
+  if (cleanEndpoint.startsWith('/Test/api/') || cleanEndpoint.startsWith('/test/api/')) {
+    cleanEndpoint = cleanEndpoint.replace(/^\/[Tt]est\/api\//, '/api/');
+  }
   
-  // Only prepend API_BASE if it's explicitly set (e.g. in dev), otherwise use relative path
+  // Only prepend API_BASE if it's explicitly set to an external origin, otherwise use relative path
   const url = API_BASE ? `${API_BASE}${cleanEndpoint}` : cleanEndpoint;
 
   const headers: HeadersInit = {

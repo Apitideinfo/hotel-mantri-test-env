@@ -355,11 +355,21 @@ router.post('/sync/inventory', checkAuth, async (req, res) => {
 });
 
 /**
- * POST /api/channels/inventory-restrictions/patch and /api/channels/invent_restrictions/patch
- * Atomic, non-destructive bulk patch for inventory and rates.
- * Validates payload strictly, reads existing records, merges changes, updates DB,
- * triggers external channel sync if configured, and returns separate local/external sync statuses.
+ * GET /api/channels/inventory-restrictions/patch
+ * Structured JSON 405 for GET requests
  */
+router.get(['/inventory-restrictions/patch', '/invent_restrictions/patch'], (req, res) => {
+  const requestId = req.requestId || `HM-PATCH-${Date.now().toString(36).toUpperCase()}`;
+  res.status(405).json({
+    success: false,
+    error: {
+      code: 'METHOD_NOT_ALLOWED',
+      message: 'GET method is not supported on /inventory-restrictions/patch. Please use POST with updates payload.',
+      requestId
+    }
+  });
+});
+
 router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], checkAuth, async (req, res) => {
   const hotelId = req.hotelId || req.auth?.hotelId;
   const requestId = req.requestId || `HM-PATCH-${Date.now().toString(36).toUpperCase()}`;
@@ -886,6 +896,16 @@ router.get('/sync/status', checkAuth, async (req, res) => {
  * Coordinates reservation reconciliation with external channel manager.
  * Used by page-open auto-sync and manual "Sync Now" button.
  */
+router.get('/live-sync', (req, res) => {
+  const requestId = req.requestId || `SYNC-${Date.now()}`;
+  res.status(200).json({
+    success: true,
+    status: 'READY',
+    message: 'Channel live-sync service is operational. Use POST with authorization to trigger sync.',
+    requestId
+  });
+});
+
 router.post('/live-sync', checkAuth, async (req, res) => {
   const startTime = Date.now();
   const hotelId = req.hotelId || req.auth?.hotelId;

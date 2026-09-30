@@ -12,7 +12,27 @@
   ],
   "rewrites": [
     {
+      "source": "/api",
+      "destination": "/api/index.js"
+    },
+    {
       "source": "/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/Test/api",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/Test/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/test/api",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/test/api/(.*)",
       "destination": "/api/index.js"
     },
     {

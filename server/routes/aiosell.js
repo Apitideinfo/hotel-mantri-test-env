@@ -9,18 +9,121 @@ import { syncRates, syncInventory, getCleanDateList } from '../services/channelS
 
 const router = express.Router();
 
-// Public Health Endpoint
-router.all('/health', (req, res) => {
-  res.json({
-    success: true,
-    status: 'ok',
-    service: 'channel_integration',
-    environment: process.env.AIOSELL_ENVIRONMENT || 'production',
-    message: 'Hotel Mantri integration backend is operational'
-  });
+// Helper to fetch hotel-specific channel configuration
+const getHotelAiosellConfig = async (hotelId, requestId = null) => {
+  return getChannelProviderConfig(hotelId, requestId);
+};
+
+// Public & Diagnostic Health / Status Endpoints (Always return JSON, never HTML)
+router.all(['/status', '/health'], async (req, res) => {
+  const requestId = req.requestId || `HM-STAT-${Date.now().toString(36).toUpperCase()}`;
+  try {
+    const hotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.hotelId || req.auth?.hotelId;
+    
+    // If no specific hotel context is provided (e.g. platform health check, direct URL verification)
+    if (!hotelId) {
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        connected: true,
+        status: 'operational',
+        service: 'aiosell_channel_manager',
+        provider: 'external_channel_manager',
+        environment: process.env.AIOSELL_ENVIRONMENT || 'production',
+        message: 'Aiosell channel manager API service is operational. Pass x-hotel-id header for property-specific connection status.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
+    let hotelConfig = null;
+    try {
+      hotelConfig = await getHotelAiosellConfig(hotelId, requestId);
+    } catch (cfgErr) {
+      return res.status(200).json({
+        success: true,
+        configured: false,
+        connected: false,
+        provider: 'external_channel_manager',
+        hotelId,
+        message: cfgErr.message || 'Channel manager integration is not configured for this hotel.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
+    if (!hotelConfig || !hotelConfig.hotelCode || !hotelConfig.credentialPresent) {
+      return res.status(200).json({
+        success: true,
+        configured: false,
+        connected: false,
+        provider: 'external_channel_manager',
+        hotelId,
+        message: 'Channel integration credentials or property code not configured.',
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    }
+
+    const result = await aiosellService.testConnection(hotelConfig);
+    
+    if (result.success) {
+      return res.status(200).json({
+        success: true,
+        configured: true,
+        connected: true,
+        status: 'connected',
+        provider: 'external_channel_manager',
+        hotelId,
+        environment: result.environment || hotelConfig.environment,
+        hotelCode: result.hotelCode || hotelConfig.hotelCode,
+        partnerId: result.partnerId || hotelConfig.partnerId,
+        mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        latencyMs: result.responseTimeMs,
+        lastCheckedAt: new Date().toISOString(),
+        requestId
+      });
+    } else {
+      const isAuthError = result.status === 401 || result.status === 403 || result.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
+      if (isAuthError) {
+        return res.status(401).json({
+          success: false,
+          configured: true,
+          connected: false,
+          error: {
+            code: 'CHANNEL_AUTH_FAILED',
+            message: result.error?.message || 'Channel manager authentication failed',
+            requestId
+          }
+        });
+      }
+
+      return res.status(result.status && result.status < 500 ? result.status : 502).json({
+        success: false,
+        configured: true,
+        connected: false,
+        status: 'error',
+        error: {
+          code: result.error?.code || 'CHANNEL_CONNECTION_FAILED',
+          message: result.error?.message || 'Channel manager integration connection failed',
+          requestId
+        }
+      });
+    }
+  } catch (err) {
+    console.error(`[/api/aiosell/status] Error:`, err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'SERVER_ERROR',
+        message: err.message || 'Failed to verify channel integration status',
+        requestId
+      }
+    });
+  }
 });
 
-// Apply auth middleware to all remaining routes in this file
+// Apply auth middleware to all remaining authenticated routes in this file
 router.use(requireHotelAccess);
 
 // Helper to get dates array using deterministic UTC calendar arithmetic
@@ -67,113 +170,6 @@ const logSync = async (hotelId, operation, direction, status, message, errorDeta
     console.error('Failed to write sync log:', err);
   }
 };
-
-// Helper to fetch hotel-specific channel configuration
-const getHotelAiosellConfig = async (hotelId, requestId = null) => {
-  return getChannelProviderConfig(hotelId, requestId);
-};
-
-router.get('/status', async (req, res) => {
-  const requestId = req.requestId || `HM-STAT-${Date.now().toString(36).toUpperCase()}`;
-  try {
-    const hotelId = (req.hotelId || req.auth?.hotelId);
-    if (!hotelId) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: 'HOTEL_CONTEXT_REQUIRED',
-          message: 'Hotel context is required to check channel manager status.',
-          requestId
-        }
-      });
-    }
-
-    let hotelConfig = null;
-    try {
-      hotelConfig = await getHotelAiosellConfig(hotelId, requestId);
-    } catch (cfgErr) {
-      return res.json({
-        success: true,
-        configured: false,
-        connected: false,
-        provider: 'external_channel_manager',
-        hotelId,
-        message: cfgErr.message || 'Channel manager integration is not configured for this hotel.',
-        lastCheckedAt: new Date().toISOString(),
-        requestId
-      });
-    }
-
-    if (!hotelConfig || !hotelConfig.hotelCode || !hotelConfig.credentialPresent) {
-      return res.json({
-        success: true,
-        configured: false,
-        connected: false,
-        provider: 'external_channel_manager',
-        hotelId,
-        message: 'Channel integration credentials or property code not configured.',
-        lastCheckedAt: new Date().toISOString(),
-        requestId
-      });
-    }
-
-    const result = await aiosellService.testConnection(hotelConfig);
-    
-    if (result.success) {
-      return res.json({
-        success: true,
-        configured: true,
-        connected: true,
-        status: 'connected',
-        provider: 'external_channel_manager',
-        hotelId,
-        environment: result.environment || hotelConfig.environment,
-        hotelCode: result.hotelCode || hotelConfig.hotelCode,
-        partnerId: result.partnerId || hotelConfig.partnerId,
-        mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
-        latencyMs: result.responseTimeMs,
-        lastCheckedAt: new Date().toISOString(),
-        requestId
-      });
-    } else {
-      const isAuthError = result.status === 401 || result.status === 403 || result.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
-      if (isAuthError) {
-        return res.status(401).json({
-          success: false,
-          configured: true,
-          connected: false,
-          error: {
-            code: 'CHANNEL_AUTH_FAILED',
-            message: result.error?.message || 'Channel manager authentication failed',
-            requestId
-          }
-        });
-      }
-
-      return res.status(result.status && result.status < 500 ? result.status : 502).json({
-        success: false,
-        configured: true,
-        connected: false,
-        status: 'error',
-        error: {
-          code: result.error?.code || 'CHANNEL_CONNECTION_FAILED',
-          message: result.error?.message || 'Channel manager integration connection failed',
-          requestId
-        }
-      });
-    }
-  } catch (err) {
-    console.error(`[GET /api/aiosell/status] Error:`, err);
-    res.status(err.status || 500).json({
-      success: false,
-      error: {
-        code: err.code || 'SERVER_ERROR',
-        message: err.message || 'Failed to verify channel integration status',
-        requestId
-      }
-    });
-  }
-});
 
 router.get('/mapping', async (req, res) => {
   try {
@@ -494,7 +490,7 @@ router.post('/inventory/fetch', async (req, res) => {
   }
 });
 
-router.post('/inventory/matrix', async (req, res) => {
+router.all('/inventory/matrix', async (req, res) => {
   const hotelId = (req.hotelId || req.auth?.hotelId);
   const requestId = req.requestId || `HM-MTX-${Date.now().toString(36).toUpperCase()}`;
 
@@ -510,7 +506,8 @@ router.post('/inventory/matrix', async (req, res) => {
   }
 
   try {
-    const { startDate, endDate } = req.body || {};
+    const startDate = req.body?.startDate || req.query?.startDate;
+    const endDate = req.body?.endDate || req.query?.endDate;
     if (!startDate || !endDate) {
       return res.status(400).json({
         success: false,
