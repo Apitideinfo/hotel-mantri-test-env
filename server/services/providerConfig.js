@@ -73,8 +73,8 @@ export const getChannelProviderConfig = async (hotelId, requestId = null) => {
   const hotelCode = settings?.aiosell_hotel_code || propertyCodeFallback || process.env.AIOSELL_HOTEL_CODE;
   const partnerId = settings?.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
   const environment = settings?.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
-  const username = process.env.AIOSELL_USERNAME || '';
-  const password = process.env.AIOSELL_PASSWORD || '';
+  const username = process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';
+  const password = process.env.AIOSELL_PASSWORD || '514r1vrb';
   const baseUrl = process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm';
 
   const credentialPresent = Boolean(username && password);

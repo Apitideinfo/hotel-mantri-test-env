@@ -22,8 +22,8 @@ export const resolveConfig = async (hotelConfig = {}) => {
   const partnerId = hotelConfig.partnerId || hotelConfig.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
   const hotelCode = hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || process.env.AIOSELL_HOTEL_CODE;
   const environment = hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
-  const username = hotelConfig.username || process.env.AIOSELL_USERNAME || '';
-  const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '';
+  const username = hotelConfig.username || process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';
+  const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '514r1vrb';
   const baseUrl = (hotelConfig.baseUrl || process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm').replace(/\/+$/, '');
 
   return {

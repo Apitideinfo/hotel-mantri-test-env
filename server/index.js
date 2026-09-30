@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import aiosellRoutes from './routes/aiosell.js';
 import aiosellIntegrationRoutes from './services/integrations/aiosell/AiosellWebhookController.js';
@@ -23,7 +25,12 @@ app.use((req, res, next) => {
 
   // URL Normalization Middleware: ensure /Test/api and /test/api, or stripped /api routes reach their handlers
   const original = req.url || '';
-  if (req.url.startsWith('/Test/api')) {
+  if (req.url === '/api/index.js' || req.url.startsWith('/api/index.js?')) {
+    const matched = req.headers['x-matched-path'] || req.headers['x-forwarded-uri'] || req.headers['x-vercel-matched-path'];
+    if (matched && matched.startsWith('/api')) {
+      req.url = matched;
+    }
+  } else if (req.url.startsWith('/Test/api')) {
     req.url = req.url.replace(/^\/Test\/api/, '/api');
   } else if (req.url.startsWith('/test/api')) {
     req.url = req.url.replace(/^\/test\/api/, '/api');
@@ -165,6 +172,10 @@ app.use(['/api', '/Test/api', '/test/api'], (req, res) => {
 
 // Global Error handler
 app.use((err, req, res, next) => {
+  if (res.headersSent) {
+    return next(err);
+  }
+
   const requestId = req.requestId || `HM-REQ-${Date.now().toString(36).toUpperCase()}`;
   console.error('[Unhandled Server Error]', {
     requestId,
@@ -186,7 +197,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+if (isDirectRun && !process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);
   });
