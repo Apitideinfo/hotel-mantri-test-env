@@ -598,6 +598,561 @@ export const validateAndProcessCheckIn = async ({
   });
 };
 
+/**
+ * Normalizes text for category matching:
+ * Converts dashes/underscores to spaces, strips rate plan suffixes (e.g. -s-ep, -ep),
+ * and removes all non-alphanumeric characters.
+ */
+const simplifyCategoryString = (str) => {
+  if (!str) return '';
+  return String(str)
+    .toLowerCase()
+    .replace(/[-_]/g, ' ')
+    .replace(/\b(s\s*ep|d\s*ep|ep|cp|map|ap)\b/gi, '')
+    .replace(/\b(room|rate|plan|standard)\b/gi, ' ')
+    .replace(/[^a-z0-9]/g, '');
+};
+
+/**
+ * Checks if automatic room assignment is enabled for this hotel.
+ * Default is ON (true).
+ */
+export const isAutoAssignEnabled = async (hotelId) => {
+  if (!hotelId) return true;
+  try {
+    const { data } = await supabaseServiceRole
+      .from('system_settings')
+      .select('value')
+      .eq('key', `auto_assign_ota_${hotelId}`)
+      .maybeSingle();
+
+    if (data && typeof data.value === 'object' && data.value !== null) {
+      return data.value.enabled !== false;
+    }
+    if (data && typeof data.value === 'boolean') {
+      return data.value;
+    }
+    return true; // Default: ON
+  } catch (err) {
+    return true; // Default: ON
+  }
+};
+
+/**
+ * Sets automatic room assignment feature flag for this hotel.
+ */
+export const setAutoAssignEnabled = async (hotelId, enabled) => {
+  if (!hotelId) throw new Error('hotelId is required');
+  const key = `auto_assign_ota_${hotelId}`;
+  const value = { enabled: Boolean(enabled), updated_at: new Date().toISOString() };
+
+  const { data: existing } = await supabaseServiceRole
+    .from('system_settings')
+    .select('key')
+    .eq('key', key)
+    .maybeSingle();
+
+  if (existing) {
+    await supabaseServiceRole
+      .from('system_settings')
+      .update({ value, updated_at: new Date().toISOString() })
+      .eq('key', key);
+  } else {
+    await supabaseServiceRole
+      .from('system_settings')
+      .insert({ key, value, updated_at: new Date().toISOString() });
+  }
+
+  return { success: true, hotelId, enabled: Boolean(enabled) };
+};
+
+/**
+ * Authoritative room category resolution from OTA roomCode, roomName, or ratePlan.
+ * 1. Checks persistent channel_room_mappings.
+ * 2. Matches active room_categories in the hotel.
+ * 3. Never guesses across categories; returns null if unmapped.
+ */
+export const resolveHotelRoomCategory = async (hotelId, { roomCode, roomName, ratePlan }) => {
+  if (!hotelId) return null;
+  const supabase = supabaseServiceRole;
+
+  const rawCandidates = [roomCode, ratePlan, roomName].filter(Boolean).map(s => String(s).trim());
+  if (rawCandidates.length === 0) return null;
+
+  // 1. Direct query on channel_room_mappings
+  for (const term of rawCandidates) {
+    const { data: mapping } = await supabase
+      .from('channel_room_mappings')
+      .select('room_category_id, external_room_code')
+      .eq('hotel_id', hotelId)
+      .ilike('external_room_code', term)
+      .maybeSingle();
+
+    if (mapping && mapping.room_category_id) {
+      const { data: cat } = await supabase
+        .from('room_categories')
+        .select('id, name')
+        .eq('id', mapping.room_category_id)
+        .maybeSingle();
+
+      if (cat) {
+        return { categoryId: cat.id, categoryName: cat.name, source: 'channel_room_mapping' };
+      }
+    }
+  }
+
+  // 2. Fetch all active room categories for this hotel
+  const { data: categories, error: catErr } = await supabase
+    .from('room_categories')
+    .select('id, name, is_active')
+    .eq('hotel_id', hotelId);
+
+  if (catErr || !categories || categories.length === 0) {
+    return null;
+  }
+
+  // Active categories map
+  const activeCats = categories.filter(c => c.is_active !== false);
+
+  // 3. Exact simplified match
+  for (const term of rawCandidates) {
+    const simpTerm = simplifyCategoryString(term);
+    if (!simpTerm) continue;
+
+    // Direct match against category simplified name
+    const exact = activeCats.find(c => simplifyCategoryString(c.name) === simpTerm);
+    if (exact) {
+      return { categoryId: exact.id, categoryName: exact.name, source: 'exact_simplified' };
+    }
+
+    // Inclusion match (e.g. deluxeac matches Deluxe AC Room)
+    const included = activeCats.find(c => {
+      const cSimp = simplifyCategoryString(c.name);
+      return cSimp.includes(simpTerm) || simpTerm.includes(cSimp);
+    });
+    if (included) {
+      return { categoryId: included.id, categoryName: included.name, source: 'fuzzy_included' };
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Removes any [UNASSIGNED_REASON: ...] tag from an internal note string.
+ */
+export const stripUnassignedReason = (note) => {
+  if (!note) return '';
+  return String(note).replace(/\[UNASSIGNED_REASON:\s*[^\]]+\]/gi, '').trim();
+};
+
+/**
+ * Appends or updates a [UNASSIGNED_REASON: <reason>] tag in an internal note.
+ */
+export const setUnassignedReason = (note, reason) => {
+  const clean = stripUnassignedReason(note);
+  const tag = `[UNASSIGNED_REASON: ${reason}]`;
+  return clean ? `${clean}\n${tag}` : tag;
+};
+
+/**
+ * Automatically assigns an eligible physical room to a reservation based on:
+ * - Hotel setting (Automatic Room Assignment ON/OFF)
+ * - Mapped room category
+ * - Stay dates (check-in inclusive, check-out exclusive)
+ * - Room status (active, not blocked, not under maintenance)
+ * - Non-conflicting reservation / in-house stay
+ * - Deterministic ordering: prefer vacant rooms, then room_no ascending
+ * - Concurrency safety: atomic execution inside withRoomLock
+ */
+export const autoAssignPhysicalRoom = async ({
+  hotelId,
+  reservationId,
+  preferredRoomNo = null,
+  userId = null,
+  dryRun = false,
+  excludeRoomIds = [],
+}) => {
+  if (!hotelId || !reservationId) {
+    throw { status: 400, code: 'MISSING_PARAMS', message: 'hotelId and reservationId are required.' };
+  }
+
+  const supabase = supabaseServiceRole;
+
+  // 1. Check Hotel Setting
+  const enabled = await isAutoAssignEnabled(hotelId);
+  if (!enabled) {
+    return {
+      success: false,
+      reason: 'AUTO_ASSIGN_DISABLED',
+      message: 'Automatic room assignment is disabled in hotel settings.',
+    };
+  }
+
+  // 2. Fetch reservation
+  const { data: reservation, error: fetchErr } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('id', reservationId)
+    .eq('hotel_id', hotelId)
+    .maybeSingle();
+
+  if (fetchErr || !reservation) {
+    throw { status: 404, code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found.' };
+  }
+
+  if (reservation.status === 'cancelled' || reservation.status === 'checked_out') {
+    return {
+      success: false,
+      reason: 'INVALID_STATUS',
+      message: `Cannot assign room to a ${reservation.status} reservation.`,
+    };
+  }
+
+  const checkIn = String(reservation.check_in_date).slice(0, 10);
+  const checkOut = String(reservation.check_out_date).slice(0, 10);
+
+  // 3. Resolve room category
+  let category = await resolveHotelRoomCategory(hotelId, {
+    roomCode: reservation.rate_plan,
+    ratePlan: reservation.rate_plan,
+    roomName: reservation.rate_plan,
+  });
+
+  // If still not resolved, check channel_ota_reservations
+  if (!category) {
+    const { data: otaRow } = await supabase
+      .from('channel_ota_reservations')
+      .select('room_category, rate_plan')
+      .eq('hotel_id', hotelId)
+      .eq('reservation_id', reservationId)
+      .maybeSingle();
+
+    if (otaRow) {
+      category = await resolveHotelRoomCategory(hotelId, {
+        roomCode: otaRow.room_category,
+        ratePlan: otaRow.rate_plan,
+      });
+    }
+  }
+
+  // If room category could not be resolved reliably
+  if (!category) {
+    if (!dryRun) {
+      const updatedNote = setUnassignedReason(reservation.internal_note, 'ROOM_CATEGORY_NOT_MAPPED');
+      await supabase
+        .from('reservations')
+        .update({
+          room_no: 'Unassigned',
+          room_id: null,
+          internal_note: updatedNote,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', reservationId);
+    }
+
+    console.warn(`[AUTO_ASSIGN] Reservation ${reservationId} unassigned: ROOM_CATEGORY_NOT_MAPPED`);
+    return {
+      success: false,
+      reason: 'ROOM_CATEGORY_NOT_MAPPED',
+      message: 'Room category mapping required. Could not map to a Hotel Mantri room category.',
+    };
+  }
+
+  // 4. Check if existing room assignment is already valid and conflict-free
+  const currentNorm = normalizePhysicalRoom(reservation.room_no);
+  if (currentNorm) {
+    // Check if the current room belongs to the target category
+    const { data: curRoomObj } = await supabase
+      .from('rooms')
+      .select('id, room_no, category_id, is_active, room_status')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', currentNorm)
+      .maybeSingle();
+
+    if (
+      curRoomObj &&
+      curRoomObj.is_active !== false &&
+      curRoomObj.category_id === category.categoryId
+    ) {
+      const avail = await checkRoomAvailability({
+        hotelId,
+        roomNo: currentNorm,
+        checkIn,
+        checkOut,
+        excludeReservationId: reservationId,
+      });
+
+      if (avail.available) {
+        // Current room is already valid and conflict-free: KEEP IT!
+        if (!dryRun) {
+          const cleanedNote = stripUnassignedReason(reservation.internal_note);
+          await supabase
+            .from('reservations')
+            .update({
+              room_no: currentNorm,
+              room_id: curRoomObj.id,
+              internal_note: cleanedNote,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', reservationId);
+        }
+
+        console.log(`[AUTO_ASSIGN] Reservation ${reservationId}: kept existing valid room ${currentNorm}`);
+        return {
+          success: true,
+          roomNo: currentNorm,
+          roomId: curRoomObj.id,
+          categoryName: category.categoryName,
+          keptExisting: true,
+          message: `Existing room ${currentNorm} is valid and conflict-free.`,
+        };
+      }
+    }
+  }
+
+  // 5. Query all active physical rooms in the mapped category
+  const { data: candidateRooms, error: roomsErr } = await supabase
+    .from('rooms')
+    .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+    .eq('hotel_id', hotelId)
+    .eq('category_id', category.categoryId)
+    .eq('is_active', true)
+    .order('room_no', { ascending: true });
+
+  if (roomsErr || !candidateRooms || candidateRooms.length === 0) {
+    if (!dryRun) {
+      const updatedNote = setUnassignedReason(reservation.internal_note, 'NO_ELIGIBLE_ROOM');
+      await supabase
+        .from('reservations')
+        .update({
+          room_no: 'Unassigned',
+          room_id: null,
+          internal_note: updatedNote,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', reservationId);
+    }
+
+    console.warn(`[AUTO_ASSIGN] Reservation ${reservationId}: NO_ELIGIBLE_ROOM for category ${category.categoryName}`);
+    return {
+      success: false,
+      reason: 'NO_ELIGIBLE_ROOM',
+      message: `No active physical rooms configured for category ${category.categoryName}.`,
+    };
+  }
+
+  // Filter out rooms with explicit non-assignable statuses or already assigned in current multi-room batch
+  const nonAssignableStatuses = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+  const excludeSet = new Set((excludeRoomIds || []).map(String));
+  const eligibleRooms = candidateRooms.filter(
+    r => !excludeSet.has(String(r.id)) && !nonAssignableStatuses.has(String(r.room_status || '').toLowerCase())
+  );
+
+  if (eligibleRooms.length === 0) {
+    if (!dryRun) {
+      const updatedNote = setUnassignedReason(reservation.internal_note, 'ROOM_BLOCKED');
+      await supabase
+        .from('reservations')
+        .update({
+          room_no: 'Unassigned',
+          room_id: null,
+          internal_note: updatedNote,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', reservationId);
+    }
+
+    return {
+      success: false,
+      reason: 'ROOM_BLOCKED',
+      message: `All physical rooms in ${category.categoryName} are currently blocked or under maintenance.`,
+    };
+  }
+
+  // 6. Deterministic ordering:
+  // - Prefer preferredRoomNo if eligible
+  // - Prefer vacant rooms (room_status === 'Vacant' or housekeeping_status === 'Vacant Clean')
+  // - Deterministic tie-breaker: room_no ascending numerically
+  const sortedCandidates = [...eligibleRooms].sort((a, b) => {
+    if (preferredRoomNo) {
+      if (a.room_no.toLowerCase() === preferredRoomNo.toLowerCase()) return -1;
+      if (b.room_no.toLowerCase() === preferredRoomNo.toLowerCase()) return 1;
+    }
+
+    const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+    const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+    if (aVacant && !bVacant) return -1;
+    if (!aVacant && bVacant) return 1;
+
+    // Room number numerical or lexicographical sort
+    const numA = parseInt(a.room_no, 10);
+    const numB = parseInt(b.room_no, 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return a.room_no.localeCompare(b.room_no);
+  });
+
+  // 7. Concurrency-Safe Transactional Check & Acquire using withRoomLock
+  let assignedRoom = null;
+
+  for (const candidate of sortedCandidates) {
+    const acquireResult = await withRoomLock(hotelId, candidate.room_no, async () => {
+      // Re-check room availability inside the mutex lock
+      const availCheck = await checkRoomAvailability({
+        hotelId,
+        roomNo: candidate.room_no,
+        checkIn,
+        checkOut,
+        excludeReservationId: reservationId,
+      });
+
+      if (!availCheck.available) {
+        return null;
+      }
+
+      if (dryRun) {
+        return { roomNo: candidate.room_no, roomId: candidate.id, dryRun: true };
+      }
+
+      // Commit the room assignment atomically
+      const cleanedNote = stripUnassignedReason(reservation.internal_note);
+      const { data: updated, error: updateErr } = await supabase
+        .from('reservations')
+        .update({
+          room_no: candidate.room_no,
+          room_id: candidate.id,
+          internal_note: cleanedNote,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', reservationId)
+        .select('*')
+        .single();
+
+      if (updateErr) {
+        console.error(`[AUTO_ASSIGN] Error updating reservation ${reservationId}:`, updateErr);
+        return null;
+      }
+
+      return { roomNo: candidate.room_no, roomId: candidate.id, updated };
+    });
+
+    if (acquireResult) {
+      assignedRoom = acquireResult;
+      break;
+    }
+  }
+
+  // 8. Result reporting
+  if (assignedRoom) {
+    console.log(
+      `[AUTO_ASSIGN_SUCCESS] OTA reservation: ${reservationId} | Category: ${category.categoryName} | Stay: ${checkIn} -> ${checkOut} | Assigned Room: ${assignedRoom.roomNo}`
+    );
+    return {
+      success: true,
+      roomNo: assignedRoom.roomNo,
+      roomId: assignedRoom.roomId,
+      categoryName: category.categoryName,
+      message: `Assigned room ${assignedRoom.roomNo} successfully.`,
+    };
+  }
+
+  // 9. If no eligible room could be assigned for the full stay
+  if (!dryRun) {
+    const updatedNote = setUnassignedReason(reservation.internal_note, 'NO_ROOM_FOR_FULL_STAY');
+    await supabase
+      .from('reservations')
+      .update({
+        room_no: 'Unassigned',
+        room_id: null,
+        internal_note: updatedNote,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', reservationId);
+  }
+
+  console.warn(
+    `[AUTO_ASSIGN_FAILED] OTA reservation: ${reservationId} | Category: ${category.categoryName} | Stay: ${checkIn} -> ${checkOut} | Result: NO_ROOM_FOR_FULL_STAY`
+  );
+
+  return {
+    success: false,
+    reason: 'NO_ROOM_FOR_FULL_STAY',
+    message: `No available physical rooms in category ${category.categoryName} for stay ${checkIn} to ${checkOut}.`,
+  };
+};
+
+/**
+ * Scans and auto-assigns physical rooms for all unassigned reservations in a hotel.
+ */
+export const batchAutoAssignReservations = async (hotelId) => {
+  if (!hotelId) throw new Error('hotelId is required');
+  const supabase = supabaseServiceRole;
+
+  const { data: unassigned, error } = await supabase
+    .from('reservations')
+    .select('id, guest_name, check_in_date, check_out_date, status, rate_plan, room_no, source_name')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .or('room_no.eq.Unassigned,room_no.eq.TBD,room_no.is.null,room_id.is.null')
+    .order('check_in_date', { ascending: true });
+
+  if (error || !unassigned || unassigned.length === 0) {
+    return { total: 0, assignedCount: 0, unassignedCount: 0, results: [] };
+  }
+
+  const results = [];
+  let assignedCount = 0;
+  let unassignedCount = 0;
+
+  for (const res of unassigned) {
+    try {
+      const outcome = await autoAssignPhysicalRoom({
+        hotelId,
+        reservationId: res.id,
+      });
+
+      if (outcome.success) {
+        assignedCount++;
+        results.push({
+          id: res.id,
+          guestName: res.guest_name,
+          source: res.source_name,
+          status: 'assigned',
+          roomNo: outcome.roomNo,
+          category: outcome.categoryName,
+        });
+      } else {
+        unassignedCount++;
+        results.push({
+          id: res.id,
+          guestName: res.guest_name,
+          source: res.source_name,
+          status: 'unassigned',
+          reason: outcome.reason,
+          message: outcome.message,
+        });
+      }
+    } catch (err) {
+      unassignedCount++;
+      results.push({
+        id: res.id,
+        guestName: res.guest_name,
+        source: res.source_name,
+        status: 'unassigned',
+        reason: 'ASSIGNMENT_ERROR',
+        message: err.message,
+      });
+    }
+  }
+
+  return {
+    total: unassigned.length,
+    assignedCount,
+    unassignedCount,
+    results,
+  };
+};
+
 export default {
   upsertGuestMaster,
   createReservationsAtomically,
@@ -605,4 +1160,10 @@ export default {
   assignPhysicalRoom,
   extendReservationStay,
   validateAndProcessCheckIn,
+  isAutoAssignEnabled,
+  setAutoAssignEnabled,
+  resolveHotelRoomCategory,
+  autoAssignPhysicalRoom,
+  batchAutoAssignReservations,
 };
+

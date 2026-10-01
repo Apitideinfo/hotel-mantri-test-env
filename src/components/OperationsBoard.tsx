@@ -5,7 +5,7 @@ import {
   Smartphone, AlertCircle, Filter, RefreshCw, Loader2, CheckCircle2,
   Clock, Phone, Mail, IndianRupee, MessageCircle, Edit3, FileText,
   Sparkles, Play, ClipboardCheck, Wrench, Ban, Star,
-  ArrowRightLeft, CalendarPlus, AlertTriangle, Sliders, Check,
+  ArrowRightLeft, CalendarPlus, AlertTriangle, Sliders, Check, Zap,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
@@ -19,7 +19,7 @@ import type {
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, GstType, GstSlab,
   FrontOfficeRole, HotSeason, MealPlan,
 } from '@/lib/types';
-import { SOURCE_CATEGORIES, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo, mapAuthRoleToFrontOffice } from '@/lib/types';
+import { SOURCE_CATEGORIES, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo, mapAuthRoleToFrontOffice, normalizePayMode } from '@/lib/types';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
 import {
@@ -29,6 +29,7 @@ import {
 import {
   getReservationsForDateRange, getFutureReservationsCount, saveReservation, deleteReservation,
   updateReservationStatus, checkRoomAvailability, extendReservation,
+  batchAutoAssignReservations, extractUnassignedReason,
 } from '@/lib/api-reservations';
 import { extendStay } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
@@ -259,6 +260,21 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       setLoading(false);
     }
   }, [timelineDates, centerDate, hotelId, hotelStatus]);
+
+  const [autoAssigningAll, setAutoAssigningAll] = useState(false);
+
+  const handleAutoAssignAll = async () => {
+    setAutoAssigningAll(true);
+    try {
+      await batchAutoAssignReservations();
+      await load();
+      onSaved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to auto-assign reservations.');
+    } finally {
+      setAutoAssigningAll(false);
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -645,7 +661,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
         total: booking.rate * booking.nights,
         company: booking.sourceName,
         source_category: (booking.sourceCategory as SourceCategory) || 'Direct/Walking',
-        pay_mode: (booking.paymentMode as PayMode) || 'Cash',
+        pay_mode: normalizePayMode(booking.paymentMode),
         description: '',
         is_complimentary: false,
         meal_plan: (res.meal_plan as MealPlan) || 'EP',
@@ -1038,20 +1054,42 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 {unassignedBookings.length} Unassigned OTA Reservation{unassignedBookings.length > 1 ? 's' : ''} (Need Room Allocation)
               </span>
             </div>
+            <button
+              onClick={handleAutoAssignAll}
+              disabled={autoAssigningAll}
+              className="flex items-center gap-1.5 px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50"
+            >
+              {autoAssigningAll ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Zap className="w-3.5 h-3.5" />
+              )}
+              Auto-Assign All
+            </button>
           </div>
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {unassignedBookings.map((b) => (
-              <button
-                key={b.id}
-                onClick={() => setSelectedBooking(b)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs text-slate-800 hover:bg-amber-100/50 transition shrink-0 shadow-xs text-left cursor-pointer"
-              >
-                <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                <span className="font-bold text-slate-900">{b.guestName || 'Guest'}</span>
-                <span className="text-slate-500">({b.checkIn} → {b.checkOut})</span>
-                <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">Assign Room</span>
-              </button>
-            ))}
+            {unassignedBookings.map((b) => {
+              const reason = extractUnassignedReason(b.rawReservation);
+              return (
+                <button
+                  key={b.id}
+                  onClick={() => setSelectedBooking(b)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs text-slate-800 hover:bg-amber-100/50 transition shrink-0 shadow-xs text-left cursor-pointer"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <span className="font-bold text-slate-900">{b.guestName || 'Guest'}</span>
+                  <span className="text-slate-500">({b.checkIn} → {b.checkOut})</span>
+                  {reason && reason !== 'UNASSIGNED' && (
+                    <span className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded">
+                      {reason}
+                    </span>
+                  )}
+                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                    Assign Room
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1445,6 +1483,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           onRoomShift={handleRoomShift}
           onExtendStay={handleExtendStay}
           onViewFolio={handleViewFolio}
+          onSaved={load}
         />
       )}
 
@@ -1528,7 +1567,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
               total: selectedBooking.rate * selectedBooking.nights,
               company: selectedBooking.sourceName,
               source_category: (selectedBooking.sourceCategory as SourceCategory) || 'Direct/Walking',
-              pay_mode: (selectedBooking.paymentMode as PayMode) || 'Cash',
+              pay_mode: normalizePayMode(selectedBooking.paymentMode),
               description: '',
               is_complimentary: false,
               meal_plan: ((selectedBooking.raw as Reservation)?.meal_plan as MealPlan) || 'EP',

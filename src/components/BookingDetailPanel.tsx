@@ -4,18 +4,30 @@ import {
   Wallet, Banknote, Smartphone, CreditCard, Edit3, LogIn, LogOut,
   FileText, MessageCircle, Trash2, AlertCircle, Loader2, MapPin,
   Users, UtensilsCrossed, Receipt, Clock, User, Building2,
-  ArrowRight, CalendarPlus,
+  ArrowRight, CalendarPlus, Printer, Download, Zap,
 } from 'lucide-react';
 import type {
   RoomChartEntry, RoomChartEntryInput, HotelSettings,
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, MealPlan, GstType, GstSlab,
   FrontOfficeRole,
 } from '@/lib/types';
-import { GST_TYPES, GST_SLABS, MEAL_PLANS, SOURCE_CATEGORIES, canCheckoutAnyway, canRoomShift, canDeleteBooking } from '@/lib/types';
+import { GST_TYPES, GST_SLABS, MEAL_PLANS, SOURCE_CATEGORIES, canCheckoutAnyway, canRoomShift, canDeleteBooking, normalizePayMode } from '@/lib/types';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
 import { fmtMoney, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { classifyCompany } from '@/lib/api';
+import {
+  getReservationConfirmationData,
+  sendReservationConfirmationEmail,
+  openWhatsAppConfirmation,
+  autoAssignReservation,
+  extractUnassignedReason,
+} from '@/lib/api-reservations';
+import {
+  downloadReservationConfirmationPdf,
+  printReservationConfirmationPdf,
+} from '@/lib/pdf-reservation';
 import { brand } from '@/lib/theme';
+
 
 export interface BoardBooking {
   id: string;
@@ -60,6 +72,7 @@ interface BookingDetailPanelProps {
   onRoomShift: (booking: BoardBooking) => void;
   onExtendStay: (booking: BoardBooking) => void;
   onViewFolio: (booking: BoardBooking) => void;
+  onSaved?: () => void;
 }
 
 const fmtDate = (d: string): string => {
@@ -91,10 +104,12 @@ const STATUS_COLORS: Record<string, string> = {
 export const BookingDetailPanel = ({
   booking, settings, sources, categories, rooms, date, role, saving,
   onClose, onEditEntry, onDeleteEntry, onEditReservation, onDeleteReservation,
-  onCheckIn, onCheckOut, onRoomShift, onExtendStay, onViewFolio,
+  onCheckIn, onCheckOut, onRoomShift, onExtendStay, onViewFolio, onSaved,
 }: BookingDetailPanelProps) => {
   const [editMode, setEditMode] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [autoAssignMsg, setAutoAssignMsg] = useState<string | null>(null);
 
   const room = useMemo(
     () => rooms.find((r) => r.room_no.trim().toLowerCase() === booking.roomNo.trim().toLowerCase()),
@@ -108,6 +123,116 @@ export const BookingDetailPanel = ({
   const isReservation = booking.type === 'reservation';
   const reservation = isReservation ? booking.raw as Reservation : null;
   const entry = !isReservation ? booking.raw as RoomChartEntry : null;
+
+  // Document action state (Sections 8-16, 19)
+  const [activeDocAction, setActiveDocAction] = useState<'pdf' | 'print' | 'email' | 'whatsapp' | null>(null);
+  const [docSuccess, setDocSuccess] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+
+  const targetResId = reservation?.id || booking.id;
+
+  const handleDocPdf = async () => {
+    if (activeDocAction) return;
+    setActiveDocAction('pdf');
+    setDocError(null);
+    setDocSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(targetResId);
+      downloadReservationConfirmationPdf({
+        reservation: data.reservation,
+        settings: data.hotel as any,
+      });
+      setDocSuccess('Confirmation PDF downloaded.');
+    } catch (err: any) {
+      setDocError(err.message || 'Failed to generate confirmation PDF.');
+    } finally {
+      setActiveDocAction(null);
+      setTimeout(() => setDocSuccess(null), 4000);
+    }
+  };
+
+  const handleDocPrint = async () => {
+    if (activeDocAction) return;
+    setActiveDocAction('print');
+    setDocError(null);
+    setDocSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(targetResId);
+      printReservationConfirmationPdf({
+        reservation: data.reservation,
+        settings: data.hotel as any,
+      });
+      setDocSuccess('Print dialog opened.');
+    } catch (err: any) {
+      setDocError(err.message || 'Failed to print confirmation.');
+    } finally {
+      setActiveDocAction(null);
+      setTimeout(() => setDocSuccess(null), 4000);
+    }
+  };
+
+  const handleDocEmail = async () => {
+    if (activeDocAction) return;
+    setActiveDocAction('email');
+    setDocError(null);
+    setDocSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(targetResId);
+      const res = await sendReservationConfirmationEmail(data);
+      setDocSuccess(res.message || 'Confirmation email dispatched.');
+    } catch (err: any) {
+      setDocError(err.message || 'Failed to send confirmation email.');
+    } finally {
+      setActiveDocAction(null);
+      setTimeout(() => setDocSuccess(null), 5000);
+    }
+  };
+
+  const handleDocWhatsApp = async () => {
+    if (activeDocAction) return;
+    setActiveDocAction('whatsapp');
+    setDocError(null);
+    setDocSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(targetResId);
+      openWhatsAppConfirmation(data);
+      setDocSuccess('Opened WhatsApp confirmation.');
+    } catch (err: any) {
+      setDocError(err.message || 'No valid phone number for WhatsApp.');
+    } finally {
+      setActiveDocAction(null);
+      setTimeout(() => setDocSuccess(null), 4000);
+    }
+  };
+
+  const isUnassigned = useMemo(() => {
+    const r = String(booking.roomNo || '').trim().toLowerCase();
+    return !r || r === 'unassigned' || r === 'tbd';
+  }, [booking.roomNo]);
+
+  const unassignedReason = useMemo(() => {
+    return extractUnassignedReason(booking.rawReservation || booking.raw);
+  }, [booking]);
+
+  const handleAutoAssignSingle = async () => {
+    const resId = isReservation ? (reservation?.id || booking.id) : null;
+    if (!resId || autoAssigning) return;
+    setAutoAssigning(true);
+    setAutoAssignMsg(null);
+    try {
+      const res = await autoAssignReservation(resId);
+      if (res.success && res.roomNo) {
+        setAutoAssignMsg(`Successfully allocated Room ${res.roomNo}!`);
+        onSaved?.();
+      } else {
+        setAutoAssignMsg(res.message || `Could not allocate room: ${res.reason || 'No room available'}`);
+      }
+    } catch (err: any) {
+      setAutoAssignMsg(err?.message || 'Automatic assignment failed.');
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
 
   const [editGuest, setEditGuest] = useState(booking.guestName);
   const [editPhone, setEditPhone] = useState(booking.phone);
@@ -160,7 +285,7 @@ export const BookingDetailPanel = ({
         total: editTotal,
         company: editSource,
         source_category: srcCat,
-        pay_mode: editPayMode as PayMode,
+        pay_mode: normalizePayMode(editPayMode),
         remarks: editRemarks,
         pay_advance: editAdvance,
         pay_balance: editBalance,
@@ -219,13 +344,50 @@ export const BookingDetailPanel = ({
           </button>
         </div>
 
-        {/* Status badge */}
+        {/* Status badge & Unassigned reason */}
         {!editMode && (
-          <div className="px-5 py-2.5 border-b border-slate-100 bg-slate-50">
+          <div className="px-5 py-2.5 border-b border-slate-100 bg-slate-50 flex items-center justify-between gap-2 flex-wrap">
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${statusColor}`}>
               <span className="w-1.5 h-1.5 rounded-full bg-current" />
               {statusLabel}
             </span>
+            {isUnassigned && unassignedReason && unassignedReason !== 'UNASSIGNED' && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-200">
+                {unassignedReason}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Unassigned quick action banner */}
+        {!editMode && isUnassigned && (
+          <div className="mx-5 mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-amber-900">Room Not Allocated</div>
+              <div className="text-[11px] text-amber-700 truncate">
+                {unassignedReason === 'NO_ELIGIBLE_ROOM' ? 'No active rooms found in category' :
+                 unassignedReason === 'ROOM_CATEGORY_NOT_MAPPED' ? 'Room category mapping required' :
+                 unassignedReason === 'NO_ROOM_FOR_FULL_STAY' ? 'All category rooms booked for these dates' :
+                 'Physical room needs to be assigned'}
+              </div>
+            </div>
+            {isReservation && (
+              <button
+                onClick={handleAutoAssignSingle}
+                disabled={autoAssigning}
+                className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition shadow-xs flex items-center gap-1 shrink-0 disabled:opacity-50 cursor-pointer"
+              >
+                {autoAssigning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Auto-Assign
+              </button>
+            )}
+          </div>
+        )}
+
+        {autoAssignMsg && (
+          <div className="mx-5 mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-semibold text-blue-800 flex items-center justify-between">
+            <span>{autoAssignMsg}</span>
+            <button onClick={() => setAutoAssignMsg(null)} className="text-blue-500 hover:text-blue-700 font-bold ml-2">×</button>
           </div>
         )}
 
@@ -278,9 +440,58 @@ export const BookingDetailPanel = ({
                 {booking.status === 'checked_out' && (
                   <ActionButton icon={LogOut} label="Checked Out" onClick={() => {}} />
                 )}
-                <ActionButton icon={MessageCircle} label="WhatsApp" onClick={handleWhatsApp} />
                 <ActionButton icon={Trash2} label="Cancel" onClick={() => setShowDeleteConfirm(true)} danger={!canDeleteBooking(role)} />
               </div>
+
+              {/* Confirmation Documents (Sections 8-16, 19) */}
+              <div className="pt-2 border-t border-slate-200">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">Documents & Confirmation</div>
+                <div className="grid grid-cols-4 gap-2">
+                  <DocActionBtn
+                    icon={activeDocAction === 'pdf' ? Loader2 : Download}
+                    label={activeDocAction === 'pdf' ? 'Loading…' : 'PDF'}
+                    loading={activeDocAction === 'pdf'}
+                    disabled={!!activeDocAction}
+                    onClick={handleDocPdf}
+                  />
+                  <DocActionBtn
+                    icon={activeDocAction === 'print' ? Loader2 : Printer}
+                    label={activeDocAction === 'print' ? 'Loading…' : 'Print'}
+                    loading={activeDocAction === 'print'}
+                    disabled={!!activeDocAction}
+                    onClick={handleDocPrint}
+                  />
+                  <DocActionBtn
+                    icon={activeDocAction === 'email' ? Loader2 : Mail}
+                    label={activeDocAction === 'email' ? 'Sending…' : 'Email'}
+                    loading={activeDocAction === 'email'}
+                    disabled={!!activeDocAction}
+                    onClick={handleDocEmail}
+                  />
+                  <DocActionBtn
+                    icon={activeDocAction === 'whatsapp' ? Loader2 : MessageCircle}
+                    label={activeDocAction === 'whatsapp' ? 'Opening…' : 'WhatsApp'}
+                    loading={activeDocAction === 'whatsapp'}
+                    disabled={!!activeDocAction}
+                    onClick={handleDocWhatsApp}
+                  />
+                </div>
+              </div>
+
+              {/* Status banners */}
+              {docSuccess && (
+                <div className="px-3 py-2 bg-emerald-50 text-emerald-800 text-xs font-semibold rounded-lg border border-emerald-200 flex items-center justify-between animate-fadeIn">
+                  <span>✓ {docSuccess}</span>
+                  <button onClick={() => setDocSuccess(null)} className="text-emerald-700 hover:text-emerald-900 font-bold ml-1">✕</button>
+                </div>
+              )}
+              {docError && (
+                <div className="px-3 py-2 bg-rose-50 text-rose-800 text-xs font-semibold rounded-lg border border-rose-200 flex items-center justify-between animate-fadeIn">
+                  <span>⚠ {docError}</span>
+                  <button onClick={() => setDocError(null)} className="text-rose-700 hover:text-rose-900 font-bold ml-1">✕</button>
+                </div>
+              )}
+
               {(booking.status === 'checked_in' || booking.status === 'occupied') && (
                 <div className="grid grid-cols-3 gap-2">
                   <button
@@ -564,3 +775,27 @@ const ActionButton = ({ icon: Icon, label, onClick, primary, danger }: {
     {label}
   </button>
 );
+
+const DocActionBtn = ({
+  icon: Icon,
+  label,
+  onClick,
+  loading = false,
+  disabled = false,
+}: {
+  icon: typeof FileText;
+  label: string;
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) => (
+  <button
+    onClick={onClick}
+    disabled={disabled || loading}
+    className="flex flex-col items-center gap-1 py-2.5 rounded-lg text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-xs"
+  >
+    <Icon className={`w-4 h-4 ${loading ? 'animate-spin text-brand-600' : 'text-slate-600'}`} />
+    <span>{label}</span>
+  </button>
+);
+

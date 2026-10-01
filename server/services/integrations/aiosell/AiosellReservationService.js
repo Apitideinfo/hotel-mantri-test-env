@@ -10,6 +10,7 @@ import { syncInventory, getCleanDateList, logSyncSafely } from '../../channelSyn
 import { withOtaLock } from '../../ReservationIdempotencyService.js';
 import { sendOtaNewReservationEmail, sendOtaNewReservationWhatsApp } from '../../notificationService.js';
 import { generateAndDeliverConfirmation } from '../../reservationDeliveryService.js';
+import { resolveHotelRoomCategory, autoAssignPhysicalRoom } from '../../RoomAssignmentService.js';
 
 const logSync = async (hotelId, operation, direction, status, message, metadata = null) => {
   try {
@@ -40,7 +41,20 @@ const toDateOnly = (dateVal, fallback) => {
   return fallback;
 };
 
-export const processAiosellReservation = async (payload, hotelId, options = {}) => {
+export const processAiosellReservation = async (arg1, arg2, options = {}) => {
+  let payload = (typeof arg1 === 'object' && arg1 !== null) ? arg1 : arg2;
+  let hotelId = typeof arg1 === 'string' ? arg1 : arg2;
+
+  // Normalize if raw webhook payload was passed directly
+  if (payload && (Array.isArray(payload.rooms) || payload.guest || !payload.guestName)) {
+    try {
+      const parsed = parseWebhookPayload(payload);
+      payload = { ...payload, ...parsed };
+    } catch {
+      // already normalized
+    }
+  }
+
   const idempotencyKey = String(payload.bookingId);
   const channelName = payload.channelName || 'aiosell';
 
@@ -53,66 +67,15 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
     let internalRatePlan = payload.rateplanCode || payload.rateplanName || 'OTA';
     let mappingStatus = 'mapped';
 
-    if (payload.roomCode) {
-      // Primary: lookup from channel_rate_mappings
-      let mapping = null;
-      if (payload.rateplanCode) {
-        const { data: rateSpecific } = await supabase
-          .from('channel_rate_mappings')
-          .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
-          .eq('hotel_id', hotelId)
-          .eq('external_room_code', payload.roomCode)
-          .eq('external_rate_plan_code', payload.rateplanCode)
-          .not('room_category_id', 'is', null)
-          .limit(1);
-        if (rateSpecific && rateSpecific.length > 0) {
-          mapping = rateSpecific[0];
-        }
-      }
+    const resolvedCat = await resolveHotelRoomCategory(hotelId, {
+      roomCode: payload.roomCode,
+      roomName: payload.roomName,
+      ratePlan: payload.rateplanCode,
+    });
 
-      if (!mapping) {
-        const { data: anyRoom } = await supabase
-          .from('channel_rate_mappings')
-          .select('room_category_id, rate_plan_id, external_rate_plan_code, status')
-          .eq('hotel_id', hotelId)
-          .eq('external_room_code', payload.roomCode)
-          .not('room_category_id', 'is', null)
-          .limit(1);
-        if (anyRoom && anyRoom.length > 0) {
-          mapping = anyRoom[0];
-        }
-      }
-
-      if (mapping && mapping.room_category_id) {
-        roomCategoryId = mapping.room_category_id;
-        if (mapping.external_rate_plan_code) internalRatePlan = mapping.external_rate_plan_code;
-
-        const { data: cat } = await supabase
-          .from('room_categories')
-          .select('name')
-          .eq('id', roomCategoryId)
-          .limit(1);
-        if (cat && cat.length > 0) roomCategoryName = cat[0].name;
-      } else {
-        // Fallback: lookup room category by name matching external room code or payload room name
-        const searchTerms = [payload.roomCode, payload.roomName].filter(Boolean);
-        for (const term of searchTerms) {
-          const { data: cat } = await supabase
-            .from('room_categories')
-            .select('id, name')
-            .eq('hotel_id', hotelId)
-            .ilike('name', `%${term}%`)
-            .limit(1);
-          if (cat && cat.length > 0) {
-            roomCategoryId = cat[0].id;
-            roomCategoryName = cat[0].name;
-            break;
-          }
-        }
-        if (!roomCategoryId) {
-          mappingStatus = 'mapping_required';
-        }
-      }
+    if (resolvedCat) {
+      roomCategoryId = resolvedCat.categoryId;
+      roomCategoryName = resolvedCat.categoryName;
     } else {
       mappingStatus = 'mapping_required';
     }
@@ -328,18 +291,12 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
       const roomSubMarker = roomsCount > 1 ? ` [ROOM: ${i + 1}/${roomsCount}]` : '';
       const fullMarker = `${idempotencyMarker}${roomSubMarker}`;
 
-      // Find available physical room (avoiding rooms assigned in this batch)
-      const physicalRoom = await findAvailablePhysicalRoom(
-        hotelId,
-        roomCategoryId,
-        ciStr,
-        coStr,
-        existingRow?.id || null,
-        assignedPhysicalRoomIds
-      );
-
-      if (physicalRoom.roomId) {
-        assignedPhysicalRoomIds.add(physicalRoom.roomId);
+      // Check if existing reservation row already has a valid physical room
+      let existingRoomId = null;
+      let existingRoomNo = 'Unassigned';
+      if (existingRow?.room_id && existingRow?.room_no && existingRow.room_no !== 'Unassigned') {
+        existingRoomId = existingRow.room_id;
+        existingRoomNo = existingRow.room_no;
       }
 
       const perRoomTotal = Math.round(totalAmount / roomsCount);
@@ -364,8 +321,8 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
         taxable_amount: perRoomTaxable,
         gst_amount: perRoomTax,
         invoice_total: perRoomTotal,
-        room_id: physicalRoom.roomId,
-        room_no: physicalRoom.roomNo,
+        room_id: existingRoomId,
+        room_no: existingRoomNo,
         rate_plan: internalRatePlan,
         payment_mode: 'OTA',
         advance_paid: perRoomAdvance,
@@ -379,7 +336,15 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
       };
 
       try {
-        const saved = await createOrUpdateReservation(pmsPayload, idempotencyKey, existingRow?.id || null);
+        const saved = await createOrUpdateReservation(
+          pmsPayload,
+          idempotencyKey,
+          existingRow?.id || null,
+          Array.from(assignedPhysicalRoomIds)
+        );
+        if (saved?.room_id) {
+          assignedPhysicalRoomIds.add(saved.room_id);
+        }
         createdReservations.push(saved);
       } catch (err) {
         console.error(`Failed to create/update room ${i + 1}/${roomsCount} in PMS:`, err);
@@ -392,7 +357,7 @@ export const processAiosellReservation = async (payload, hotelId, options = {}) 
       for (const excess of excessRows) {
         await supabase
           .from('reservations')
-          .update({ status: 'cancelled', room_id: null, updated_at: new Date().toISOString() })
+          .update({ status: 'cancelled', room_id: null, room_no: 'Unassigned', updated_at: new Date().toISOString() })
           .eq('id', excess.id);
       }
     }

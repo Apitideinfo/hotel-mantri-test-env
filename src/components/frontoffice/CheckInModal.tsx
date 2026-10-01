@@ -9,7 +9,7 @@ import type {
   SourceCategory, PayMode, MealPlan, GstType, GstSlab,
   FrontOfficeRole,
 } from '@/lib/types';
-import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
+import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo, normalizePayMode } from '@/lib/types';
 import type { Reservation } from '@/lib/types-reservations';
 import { fmtMoney, toNum, calcGstFull, calcStayNights, addDays } from '@/lib/calc';
 import { checkInGuest, validateCheckIn } from '@/lib/api-frontoffice';
@@ -104,6 +104,7 @@ export const CheckInModal = ({
   };
 
   const handleCheckIn = async () => {
+    if (saving) return;
     setError(null);
     if (roomRows.some((row) => !row.roomNo)) { setError('Select a room for every room row.'); return; }
     if (selectedRoomNos.size !== roomRows.length) { setError('The same room cannot be selected twice.'); return; }
@@ -116,7 +117,7 @@ export const CheckInModal = ({
       checkOut,
       sourceCategory: reservation?.source_category as SourceCategory,
       sourceName: reservation?.source_name,
-      paymentMode: reservation?.payment_mode as PayMode,
+      paymentMode: normalizePayMode(reservation?.payment_mode),
       advancePaid: reservation?.advance_paid,
       payCash: reservation?.pay_cash,
       payUpi: reservation?.pay_upi,
@@ -154,7 +155,7 @@ export const CheckInModal = ({
       setSuccess(true);
       setTimeout(() => { onCheckedIn(); }, 1200);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Check-in failed');
+      setError(e instanceof Error ? e.message : 'Unable to complete check-in because the room occupancy record could not be created. No changes were committed.');
     } finally {
       setSaving(false);
     }

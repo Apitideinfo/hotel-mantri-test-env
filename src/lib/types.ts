@@ -1,5 +1,18 @@
 export type SourceCategory = 'OTA' | 'Direct/Walking' | 'Corporate/Agent' | 'Phonebook';
 export type PayMode = 'Cash' | 'Bank';
+
+/**
+ * Authoritative PayMode normalizer for room_chart_entries.
+ * room_chart_entries.pay_mode has a database check constraint: CHECK (pay_mode IN ('Cash','Bank')).
+ * Cash transactions are recorded as 'Cash'. All non-cash payment channels
+ * (OTA payouts, UPI, Card, NetBanking, Cheque, Bank Transfer) route to 'Bank'.
+ */
+export const normalizePayMode = (mode?: string | null): PayMode => {
+  if (!mode) return 'Cash';
+  const m = mode.trim().toLowerCase();
+  if (m === 'cash') return 'Cash';
+  return 'Bank';
+};
 export type MealPlan = 'EP' | 'CP' | 'MAP' | 'AP';
 export type GstMode = 'Inclusive' | 'Exclusive';
 export type GstType = 'No Scope' | 'Inclusive' | 'Exclusive';

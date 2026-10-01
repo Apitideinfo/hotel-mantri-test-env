@@ -887,3 +887,41 @@ export function downloadReservationConfirmationPdf(options: ReservationPdfOption
   const filename = `Hotel-Mantri-Reservation-Confirmation-HM-${shortId}-v${options.version || 1}.pdf`;
   downloadPDF(doc, filename);
 }
+
+export function printReservationConfirmationPdf(options: ReservationPdfOptions): void {
+  const doc = buildReservationConfirmationPdf(options);
+  doc.autoPrint();
+  const blobUrl = doc.output('bloburl');
+
+  // Dedicated isolated printing container / iframe:
+  // Guarantees ONLY the reservation confirmation document is sent to the printer,
+  // never the application shell, navigation, or modals (Section 10).
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.src = blobUrl as any;
+  document.body.appendChild(iframe);
+
+  iframe.onload = () => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } catch {
+      const printWin = window.open(blobUrl as any, '_blank');
+      if (printWin) {
+        printWin.focus();
+      }
+    }
+    setTimeout(() => {
+      try {
+        document.body.removeChild(iframe);
+      } catch {}
+      URL.revokeObjectURL(blobUrl as any);
+    }, 60000);
+  };
+}
+

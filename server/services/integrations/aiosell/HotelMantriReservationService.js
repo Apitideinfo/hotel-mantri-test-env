@@ -1,7 +1,8 @@
 import { supabaseServiceRole } from '../../../supabaseClient.js';
 import dotenv from 'dotenv';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
-import { checkRoomAvailability, normalizePhysicalRoom } from '../../ReservationConflictService.js';
+import { checkRoomAvailability, normalizePhysicalRoom, withRoomLock } from '../../ReservationConflictService.js';
+import { autoAssignPhysicalRoom, resolveHotelRoomCategory, isAutoAssignEnabled } from '../../RoomAssignmentService.js';
 dotenv.config();
 
 export const getSupabase = () => supabaseServiceRole;
@@ -20,7 +21,7 @@ export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkIn
     // 1. Fetch active physical rooms in this category
     const { data: physicalRooms, error: roomsErr } = await supabase
       .from('rooms')
-      .select('id, room_no')
+      .select('id, room_no, room_status, housekeeping_status, is_active')
       .eq('hotel_id', hotelId)
       .eq('category_id', roomCategoryId)
       .eq('is_active', true)
@@ -30,51 +31,37 @@ export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkIn
       return { roomId: null, roomNo: 'Unassigned' };
     }
 
-    // 2. Fetch occupied reservations in this date range
-    let resQuery = supabase
-      .from('reservations')
-      .select('id, room_id, room_no')
-      .eq('hotel_id', hotelId)
-      .in('status', ['confirmed', 'checked_in'])
-      .lt('check_in_date', checkOutDate)
-      .gt('check_out_date', checkInDate);
-
-    if (excludeReservationId) {
-      resQuery = resQuery.neq('id', excludeReservationId);
-    }
-
-    const { data: bookedReservations } = await resQuery;
-
-    // 3. Fetch occupied in-house room chart entries
-    const { data: occupiedEntries } = await supabase
-      .from('room_chart_entries')
-      .select('room_no')
-      .eq('hotel_id', hotelId)
-      .is('checked_out_at', null)
-      .lt('report_date', checkOutDate)
-      .gte('report_date', checkInDate);
-
-    const occupiedRoomNos = new Set();
-    const occupiedRoomIds = new Set();
-
-    (bookedReservations || []).forEach(r => {
-      if (r.room_id) occupiedRoomIds.add(r.room_id);
-      if (r.room_no) occupiedRoomNos.add(r.room_no.trim().toLowerCase());
-    });
-
-    (occupiedEntries || []).forEach(e => {
-      if (e.room_no) occupiedRoomNos.add(e.room_no.trim().toLowerCase());
-    });
+    const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+    const eligibleRooms = physicalRooms.filter(r => !nonAssignable.has(String(r.room_status || '').toLowerCase()));
 
     const excludeSet = excludeRoomIds instanceof Set ? excludeRoomIds : new Set(Array.isArray(excludeRoomIds) ? excludeRoomIds : []);
 
-    // 4. Find the first physical room that is not occupied
-    const freeRoom = physicalRooms.find(r => 
-      !occupiedRoomIds.has(r.id) && !excludeSet.has(r.id) && !occupiedRoomNos.has(r.room_no.trim().toLowerCase())
-    );
+    // Deterministic sort: vacant first, room_no ascending
+    const sorted = [...eligibleRooms].sort((a, b) => {
+      const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+      const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+      if (aVacant && !bVacant) return -1;
+      if (!aVacant && bVacant) return 1;
+      const numA = parseInt(a.room_no, 10);
+      const numB = parseInt(b.room_no, 10);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.room_no.localeCompare(b.room_no);
+    });
 
-    if (freeRoom) {
-      return { roomId: freeRoom.id, roomNo: freeRoom.room_no };
+    for (const room of sorted) {
+      if (excludeSet.has(room.id) || excludeSet.has(room.room_no)) continue;
+
+      const avail = await checkRoomAvailability({
+        hotelId,
+        roomNo: room.room_no,
+        checkIn: checkInDate,
+        checkOut: checkOutDate,
+        excludeReservationId,
+      });
+
+      if (avail.available) {
+        return { roomId: room.id, roomNo: room.room_no };
+      }
     }
 
     return { roomId: null, roomNo: 'Unassigned' };
@@ -166,7 +153,12 @@ export const upsertGuest = async (hotelId, guestInfo = {}) => {
  * Creates or updates a reservation in the core PMS `reservations` table.
  * Strictly maintains idempotency via external booking ID and reservation ID.
  */
-export const createOrUpdateReservation = async (reservationData, externalId, existingReservationId = null) => {
+export const createOrUpdateReservation = async (
+  reservationData,
+  externalId,
+  existingReservationId = null,
+  excludeRoomIds = []
+) => {
   const supabase = getSupabase();
   const idempotencyMarker = `[OTA_BOOKING_ID: ${externalId}]`;
   const legacyMarker = `[AIOSELL_BOOKING_ID: ${externalId}]`;
@@ -245,10 +237,24 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
   }
 
   if (existing) {
-    // Preserve existing physical room assignment if already set and new payload didn't assign one
-    if (existing.room_id && (!payload.room_id || payload.room_no === 'Unassigned' || payload.room_no === 'TBD')) {
-      payload.room_id = existing.room_id;
-      payload.room_no = existing.room_no;
+    // If existing reservation has a physical room, check if it remains conflict-free for the stay dates
+    if (existing.room_id && existing.room_no && (!payload.room_id || payload.room_no === 'Unassigned' || payload.room_no === 'TBD')) {
+      const stillAvail = await checkRoomAvailability({
+        hotelId: reservationData.hotel_id,
+        roomNo: existing.room_no,
+        checkIn: cleanCheckIn,
+        checkOut: cleanCheckOut,
+        excludeReservationId: existing.id,
+      });
+
+      if (stillAvail.available) {
+        payload.room_id = existing.room_id;
+        payload.room_no = existing.room_no;
+      } else {
+        console.warn(`[OTA Service] Existing room ${existing.room_no} now conflicts with updated stay ${cleanCheckIn} to ${cleanCheckOut}. Will auto-reassign.`);
+        payload.room_id = null;
+        payload.room_no = 'Unassigned';
+      }
     }
 
     // Preserve valid local guest details if incoming payload has blanks
@@ -277,6 +283,23 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
 
     if (error) throw new Error(`Failed to update reservation: ${error.message}`);
 
+    // If reservation remains unassigned, attempt automatic physical room assignment
+    if (!data.room_id || data.room_no === 'Unassigned' || data.room_no === 'TBD') {
+      try {
+        const autoRes = await autoAssignPhysicalRoom({
+          hotelId: payload.hotel_id,
+          reservationId: data.id,
+          excludeRoomIds,
+        });
+        if (autoRes?.success && autoRes.roomNo) {
+          data.room_no = autoRes.roomNo;
+          data.room_id = autoRes.roomId;
+        }
+      } catch (autoErr) {
+        console.warn('[HotelMantriReservationService] Automatic assignment non-blocking warning:', autoErr.message);
+      }
+    }
+
     return data;
   } else {
     // Create new reservation
@@ -300,6 +323,23 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
       .single();
 
     if (error) throw new Error(`Failed to create reservation: ${error.message}`);
+
+    // Attempt automatic room assignment immediately upon import if room is not yet assigned
+    if (!data.room_id || data.room_no === 'Unassigned' || data.room_no === 'TBD') {
+      try {
+        const autoRes = await autoAssignPhysicalRoom({
+          hotelId: payload.hotel_id,
+          reservationId: data.id,
+          excludeRoomIds,
+        });
+        if (autoRes?.success && autoRes.roomNo) {
+          data.room_no = autoRes.roomNo;
+          data.room_id = autoRes.roomId;
+        }
+      } catch (autoErr) {
+        console.warn('[HotelMantriReservationService] Automatic assignment non-blocking warning:', autoErr.message);
+      }
+    }
 
     return data;
   }
@@ -335,6 +375,7 @@ export const cancelReservation = async (hotelId, externalId, existingReservation
     .update({ 
       status: 'cancelled',
       room_id: null,
+      room_no: 'Unassigned',
       updated_at: new Date().toISOString()
     })
     .in('id', idsToCancel)

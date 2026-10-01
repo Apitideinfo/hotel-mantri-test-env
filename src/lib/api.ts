@@ -5,6 +5,7 @@ import type {
   OtherDailyEntries, OtherDailyEntriesInput, CompanySource, SourceCategory, DerivedReport,
   RoomCategory, Room, RoomInput, PayMode, MealPlan, GstType, GstSlab,
 } from './types';
+import { normalizePayMode } from './types';
 import type { Reservation } from './types-reservations';
 import { calcCashClosing, toNum, buildDerivedReport, aggregateRoomChart, buildMtdYtdFromDaily, buildCashFlow, calcTotalRevenue, aggregateDerived, getTodayLocal, calcStayNights, isStayOccupiedOnDate, addDays, reconcilePeriodFinances } from './calc';
 import { reconcilePaymentLedger, type PaymentTransaction } from './financialLedger';
@@ -318,7 +319,7 @@ export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
     total: isComplimentary ? 0 : invTotal,
     company: r.source_name || '',
     source_category: (r.source_category as SourceCategory) || 'Direct/Walking',
-    pay_mode: (r.payment_mode as PayMode) || 'Cash',
+    pay_mode: normalizePayMode(r.payment_mode),
     description: '',
     is_complimentary: isComplimentary,
     meal_plan: (r.meal_plan as MealPlan) || 'EP',
@@ -405,7 +406,14 @@ export const saveRoomChartRow = async (
   const nights = (input.arrival && input.departure)
     ? calcStayNights(input.arrival, input.departure)
     : Math.max(1, toNum(input.nights) || 1);
-  const payload = { ...input, nights, hotel_id: getCurrentHotelId(), source_category: category };
+  const normalizedPayMode = normalizePayMode(input.pay_mode);
+  const payload = {
+    ...input,
+    nights,
+    hotel_id: getCurrentHotelId(),
+    source_category: category,
+    pay_mode: normalizedPayMode,
+  };
   if (existingId) {
     const { data, error } = await supabase
       .from('room_chart_entries')

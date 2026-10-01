@@ -10,6 +10,7 @@ import type {
   RatePlan, RatePlanInput, RatePlanType,
   WaitlistEntry, WaitlistInput, WaitlistStatus,
   RoomBlock, RoomBlockInput, BlockType,
+  ReservationConfirmationData,
 } from './types-reservations';
 import { isValidEmail } from './types-reservations';
 
@@ -542,6 +543,78 @@ export const assignPhysicalRoom = async (
     room_no: r.room_no,
   }).catch(e => console.warn('[assignPhysicalRoom] Auto-sync warning:', e));
   return r;
+};
+
+export const extractUnassignedReason = (reservation: any): string => {
+  const note = reservation?.internal_note || reservation?.remarks || '';
+  const match = note.match(/\[UNASSIGNED_REASON:\s*([^\]]+)\]/i);
+  if (match) return match[1].trim();
+  const room = String(reservation?.room_no || '').trim().toLowerCase();
+  if (room === 'tbd' || room === 'unassigned' || !room) {
+    return 'UNASSIGNED';
+  }
+  return '';
+};
+
+export const autoAssignReservation = async (
+  reservationId: string,
+  preferredRoomNo?: string | null,
+): Promise<{ success: boolean; roomNo?: string; roomId?: string; categoryName?: string; reason?: string; message?: string }> => {
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/auto-assign`, {
+      method: 'POST',
+      body: JSON.stringify({ preferredRoomNo }),
+    });
+    if (res?.success && res.roomNo) {
+      dispatchChannelEvent('ROOM_TRANSFER', {
+        room_no: res.roomNo,
+      }).catch(e => console.warn('[autoAssignReservation] Auto-sync warning:', e));
+    }
+    return res;
+  } catch (err: any) {
+    return {
+      success: false,
+      reason: err?.code || 'AUTO_ASSIGN_FAILED',
+      message: err?.message || 'Automatic room assignment failed.',
+    };
+  }
+};
+
+export const batchAutoAssignReservations = async (): Promise<{
+  total: number;
+  assignedCount: number;
+  unassignedCount: number;
+  results: any[];
+}> => {
+  try {
+    const res = await apiFetch('/api/reservations/auto-assign-all', {
+      method: 'POST',
+    });
+    return res;
+  } catch (err: any) {
+    throw new Error(err?.message || 'Failed to auto-assign unassigned reservations.');
+  }
+};
+
+export const getAutoAssignSetting = async (): Promise<boolean> => {
+  try {
+    const res = await apiFetch('/api/reservations/auto-assign-setting');
+    return res?.enabled !== false;
+  } catch {
+    return true; // Default ON
+  }
+};
+
+export const setAutoAssignSetting = async (enabled: boolean): Promise<boolean> => {
+  try {
+    const res = await apiFetch('/api/reservations/auto-assign-setting', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    return res?.enabled !== false;
+  } catch {
+    return enabled;
+  }
 };
 
 export const checkInReservation = async (reservationId: string): Promise<Reservation> => {
@@ -1502,5 +1575,347 @@ export const getReservationConflicts = async (): Promise<any[]> => {
     }
   }
   return conflicts;
+};
+
+/**
+ * Authoritative Reservation Confirmation Data Service (Section 16)
+ * Single authoritative source of truth for PDF, Print, Email, and WhatsApp.
+ */
+export const getReservationConfirmationData = async (
+  reservationId: string
+): Promise<ReservationConfirmationData> => {
+  if (!reservationId) {
+    throw new Error('Reservation ID is required.');
+  }
+
+  // 1. Try fetching authoritative reservation record
+  let reservation: Reservation | null = null;
+  const { data: resData } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('id', reservationId)
+    .maybeSingle();
+
+  if (resData) {
+    reservation = resData as Reservation;
+  } else {
+    // Check if reservationId is actually a room_chart_entry id
+    const { data: entryData } = await supabase
+      .from('room_chart_entries')
+      .select('*')
+      .eq('id', reservationId)
+      .maybeSingle();
+
+    if (entryData) {
+      if (entryData.reservation_id) {
+        const { data: linkedRes } = await supabase
+          .from('reservations')
+          .select('*')
+          .eq('id', entryData.reservation_id)
+          .maybeSingle();
+        if (linkedRes) {
+          reservation = linkedRes as Reservation;
+        }
+      }
+
+      // If no linked reservation exists, synthesize authoritative reservation from entry
+      if (!reservation) {
+        const advance = toNum(entryData.pay_cash) + toNum(entryData.pay_upi) + toNum(entryData.pay_card) + toNum(entryData.pay_bank);
+        reservation = {
+          id: entryData.id,
+          hotel_id: entryData.hotel_id,
+          room_id: null,
+          room_no: entryData.room_no || 'Unassigned',
+          guest_name: entryData.guest_name || 'Valued Guest',
+          guest_phone: '',
+          guest_email: '',
+          guest_address: '',
+          guest_type: entryData.source_category || 'Direct',
+          company_gst: '',
+          check_in_date: entryData.arrival || entryData.report_date,
+          check_out_date: entryData.departure || entryData.report_date,
+          nights: entryData.nights || 1,
+          rate: toNum(entryData.room_rate),
+          source_category: entryData.source_category || 'Direct',
+          source_name: entryData.company || 'Direct',
+          payment_mode: entryData.pay_mode || 'Cash',
+          advance_paid: advance,
+          pay_cash: toNum(entryData.pay_cash),
+          pay_upi: toNum(entryData.pay_upi),
+          pay_card: toNum(entryData.pay_card),
+          pay_bank: toNum(entryData.pay_bank),
+          payment_ref: '',
+          discount: 0,
+          meal_plan: entryData.meal_plan || 'EP',
+          gst_type: entryData.gst_type || 'No Scope',
+          gst_slab: 0,
+          gst_amount: toNum(entryData.gst_amount),
+          taxable_amount: toNum(entryData.taxable_amount) || toNum(entryData.total),
+          invoice_total: toNum(entryData.invoice_total) || toNum(entryData.total),
+          adults: 1,
+          children: 0,
+          remarks: entryData.remarks || '',
+          internal_note: '',
+          created_by: 'STAFF',
+          status: entryData.checked_out_at ? 'checked_out' : 'checked_in',
+          room_chart_entry_id: entryData.id,
+          group_id: null,
+          rate_plan: 'Standard',
+          parent_reservation_id: null,
+          guest_id: null,
+          created_at: entryData.created_at || new Date().toISOString(),
+          updated_at: entryData.updated_at || new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  if (!reservation) {
+    throw new Error('Reservation record not found.');
+  }
+
+  const hotelId = reservation.hotel_id || getCurrentHotelId();
+
+  // 2. Load linked guest record if available
+  let guest = {
+    id: reservation.guest_id || undefined,
+    name: reservation.guest_name || 'Valued Guest',
+    phone: reservation.guest_phone || '',
+    email: reservation.guest_email || '',
+    address: reservation.guest_address || '',
+  };
+
+  if (reservation.guest_id) {
+    const { data: g } = await supabase
+      .from('guests')
+      .select('*')
+      .eq('id', reservation.guest_id)
+      .maybeSingle();
+    if (g) {
+      guest = {
+        id: g.id,
+        name: g.name || guest.name,
+        phone: g.phone || guest.phone,
+        email: g.email || guest.email,
+        address: g.address || guest.address,
+      };
+    }
+  }
+
+  // 3. Load hotel settings and hotel record
+  const [{ data: settingsData }, { data: hotelData }] = await Promise.all([
+    supabase.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle(),
+    supabase.from('hotels').select('*').eq('id', hotelId).maybeSingle(),
+  ]);
+
+  const hotelSettings = settingsData || {};
+  const hotelInfo = hotelData || {};
+
+  const hotelName = hotelSettings.hotel_name || hotelInfo.hotel_name || 'Hotel Mantri';
+  const hotelPhone = hotelSettings.phone || hotelInfo.phone || '';
+  const hotelEmail = hotelSettings.email || hotelInfo.email || '';
+  const hotelAddress = [
+    hotelSettings.address || hotelInfo.address,
+    hotelSettings.city,
+    hotelSettings.state_name,
+    hotelSettings.pin_code,
+  ].filter(Boolean).join(', ');
+
+  const hotel = {
+    id: hotelId,
+    hotel_name: hotelName,
+    phone: hotelPhone,
+    email: hotelEmail,
+    address: hotelAddress,
+    city: hotelSettings.city || '',
+    state_name: hotelSettings.state_name || '',
+    pin_code: hotelSettings.pin_code || '',
+    gst_number: hotelSettings.gst_number || '',
+    logo_url: hotelSettings.logo_url,
+    check_in_time: hotelSettings.check_in_time || '12:00 Hrs',
+    check_out_time: hotelSettings.check_out_time || '10:00 Hrs',
+    cancellation_policy: hotelSettings.cancellation_policy || 'Standard cancellation policy applies.',
+    important_notes: hotelSettings.important_notes || '',
+  };
+
+  // 4. Resolve room category
+  let roomCategory = reservation.rate_plan || (reservation as any).room_category || 'Standard';
+  let roomId = reservation.room_id || undefined;
+  if (reservation.room_no && reservation.room_no !== 'Unassigned') {
+    const { data: rooms } = await supabase.from('rooms').select('*').eq('hotel_id', hotelId);
+    const room = (rooms || []).find((r: any) => r.room_no?.trim().toLowerCase() === reservation.room_no?.trim().toLowerCase());
+    if (room) {
+      roomId = room.id;
+      if (room.category_id) {
+        const { data: cat } = await supabase.from('room_categories').select('*').eq('id', room.category_id).maybeSingle();
+        if (cat?.name) {
+          roomCategory = cat.name;
+        }
+      }
+    }
+  }
+
+  // 5. Calculate stay dates (Hotel-local dates inclusive check-in, exclusive check-out)
+  const checkIn = String(reservation.check_in_date || '').slice(0, 10);
+  const checkOut = String(reservation.check_out_date || '').slice(0, 10);
+  const nights = calcStayNights(checkIn, checkOut);
+  const bookingDate = reservation.created_at || new Date().toISOString();
+
+  // 6. Calculate authoritative charges
+  const rate = Number(reservation.rate) || 0;
+  const roomCharges = rate * nights;
+  const taxableAmount = Number(reservation.taxable_amount) || roomCharges;
+  const gstAmount = Number(reservation.gst_amount) || 0;
+  const totalAmount = Number(reservation.invoice_total) || (taxableAmount + gstAmount);
+
+  // 7. Calculate authoritative payments and balance
+  const advancePaid = Number(reservation.advance_paid) || 0;
+  const balance = Math.max(0, totalAmount - advancePaid);
+  const paymentStatus = (balance === 0 ? 'Paid' : (advancePaid > 0 ? 'Partially Paid' : 'Pending')) as 'Paid' | 'Partially Paid' | 'Pending';
+  const paymentMode = reservation.payment_mode || 'Cash';
+
+  // 8. Resolve booking source & OTA details
+  const rawNote = `${reservation.internal_note || ''} ${reservation.remarks || ''}`;
+  const otaMatch = rawNote.match(/\[OTA_BOOKING_ID:\s*([^\]]+)\]/i) || rawNote.match(/\[AIOSELL_BOOKING_ID:\s*([^\]]+)\]/i);
+  const otaBookingId = otaMatch && otaMatch[1] ? otaMatch[1].trim() : '';
+  const catStr = String(reservation.source_category || '').toLowerCase();
+  const nameStr = String(reservation.source_name || '').toLowerCase();
+
+  const isOta = !!(otaBookingId || catStr.includes('ota') || String(reservation.guest_type || '').toUpperCase() === 'OTA' ||
+    nameStr.includes('agoda') || nameStr.includes('makemytrip') || nameStr.includes('booking') || nameStr.includes('goibibo'));
+
+  const sourceType = (isOta ? 'OTA' : 'MANUAL') as 'OTA' | 'MANUAL';
+  const sourceName = reservation.source_name || reservation.source_category || (isOta ? 'OTA' : 'Direct');
+  const shortId = (reservation.id || '').slice(0, 8).toUpperCase();
+  const confirmationNumber = otaBookingId || `HM-RES-${shortId}`;
+
+  // 9. Resolve contacts according to Section 12 rule:
+  // Manual -> Guest email. OTA -> Owner email.
+  const targetEmail = isOta ? (hotelEmail || null) : (guest.email || null);
+  const targetPhone = guest.phone || hotelPhone || null;
+
+  return {
+    hotel,
+    guest,
+    reservation,
+    room: {
+      room_no: reservation.room_no || 'Unassigned',
+      room_id: roomId,
+      room_category: roomCategory,
+      rate_plan: reservation.rate_plan || 'Standard',
+      meal_plan: reservation.meal_plan || 'EP',
+    },
+    dates: {
+      checkIn,
+      checkOut,
+      nights,
+      bookingDate,
+    },
+    charges: {
+      rate,
+      roomCharges,
+      taxableAmount,
+      gstAmount,
+      totalAmount,
+    },
+    payments: {
+      advancePaid,
+      paymentMode,
+      paymentStatus,
+    },
+    balance,
+    source: {
+      sourceType,
+      sourceName,
+      otaBookingId,
+      confirmationNumber,
+    },
+    contacts: {
+      guestContact: {
+        name: guest.name,
+        phone: guest.phone,
+        email: guest.email,
+      },
+      ownerContact: {
+        name: hotelName,
+        phone: hotelPhone,
+        email: hotelEmail,
+      },
+      targetEmail,
+      targetPhone,
+    },
+  };
+};
+
+/**
+ * Builds the authoritative WhatsApp confirmation message (Section 15)
+ */
+export const buildWhatsAppConfirmationText = (data: ReservationConfirmationData): string => {
+  const hotelName = data.hotel.hotel_name || 'Hotel Mantri';
+  const lines = [
+    `*${hotelName} Reservation Confirmation*`,
+    '',
+    `Guest: ${data.guest.name}`,
+    `Booking ID: ${data.source.confirmationNumber}`,
+    `Room: ${data.room.room_no} - ${data.room.room_category}`,
+    `Check-in: ${data.dates.checkIn}`,
+    `Check-out: ${data.dates.checkOut}`,
+    `Nights: ${data.dates.nights}`,
+    '',
+    `Grand Total: ₹${Math.round(data.charges.totalAmount).toLocaleString('en-IN')}`,
+    `Received: ₹${Math.round(data.payments.advancePaid).toLocaleString('en-IN')}`,
+    `Balance: ₹${Math.round(data.balance).toLocaleString('en-IN')}`,
+  ];
+  return lines.join('\n');
+};
+
+/**
+ * Dispatches or opens WhatsApp with authoritative reservation text (Section 15)
+ */
+export const openWhatsAppConfirmation = (data: ReservationConfirmationData): string => {
+  const targetPhone = data.contacts.targetPhone || data.contacts.guestContact.phone || data.contacts.ownerContact.phone;
+  const digits = (targetPhone || '').replace(/\D/g, '');
+  if (!digits) {
+    throw new Error('No valid mobile phone number available for WhatsApp.');
+  }
+  const formattedPhone = digits.length === 10 ? `91${digits}` : digits;
+  const text = buildWhatsAppConfirmationText(data);
+  const url = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`;
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return url;
+};
+
+/**
+ * Sends reservation confirmation email via server SMTP service (Section 11-14)
+ */
+export const sendReservationConfirmationEmail = async (
+  data: ReservationConfirmationData,
+  recipientEmailOverride?: string
+): Promise<{ success: boolean; message: string; messageId?: string }> => {
+  const isOta = data.source.sourceType === 'OTA';
+  const target = (recipientEmailOverride || (isOta ? data.contacts.ownerContact.email : data.guest.email) || '').trim();
+
+  // Section 12 requirement: If guest email missing on manual/direct booking
+  if (!isOta && (!target || !isValidEmail(target))) {
+    throw new Error('Guest email is required to send the confirmation.');
+  }
+
+  // If OTA and owner email missing
+  if (isOta && (!target || !isValidEmail(target))) {
+    throw new Error('Hotel owner email is required to send notification for OTA bookings.');
+  }
+
+  const res = await apiFetch(`/api/reservations/${data.reservation.id}/confirmation/send-email`, {
+    method: 'POST',
+    body: JSON.stringify({
+      recipientEmail: target || undefined,
+    }),
+  });
+
+  if (!res.success) {
+    throw new Error(res.message || 'Failed to send confirmation email.');
+  }
+
+  return res;
 };
 

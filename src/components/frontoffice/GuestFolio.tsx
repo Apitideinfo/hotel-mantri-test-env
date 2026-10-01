@@ -10,6 +10,15 @@ import type {
 } from '@/lib/types';
 import { fmtMoney, toNum } from '@/lib/calc';
 import { getTimeline, getFolioCharges, getRoomShifts } from '@/lib/api-frontoffice';
+import {
+  getReservationConfirmationData,
+  sendReservationConfirmationEmail,
+  openWhatsAppConfirmation,
+} from '@/lib/api-reservations';
+import {
+  downloadReservationConfirmationPdf,
+  printReservationConfirmationPdf,
+} from '@/lib/pdf-reservation';
 import { brand } from '@/lib/theme';
 
 interface GuestFolioProps {
@@ -46,6 +55,11 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
   const [shifts, setShifts] = useState<RoomShift[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Document action state (Section 19)
+  const [activeAction, setActiveAction] = useState<'pdf' | 'print' | 'email' | 'whatsapp' | null>(null);
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
   useEffect(() => {
     Promise.all([
       getTimeline(entry.id),
@@ -75,16 +89,80 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
   const received = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
   const balance = Math.max(0, grandTotal - received);
 
-  const handleWhatsApp = () => {
-    const rawPhone = booking?.phone || '';
-    const phone = rawPhone.replace(/\D/g, '');
-    if (!phone) {
-      alert('No guest mobile number available for WhatsApp.');
-      return;
+  const handlePdf = async () => {
+    if (activeAction) return;
+    setActiveAction('pdf');
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
+      downloadReservationConfirmationPdf({
+        reservation: data.reservation,
+        settings: data.hotel as any,
+      });
+      setActionSuccess('Confirmation PDF downloaded.');
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to generate confirmation PDF.');
+    } finally {
+      setActiveAction(null);
+      setTimeout(() => setActionSuccess(null), 4000);
     }
-    const msg = `Guest Folio - ${settings?.hotel_name ?? 'Hotel'}\n\nGuest: ${booking?.guestName || entry.guest_name}\nRoom: ${roomNo}\nCheck-in: ${entry.arrival ?? entry.report_date}\nCheck-out: ${entry.departure ?? '—'}\nNights: ${entry.nights}\n\nRoom Charges: ₹${fmtMoney(roomCharges)}\nExtra Charges: ₹${fmtMoney(extraTotal)}\nGST: ₹${fmtMoney(gstAmount)}\nTotal: ₹${fmtMoney(grandTotal)}\nReceived: ₹${fmtMoney(received)}\nBalance: ₹${fmtMoney(balance)}`;
-    window.open(`https://wa.me/${phone.length === 10 ? `91${phone}` : phone}?text=${encodeURIComponent(msg)}`, '_blank');
   };
+
+  const handlePrint = async () => {
+    if (activeAction) return;
+    setActiveAction('print');
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
+      printReservationConfirmationPdf({
+        reservation: data.reservation,
+        settings: data.hotel as any,
+      });
+      setActionSuccess('Print dialog opened.');
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to print confirmation.');
+    } finally {
+      setActiveAction(null);
+      setTimeout(() => setActionSuccess(null), 4000);
+    }
+  };
+
+  const handleEmail = async () => {
+    if (activeAction) return;
+    setActiveAction('email');
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
+      const res = await sendReservationConfirmationEmail(data);
+      setActionSuccess(res.message || 'Confirmation email dispatched successfully.');
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to send confirmation email.');
+    } finally {
+      setActiveAction(null);
+      setTimeout(() => setActionSuccess(null), 5000);
+    }
+  };
+
+  const handleWhatsApp = async () => {
+    if (activeAction) return;
+    setActiveAction('whatsapp');
+    setActionError(null);
+    setActionSuccess(null);
+    try {
+      const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
+      openWhatsAppConfirmation(data);
+      setActionSuccess('Opened WhatsApp with reservation confirmation.');
+    } catch (err: any) {
+      setActionError(err.message || 'No valid phone number for WhatsApp.');
+    } finally {
+      setActiveAction(null);
+      setTimeout(() => setActionSuccess(null), 4000);
+    }
+  };
+
 
   return (
     <>
@@ -246,12 +324,50 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
           )}
         </div>
 
+        {/* Feedback banners (Section 19) */}
+        {actionSuccess && (
+          <div className="px-5 py-2.5 bg-emerald-50 text-emerald-800 text-xs font-semibold border-t border-emerald-200 flex items-center justify-between animate-fadeIn">
+            <span>✓ {actionSuccess}</span>
+            <button onClick={() => setActionSuccess(null)} className="text-emerald-600 hover:text-emerald-900 font-bold ml-2">✕</button>
+          </div>
+        )}
+        {actionError && (
+          <div className="px-5 py-2.5 bg-rose-50 text-rose-800 text-xs font-semibold border-t border-rose-200 flex items-center justify-between animate-fadeIn">
+            <span>⚠ {actionError}</span>
+            <button onClick={() => setActionError(null)} className="text-rose-600 hover:text-rose-900 font-bold ml-2">✕</button>
+          </div>
+        )}
+
         {/* Export buttons */}
         <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 grid grid-cols-4 gap-2">
-          <ExportBtn icon={Download} label="PDF" onClick={() => {}} />
-          <ExportBtn icon={Printer} label="Print" onClick={() => window.print()} />
-          <ExportBtn icon={Mail} label="Email" onClick={() => {}} />
-          <ExportBtn icon={MessageCircle} label="WhatsApp" onClick={handleWhatsApp} />
+          <ExportBtn
+            icon={activeAction === 'pdf' ? Loader2 : Download}
+            label={activeAction === 'pdf' ? 'Loading…' : 'PDF'}
+            loading={activeAction === 'pdf'}
+            disabled={!!activeAction}
+            onClick={handlePdf}
+          />
+          <ExportBtn
+            icon={activeAction === 'print' ? Loader2 : Printer}
+            label={activeAction === 'print' ? 'Loading…' : 'Print'}
+            loading={activeAction === 'print'}
+            disabled={!!activeAction}
+            onClick={handlePrint}
+          />
+          <ExportBtn
+            icon={activeAction === 'email' ? Loader2 : Mail}
+            label={activeAction === 'email' ? 'Sending…' : 'Email'}
+            loading={activeAction === 'email'}
+            disabled={!!activeAction}
+            onClick={handleEmail}
+          />
+          <ExportBtn
+            icon={activeAction === 'whatsapp' ? Loader2 : MessageCircle}
+            label={activeAction === 'whatsapp' ? 'Opening…' : 'WhatsApp'}
+            loading={activeAction === 'whatsapp'}
+            disabled={!!activeAction}
+            onClick={handleWhatsApp}
+          />
         </div>
       </div>
     </>
@@ -278,10 +394,26 @@ const PayRow = ({ icon: Icon, label, value }: { icon: typeof Wallet; label: stri
   </div>
 );
 
-const ExportBtn = ({ icon: Icon, label, onClick }: { icon: typeof FileText; label: string; onClick: () => void }) => (
-  <button onClick={onClick}
-    className="flex flex-col items-center gap-1 py-2.5 rounded-lg text-xs font-medium text-slate-600 border border-slate-200 hover:bg-slate-100 transition">
-    <Icon className="w-4 h-4" />
+const ExportBtn = ({
+  icon: Icon,
+  label,
+  onClick,
+  loading = false,
+  disabled = false,
+}: {
+  icon: typeof FileText;
+  label: string;
+  onClick: () => void;
+  loading?: boolean;
+  disabled?: boolean;
+}) => (
+  <button
+    onClick={onClick}
+    disabled={disabled || loading}
+    className="flex flex-col items-center gap-1 py-2.5 rounded-lg text-xs font-medium text-slate-600 border border-slate-200 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+  >
+    <Icon className={`w-4 h-4 ${loading ? 'animate-spin text-brand-600' : ''}`} />
     {label}
   </button>
 );
+

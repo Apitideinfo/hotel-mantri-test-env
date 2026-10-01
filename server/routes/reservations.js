@@ -21,6 +21,10 @@ import {
   assignPhysicalRoom,
   extendReservationStay,
   validateAndProcessCheckIn,
+  autoAssignPhysicalRoom,
+  batchAutoAssignReservations,
+  isAutoAssignEnabled,
+  setAutoAssignEnabled,
 } from '../services/RoomAssignmentService.js';
 import {
   generateAndDeliverConfirmation,
@@ -402,6 +406,113 @@ router.post('/:id/assign-room', checkAuth, async (req, res) => {
       message: err.message || 'Failed to assign room.',
       conflictingReservation: err.conflictingReservation || null,
     });
+  }
+});
+
+/**
+ * POST /api/reservations/:id/auto-assign
+ * Automatically assigns an eligible physical room to an unassigned reservation.
+ */
+router.post('/:id/auto-assign', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+    const { preferredRoomNo, dryRun } = req.body || {};
+
+    const result = await autoAssignPhysicalRoom({
+      hotelId,
+      reservationId: id,
+      preferredRoomNo,
+      userId,
+      dryRun: Boolean(dryRun),
+    });
+
+    if (result.success && !dryRun) {
+      (async () => {
+        try {
+          const { data: updatedRes } = await supabaseServiceRole
+            .from('reservations')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+          if (updatedRes) {
+            await generateAndDeliverConfirmation({
+              hotelId,
+              reservationId: id,
+              reservation: updatedRes,
+              eventType: 'RESERVATION_MODIFIED',
+              forceNewVersion: true,
+              generatedBy: userId || 'STAFF',
+            });
+          }
+        } catch (e) {
+          console.error(`[API /auto-assign] Confirmation error for ${id}:`, e.message);
+        }
+      })().catch(e => console.error('[API /auto-assign] Worker error:', e));
+    }
+
+    res.json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'AUTO_ASSIGN_FAILED',
+      message: err.message || 'Failed to auto-assign room.',
+    });
+  }
+});
+
+/**
+ * POST /api/reservations/auto-assign-all
+ * Batch auto-assigns all unassigned reservations in the hotel.
+ */
+router.post('/auto-assign-all', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const result = await batchAutoAssignReservations(hotelId);
+    res.json({
+      success: true,
+      message: `Processed ${result.total} unassigned reservations: ${result.assignedCount} assigned, ${result.unassignedCount} remaining.`,
+      ...result,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: 'BATCH_AUTO_ASSIGN_FAILED',
+      message: err.message || 'Failed to batch auto-assign reservations.',
+    });
+  }
+});
+
+/**
+ * GET /api/reservations/auto-assign-setting
+ * Retrieves hotel setting for automatic room assignment.
+ */
+router.get('/auto-assign-setting', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const enabled = await isAutoAssignEnabled(hotelId);
+    res.json({ success: true, hotelId, enabled });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to retrieve auto-assign setting.' });
+  }
+});
+
+/**
+ * POST /api/reservations/auto-assign-setting
+ * Updates hotel setting for automatic room assignment.
+ */
+router.post('/auto-assign-setting', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { enabled } = req.body;
+    const result = await setAutoAssignEnabled(hotelId, enabled);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to update auto-assign setting.' });
   }
 });
 

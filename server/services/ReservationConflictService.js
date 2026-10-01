@@ -30,10 +30,13 @@ export const withRoomLock = async (hotelId, roomNo, task) => {
     release = resolve;
   });
 
-  roomLocks.set(key, prevLock.then(() => currentLock));
+  roomLocks.set(
+    key,
+    prevLock.catch(() => {}).then(() => currentLock)
+  );
 
   try {
-    await prevLock;
+    await prevLock.catch(() => {});
     return await task();
   } finally {
     release();
@@ -180,6 +183,66 @@ export const checkRoomAvailability = async ({
       message: `Room ${normRoom} is currently occupied by in-house guest ${conflictingEntry.guest_name}. Please choose another room.`,
       conflictingEntry,
     };
+  }
+
+  // 3. Query room blocks / maintenance for this room
+  try {
+    const { data: blocks } = await supabase
+      .from('room_blocks')
+      .select('id, room_no, block_type, start_date, end_date, reason')
+      .eq('hotel_id', hotelId);
+
+    if (blocks && blocks.length > 0) {
+      const conflictingBlock = blocks.find((b) => {
+        const bRoom = (b.room_no || '').trim().toLowerCase();
+        if (bRoom !== roomKey) return false;
+        const bIn = String(b.start_date || '').slice(0, 10);
+        const bOut = String(b.end_date || '').slice(0, 10);
+        return isStayOverlapping(cleanCheckIn, cleanCheckOut, bIn, bOut);
+      });
+
+      if (conflictingBlock) {
+        return {
+          available: false,
+          code: 'ROOM_BLOCKED',
+          message: `Room ${normRoom} is blocked for ${conflictingBlock.block_type || 'maintenance'} (${conflictingBlock.start_date} to ${conflictingBlock.end_date}): ${conflictingBlock.reason || 'Blocked'}.`,
+          block: conflictingBlock,
+        };
+      }
+    }
+  } catch (bErr) {
+    console.warn('[ReservationConflictService] Room block check warning:', bErr.message);
+  }
+
+  // 4. Query physical room active and maintenance status in rooms table
+  try {
+    const { data: physicalRoom } = await supabase
+      .from('rooms')
+      .select('id, room_no, is_active, room_status, block_reason')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', normRoom)
+      .maybeSingle();
+
+    if (physicalRoom) {
+      if (physicalRoom.is_active === false) {
+        return {
+          available: false,
+          code: 'ROOM_INACTIVE',
+          message: `Room ${normRoom} is deactivated and cannot be assigned.`,
+        };
+      }
+
+      const st = String(physicalRoom.room_status || '').toLowerCase();
+      if (st === 'blocked' || st === 'maintenance' || st === 'out of service' || st === 'out of order') {
+        return {
+          available: false,
+          code: 'ROOM_UNAVAILABLE',
+          message: `Room ${normRoom} is currently marked as ${physicalRoom.room_status}${physicalRoom.block_reason ? ` (${physicalRoom.block_reason})` : ''}.`,
+        };
+      }
+    }
+  } catch (rErr) {
+    console.warn('[ReservationConflictService] Physical room status check warning:', rErr.message);
   }
 
   return { available: true };
