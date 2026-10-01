@@ -253,6 +253,10 @@ router.get('/mapping', async (req, res) => {
  * Used by both UI grid matrix endpoint and outbound channel push.
  */
 export async function calculateAuthoritativeInventory(hotelId, startDate, endDate, specificCategoryIds = null, options = {}) {
+  if (specificCategoryIds && !Array.isArray(specificCategoryIds) && typeof specificCategoryIds === 'object') {
+    options = specificCategoryIds;
+    specificCategoryIds = null;
+  }
   const dates = getDates(startDate, endDate);
   const supabase = getSupabase();
 
@@ -286,7 +290,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   // 2. Get active reservations overlapping the date range
   const { data: reservations, error: resError } = await supabase
     .from('reservations')
-    .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks')
+    .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks, created_at')
     .eq('hotel_id', hotelId)
     .in('status', ['confirmed', 'checked_in'])
     .lte('check_in_date', endDate)
@@ -357,7 +361,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   // 7. Get inventory restrictions overrides
   let restrictionsQuery = supabase
     .from('channel_inventory_restrictions')
-    .select('date, room_category_id, availability, stop_sell, base_rate, channel_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure')
+    .select('date, room_category_id, availability, stop_sell, base_rate, channel_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure, updated_at')
     .eq('hotel_id', hotelId)
     .gte('date', startDate)
     .lte('date', endDate);
@@ -444,9 +448,56 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
       const calculatedAvailable = Math.max(0, physical - occupied - blocked);
 
       const r = restrictionMap.get(`${cat.id}|${date}`);
-      // Authoritative PMS availability rule:
-      // Stop Sell = 0, otherwise calculated available (physical - occupied - blocked)
-      const sellable = r?.stop_sell ? 0 : calculatedAvailable;
+      const isManual = r && r.availability !== undefined && r.availability !== null && String(r.availability).trim() !== '';
+      const manualVal = isManual ? Number(r.availability) : null;
+
+      let sellable = calculatedAvailable;
+
+      if (r?.stop_sell) {
+        sellable = 0;
+      } else if (isManual && !isNaN(manualVal)) {
+        // Authoritative inventory: respect manual override
+        // Calculate new reservations for this category and date created strictly AFTER the manual update was saved
+        const rUpdatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+        let newReservationsAfterUpdate = 0;
+        if (rUpdatedAt > 0) {
+          (reservations || []).forEach(res => {
+            const ci = String(res.check_in_date).slice(0, 10);
+            const co = String(res.check_out_date).slice(0, 10);
+            if (date >= ci && date < co) {
+              const resCreatedAt = res.created_at ? new Date(res.created_at).getTime() : 0;
+              if (resCreatedAt > rUpdatedAt) {
+                let matchedCatId = res.room_id ? roomToCatMap[res.room_id] : null;
+                if (!matchedCatId && res.room_no && res.room_no !== 'Unassigned' && res.room_no !== 'TBD') {
+                  matchedCatId = roomNoToCatMap[String(res.room_no).trim().toLowerCase()];
+                }
+                if (!matchedCatId && res.rate_plan) {
+                  const rp = String(res.rate_plan).toLowerCase().trim();
+                  matchedCatId = ratePlanCodeToCatMap[rp] || extCodeToCatMap[rp.split('-').slice(0, 2).join('-')] || extCodeToCatMap[rp.split('-')[0]];
+                }
+                if (!matchedCatId && res.id && otaResIdToCatMap[res.id]) {
+                  matchedCatId = otaResIdToCatMap[res.id];
+                }
+                if (!matchedCatId) {
+                  const noteText = `${res.internal_note || ''} ${res.remarks || ''}`;
+                  const otaMatch = noteText.match(/\[OTA_BOOKING_ID:\s*([^\]\s]+)\]/i);
+                  if (otaMatch && otaMatch[1]) {
+                    matchedCatId = otaBookingIdToCatMap[otaMatch[1].trim()];
+                  }
+                }
+                if (matchedCatId === cat.id) {
+                  newReservationsAfterUpdate++;
+                }
+              }
+            }
+          });
+        }
+
+        const remainingManual = Math.max(0, manualVal - newReservationsAfterUpdate);
+        // Authoritative PMS inventory rule:
+        // Cap at physical availability to prevent impossible inventory (Section 18)
+        sellable = Math.min(remainingManual, calculatedAvailable);
+      }
 
       matrix.push({
         date,
@@ -458,8 +509,8 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
         calculatedAvailable,
         available: sellable,
         stop_sell: Boolean(r?.stop_sell),
-        is_manual: false,
-        manual_availability: null,
+        is_manual: isManual,
+        manual_availability: manualVal,
         base_rate: r?.base_rate ?? 0,
         channel_rate: r?.channel_rate ?? 0,
         min_stay: r?.min_stay ?? 1,
@@ -470,8 +521,8 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   }
 
-  // Persist authoritative calculated availability into channel_inventory_restrictions
-  if (options.persistToDb !== false && matrix.length > 0) {
+  // Persist authoritative calculated availability into channel_inventory_restrictions ONLY when explicitly requested
+  if (options.persistToDb === true && matrix.length > 0) {
     try {
       const upsertRows = matrix.map(m => {
         const existing = restrictionMap.get(`${m.room_category_id}|${m.date}`);
@@ -479,7 +530,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
           hotel_id: hotelId,
           room_category_id: m.room_category_id,
           date: m.date,
-          availability: m.available,
+          availability: m.is_manual ? m.available : (existing?.availability ?? null),
           base_rate: existing?.base_rate ?? 0,
           channel_rate: existing?.channel_rate ?? 0,
           min_stay: existing?.min_stay ?? 1,
@@ -518,7 +569,9 @@ export async function calculateRoomCategoryAvailability(hotelId, roomCategoryId,
     blocked: entry?.blocked ?? 0,
     calculatedAvailable: entry?.calculatedAvailable ?? 0,
     available: entry?.available ?? 0,
-    stopSell: Boolean(entry?.stop_sell)
+    stopSell: Boolean(entry?.stop_sell),
+    isManual: Boolean(entry?.is_manual),
+    manualAvailability: entry?.manual_availability ?? null
   };
 }
 
@@ -666,7 +719,7 @@ router.all('/inventory/matrix', async (req, res) => {
       });
     }
 
-    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, null, { persistToDb: false });
     res.json({
       success: true,
       startDate,

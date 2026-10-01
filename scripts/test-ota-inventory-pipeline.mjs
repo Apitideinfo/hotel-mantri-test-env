@@ -39,6 +39,13 @@ async function cleanAllTestRecords() {
     await supabaseServiceRole.from('channel_ota_reservations').delete().in('id', ids);
     console.log(`  Purged ${ids.length} test channel_ota_reservations records.`);
   }
+
+  // Purge test restrictions
+  await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .delete()
+    .eq('hotel_id', HOTEL_ID)
+    .in('date', ['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25']);
 }
 
 async function runAllTests() {

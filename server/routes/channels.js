@@ -756,6 +756,37 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       throw upsertErr;
     }
 
+    // 7.5. Audit logging for bulk inventory & rate updates
+    try {
+      const auditEntries = mergedPayload.map(m => {
+        const oldRow = existingMap.get(`${m.room_category_id}|${m.date}`);
+        return {
+          hotel_id: hotelId,
+          user_id: req.user?.id || req.auth?.userId || 'system',
+          room_category_id: m.room_category_id,
+          date: m.date,
+          old_availability: oldRow?.availability ?? null,
+          new_availability: m.availability,
+          old_rate: oldRow?.base_rate ?? 0,
+          new_rate: m.base_rate,
+          timestamp: m.updated_at,
+          source: 'bulk_update'
+        };
+      });
+
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'BULK_UPDATE',
+        direction: 'outbound',
+        status: 'SUCCESS',
+        message: `Bulk update applied: ${mergedPayload.length} record updates across ${targetCatIds.length} categories (${minDate} to ${maxDate})`,
+        date_range: `${minDate} to ${maxDate}`,
+        error_detail: JSON.stringify(auditEntries.slice(0, 50))
+      });
+    } catch (auditErr) {
+      console.warn('[inventory-restrictions/patch] Audit logging warning:', auditErr.message);
+    }
+
     // 8. Determine external channel manager configuration state
     let isChannelConfigured = false;
     try {
@@ -830,9 +861,23 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       (!hasRate || (rateSyncResult && rateSyncResult.verified !== false)) &&
       (!hasInv || (invSyncResult && invSyncResult.verified !== false));
 
+    const updated = mergedPayload.map(m => ({
+      roomCategoryId: m.room_category_id,
+      date: m.date,
+      availability: m.availability,
+      baseRate: m.base_rate,
+      channelRate: m.channel_rate,
+      minStay: m.min_stay,
+      maxStay: m.max_stay,
+      stopSell: m.stop_sell,
+      closedToArrival: m.closed_to_arrival,
+      closedToDeparture: m.closed_to_departure
+    }));
+
     res.json({
       success: true,
       updatedCount: mergedPayload.length,
+      updated,
       localUpdate: {
         success: true,
         count: mergedPayload.length

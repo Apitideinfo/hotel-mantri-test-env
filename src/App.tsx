@@ -234,6 +234,17 @@ function AppInner() {
           );
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
+        (payload) => {
+          window.dispatchEvent(
+            new CustomEvent('hotel_mantri_availability_updated', {
+              detail: { source: 'realtime_channel_inventory_restrictions', payload },
+            })
+          );
+        }
+      )
       .subscribe();
 
     return () => {

@@ -35,6 +35,7 @@ import { fmtMoney, toNum } from '@/lib/calc';
 import { ChannelsDashboard } from './components/ChannelsDashboard';
 import { useHotel } from '@/lib/hotel-context';
 import { HotelSelectorModal } from '@/components/HotelSelectorModal';
+import { supabase } from '@/lib/supabase';
 
 interface ChannelManagerProps {
   onBack?: () => void;
@@ -728,7 +729,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             date: item.date,
             availability: item.available,
             base_rate: item.base_rate,
-            channel_rate: 0,
+            channel_rate: (item as any).channel_rate ?? 0,
             min_stay: item.min_stay,
             max_stay: item.max_stay,
             stop_sell: item.stop_sell,
@@ -751,6 +752,38 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   }, [startDate, endDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Listen for local and realtime availability/reservation updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      load();
+    };
+    window.addEventListener('hotel_mantri_availability_updated', handleUpdate);
+    window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('hotel_mantri_availability_updated', handleUpdate);
+      window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    };
+  }, [load]);
+
+  // Direct Supabase realtime listener for channel_inventory_restrictions scoped to this hotel
+  useEffect(() => {
+    if (!hotelId) return;
+    const channel = supabase
+      .channel(`inventory_tab_changes_${hotelId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [hotelId, load]);
 
   const getR = (catId: string, date: string): Partial<ChannelInventoryRestriction> => {
     return restrictions.get(`${catId}|${date}`) ?? {
@@ -1088,9 +1121,17 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           existingRestrictions={restrictions}
           hotelId={hotelId}
           onClose={() => setBulkOpen(false)}
-          onSuccess={async () => {
+          onSuccess={async (result?: any) => {
             setBulkOpen(false);
             await load();
+            if (result && result.externalSync && !result.externalSync.success && result.externalSync.status !== 'SKIPPED' && result.externalSync.status !== 'NOT_CONFIGURED') {
+              setSyncNotice({
+                title: 'PMS Saved, Channel Sync Warning',
+                message: 'Authoritative inventory was saved to the PMS database, but external channel manager synchronization reported an issue.',
+                type: 'warning',
+                details: result.externalSync.message || result.externalSync.inventorySync?.error || 'External channel manager push could not be fully verified.'
+              });
+            }
           }}
         />
       )}
@@ -1341,7 +1382,7 @@ const BulkUpdateDrawer = ({
   existingRestrictions?: Map<string, ChannelInventoryRestriction>;
   hotelId?: string | null;
   onClose: () => void;
-  onSuccess: () => Promise<void>;
+  onSuccess: (result?: any) => Promise<void>;
 }) => {
   const [fromDate, setFromDate] = useState(defaultStart);
   const [toDate, setToDate] = useState(defaultEnd);
@@ -1561,7 +1602,7 @@ const BulkUpdateDrawer = ({
       const result = await applyBulkInventoryPatch(patchList);
       if (result && result.success) {
         setDrafts(clearDraft());
-        await onSuccess();
+        await onSuccess(result);
       } else {
         throw new Error(result?.message || 'Failed to apply updates.');
       }

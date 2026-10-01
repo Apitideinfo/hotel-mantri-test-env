@@ -633,6 +633,7 @@ export interface AuthoritativeMatrixItem {
   is_manual?: boolean;
   manual_availability?: number | null;
   base_rate?: number;
+  channel_rate?: number;
   min_stay?: number;
   max_stay?: number;
   closed_to_arrival?: boolean;
@@ -658,7 +659,7 @@ export const getAuthoritativeAvailabilityMatrix = async (
   const [catsRes, roomsRes, resvsRes, blocksRes, restrictionsRes] = await Promise.all([
     supabase.from('room_categories').select('id, name').eq('hotel_id', hotelId).eq('is_active', true).order('sort_order', { ascending: true }),
     supabase.from('rooms').select('id, category_id, room_no, is_active').eq('hotel_id', hotelId),
-    supabase.from('reservations').select('id, room_id, room_no, check_in_date, check_out_date, status').eq('hotel_id', hotelId).in('status', ['confirmed', 'checked_in']).lte('check_in_date', endDate).gte('check_out_date', startDate),
+    supabase.from('reservations').select('id, room_id, room_no, check_in_date, check_out_date, status, created_at').eq('hotel_id', hotelId).in('status', ['confirmed', 'checked_in']).lte('check_in_date', endDate).gte('check_out_date', startDate),
     supabase.from('room_blocks').select('room_no, start_date, end_date, block_type').eq('hotel_id', hotelId).lte('start_date', endDate).gte('end_date', startDate),
     supabase.from('channel_inventory_restrictions').select('*').eq('hotel_id', hotelId).gte('date', startDate).lte('date', endDate),
   ]);
@@ -734,15 +735,32 @@ export const getAuthoritativeAvailabilityMatrix = async (
 
       const r = restrictionMap.get(`${cat.id}|${d}`);
       let sellable = calculatedAvailable;
+      const isManual = Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '');
+      const manualVal = isManual ? Number(r!.availability) : null;
 
       if (r) {
         if (r.stop_sell) {
           sellable = 0;
-        } else if (r.availability !== undefined && r.availability !== null && String(r.availability) !== '') {
-          const manualVal = Number(r.availability);
-          if (!isNaN(manualVal)) {
-            sellable = Math.max(0, manualVal);
+        } else if (isManual && manualVal !== null && !isNaN(manualVal)) {
+          const rUpdatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+          let newBookingsAfterUpdate = 0;
+          if (rUpdatedAt > 0) {
+            for (const res of reservations) {
+              const ci = new Date(res.check_in_date + 'T12:00:00');
+              const co = new Date(res.check_out_date + 'T12:00:00');
+              if (dTime >= ci && dTime < co) {
+                const resCreatedAt = (res as any).created_at ? new Date((res as any).created_at).getTime() : 0;
+                if (resCreatedAt > rUpdatedAt) {
+                  const matchedCatId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+                  if (matchedCatId === cat.id) {
+                    newBookingsAfterUpdate++;
+                  }
+                }
+              }
+            }
           }
+          const remainingManual = Math.max(0, manualVal - newBookingsAfterUpdate);
+          sellable = Math.min(remainingManual, calculatedAvailable);
         }
       }
 
@@ -756,9 +774,10 @@ export const getAuthoritativeAvailabilityMatrix = async (
         calculatedAvailable,
         available: sellable,
         stop_sell: Boolean(r?.stop_sell),
-        is_manual: Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== ''),
-        manual_availability: r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '' ? Number(r.availability) : null,
+        is_manual: isManual,
+        manual_availability: manualVal,
         base_rate: r?.base_rate ?? 0,
+        channel_rate: r?.channel_rate ?? 0,
         min_stay: r?.min_stay ?? 1,
         max_stay: r?.max_stay ?? 0,
         closed_to_arrival: Boolean(r?.closed_to_arrival),
