@@ -20,9 +20,9 @@ const otaLocks = new Map();
 export const withOtaLock = async (hotelId, channel, externalBookingId, task) => {
   if (!hotelId || !externalBookingId) return task();
 
-  const chan = String(channel || 'ota').trim().toLowerCase();
   const extId = String(externalBookingId).trim();
-  const key = `${hotelId}::${chan}::${extId}`;
+  // Lock strictly per (hotelId, externalBookingId) so any channel alias shares the lock
+  const key = `${hotelId}::${extId}`;
 
   const prevLock = otaLocks.get(key) || Promise.resolve();
 

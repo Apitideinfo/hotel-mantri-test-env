@@ -645,3 +645,100 @@ export const handlePmsEvent = async (hotelId, eventType, details = {}) => {
       return { success: true, message: `Event ${eventType} recorded.` };
   }
 };
+
+/**
+ * Authoritative Inventory Reconciliation Service
+ * Compares authoritative PMS availability against external channel manager (Aiosell).
+ * Safely repairs any discrepancies and logs the verified outcome.
+ */
+export const reconcileInventory = async ({
+  hotelId,
+  startDate = null,
+  endDate = null,
+  roomCategoryIds = null,
+  autoRepair = true
+}) => {
+  if (!hotelId) throw new Error('Hotel ID is required for reconcileInventory');
+
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const sDate = startDate || today;
+  const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+  const hotelConfig = await getChannelProviderConfig(hotelId);
+  const mappings = await resolveAuthoritativeMappings(hotelId, hotelConfig);
+  const categoryToExtCode = mappings.categoryToRoomCode;
+
+  // 1. Authoritative PMS inventory
+  const { matrix } = await calculateAuthoritativeInventory(hotelId, sDate, eDate, roomCategoryIds);
+
+  // 2. Fetch external inventory from provider
+  let externalUpdates = [];
+  try {
+    const fetched = await aiosellService.fetchInventory(sDate, eDate, hotelConfig);
+    externalUpdates = fetched?.updates || (Array.isArray(fetched) ? fetched : []);
+  } catch (err) {
+    console.warn('[reconcileInventory] Upstream fetch warning:', err.message);
+  }
+
+  // 3. Compare PMS availability vs External
+  const discrepancies = [];
+  for (const entry of matrix) {
+    const extRoomCode = categoryToExtCode[entry.room_category_id];
+    if (!extRoomCode) continue;
+
+    const extDay = externalUpdates.find(u => u.startDate === entry.date);
+    const extRoom = extDay?.rooms?.find(r => r.roomCode === extRoomCode);
+    const externalAvailable = extRoom ? Number(extRoom.available) : null;
+    const pmsAvailable = Number(entry.available);
+
+    if (externalAvailable === null || externalAvailable !== pmsAvailable) {
+      discrepancies.push({
+        date: entry.date,
+        roomCategoryId: entry.room_category_id,
+        categoryName: entry.category_name,
+        roomCode: extRoomCode,
+        pmsAvailable,
+        externalAvailable,
+        difference: (externalAvailable ?? 0) - pmsAvailable
+      });
+    }
+  }
+
+  let repairResult = null;
+  if (discrepancies.length > 0 && autoRepair) {
+    repairResult = await syncInventory({
+      hotelId,
+      startDate: sDate,
+      endDate: eDate,
+      roomCategoryIds,
+      skipVerification: false,
+      triggeredBy: 'reconciliation'
+    });
+  }
+
+  const isVerified = discrepancies.length === 0 || Boolean(repairResult?.verified);
+  const logStatus = isVerified ? 'VERIFIED' : (discrepancies.length > 0 ? 'PARTIAL' : 'SUCCESS');
+  const logMessage = `Inventory reconciliation (${sDate} to ${eDate}): ${discrepancies.length} discrepancies found${discrepancies.length > 0 ? (autoRepair ? `, repaired to authoritative PMS state` : '') : ', in sync'}`;
+
+  await logSyncSafely({
+    hotelId,
+    logType: 'RECONCILIATION',
+    status: logStatus,
+    message: logMessage,
+    errorDetail: discrepancies.length > 0 ? discrepancies.slice(0, 10) : null,
+    dateRange: `${sDate} to ${eDate}`,
+    recordsAttempted: matrix.length,
+    recordsVerified: matrix.length - discrepancies.length + (repairResult?.recordsVerified || 0)
+  });
+
+  return {
+    success: true,
+    status: logStatus,
+    verified: isVerified,
+    discrepanciesCount: discrepancies.length,
+    discrepancies,
+    repaired: Boolean(repairResult?.success),
+    repairResult,
+    message: logMessage
+  };
+};

@@ -10,7 +10,7 @@ export const getSupabase = () => supabaseServiceRole;
  * Finds an available physical room for a given category and date range.
  * If all physical rooms in the category are occupied, returns room_no: 'Unassigned'.
  */
-export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkInDate, checkOutDate, excludeReservationId = null) => {
+export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkInDate, checkOutDate, excludeReservationId = null, excludeRoomIds = []) => {
   const supabase = getSupabase();
   if (!hotelId || !roomCategoryId || !checkInDate || !checkOutDate) {
     return { roomId: null, roomNo: 'Unassigned' };
@@ -66,9 +66,11 @@ export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkIn
       if (e.room_no) occupiedRoomNos.add(e.room_no.trim().toLowerCase());
     });
 
+    const excludeSet = excludeRoomIds instanceof Set ? excludeRoomIds : new Set(Array.isArray(excludeRoomIds) ? excludeRoomIds : []);
+
     // 4. Find the first physical room that is not occupied
     const freeRoom = physicalRooms.find(r => 
-      !occupiedRoomIds.has(r.id) && !occupiedRoomNos.has(r.room_no.trim().toLowerCase())
+      !occupiedRoomIds.has(r.id) && !excludeSet.has(r.id) && !occupiedRoomNos.has(r.room_no.trim().toLowerCase())
     );
 
     if (freeRoom) {
@@ -181,13 +183,22 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
     if (data) existing = data;
   }
 
+  const roomSubMatch = (reservationData.internal_note || '').match(/\[ROOM:\s*\d+\/\d+\]/i);
+  const targetMarker = roomSubMatch ? `${idempotencyMarker} ${roomSubMatch[0]}` : idempotencyMarker;
+
   if (!existing) {
-    const { data: existingList, error: searchError } = await supabase
+    let query = supabase
       .from('reservations')
       .select('id, internal_note, room_id, room_no, guest_name, guest_phone, guest_email, guest_address, remarks')
-      .eq('hotel_id', reservationData.hotel_id)
-      .or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`)
-      .limit(1);
+      .eq('hotel_id', reservationData.hotel_id);
+
+    if (roomSubMatch) {
+      query = query.or(`internal_note.ilike.%${targetMarker}%,remarks.ilike.%${targetMarker}%`);
+    } else {
+      query = query.or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`);
+    }
+
+    const { data: existingList, error: searchError } = await query.limit(1);
 
     if (searchError) {
       throw new Error(`Failed to query existing reservations: ${searchError.message}`);
@@ -266,12 +277,11 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
 
     if (error) throw new Error(`Failed to update reservation: ${error.message}`);
 
-    triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
     return data;
   } else {
     // Create new reservation
     const internalNote = payload.internal_note
-      ? `${payload.internal_note}\n${idempotencyMarker}`
+      ? (payload.internal_note.includes(idempotencyMarker) ? payload.internal_note : `${payload.internal_note}\n${idempotencyMarker}`)
       : idempotencyMarker;
 
     payload.internal_note = internalNote;
@@ -291,7 +301,6 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
 
     if (error) throw new Error(`Failed to create reservation: ${error.message}`);
 
-    triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
     return data;
   }
 };
@@ -301,58 +310,40 @@ export const cancelReservation = async (hotelId, externalId, existingReservation
   const idempotencyMarker = `[OTA_BOOKING_ID: ${externalId}]`;
   const legacyMarker = `[AIOSELL_BOOKING_ID: ${externalId}]`;
 
-  let existing = null;
+  // Find all reservations for this booking
+  let query = supabase
+    .from('reservations')
+    .select('id, hotel_id, check_in_date, check_out_date, status')
+    .eq('hotel_id', hotelId);
 
   if (existingReservationId) {
-    const { data } = await supabase
-      .from('reservations')
-      .select('id, hotel_id, check_in_date, check_out_date')
-      .eq('id', existingReservationId)
-      .eq('hotel_id', hotelId)
-      .maybeSingle();
-    if (data) existing = data;
+    query = query.or(`id.eq.${existingReservationId},internal_note.ilike.%${idempotencyMarker}%,remarks.ilike.%${idempotencyMarker}%`);
+  } else {
+    query = query.or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`);
   }
 
-  if (!existing) {
-    const { data: existingReservations } = await supabase
-      .from('reservations')
-      .select('id, hotel_id, check_in_date, check_out_date')
-      .eq('hotel_id', hotelId)
-      .or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`)
-      .limit(1);
+  const { data: existingReservations } = await query;
 
-    existing = existingReservations && existingReservations.length > 0 ? existingReservations[0] : null;
-  }
-
-  if (!existing) {
+  if (!existingReservations || existingReservations.length === 0) {
     return null;
   }
 
-  const { data, error } = await supabase
+  const idsToCancel = existingReservations.map(r => r.id);
+
+  const { data: cancelledRows, error } = await supabase
     .from('reservations')
     .update({ 
       status: 'cancelled',
       room_id: null,
       updated_at: new Date().toISOString()
     })
-    .eq('id', existing.id)
-    .select('*')
-    .single();
+    .in('id', idsToCancel)
+    .select('*');
 
+  if (error) throw new Error(`Failed to cancel reservations: ${error.message}`);
 
-  if (error) throw new Error(`Failed to cancel reservation: ${error.message}`);
-
-  triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
-  return data;
-};
-
-const triggerBackgroundSync = (hotelId, startDate, endDate) => {
-  if (!hotelId || !startDate || !endDate) return;
-  const start = String(startDate).slice(0, 10);
-  const end = String(endDate).slice(0, 10);
-  // Fire and forget inventory push
-  executeInventoryPush(hotelId, null, start, end)
-    .catch(err => console.warn(`[AutoSync] Background inventory push deferred for hotel ${hotelId}:`, err.message));
+  const primary = (cancelledRows || []).find(r => r.id === existingReservationId) || cancelledRows?.[0] || existingReservations[0];
+  return primary;
 };
 
 export default {

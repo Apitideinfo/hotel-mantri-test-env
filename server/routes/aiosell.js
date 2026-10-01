@@ -252,7 +252,7 @@ router.get('/mapping', async (req, res) => {
  * Computes: Available = max(0, physicalActive - occupied - blocked)
  * Used by both UI grid matrix endpoint and outbound channel push.
  */
-export async function calculateAuthoritativeInventory(hotelId, startDate, endDate, specificCategoryIds = null) {
+export async function calculateAuthoritativeInventory(hotelId, startDate, endDate, specificCategoryIds = null, options = {}) {
   const dates = getDates(startDate, endDate);
   const supabase = getSupabase();
 
@@ -286,7 +286,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   // 2. Get active reservations overlapping the date range
   const { data: reservations, error: resError } = await supabase
     .from('reservations')
-    .select('id, room_id, rate_plan, check_in_date, check_out_date, status')
+    .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks')
     .eq('hotel_id', hotelId)
     .in('status', ['confirmed', 'checked_in'])
     .lte('check_in_date', endDate)
@@ -304,24 +304,60 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     .lte('start_date', endDate)
     .gte('end_date', startDate);
 
-  // 4. Get channel mappings for rate plan / room code fallback resolution
+  // 4. Get channel mappings for rate plan / room code resolution
   const { data: mappings } = await supabase
     .from('channel_rate_mappings')
-    .select('room_category_id, external_room_code')
+    .select('room_category_id, external_room_code, external_rate_plan_code')
     .eq('hotel_id', hotelId)
     .eq('status', 'mapped');
 
   const extCodeToCatMap = {};
+  const ratePlanCodeToCatMap = {};
   (mappings || []).forEach(m => {
-    if (m.external_room_code && m.room_category_id) {
-      extCodeToCatMap[m.external_room_code.toLowerCase()] = m.room_category_id;
+    if (m.room_category_id) {
+      if (m.external_room_code) {
+        extCodeToCatMap[m.external_room_code.toLowerCase()] = m.room_category_id;
+      }
+      if (m.external_rate_plan_code) {
+        ratePlanCodeToCatMap[m.external_rate_plan_code.toLowerCase()] = m.room_category_id;
+      }
     }
   });
 
-  // 5. Get inventory restrictions overrides
+  // 5. Get room categories to map category names
+  const { data: allCategories } = await supabase
+    .from('room_categories')
+    .select('id, name')
+    .eq('hotel_id', hotelId)
+    .neq('is_active', false);
+
+  const catNameToIdMap = {};
+  (allCategories || []).forEach(c => {
+    if (c.name) {
+      catNameToIdMap[c.name.trim().toLowerCase()] = c.id;
+    }
+  });
+
+  // 6. Query channel_ota_reservations for mapping unassigned bookings
+  const { data: otaRecords } = await supabase
+    .from('channel_ota_reservations')
+    .select('ota_booking_id, reservation_id, room_category')
+    .eq('hotel_id', hotelId);
+
+  const otaResIdToCatMap = {};
+  const otaBookingIdToCatMap = {};
+  (otaRecords || []).forEach(o => {
+    const matchedCatId = o.room_category ? catNameToIdMap[o.room_category.trim().toLowerCase()] : null;
+    if (matchedCatId) {
+      if (o.reservation_id) otaResIdToCatMap[o.reservation_id] = matchedCatId;
+      if (o.ota_booking_id) otaBookingIdToCatMap[String(o.ota_booking_id).trim()] = matchedCatId;
+    }
+  });
+
+  // 7. Get inventory restrictions overrides
   let restrictionsQuery = supabase
     .from('channel_inventory_restrictions')
-    .select('date, room_category_id, availability, stop_sell, base_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure')
+    .select('date, room_category_id, availability, stop_sell, base_rate, channel_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure')
     .eq('hotel_id', hotelId)
     .gte('date', startDate)
     .lte('date', endDate);
@@ -336,13 +372,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
   });
 
-  // 6. Compute matrix for all dates and room categories
-  const { data: allCategories } = await supabase
-    .from('room_categories')
-    .select('id, name')
-    .eq('hotel_id', hotelId)
-    .neq('is_active', false);
-
   const categories = (allCategories || []).filter(c => 
     !specificCategoryIds || specificCategoryIds.includes(c.id)
   );
@@ -350,20 +379,45 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   const matrix = [];
 
   for (const date of dates) {
-    const dTime = new Date(date + 'T12:00:00');
-
     // Count occupied per category on this date
+    // Hotel night interval [check_in, check_out): check-in is occupied, check-out is no longer occupied
     const occupiedCounts = {};
     (reservations || []).forEach(res => {
-      const ci = new Date(res.check_in_date + 'T12:00:00');
-      const co = new Date(res.check_out_date + 'T12:00:00');
-      // Hotel night: guest occupies room from check_in date noon until check_out date noon
-      if (dTime >= ci && dTime < co) {
+      const ci = String(res.check_in_date).slice(0, 10);
+      const co = String(res.check_out_date).slice(0, 10);
+
+      if (date >= ci && date < co) {
         let catId = res.room_id ? roomToCatMap[res.room_id] : null;
-        if (!catId && res.rate_plan) {
-          const prefix = String(res.rate_plan).split('-').slice(0, 2).join('-').toLowerCase();
-          catId = extCodeToCatMap[prefix];
+
+        // Try physical room number if assigned
+        if (!catId && res.room_no && res.room_no !== 'Unassigned' && res.room_no !== 'TBD') {
+          catId = roomNoToCatMap[String(res.room_no).trim().toLowerCase()];
         }
+
+        // Try rate plan exact code or room code prefix
+        if (!catId && res.rate_plan) {
+          const rp = String(res.rate_plan).toLowerCase().trim();
+          catId = ratePlanCodeToCatMap[rp];
+          if (!catId) {
+            const prefix = rp.split('-').slice(0, 2).join('-');
+            catId = extCodeToCatMap[prefix] || extCodeToCatMap[rp.split('-')[0]];
+          }
+        }
+
+        // Try reservation ID in OTA records
+        if (!catId && res.id && otaResIdToCatMap[res.id]) {
+          catId = otaResIdToCatMap[res.id];
+        }
+
+        // Try OTA booking marker in internal note or remarks
+        if (!catId) {
+          const noteText = `${res.internal_note || ''} ${res.remarks || ''}`;
+          const otaMatch = noteText.match(/\[OTA_BOOKING_ID:\s*([^\]\s]+)\]/i);
+          if (otaMatch && otaMatch[1]) {
+            catId = otaBookingIdToCatMap[otaMatch[1].trim()];
+          }
+        }
+
         if (catId) {
           occupiedCounts[catId] = (occupiedCounts[catId] || 0) + 1;
         }
@@ -373,9 +427,9 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     // Count blocked per category on this date
     const blockedCounts = {};
     (roomBlocks || []).forEach(b => {
-      const bs = new Date(b.start_date + 'T12:00:00');
-      const be = new Date(b.end_date + 'T12:00:00');
-      if (dTime >= bs && dTime <= be) {
+      const bs = String(b.start_date).slice(0, 10);
+      const be = String(b.end_date).slice(0, 10);
+      if (date >= bs && date <= be) {
         const catId = roomNoToCatMap[String(b.room_no).trim().toLowerCase()];
         if (catId) {
           blockedCounts[catId] = (blockedCounts[catId] || 0) + 1;
@@ -390,18 +444,9 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
       const calculatedAvailable = Math.max(0, physical - occupied - blocked);
 
       const r = restrictionMap.get(`${cat.id}|${date}`);
-      let sellable = calculatedAvailable;
-
-      if (r) {
-        if (r.stop_sell) {
-          sellable = 0;
-        } else if (r.availability !== undefined && r.availability !== null && r.availability !== '') {
-          const manualVal = Number(r.availability);
-          if (!isNaN(manualVal)) {
-            sellable = Math.max(0, manualVal);
-          }
-        }
-      }
+      // Authoritative PMS availability rule:
+      // Stop Sell = 0, otherwise calculated available (physical - occupied - blocked)
+      const sellable = r?.stop_sell ? 0 : calculatedAvailable;
 
       matrix.push({
         date,
@@ -413,9 +458,10 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
         calculatedAvailable,
         available: sellable,
         stop_sell: Boolean(r?.stop_sell),
-        is_manual: Boolean(r && r.availability !== undefined && r.availability !== null && r.availability !== ''),
-        manual_availability: r && r.availability !== undefined && r.availability !== null && r.availability !== '' ? Number(r.availability) : null,
+        is_manual: false,
+        manual_availability: null,
         base_rate: r?.base_rate ?? 0,
+        channel_rate: r?.channel_rate ?? 0,
         min_stay: r?.min_stay ?? 1,
         max_stay: r?.max_stay ?? 0,
         closed_to_arrival: Boolean(r?.closed_to_arrival),
@@ -424,7 +470,56 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   }
 
+  // Persist authoritative calculated availability into channel_inventory_restrictions
+  if (options.persistToDb !== false && matrix.length > 0) {
+    try {
+      const upsertRows = matrix.map(m => {
+        const existing = restrictionMap.get(`${m.room_category_id}|${m.date}`);
+        return {
+          hotel_id: hotelId,
+          room_category_id: m.room_category_id,
+          date: m.date,
+          availability: m.available,
+          base_rate: existing?.base_rate ?? 0,
+          channel_rate: existing?.channel_rate ?? 0,
+          min_stay: existing?.min_stay ?? 1,
+          max_stay: existing?.max_stay ?? 0,
+          stop_sell: Boolean(existing?.stop_sell),
+          closed_to_arrival: Boolean(existing?.closed_to_arrival),
+          closed_to_departure: Boolean(existing?.closed_to_departure),
+          updated_at: new Date().toISOString()
+        };
+      });
+
+      await supabase
+        .from('channel_inventory_restrictions')
+        .upsert(upsertRows, { onConflict: 'hotel_id,room_category_id,date' });
+    } catch (upsertErr) {
+      console.warn('[calculateAuthoritativeInventory] Warning: could not persist availability to restrictions table:', upsertErr.message);
+    }
+  }
+
   return { matrix, physicalCounts, categories, mappings: mappings || [] };
+}
+
+/**
+ * Authoritative single category/date availability calculator
+ */
+export async function calculateRoomCategoryAvailability(hotelId, roomCategoryId, businessDate) {
+  const cleanDate = String(businessDate).slice(0, 10);
+  const { matrix } = await calculateAuthoritativeInventory(hotelId, cleanDate, cleanDate, [roomCategoryId], { persistToDb: false });
+  const entry = matrix.find(m => m.room_category_id === roomCategoryId && m.date === cleanDate);
+  return {
+    hotelId,
+    roomCategoryId,
+    businessDate: cleanDate,
+    physical: entry?.physical ?? 0,
+    occupied: entry?.occupied ?? 0,
+    blocked: entry?.blocked ?? 0,
+    calculatedAvailable: entry?.calculatedAvailable ?? 0,
+    available: entry?.available ?? 0,
+    stopSell: Boolean(entry?.stop_sell)
+  };
 }
 
 export const executeInventoryPush = async (hotelId, arg2, arg3, arg4, options = {}) => {

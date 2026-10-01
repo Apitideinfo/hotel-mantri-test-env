@@ -6,7 +6,7 @@ import { getChannelProviderConfig } from '../services/providerConfig.js';
 import { executeInventoryPush, executeRatePush } from './aiosell.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
-import { handlePmsEvent, syncRates, syncInventory } from '../services/channelSyncEngine.js';
+import { handlePmsEvent, syncRates, syncInventory, reconcileInventory } from '../services/channelSyncEngine.js';
 
 const router = express.Router();
 
@@ -1097,19 +1097,37 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       );
     }
 
-    // 6. Determine final sync status
+    // 6. Authoritative PMS Inventory Reconciliation (Awaited for Vercel Serverless Safety)
+    let reconciliationResult = null;
+    try {
+      const todayKolkata = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const reconcileStart = (startDate && startDate >= todayKolkata) ? startDate : todayKolkata;
+      const reconcileEnd = (endDate && endDate >= reconcileStart) ? endDate : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+      reconciliationResult = await reconcileInventory({
+        hotelId,
+        startDate: reconcileStart,
+        endDate: reconcileEnd,
+        autoRepair: true
+      });
+    } catch (recErr) {
+      console.warn('[live-sync] Post-reservation reconciliation error:', recErr.message);
+      reconciliationResult = { success: false, error: recErr.message };
+    }
+
+    // 7. Determine final sync status
     let overallStatus = 'SUCCESS';
     if (stats.failed > 0 && stats.created === 0 && stats.updated === 0 && stats.cancelled === 0) {
       overallStatus = 'FAILED';
-    } else if (stats.unmapped > 0 || stats.failed > 0) {
+    } else if (stats.unmapped > 0 || stats.failed > 0 || reconciliationResult?.status === 'FAILED') {
       overallStatus = 'PARTIAL_SUCCESS';
     }
 
     const now = new Date().toISOString();
     const durationMs = Date.now() - startTime;
-    const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed (${durationMs}ms)`;
+    const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed, reconciliation: ${reconciliationResult?.verified ? 'VERIFIED' : (reconciliationResult?.status || 'SKIPPED')} (${durationMs}ms)`;
 
-    // 7. Update channel connections timestamps
+    // 8. Update channel connections timestamps
     try {
       await supabaseServiceRole
         .from('channel_connections')
@@ -1125,7 +1143,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       console.warn('[live-sync] Could not update channel_connections:', connErr.message);
     }
 
-    // 8. Log to channel_sync_logs
+    // 9. Log to channel_sync_logs
     try {
       await supabaseServiceRole.from('channel_sync_logs').insert({
         hotel_id: hotelId,
@@ -1153,6 +1171,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
         records_unmapped: stats.unmapped,
         records_failed: stats.failed
       },
+      reconciliation: reconciliationResult,
       durationMs,
       dateRange: `${startDate} to ${endDate}`,
       errors: errors.slice(0, 5),
@@ -1187,6 +1206,44 @@ router.post('/live-sync', checkAuth, async (req, res) => {
         records_unmapped: 0,
         records_failed: 0
       },
+      requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/reconcile-inventory
+ * Authoritative Inventory Reconciliation Endpoint.
+ * Compares authoritative PMS availability against external channel manager and repairs any discrepancies.
+ */
+router.post('/reconcile-inventory', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const requestId = req.requestId || `REC-${Date.now()}`;
+  if (!hotelId) {
+    return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId });
+  }
+
+  try {
+    const { startDate, endDate, roomCategoryIds, autoRepair = true } = req.body || {};
+    const result = await reconcileInventory({
+      hotelId,
+      startDate,
+      endDate,
+      roomCategoryIds,
+      autoRepair
+    });
+
+    return res.json({
+      success: true,
+      requestId,
+      ...result
+    });
+  } catch (err) {
+    console.error('[channels/reconcile-inventory] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'RECONCILIATION_FAILED',
+      message: err.message || 'Reconciliation failed',
       requestId
     });
   }
