@@ -22,6 +22,7 @@ import {
   extendReservationStay,
   validateAndProcessCheckIn,
   autoAssignPhysicalRoom,
+  processPendingRoomAllocations,
   batchAutoAssignReservations,
   isAutoAssignEnabled,
   setAutoAssignEnabled,
@@ -60,6 +61,13 @@ router.get('/', checkAuth, async (req, res) => {
     const hotelId = req.hotelId || req.auth?.hotelId;
     if (!hotelId) {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
+    }
+
+    // Opportunistic automatic reconciliation for pending unassigned OTA reservations
+    try {
+      await processPendingRoomAllocations(hotelId);
+    } catch (allocErr) {
+      console.warn('[Reservations] Background reconciliation non-blocking warning:', allocErr.message);
     }
 
     const {

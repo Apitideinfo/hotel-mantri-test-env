@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import aiosellRoutes from './routes/aiosell.js';
 import aiosellIntegrationRoutes from './services/integrations/aiosell/AiosellWebhookController.js';
+import { processPendingRoomAllocations } from './services/RoomAssignmentService.js';
 
 dotenv.config();
 
@@ -208,6 +209,10 @@ const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.r
 if (isDirectRun && !process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);
+    // Run background reconciliation on startup for active properties
+    processPendingRoomAllocations('a93139f5-baa0-47a4-87ca-81ee7e106d9c').catch(e => {
+      console.warn('[Startup] Automatic allocation reconciliation warning:', e.message);
+    });
   });
 }
 

@@ -7,6 +7,7 @@ import { executeInventoryPush, executeRatePush } from './aiosell.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
 import { handlePmsEvent, syncRates, syncInventory, reconcileInventory } from '../services/channelSyncEngine.js';
+import { processPendingRoomAllocations } from '../services/RoomAssignmentService.js';
 
 const router = express.Router();
 
@@ -1567,6 +1568,14 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId);
 
     const normalizedMappings = (data || []).map(normalizeMapping);
+
+    // Automatically reconcile any pending unassigned OTA reservations with the new mappings
+    setImmediate(() => {
+      processPendingRoomAllocations(hotelId).catch(reconcileErr => {
+        console.warn('[ChannelMappings] Automatic reconciliation warning:', reconcileErr.message);
+      });
+    });
+
     res.json({ success: true, count: normalizedMappings.length, mappings: normalizedMappings, requestId: req.requestId });
   } catch (err) {
     console.error('Error saving channel mappings:', err);

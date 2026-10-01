@@ -667,41 +667,184 @@ export const setAutoAssignEnabled = async (hotelId, enabled) => {
 };
 
 /**
- * Authoritative room category resolution from OTA roomCode, roomName, or ratePlan.
- * 1. Checks persistent channel_room_mappings.
- * 2. Matches active room_categories in the hotel.
- * 3. Never guesses across categories; returns null if unmapped.
+ * Normalizes category names for exact comparison:
+ * Lowercase, stripped punctuation, common separators, and rate plan suffixes.
  */
-export const resolveHotelRoomCategory = async (hotelId, { roomCode, roomName, ratePlan }) => {
+export const normalizeCategoryToken = (str) => {
+  if (!str) return '';
+  return String(str)
+    .toLowerCase()
+    .replace(/[-_/\\.,|]/g, ' ')
+    .replace(/\b(s\s*ep|d\s*ep|t\s*ep|q\s*ep|p\s*ep|ep|cp|map|ap)\b/gi, '')
+    .replace(/\b(room|rate|plan|standard)\b/gi, ' ')
+    .replace(/\s+/g, '')
+    .trim();
+};
+
+/**
+ * Authoritative room category resolution hierarchy for OTA reservations:
+ * 
+ * Level 1 — Existing explicit mapping (channel_room_mappings)
+ * Level 2 — Existing channel mapping metadata (channel_rate_mappings, multi-room sibling inheritance, channel baseline)
+ * Level 3 — Exact normalized category match
+ * Level 4 — Known safe aliases (unambiguous, never crossing between Suite / Deluxe / Fourbed)
+ */
+export const resolveHotelRoomCategory = async (hotelId, {
+  roomCode,
+  roomName,
+  ratePlan,
+  reservationId = null,
+  reservation = null,
+}) => {
   if (!hotelId) return null;
   const supabase = supabaseServiceRole;
 
   const rawCandidates = [roomCode, ratePlan, roomName].filter(Boolean).map(s => String(s).trim());
-  if (rawCandidates.length === 0) return null;
 
-  // 1. Direct query on channel_room_mappings
+  // LEVEL 1 — Existing explicit mapping in channel_room_mappings
   for (const term of rawCandidates) {
-    const { data: mapping } = await supabase
-      .from('channel_room_mappings')
-      .select('room_category_id, external_room_code')
-      .eq('hotel_id', hotelId)
-      .ilike('external_room_code', term)
-      .maybeSingle();
+    if (!term || term.toLowerCase() === 'ota') continue;
+    const strippedTerm = term.replace(/[-_](s|d|t|q|p)?(ep|cp|map|ap)$/i, '');
+    const searchTerms = [term, strippedTerm];
 
-    if (mapping && mapping.room_category_id) {
-      const { data: cat } = await supabase
-        .from('room_categories')
-        .select('id, name')
-        .eq('id', mapping.room_category_id)
+    for (const st of searchTerms) {
+      const { data: mapping } = await supabase
+        .from('channel_room_mappings')
+        .select('room_category_id, external_room_code')
+        .eq('hotel_id', hotelId)
+        .ilike('external_room_code', st)
         .maybeSingle();
 
-      if (cat) {
-        return { categoryId: cat.id, categoryName: cat.name, source: 'channel_room_mapping' };
+      if (mapping && mapping.room_category_id) {
+        const { data: cat } = await supabase
+          .from('room_categories')
+          .select('id, name')
+          .eq('id', mapping.room_category_id)
+          .maybeSingle();
+
+        if (cat) {
+          return { categoryId: cat.id, categoryName: cat.name, source: 'channel_room_mapping' };
+        }
       }
     }
   }
 
-  // 2. Fetch all active room categories for this hotel
+  // LEVEL 2 — Existing channel mapping metadata & Multi-room sibling inheritance
+  // 2a. Check channel_rate_mappings
+  for (const term of rawCandidates) {
+    if (!term || term.toLowerCase() === 'ota') continue;
+    const strippedTerm = term.replace(/[-_](s|d|t|q|p)?(ep|cp|map|ap)$/i, '');
+
+    const { data: rateMapping } = await supabase
+      .from('channel_rate_mappings')
+      .select('room_category_id, external_room_code, external_rate_plan_code')
+      .eq('hotel_id', hotelId)
+      .or(`external_rate_plan_code.ilike.%${term}%,external_room_code.ilike.%${term}%,external_rate_plan_code.ilike.%${strippedTerm}%,external_room_code.ilike.%${strippedTerm}%`)
+      .limit(1);
+
+    if (rateMapping && rateMapping.length > 0 && rateMapping[0].room_category_id) {
+      const { data: cat } = await supabase
+        .from('room_categories')
+        .select('id, name')
+        .eq('id', rateMapping[0].room_category_id)
+        .maybeSingle();
+
+      if (cat) {
+        return { categoryId: cat.id, categoryName: cat.name, source: 'channel_rate_mapping' };
+      }
+    }
+  }
+
+  // 2b. Multi-room Sibling Inheritance:
+  // When multiple rooms are booked under the same OTA booking ID (e.g. Manish Sharma Room 1 & Room 2),
+  // if a sibling room has already been assigned a physical room, its room category is authoritative.
+  let targetRes = reservation;
+  if (!targetRes && reservationId) {
+    const { data: resObj } = await supabase
+      .from('reservations')
+      .select('id, internal_note, remarks, source_name, hotel_id')
+      .eq('id', reservationId)
+      .maybeSingle();
+    targetRes = resObj;
+  }
+
+  if (targetRes) {
+    const noteText = `${targetRes.internal_note || ''} ${targetRes.remarks || ''}`;
+    const otaMatch = noteText.match(/\[(?:OTA_BOOKING_ID|AIOSELL_BOOKING_ID):\s*([^\]]+)\]/i);
+    if (otaMatch && otaMatch[1]) {
+      const extBookingId = otaMatch[1].trim();
+      const marker = `[OTA_BOOKING_ID: ${extBookingId}]`;
+      const legacy = `[AIOSELL_BOOKING_ID: ${extBookingId}]`;
+
+      const { data: siblings } = await supabase
+        .from('reservations')
+        .select('id, room_id, room_no, rate_plan')
+        .eq('hotel_id', hotelId)
+        .neq('id', targetRes.id)
+        .or(`internal_note.ilike.%${marker}%,internal_note.ilike.%${legacy}%,remarks.ilike.%${marker}%,remarks.ilike.%${legacy}%`);
+
+      if (siblings && siblings.length > 0) {
+        const siblingWithRoom = siblings.find(s => s.room_id && s.room_no && s.room_no !== 'Unassigned' && s.room_no !== 'TBD');
+        if (siblingWithRoom) {
+          const { data: roomObj } = await supabase
+            .from('rooms')
+            .select('category_id, room_categories(id, name)')
+            .eq('id', siblingWithRoom.room_id)
+            .maybeSingle();
+
+          if (roomObj && roomObj.room_categories) {
+            return {
+              categoryId: roomObj.category_id,
+              categoryName: roomObj.room_categories.name,
+              source: 'sibling_booking_inheritance',
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // 2c. Channel Baseline:
+  // If the reservation comes from a known channel (e.g. travelguru) and other reservations from that channel
+  // consistently map to an authoritative category in this hotel
+  if (targetRes?.source_name) {
+    const channelName = String(targetRes.source_name).toLowerCase().trim();
+    if (channelName === 'travelguru') {
+      const { data: channelReservations } = await supabase
+        .from('reservations')
+        .select('room_id')
+        .eq('hotel_id', hotelId)
+        .ilike('source_name', 'travelguru')
+        .not('room_id', 'is', null)
+        .limit(10);
+
+      if (channelReservations && channelReservations.length > 0) {
+        const roomIds = channelReservations.map(r => r.room_id).filter(Boolean);
+        const { data: mappedRooms } = await supabase
+          .from('rooms')
+          .select('category_id, room_categories(id, name)')
+          .in('id', roomIds);
+
+        const categoryCounts = new Map();
+        for (const mr of (mappedRooms || [])) {
+          if (mr.category_id && mr.room_categories?.name) {
+            categoryCounts.set(mr.category_id, {
+              id: mr.category_id,
+              name: mr.room_categories.name,
+              count: (categoryCounts.get(mr.category_id)?.count || 0) + 1,
+            });
+          }
+        }
+
+        if (categoryCounts.size === 1) {
+          const only = Array.from(categoryCounts.values())[0];
+          return { categoryId: only.id, categoryName: only.name, source: 'channel_baseline_mapping' };
+        }
+      }
+    }
+  }
+
+  // Fetch all active room categories for this hotel
   const { data: categories, error: catErr } = await supabase
     .from('room_categories')
     .select('id, name, is_active')
@@ -711,27 +854,41 @@ export const resolveHotelRoomCategory = async (hotelId, { roomCode, roomName, ra
     return null;
   }
 
-  // Active categories map
   const activeCats = categories.filter(c => c.is_active !== false);
 
-  // 3. Exact simplified match
+  // LEVEL 3 — Exact normalized category match
   for (const term of rawCandidates) {
-    const simpTerm = simplifyCategoryString(term);
-    if (!simpTerm) continue;
+    if (!term || term.toLowerCase() === 'ota') continue;
+    const normTerm = normalizeCategoryToken(term);
+    if (!normTerm) continue;
 
-    // Direct match against category simplified name
-    const exact = activeCats.find(c => simplifyCategoryString(c.name) === simpTerm);
+    const exact = activeCats.find(c => normalizeCategoryToken(c.name) === normTerm);
     if (exact) {
-      return { categoryId: exact.id, categoryName: exact.name, source: 'exact_simplified' };
+      return { categoryId: exact.id, categoryName: exact.name, source: 'exact_normalized' };
+    }
+  }
+
+  // LEVEL 4 — Known safe aliases (unambiguous, never crossing between Suite / Deluxe / Fourbed)
+  for (const term of rawCandidates) {
+    if (!term || term.toLowerCase() === 'ota') continue;
+    const norm = normalizeCategoryToken(term);
+
+    // Deluxe AC safe alias
+    if (norm.includes('deluxe') && !norm.includes('suite') && !norm.includes('four') && !norm.includes('4')) {
+      const match = activeCats.find(c => normalizeCategoryToken(c.name).includes('deluxe'));
+      if (match) return { categoryId: match.id, categoryName: match.name, source: 'safe_alias_deluxe' };
     }
 
-    // Inclusion match (e.g. deluxeac matches Deluxe AC Room)
-    const included = activeCats.find(c => {
-      const cSimp = simplifyCategoryString(c.name);
-      return cSimp.includes(simpTerm) || simpTerm.includes(cSimp);
-    });
-    if (included) {
-      return { categoryId: included.id, categoryName: included.name, source: 'fuzzy_included' };
+    // Fourbed AC safe alias
+    if ((norm.includes('fourbed') || norm.includes('four') || norm.includes('4bed') || norm.includes('4')) && !norm.includes('suite')) {
+      const match = activeCats.find(c => normalizeCategoryToken(c.name).includes('fourbed'));
+      if (match) return { categoryId: match.id, categoryName: match.name, source: 'safe_alias_fourbed' };
+    }
+
+    // Suite Room AC safe alias
+    if (norm.includes('suite') && !norm.includes('deluxe') && !norm.includes('four') && !norm.includes('4')) {
+      const match = activeCats.find(c => normalizeCategoryToken(c.name).includes('suite'));
+      if (match) return { categoryId: match.id, categoryName: match.name, source: 'safe_alias_suite' };
     }
   }
 
@@ -817,6 +974,8 @@ export const autoAssignPhysicalRoom = async ({
     roomCode: reservation.rate_plan,
     ratePlan: reservation.rate_plan,
     roomName: reservation.rate_plan,
+    reservationId,
+    reservation,
   });
 
   // If still not resolved, check channel_ota_reservations
@@ -832,6 +991,8 @@ export const autoAssignPhysicalRoom = async ({
       category = await resolveHotelRoomCategory(hotelId, {
         roomCode: otaRow.room_category,
         ratePlan: otaRow.rate_plan,
+        reservationId,
+        reservation,
       });
     }
   }
@@ -1082,15 +1243,16 @@ export const autoAssignPhysicalRoom = async ({
 };
 
 /**
- * Scans and auto-assigns physical rooms for all unassigned reservations in a hotel.
+ * Automatically processes and allocates physical rooms for all pending unassigned OTA reservations in a hotel.
+ * Authoritative backend reconciliation service.
  */
-export const batchAutoAssignReservations = async (hotelId) => {
-  if (!hotelId) throw new Error('hotelId is required');
+export const processPendingRoomAllocations = async (hotelId) => {
+  if (!hotelId) return { total: 0, assignedCount: 0, unassignedCount: 0, results: [] };
   const supabase = supabaseServiceRole;
 
   const { data: unassigned, error } = await supabase
     .from('reservations')
-    .select('id, guest_name, check_in_date, check_out_date, status, rate_plan, room_no, source_name')
+    .select('id, guest_name, check_in_date, check_out_date, status, rate_plan, room_no, room_id, source_name, source_category, internal_note')
     .eq('hotel_id', hotelId)
     .in('status', ['confirmed', 'checked_in'])
     .or('room_no.eq.Unassigned,room_no.eq.TBD,room_no.is.null,room_id.is.null')
@@ -1139,7 +1301,7 @@ export const batchAutoAssignReservations = async (hotelId) => {
         guestName: res.guest_name,
         source: res.source_name,
         status: 'unassigned',
-        reason: 'ASSIGNMENT_ERROR',
+        reason: 'ALLOCATION_ERROR',
         message: err.message,
       });
     }
@@ -1152,6 +1314,8 @@ export const batchAutoAssignReservations = async (hotelId) => {
     results,
   };
 };
+
+export const batchAutoAssignReservations = processPendingRoomAllocations;
 
 export default {
   upsertGuestMaster,

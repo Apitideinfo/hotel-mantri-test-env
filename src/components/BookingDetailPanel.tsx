@@ -19,7 +19,6 @@ import {
   getReservationConfirmationData,
   sendReservationConfirmationEmail,
   openWhatsAppConfirmation,
-  autoAssignReservation,
   extractUnassignedReason,
 } from '@/lib/api-reservations';
 import {
@@ -108,8 +107,6 @@ export const BookingDetailPanel = ({
 }: BookingDetailPanelProps) => {
   const [editMode, setEditMode] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [autoAssigning, setAutoAssigning] = useState(false);
-  const [autoAssignMsg, setAutoAssignMsg] = useState<string | null>(null);
 
   const room = useMemo(
     () => rooms.find((r) => r.room_no.trim().toLowerCase() === booking.roomNo.trim().toLowerCase()),
@@ -213,26 +210,6 @@ export const BookingDetailPanel = ({
   const unassignedReason = useMemo(() => {
     return extractUnassignedReason(booking.rawReservation || booking.raw);
   }, [booking]);
-
-  const handleAutoAssignSingle = async () => {
-    const resId = isReservation ? (reservation?.id || booking.id) : null;
-    if (!resId || autoAssigning) return;
-    setAutoAssigning(true);
-    setAutoAssignMsg(null);
-    try {
-      const res = await autoAssignReservation(resId);
-      if (res.success && res.roomNo) {
-        setAutoAssignMsg(`Successfully allocated Room ${res.roomNo}!`);
-        onSaved?.();
-      } else {
-        setAutoAssignMsg(res.message || `Could not allocate room: ${res.reason || 'No room available'}`);
-      }
-    } catch (err: any) {
-      setAutoAssignMsg(err?.message || 'Automatic assignment failed.');
-    } finally {
-      setAutoAssigning(false);
-    }
-  };
 
   const [editGuest, setEditGuest] = useState(booking.guestName);
   const [editPhone, setEditPhone] = useState(booking.phone);
@@ -359,7 +336,7 @@ export const BookingDetailPanel = ({
           </div>
         )}
 
-        {/* Unassigned quick action banner */}
+        {/* Unassigned status banner */}
         {!editMode && isUnassigned && (
           <div className="mx-5 mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2">
             <div className="min-w-0">
@@ -368,26 +345,14 @@ export const BookingDetailPanel = ({
                 {unassignedReason === 'NO_ELIGIBLE_ROOM' ? 'No active rooms found in category' :
                  unassignedReason === 'ROOM_CATEGORY_NOT_MAPPED' ? 'Room category mapping required' :
                  unassignedReason === 'NO_ROOM_FOR_FULL_STAY' ? 'All category rooms booked for these dates' :
-                 'Physical room needs to be assigned'}
+                 'Physical room allocation pending in backend'}
               </div>
             </div>
-            {isReservation && (
-              <button
-                onClick={handleAutoAssignSingle}
-                disabled={autoAssigning}
-                className="px-2.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg transition shadow-xs flex items-center gap-1 shrink-0 disabled:opacity-50 cursor-pointer"
-              >
-                {autoAssigning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                Auto-Assign
-              </button>
+            {unassignedReason && unassignedReason !== 'UNASSIGNED' && (
+              <span className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-2 py-0.5 rounded shrink-0">
+                Allocation blocked: {unassignedReason}
+              </span>
             )}
-          </div>
-        )}
-
-        {autoAssignMsg && (
-          <div className="mx-5 mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-semibold text-blue-800 flex items-center justify-between">
-            <span>{autoAssignMsg}</span>
-            <button onClick={() => setAutoAssignMsg(null)} className="text-blue-500 hover:text-blue-700 font-bold ml-2">×</button>
           </div>
         )}
 

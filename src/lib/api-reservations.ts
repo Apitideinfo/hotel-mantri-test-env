@@ -556,45 +556,6 @@ export const extractUnassignedReason = (reservation: any): string => {
   return '';
 };
 
-export const autoAssignReservation = async (
-  reservationId: string,
-  preferredRoomNo?: string | null,
-): Promise<{ success: boolean; roomNo?: string; roomId?: string; categoryName?: string; reason?: string; message?: string }> => {
-  try {
-    const res = await apiFetch(`/api/reservations/${reservationId}/auto-assign`, {
-      method: 'POST',
-      body: JSON.stringify({ preferredRoomNo }),
-    });
-    if (res?.success && res.roomNo) {
-      dispatchChannelEvent('ROOM_TRANSFER', {
-        room_no: res.roomNo,
-      }).catch(e => console.warn('[autoAssignReservation] Auto-sync warning:', e));
-    }
-    return res;
-  } catch (err: any) {
-    return {
-      success: false,
-      reason: err?.code || 'AUTO_ASSIGN_FAILED',
-      message: err?.message || 'Automatic room assignment failed.',
-    };
-  }
-};
-
-export const batchAutoAssignReservations = async (): Promise<{
-  total: number;
-  assignedCount: number;
-  unassignedCount: number;
-  results: any[];
-}> => {
-  try {
-    const res = await apiFetch('/api/reservations/auto-assign-all', {
-      method: 'POST',
-    });
-    return res;
-  } catch (err: any) {
-    throw new Error(err?.message || 'Failed to auto-assign unassigned reservations.');
-  }
-};
 
 export const getAutoAssignSetting = async (): Promise<boolean> => {
   try {

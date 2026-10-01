@@ -29,7 +29,7 @@ import {
 import {
   getReservationsForDateRange, getFutureReservationsCount, saveReservation, deleteReservation,
   updateReservationStatus, checkRoomAvailability, extendReservation,
-  batchAutoAssignReservations, extractUnassignedReason,
+  extractUnassignedReason,
 } from '@/lib/api-reservations';
 import { extendStay } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
@@ -261,20 +261,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     }
   }, [timelineDates, centerDate, hotelId, hotelStatus]);
 
-  const [autoAssigningAll, setAutoAssigningAll] = useState(false);
 
-  const handleAutoAssignAll = async () => {
-    setAutoAssigningAll(true);
-    try {
-      await batchAutoAssignReservations();
-      await load();
-      onSaved();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to auto-assign reservations.');
-    } finally {
-      setAutoAssigningAll(false);
-    }
-  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -1054,18 +1041,6 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 {unassignedBookings.length} Unassigned OTA Reservation{unassignedBookings.length > 1 ? 's' : ''} (Need Room Allocation)
               </span>
             </div>
-            <button
-              onClick={handleAutoAssignAll}
-              disabled={autoAssigningAll}
-              className="flex items-center gap-1.5 px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-xs transition cursor-pointer disabled:opacity-50"
-            >
-              {autoAssigningAll ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Zap className="w-3.5 h-3.5" />
-              )}
-              Auto-Assign All
-            </button>
           </div>
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
             {unassignedBookings.map((b) => {
@@ -1079,14 +1054,15 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                   <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
                   <span className="font-bold text-slate-900">{b.guestName || 'Guest'}</span>
                   <span className="text-slate-500">({b.checkIn} → {b.checkOut})</span>
-                  {reason && reason !== 'UNASSIGNED' && (
+                  {reason && reason !== 'UNASSIGNED' ? (
                     <span className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded">
-                      {reason}
+                      Allocation blocked: {reason}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                      Allocation Pending
                     </span>
                   )}
-                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                    Assign Room
-                  </span>
                 </button>
               );
             })}
