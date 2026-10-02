@@ -10,46 +10,30 @@ const getSupabaseConfig = () => {
 /**
  * Resolves the authenticated user and their authorized hotel context.
  * Strictly verifies role permissions and rejects unauthorized cross-hotel requests.
+ * 
+ * Rules:
+ * 1. Requires valid Supabase JWT authentication.
+ * 2. Super Admin can select and switch between authorized properties.
+ * 3. Hotel Owner / Admin / Staff is strictly bound to ONE authorized hotel resolved
+ *    from the database. Client-supplied hotel IDs cannot override authorization.
+ *    Any mismatch is immediately rejected with 403 HOTEL_ACCESS_DENIED.
  */
 export const resolveAuthorizedHotel = async (req) => {
   if (req.user && req.auth?.hotelId) {
     return {
       success: true,
       user: req.user,
+      userId: req.user.id || req.auth.userId,
       hotelId: req.auth.hotelId,
-      role: req.userRole || req.auth.role || 'super_admin',
+      role: req.userRole || req.auth.role || 'hotel_admin',
+      isSuperAdmin: Boolean(req.auth.isSuperAdmin),
       hotel: req.hotel || { id: req.auth.hotelId },
       scopedSupabase: req.scopedSupabase,
     };
   }
 
-  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.body?.hotel_id || req.body?.hotelId;
-  if (!requestedHotelId) {
-    return {
-      success: false,
-      status: 400,
-      code: 'HOTEL_CONTEXT_REQUIRED',
-      message: 'Hotel context is required for this operation. Please select a hotel.',
-    };
-  }
-
-  const supabaseConfig = getSupabaseConfig();
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || supabaseConfig.anonKey;
-
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    if (requestedHotelId && (process.env.NODE_ENV !== 'production' || !authHeader)) {
-      return {
-        success: true,
-        user: { id: 'service-role-admin', email: 'service@hotelmantri.com' },
-        userId: 'service-role-admin',
-        role: 'super_admin',
-        hotelId: requestedHotelId,
-        hotel: { id: requestedHotelId },
-        scopedSupabase: createClient(getSupabaseConfig().url, serviceKey || anonKey),
-      };
-    }
     return {
       success: false,
       status: 401,
@@ -68,30 +52,34 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
-  if (token && ((serviceKey && token === serviceKey) || (anonKey && token === anonKey))) {
+  const supabaseConfig = getSupabaseConfig();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Privileged internal server-to-server call with service role key ONLY
+  if (serviceKey && token === serviceKey) {
+    const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
+    if (!requestedHotelId) {
+      return {
+        success: false,
+        status: 400,
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context is required for service role operations.',
+      };
+    }
     return {
       success: true,
       user: { id: 'service-role-admin', email: 'service@hotelmantri.com' },
       userId: 'service-role-admin',
       role: 'super_admin',
+      isSuperAdmin: true,
       hotelId: requestedHotelId,
       hotel: { id: requestedHotelId },
-      scopedSupabase: createClient(getSupabaseConfig().url, serviceKey || anonKey),
+      scopedSupabase: createClient(supabaseConfig.url, serviceKey),
     };
   }
 
-  const { url: supabaseUrl, anonKey: supabaseAnonKey } = getSupabaseConfig();
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return {
-      success: false,
-      status: 500,
-      code: 'CONFIG_ERROR',
-      message: 'Supabase configuration is missing on the server.',
-    };
-  }
-
-  // Create request-scoped Supabase client with user's JWT
-  const scopedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+  // Normal user token validation via Supabase Auth
+  const scopedSupabase = createClient(supabaseConfig.url, supabaseConfig.anonKey, {
     global: {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -103,7 +91,6 @@ export const resolveAuthorizedHotel = async (req) => {
     },
   });
 
-  // Verify token and retrieve user
   const { data: { user }, error: authError } = await scopedSupabase.auth.getUser(token);
   if (authError || !user) {
     return {
@@ -114,7 +101,9 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
-  // Check Super Admin privilege via RPC
+  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
+
+  // Check Super Admin privilege via RPC is_super_admin()
   let isSuperAdmin = false;
   try {
     const { data: isSuper, error: rpcErr } = await scopedSupabase.rpc('is_super_admin');
@@ -125,9 +114,21 @@ export const resolveAuthorizedHotel = async (req) => {
     isSuperAdmin = false;
   }
 
-  // Requested hotel already extracted as requestedHotelId
+  if (!isSuperAdmin) {
+    const { data: cu } = await scopedSupabase
+      .from('company_users')
+      .select('role')
+      .eq('user_id', user.id)
+      .eq('status', 'Active')
+      .maybeSingle();
+
+    if (cu && (cu.role === 'founder' || cu.role === 'company_admin')) {
+      isSuperAdmin = true;
+    }
+  }
 
   if (isSuperAdmin) {
+    // Super Admin Flow: Must specify an active target hotel property
     if (!requestedHotelId) {
       return {
         success: false,
@@ -137,7 +138,6 @@ export const resolveAuthorizedHotel = async (req) => {
       };
     }
 
-    // Verify hotel exists
     const { data: hotel, error: hotelErr } = await scopedSupabase
       .from('hotels')
       .select('id, hotel_name, subscription_status, is_active')
@@ -158,14 +158,15 @@ export const resolveAuthorizedHotel = async (req) => {
       user,
       userId: user.id,
       role: 'super_admin',
+      isSuperAdmin: true,
       hotelId: requestedHotelId,
       hotel,
       scopedSupabase,
     };
   }
 
-  // Hotel Admin / Staff Flow:
-  // Query active hotel assignments for this user
+  // Hotel Owner / Hotel Admin / Staff Flow:
+  // Authoritatively query assigned hotel from database
   const { data: adminRecords, error: dbError } = await scopedSupabase
     .from('hotel_admins')
     .select('role, hotel_id, status')
@@ -184,6 +185,7 @@ export const resolveAuthorizedHotel = async (req) => {
 
   const activeRecord = adminRecords && adminRecords[0];
   let authorizedHotelId = activeRecord?.hotel_id;
+  let userRole = activeRecord?.role || 'hotel_admin';
 
   if (!authorizedHotelId && user.email) {
     const { data: matchedHotel } = await scopedSupabase
@@ -194,23 +196,8 @@ export const resolveAuthorizedHotel = async (req) => {
       .maybeSingle();
 
     if (matchedHotel) {
-      if (requestedHotelId && requestedHotelId !== matchedHotel.id) {
-        return {
-          success: false,
-          status: 403,
-          code: 'HOTEL_ACCESS_DENIED',
-          message: 'Cross-hotel access denied. You are not authorized for this property.',
-        };
-      }
-      return {
-        success: true,
-        user,
-        userId: user.id,
-        role: 'hotel_admin',
-        hotelId: matchedHotel.id,
-        hotel: matchedHotel,
-        scopedSupabase,
-      };
+      authorizedHotelId = matchedHotel.id;
+      userRole = 'hotel_admin';
     }
   }
 
@@ -218,18 +205,18 @@ export const resolveAuthorizedHotel = async (req) => {
     return {
       success: false,
       status: 403,
-      code: 'HOTEL_ACCESS_DENIED',
-      message: 'User is not assigned to any active hotel property.',
+      code: 'NO_HOTEL_ASSIGNED',
+      message: 'No hotel is associated with this account.',
     };
   }
 
-  // If client passed an X-Hotel-Id, verify it matches their assigned hotel
+  // STRICT SECURITY CHECK: Reject any client hotel tampering attempt
   if (requestedHotelId && requestedHotelId !== authorizedHotelId) {
     return {
       success: false,
       status: 403,
       code: 'HOTEL_ACCESS_DENIED',
-      message: 'Cross-hotel access denied. You are not authorized for this property.',
+      message: 'You are not authorized to access this hotel.',
     };
   }
 
@@ -244,7 +231,8 @@ export const resolveAuthorizedHotel = async (req) => {
     success: true,
     user,
     userId: user.id,
-    role: activeRecord.role || 'hotel_admin',
+    role: userRole,
+    isSuperAdmin: false,
     hotelId: authorizedHotelId,
     hotel: hotel || { id: authorizedHotelId, hotel_name: 'Hotel' },
     scopedSupabase,
@@ -263,6 +251,7 @@ export const requireAuth = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
+        error: 'AUTH_REQUIRED',
         code: 'AUTH_REQUIRED',
         message: 'Missing or invalid Authorization header.',
         requestId,
@@ -280,6 +269,7 @@ export const requireAuth = async (req, res, next) => {
     if (authError || !user) {
       return res.status(401).json({
         success: false,
+        error: 'INVALID_TOKEN',
         code: 'INVALID_TOKEN',
         message: 'Authentication token is invalid or expired.',
         requestId,
@@ -293,6 +283,7 @@ export const requireAuth = async (req, res, next) => {
     console.error(`[${requestId}] requireAuth error:`, err?.message || err);
     res.status(500).json({
       success: false,
+      error: 'SERVER_ERROR',
       code: 'SERVER_ERROR',
       message: 'Internal server error during authentication.',
       requestId,
@@ -302,7 +293,7 @@ export const requireAuth = async (req, res, next) => {
 
 /**
  * Middleware: Requires authenticated user AND valid authorized hotel context.
- * Strictly verifies role permissions and attaches req.auth = { userId, role, hotelId, hotel }.
+ * Strictly verifies role permissions and attaches req.auth = { userId, role, isSuperAdmin, hotelId, hotel }.
  */
 export const requireHotelAccess = async (req, res, next) => {
   const requestId = req.headers['x-request-id'] || crypto.randomUUID();
@@ -311,22 +302,17 @@ export const requireHotelAccess = async (req, res, next) => {
   try {
     const resolution = await resolveAuthorizedHotel(req);
     if (!resolution.success) {
-      // Safe diagnostic logging (NEVER log tokens or passwords)
       console.warn(`[${requestId}] Hotel Auth Denied:`, {
         endpoint: req.originalUrl || req.url,
         method: req.method,
         statusCode: resolution.status,
         code: resolution.code,
-        requestedHotelId: req.headers['x-hotel-id'] || req.query.hotelId,
+        message: resolution.message,
       });
 
       return res.status(resolution.status).json({
         success: false,
-        error: {
-          code: resolution.code,
-          message: resolution.message,
-          requestId
-        },
+        error: resolution.code,
         code: resolution.code,
         message: resolution.message,
         requestId,
@@ -342,6 +328,7 @@ export const requireHotelAccess = async (req, res, next) => {
     req.auth = {
       userId: resolution.userId,
       role: resolution.role,
+      isSuperAdmin: resolution.isSuperAdmin,
       hotelId: resolution.hotelId,
       hotel: resolution.hotel,
     };
@@ -351,10 +338,10 @@ export const requireHotelAccess = async (req, res, next) => {
     console.error(`[${requestId}] requireHotelAccess exception:`, error?.message || error);
     res.status(500).json({
       success: false,
+      error: 'SERVER_ERROR',
       code: 'SERVER_ERROR',
       message: 'Internal server error during hotel authorization.',
       requestId,
     });
   }
 };
-

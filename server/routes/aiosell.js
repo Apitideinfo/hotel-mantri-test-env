@@ -15,10 +15,36 @@ const getHotelAiosellConfig = async (hotelId, requestId = null) => {
 };
 
 // Public & Diagnostic Health / Status Endpoints (Always return JSON, never HTML)
-router.all(['/status', '/health'], async (req, res) => {
+router.all(['/status', '/health', '/test-connection'], async (req, res) => {
   const requestId = req.requestId || `HM-STAT-${Date.now().toString(36).toUpperCase()}`;
   try {
-    const hotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.hotelId || req.auth?.hotelId;
+    // Resolve authorized hotel context securely when token is provided
+    let hotelId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const authRes = await resolveAuthorizedHotel(req);
+      if (!authRes.success) {
+        return res.status(authRes.status || 403).json({
+          success: false,
+          error: authRes.code,
+          code: authRes.code,
+          message: authRes.message,
+          requestId,
+        });
+      }
+      hotelId = authRes.hotelId;
+    } else {
+      const requestedHeader = req.headers['x-hotel-id'] || req.query.hotelId;
+      if (requestedHeader) {
+        return res.status(401).json({
+          success: false,
+          error: 'AUTH_REQUIRED',
+          code: 'AUTH_REQUIRED',
+          message: 'Authentication required to inspect hotel-specific integration status.',
+          requestId,
+        });
+      }
+    }
     
     // If no specific hotel context is provided (e.g. platform health check, direct URL verification)
     if (!hotelId) {
@@ -42,12 +68,14 @@ router.all(['/status', '/health'], async (req, res) => {
     } catch (cfgErr) {
       const isPropMissing = cfgErr.code === 'PROVIDER_PROPERTY_NOT_FOUND' || cfgErr.message?.includes('property code');
       const statusType = isPropMissing ? 'PROPERTY_NOT_CONFIGURED' : 'CONFIGURATION_MISSING';
+      const errCode = isPropMissing ? 'AIOSSELL_HOTEL_NOT_FOUND' : 'AIOSSELL_AUTH_FAILED';
       return res.status(200).json({
-        success: true,
+        success: false,
         configured: false,
         connected: false,
         status: statusType,
-        code: statusType,
+        code: errCode,
+        errorCode: errCode,
         provider: 'external_channel_manager',
         hotelId,
         message: cfgErr.message || 'Channel manager integration is not configured for this hotel.',
@@ -58,11 +86,12 @@ router.all(['/status', '/health'], async (req, res) => {
 
     if (!hotelConfig || !hotelConfig.credentialPresent) {
       return res.status(200).json({
-        success: true,
+        success: false,
         configured: false,
         connected: false,
         status: 'CONFIGURATION_MISSING',
-        code: 'CONFIGURATION_MISSING',
+        code: 'AIOSSELL_AUTH_FAILED',
+        errorCode: 'AIOSSELL_AUTH_FAILED',
         provider: 'external_channel_manager',
         hotelId,
         message: 'Channel manager server credentials are not configured.',
@@ -73,11 +102,12 @@ router.all(['/status', '/health'], async (req, res) => {
 
     if (!hotelConfig.hotelCode) {
       return res.status(200).json({
-        success: true,
+        success: false,
         configured: false,
         connected: false,
         status: 'PROPERTY_NOT_CONFIGURED',
-        code: 'PROPERTY_NOT_CONFIGURED',
+        code: 'AIOSSELL_HOTEL_NOT_FOUND',
+        errorCode: 'AIOSSELL_HOTEL_NOT_FOUND',
         provider: 'external_channel_manager',
         hotelId,
         message: 'External property code is not configured for this hotel in Channel Settings.',
@@ -89,53 +119,74 @@ router.all(['/status', '/health'], async (req, res) => {
     const result = await aiosellService.testConnection(hotelConfig);
     
     if (result.success) {
+      // Persist success status in channel_settings
+      const supabase = getSupabase();
+      await supabase
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'connected',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: 'Connected successfully',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
       return res.status(200).json({
         success: true,
         configured: true,
         connected: true,
         status: 'CONNECTED',
-        code: 'CONNECTED',
+        code: 'AIOSSELL_CONNECTED',
+        errorCode: null,
         provider: 'external_channel_manager',
         hotelId,
         environment: result.environment || hotelConfig.environment,
         hotelCode: result.hotelCode || hotelConfig.hotelCode,
         partnerId: result.partnerId || hotelConfig.partnerId,
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        mapping: result.mapping,
         latencyMs: result.responseTimeMs,
+        responseTimeMs: result.responseTimeMs,
+        message: 'Channel integration connection successful',
         lastCheckedAt: new Date().toISOString(),
         requestId
       });
     } else {
-      const isAuthError = result.status === 401 || result.status === 403 || result.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
-      if (isAuthError) {
-        return res.status(200).json({
-          success: false,
-          configured: true,
-          connected: false,
-          status: 'AUTH_ERROR',
-          code: 'AUTH_ERROR',
-          error: {
-            code: 'CHANNEL_AUTH_FAILED',
-            message: result.error?.message || 'Channel manager authentication failed. Please verify server-side credentials.',
-            requestId
-          },
-          message: result.error?.message || 'Channel manager authentication failed. Please verify server-side credentials.',
-          requestId
-        });
-      }
+      // Persist error status in channel_settings
+      const supabase = getSupabase();
+      await supabase
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'error',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: result.error?.message || 'Connection test failed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
+      const errObj = result.error || {};
+      const errorCode = errObj.errorCode || errObj.code || 'AIOSSELL_CONNECTION_FAILED';
+      const statusLabel = errorCode === 'AIOSSELL_AUTH_FAILED' 
+        ? 'AUTH_ERROR' 
+        : errorCode === 'AIOSSELL_HOTEL_NOT_FOUND' 
+        ? 'PROPERTY_NOT_CONFIGURED' 
+        : 'EXTERNAL_PROVIDER_UNAVAILABLE';
 
       return res.status(200).json({
         success: false,
         configured: true,
         connected: false,
-        status: 'EXTERNAL_PROVIDER_UNAVAILABLE',
-        code: 'EXTERNAL_PROVIDER_UNAVAILABLE',
+        status: statusLabel,
+        code: errorCode,
+        errorCode,
+        provider: 'external_channel_manager',
         error: {
-          code: result.error?.code || 'CHANNEL_CONNECTION_FAILED',
-          message: result.error?.message || 'Channel manager integration connection failed',
+          code: errorCode,
+          message: errObj.message || 'Channel manager integration connection failed',
           requestId
         },
-        message: result.error?.message || 'Channel manager integration connection failed',
+        message: errObj.message || 'Channel manager integration connection failed',
+        details: result.diagnostic,
         requestId
       });
     }
@@ -143,11 +194,15 @@ router.all(['/status', '/health'], async (req, res) => {
     console.error(`[/api/aiosell/status] Error:`, err);
     res.status(err.status || 500).json({
       success: false,
+      provider: 'external_channel_manager',
       error: {
-        code: err.code || 'SERVER_ERROR',
+        code: err.errorCode || err.code || 'SERVER_ERROR',
         message: err.message || 'Failed to verify channel integration status',
         requestId
-      }
+      },
+      errorCode: err.errorCode || err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to verify channel integration status',
+      requestId
     });
   }
 });

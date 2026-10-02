@@ -718,15 +718,17 @@ function AppInner() {
             <PosReportsScreen onBack={back} />
           )}
         </Suspense>
+          </div>
+        </AppShell>
       </div>
-    </AppShell>
-  </div>
-  <HotelSelectorModal
-    isOpen={showSuperAdminHotelSelector}
-    onClose={() => setShowSuperAdminHotelSelector(false)}
-  />
-</div>
-);
+      {isSuperAdmin && (
+        <HotelSelectorModal
+          isOpen={showSuperAdminHotelSelector}
+          onClose={() => setShowSuperAdminHotelSelector(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 function SuperAdminRouter({ onSignOut, onViewDashboard }: { onSignOut: () => void; onViewDashboard?: (hotelId?: string) => void }) {
