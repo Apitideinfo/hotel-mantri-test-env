@@ -5,6 +5,13 @@ import type { DashboardSummary } from '@/lib/api';
 
 interface KpiSectionProps {
   mtd: DashboardSummary['mtd'] | null;
+  periodTotalRevenue?: number;
+  periodSub?: string;
+  periodCash?: number;
+  periodBank?: number;
+  periodArr?: number;
+  periodRevpar?: number;
+  periodOcc?: number;
 }
 
 const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
@@ -50,15 +57,32 @@ const KpiCardItem = ({ label, value, sub, icon, color, iconBg, index }: KpiCardP
   </div>
 );
 
-export const KpiSection = ({ mtd }: KpiSectionProps) => {
+export const KpiSection = ({
+  mtd,
+  periodTotalRevenue,
+  periodSub,
+  periodCash,
+  periodBank,
+  periodArr,
+  periodRevpar,
+  periodOcc,
+}: KpiSectionProps) => {
   const isPositiveNet = (mtd?.netIncome ?? 0) >= 0;
+
+  const totalRev = periodTotalRevenue !== undefined ? periodTotalRevenue : (mtd?.totalRevenue ?? 0);
+  const incomeSub = periodSub || "MTD Earned Revenue";
+  const cashVal = periodCash !== undefined ? periodCash : (mtd?.cash ?? 0);
+  const bankVal = periodBank !== undefined ? periodBank : (mtd?.bank ?? 0);
+  const arrVal = periodArr !== undefined ? periodArr : (mtd?.arr ?? 0);
+  const revparVal = periodRevpar !== undefined ? periodRevpar : (mtd?.revpar ?? 0);
+  const occVal = periodOcc !== undefined ? periodOcc : (mtd?.occ ?? 0);
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 sm:gap-4">
       <KpiCardItem
         label="Total Income"
-        value={rs(mtd?.totalRevenue ?? 0)}
-        sub="MTD Earned Revenue"
+        value={rs(totalRev)}
+        sub={incomeSub}
         icon={<DollarSign className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-brand-600"
         iconBg="bg-brand-50 text-brand-600"
@@ -66,8 +90,8 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       />
       <KpiCardItem
         label="Cash"
-        value={rs(mtd?.cash ?? 0)}
-        sub="MTD Cash Received"
+        value={rs(cashVal)}
+        sub="Period Cash Received"
         icon={<Wallet className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-emerald-600"
         iconBg="bg-emerald-50 text-emerald-600"
@@ -75,8 +99,8 @@ export const KpiSection = ({ mtd }: KpiSectionProps) => {
       />
       <KpiCardItem
         label="Bank / OTA"
-        value={rs(mtd?.bank ?? 0)}
-        sub="MTD Bank/OTA Received"
+        value={rs(bankVal)}
+        sub="Period Bank/OTA Received"
         icon={<Banknote className="w-4 h-4 sm:w-5 sm:h-5" />}
         color="text-slate-800"
         iconBg="bg-slate-100 text-slate-700"

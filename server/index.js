@@ -57,6 +57,7 @@ import channelRoutes from './routes/channels.js';
 import reservationRoutes from './routes/reservations.js';
 import hotelBrandingRoutes from './routes/hotelBranding.js';
 import notificationRoutes from './routes/notifications.js';
+import revenueRoutes from './routes/revenue.js';
 
 // Mount API routes with both /api prefix and direct path for total serverless compatibility
 app.use('/api/aiosell', aiosellRoutes);
@@ -70,6 +71,10 @@ app.use('/channels', channelRoutes);
 
 app.use('/api/reservations', reservationRoutes);
 app.use('/reservations', reservationRoutes);
+
+app.use('/api/revenue', revenueRoutes);
+app.use('/revenue', revenueRoutes);
+app.use('/api/reservations/revenue', revenueRoutes);
 
 app.use('/api/hotel-branding', hotelBrandingRoutes);
 app.use('/hotel-branding', hotelBrandingRoutes);

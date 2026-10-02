@@ -2,9 +2,15 @@ import { useState } from 'react';
 import { Wallet, DollarSign, Receipt, Clock, Info, CheckCircle2, ChevronDown, ChevronUp } from 'lucide-react';
 import { fmtMoney } from '@/lib/calc';
 import type { DashboardSummary } from '@/lib/api';
+import type { DayWiseRevenueData } from '@/lib/api-revenue';
 
 interface FinancialOverviewProps {
   mtd: DashboardSummary['mtd'] | null;
+  periodSummary?: DayWiseRevenueData['summary'] | null;
+  periodSubtitle?: string;
+  periodBadge?: string;
+  onOpenHistory?: () => void;
+  onDrilldownRoomRevenue?: () => void;
 }
 
 const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
@@ -43,17 +49,20 @@ const RowItem = ({
   sublabel,
   color,
   isTotal,
+  onClick,
 }: {
   label: string;
   value: number;
   sublabel?: string;
   color?: string;
   isTotal?: boolean;
+  onClick?: () => void;
 }) => (
   <div
+    onClick={onClick}
     className={`flex items-center justify-between py-2 ${
       isTotal ? 'pt-3 mt-2 border-t-2 border-slate-200/80' : 'border-b border-slate-100/60 last:border-0'
-    }`}
+    } ${onClick ? 'cursor-pointer hover:bg-slate-50/80 -mx-2 px-2 rounded-lg transition-colors' : ''}`}
   >
     <div className="min-w-0 pr-2">
       <span className={`text-xs block ${isTotal ? 'font-bold text-slate-900' : 'font-medium text-slate-600'}`}>
@@ -71,15 +80,31 @@ const RowItem = ({
   </div>
 );
 
-export const FinancialOverview = ({ mtd }: FinancialOverviewProps) => {
+export const FinancialOverview = ({
+  mtd,
+  periodSummary,
+  periodSubtitle,
+  periodBadge,
+  onOpenHistory,
+  onDrilldownRoomRevenue,
+}: FinancialOverviewProps) => {
   const [showReconDetails, setShowReconDetails] = useState(false);
 
-  // Authoritative collection is strictly the sum of actual payment modes received
-  const totalCollection =
-    mtd?.totalCollections ??
-    (mtd?.payCash ?? 0) + (mtd?.payBank ?? 0) + (mtd?.payUpi ?? 0) + (mtd?.payCard ?? 0);
+  // Active revenue numbers: prioritize periodSummary when provided, else MTD
+  const roomRev = periodSummary ? periodSummary.roomRevenue : (mtd?.roomRevenue ?? 0);
+  const fbRev = periodSummary ? periodSummary.fbRevenue : (mtd?.fbRevenue ?? 0);
+  const otherInc = periodSummary ? periodSummary.otherIncome : ((mtd?.miscRevenue ?? 0) + (mtd?.otherRevenue ?? 0));
+  const earnedRevenue = periodSummary ? periodSummary.totalIncome : (mtd?.totalRevenue ?? 0);
 
-  const earnedRevenue = mtd?.totalRevenue ?? 0;
+  // Active collections
+  const colCash = periodSummary ? periodSummary.collections.cash : (mtd?.payCash ?? 0);
+  const colBank = periodSummary ? periodSummary.collections.bank : (mtd?.payBank ?? 0);
+  const colUpi = periodSummary ? periodSummary.collections.upi : (mtd?.payUpi ?? 0);
+  const colCard = periodSummary ? periodSummary.collections.card : (mtd?.payCard ?? 0);
+  const totalCollection = periodSummary ? periodSummary.collections.total : (
+    mtd?.totalCollections ?? (colCash + colBank + colUpi + colCard)
+  );
+
   const earnedCollected = mtd?.earnedRevenueCollected ?? 0;
   const earnedOutstanding = mtd?.earnedRevenueOutstanding ?? 0;
   const mtdUncollected = mtd?.payBalance ?? 0;
@@ -93,34 +118,50 @@ export const FinancialOverview = ({ mtd }: FinancialOverviewProps) => {
         {/* 1. Income Breakup (Accrual Earned Revenue) */}
         <BreakdownCard
           title="Income Breakup"
-          subtitle="MTD Earned Revenue"
-          badge="Accrual"
+          subtitle={periodSubtitle || "MTD Earned Revenue"}
+          badge={periodBadge || "Accrual"}
           icon={<DollarSign className="w-4 h-4 text-brand-600" />}
         >
           <div className="space-y-0.5">
-            <RowItem label="Room Revenue" sublabel="Per occupied night" value={mtd?.roomRevenue ?? 0} color="text-brand-600" />
-            <RowItem label="F&B Revenue" sublabel="Kitchen / Restaurant" value={mtd?.fbRevenue ?? 0} />
+            <RowItem
+              label="Room Revenue"
+              sublabel="Per occupied night (Click to drill down)"
+              value={roomRev}
+              color="text-brand-600"
+              onClick={onDrilldownRoomRevenue || onOpenHistory}
+            />
+            <RowItem label="F&B Revenue" sublabel="Kitchen / Restaurant" value={fbRev} />
             <RowItem
               label="Other Income"
               sublabel="Misc & daily heads"
-              value={(mtd?.miscRevenue ?? 0) + (mtd?.otherRevenue ?? 0)}
+              value={otherInc}
             />
           </div>
-          <RowItem label="Total Income" sublabel="Earned in period" value={earnedRevenue} isTotal />
+          <div>
+            <RowItem label="Total Income" sublabel="Earned in period" value={earnedRevenue} isTotal />
+            {onOpenHistory && (
+              <button
+                onClick={onOpenHistory}
+                className="mt-2 text-[11px] font-bold text-brand-600 hover:text-brand-800 transition flex items-center gap-1 cursor-pointer"
+              >
+                <span>View Day-Wise Breakdown & History →</span>
+              </button>
+            )}
+          </div>
         </BreakdownCard>
 
         {/* 2. Collection Breakup (Actual Money Received) */}
         <BreakdownCard
           title="Collection Breakup"
-          subtitle="MTD Money Received"
+          subtitle={periodSubtitle ? periodSubtitle.replace('Earned Revenue', 'Money Received') : "MTD Money Received"}
           badge="Cash Basis"
           icon={<Wallet className="w-4 h-4 text-emerald-600" />}
         >
           <div className="space-y-0.5">
-            <RowItem label="Cash" sublabel="Physical currency received" value={mtd?.payCash ?? 0} color="text-emerald-600" />
-            <RowItem label="Bank / OTA" sublabel="Bank transfer & OTA payout" value={mtd?.payBank ?? 0} color="text-slate-700" />
-            <RowItem label="UPI" sublabel="Direct QR / UPI payments" value={mtd?.payUpi ?? 0} color="text-brand-600" />
-            <RowItem label="Card" sublabel="Credit / Debit POS" value={mtd?.payCard ?? 0} color="text-amber-600" />
+            <RowItem label="Cash" sublabel="Physical currency received" value={colCash} color="text-emerald-600" />
+            <RowItem label="Bank / OTA" sublabel="Bank transfer & OTA payout" value={colBank} color="text-slate-700" />
+            <RowItem label="UPI" sublabel="Direct QR / UPI payments" value={colUpi} color="text-brand-600" />
+            <RowItem label="Card" sublabel="Credit / Debit POS" value={colCard} color="text-amber-600" />
           </div>
           <RowItem label="Total Collection" sublabel="Actual money posted" value={totalCollection} isTotal />
         </BreakdownCard>
