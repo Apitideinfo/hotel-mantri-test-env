@@ -135,8 +135,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       setError(null);
       const data = await getChannelManagerOverview();
       setOverview(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Channel Manager');
+    } catch (e: any) {
+      const rawMsg = e instanceof Error ? e.message : String(e || 'Failed to load Channel Manager');
+      const isInternalJsError = rawMsg.includes('resolveAuthorizedHotel') || rawMsg.includes('ReferenceError') || rawMsg.includes('is not defined');
+      setError(isInternalJsError ? 'Channel integration is initializing. Please refresh shortly.' : rawMsg);
     } finally {
       setLoading(false);
     }
@@ -3153,10 +3155,16 @@ const SettingsTab = ({ settings, onChanged }: {
       }
     } catch (err: any) {
       const isAuthError = err?.status === 401 || err?.errorCode === 'AIOSSELL_AUTH_FAILED';
-      const errMsg = err?.message || err?.error || "✕ Hotel Mantri Backend Unreachable";
+      const rawMsg = err?.message || err?.error || "✕ Hotel Mantri Backend Unreachable";
+      const isInternalJsError = String(rawMsg).includes('resolveAuthorizedHotel') || String(rawMsg).includes('ReferenceError') || String(rawMsg).includes('is not defined');
+      const safeMsg = isInternalJsError
+        ? "✕ Channel integration configuration required"
+        : isAuthError
+        ? "✕ Channel Manager Authentication Failed"
+        : (rawMsg.startsWith('✕') ? rawMsg : `✕ ${rawMsg}`);
       setProviderTestResult({ 
         ok: false, 
-        message: isAuthError ? "✕ Channel Manager Authentication Failed" : (errMsg.startsWith('✕') ? errMsg : `✕ ${errMsg}`)
+        message: safeMsg
       });
       if (settings) {
         await saveChannelSettings({

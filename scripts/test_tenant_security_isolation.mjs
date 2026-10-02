@@ -7,7 +7,7 @@ dotenv.config();
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://mtfycmdoqzzyxhjmfvuv.supabase.co';
 const ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY;
 
-const HOTEL_A_ID = '2fb1e4de-de39-4ad3-ac75-a03f196157b4'; // test hotel
+const HOTEL_A_ID = '9001eb1c-9d38-49d0-84f7-75244e8f4bf8'; // mars hotel (be424e4a03)
 const HOTEL_B_ID = 'a93139f5-baa0-47a4-87ca-81ee7e106d9c'; // Hotel Gopal
 
 let passed = 0;

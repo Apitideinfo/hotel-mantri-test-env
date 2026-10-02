@@ -3,15 +3,15 @@ import aiosellService from '../services/aiosellService.js';
 import { createClient } from '@supabase/supabase-js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
-import { requireHotelAccess } from '../middleware/auth.js';
+import { resolveAuthorizedHotel, requireHotelAccess } from '../middleware/auth.js';
 import { getChannelProviderConfig } from '../services/providerConfig.js';
 import { syncRates, syncInventory, getCleanDateList } from '../services/channelSyncEngine.js';
 
 const router = express.Router();
 
 // Helper to fetch hotel-specific channel configuration
-const getHotelAiosellConfig = async (hotelId, requestId = null) => {
-  return getChannelProviderConfig(hotelId, requestId);
+const getHotelAiosellConfig = async (hotelId, requestId = null, client = null) => {
+  return getChannelProviderConfig(hotelId, requestId, client);
 };
 
 // Public & Diagnostic Health / Status Endpoints (Always return JSON, never HTML)
@@ -20,6 +20,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
   try {
     // Resolve authorized hotel context securely when token is provided
     let hotelId = null;
+    let scopedClient = null;
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const authRes = await resolveAuthorizedHotel(req);
@@ -33,6 +34,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
         });
       }
       hotelId = authRes.hotelId;
+      scopedClient = authRes.scopedSupabase;
     } else {
       const requestedHeader = req.headers['x-hotel-id'] || req.query.hotelId;
       if (requestedHeader) {
@@ -64,7 +66,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
 
     let hotelConfig = null;
     try {
-      hotelConfig = await getHotelAiosellConfig(hotelId, requestId);
+      hotelConfig = await getHotelAiosellConfig(hotelId, requestId, scopedClient || req.scopedSupabase);
     } catch (cfgErr) {
       const isPropMissing = cfgErr.code === 'PROVIDER_PROPERTY_NOT_FOUND' || cfgErr.message?.includes('property code');
       const statusType = isPropMissing ? 'PROPERTY_NOT_CONFIGURED' : 'CONFIGURATION_MISSING';
@@ -120,7 +122,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
     
     if (result.success) {
       // Persist success status in channel_settings
-      const supabase = getSupabase();
+      const supabase = scopedClient || req.scopedSupabase || getSupabase();
       await supabase
         .from('channel_settings')
         .update({
@@ -153,7 +155,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
       });
     } else {
       // Persist error status in channel_settings
-      const supabase = getSupabase();
+      const supabase = scopedClient || req.scopedSupabase || getSupabase();
       await supabase
         .from('channel_settings')
         .update({
@@ -192,16 +194,23 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
     }
   } catch (err) {
     console.error(`[/api/aiosell/status] Error:`, err);
-    res.status(err.status || 500).json({
+    const statusCode = err.status && typeof err.status === 'number' ? err.status : 500;
+    const errorCode = err.errorCode || err.code || (statusCode === 500 ? 'SERVER_ERROR' : 'API_ERROR');
+    const isInternalJsError = err instanceof ReferenceError || err instanceof TypeError || String(err?.message || '').includes('is not defined');
+    const safeMessage = isInternalJsError
+      ? 'An internal authorization error occurred while verifying hotel channel status.'
+      : (err.message || 'Failed to verify channel integration status');
+
+    res.status(statusCode).json({
       success: false,
       provider: 'external_channel_manager',
       error: {
-        code: err.errorCode || err.code || 'SERVER_ERROR',
-        message: err.message || 'Failed to verify channel integration status',
+        code: errorCode,
+        message: safeMessage,
         requestId
       },
-      errorCode: err.errorCode || err.code || 'SERVER_ERROR',
-      message: err.message || 'Failed to verify channel integration status',
+      errorCode,
+      message: safeMessage,
       requestId
     });
   }
@@ -262,7 +271,7 @@ router.get('/mapping', async (req, res) => {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
     }
 
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -271,7 +280,7 @@ router.get('/mapping', async (req, res) => {
     const result = await aiosellService.getPropertyMapping(hotelConfig);
     
     // Enrich with hotel object matching frontend AiosellMappingResponse contract
-    const { data: hotelData } = await getSupabase()
+    const { data: hotelData } = await (req.scopedSupabase || getSupabase())
       .from('hotels')
       .select('id, hotel_name')
       .eq('id', hotelId)
@@ -693,7 +702,7 @@ router.post('/inventory/fetch', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -805,8 +814,8 @@ router.post('/inventory/verify', async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
     }
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
-    const { matrix } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
+    const { matrix } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, null, { client: req.scopedSupabase });
     
     // Fetch live from Aiosell
     const fetchedInv = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
@@ -832,8 +841,8 @@ router.post('/inventory/diagnostic', async (req, res) => {
   const hotelId = (req.hotelId || req.auth?.hotelId);
   try {
     const { startDate, endDate } = req.body;
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
-    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
+    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, null, { client: req.scopedSupabase });
 
     res.json({
       hotel: {
@@ -937,11 +946,11 @@ router.post('/rates/verify', async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ success: false, error: 'startDate and endDate are required' });
     }
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     const fetchedRatesRes = await aiosellService.fetchRates(startDate, endDate, hotelConfig);
     const fetchedUpdates = fetchedRatesRes?.updates || (Array.isArray(fetchedRatesRes) ? fetchedRatesRes : []);
 
-    const supabase = getSupabase();
+    const supabase = req.scopedSupabase || getSupabase();
     const { data: restrictions } = await supabase
       .from('channel_inventory_restrictions')
       .select('date, room_category_id, channel_rate, base_rate')
@@ -981,7 +990,7 @@ router.post('/rates/fetch', async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
 
     const result = await aiosellService.fetchRates(startDate, endDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1013,7 +1022,7 @@ router.post('/rates/fetch', async (req, res) => {
 router.post('/inventory-restrictions/push', async (req, res) => {
   try {
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.pushInventoryRestrictions(req.body, hotelConfig);
     await logSync(hotelId, 'INVENTORY_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
     res.json({ success: true, result });
@@ -1026,7 +1035,7 @@ router.post('/inventory-restrictions/push', async (req, res) => {
 router.post('/rate-restrictions/push', async (req, res) => {
   try {
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.pushRateRestrictions(req.body, hotelConfig);
     await logSync(hotelId, 'RATE_RESTRICTION_PUSH', 'outbound', 'success', 'Restrictions pushed');
     res.json({ success: true, result });
@@ -1040,7 +1049,7 @@ router.post('/reservations/fetch', async (req, res) => {
   try {
     const { startDate, endDate, channelId } = req.body;
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     
     // 1. Fetch raw reservations from provider
     const result = await aiosellService.fetchReservations(startDate, endDate, hotelConfig);
@@ -1090,7 +1099,7 @@ router.post('/reservation/no-show', async (req, res) => {
   try {
     const { bookingId } = req.body;
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.markNoShow(bookingId, hotelConfig);
     res.json({ success: true, result });
   } catch (err) {
@@ -1101,7 +1110,7 @@ router.post('/reservation/no-show', async (req, res) => {
 router.post('/channel-multiplier', async (req, res) => {
   try {
     const hotelId = (req.hotelId || req.auth?.hotelId);
-    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId);
+    const hotelConfig = await getHotelAiosellConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.channelMultiplier(req.body, hotelConfig);
     res.json({ success: true, result });
   } catch (err) {

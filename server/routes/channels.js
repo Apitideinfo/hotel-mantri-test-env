@@ -122,10 +122,10 @@ router.post('/discover', checkAuth, async (req, res) => {
     }
 
     // Verify hotel configuration exists
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     res.status(501).json({ 
-      success: false,
+      success: false, 
       code: 'DISCOVERY_NOT_SUPPORTED',
       message: 'Automatic OTA discovery is not supported for this integration account. Please use Add Channel to connect your distribution channels.',
       discovered: [],
@@ -152,12 +152,12 @@ router.post('/test-connection', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
     }
 
-    const config = await getChannelProviderConfig(hotelId, req.requestId);
+    const config = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.testConnection(config);
 
     if (result.success) {
       // Authoritatively update channel_settings in DB
-      await supabaseServiceRole
+      await (req.scopedSupabase || supabaseServiceRole)
         .from('channel_settings')
         .update({
           aiosell_status: 'connected',
@@ -185,7 +185,7 @@ router.post('/test-connection', checkAuth, async (req, res) => {
       });
     } else {
       // Authoritatively update channel_settings in DB
-      await supabaseServiceRole
+      await (req.scopedSupabase || supabaseServiceRole)
         .from('channel_settings')
         .update({
           aiosell_status: 'error',
@@ -819,7 +819,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     // 8. Determine external channel manager configuration state
     let isChannelConfigured = false;
     try {
-      const config = await getChannelProviderConfig(hotelId, requestId);
+      const config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
       if (config && config.hotelCode && config.credentialPresent) {
         isChannelConfigured = true;
       }
@@ -999,7 +999,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     // 1. Resolve channel configuration
     let config;
     try {
-      config = await getChannelProviderConfig(hotelId, requestId);
+      config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
     } catch (cfgErr) {
       return res.status(200).json({
         success: false,
@@ -1731,7 +1731,7 @@ router.post('/:channelId/fetch/inventory', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchInventory(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1772,7 +1772,7 @@ router.post('/:channelId/fetch/rates', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchRates(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1825,10 +1825,10 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
     }
 
     // Resolve provider config properly using the centralized resolver
-    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Fetch channel details to know channel_name
-    const { data: connection } = await supabaseServiceRole
+    const { data: connection } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('channel_name, channel_type')
       .eq('id', channelId)
@@ -1977,10 +1977,10 @@ router.post('/', checkAuth, async (req, res) => {
     if (!channelType || !displayName) return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'channelType and displayName required', requestId: req.requestId });
 
     // Validate that integration is setup
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Check for duplicate channel
-    const { data: existingChannel } = await supabaseServiceRole
+    const { data: existingChannel } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('id')
       .eq('hotel_id', hotelId)

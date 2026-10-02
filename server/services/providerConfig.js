@@ -43,13 +43,15 @@ export const createProviderError = (code, message, status = 500, details = null,
  * Resolves hotelCode, partnerId, credentials, and baseUrl with fallback chain.
  * NEVER exposes provider credentials to client.
  */
-export const getChannelProviderConfig = async (hotelId, requestId = null) => {
+export const getChannelProviderConfig = async (hotelId, requestId = null, client = null) => {
   if (!hotelId) {
     throw createProviderError('HOTEL_CONTEXT_REQUIRED', 'Hotel context is required to resolve channel configuration.', 400, null, requestId);
   }
 
+  const db = client || supabaseServiceRole;
+
   // 1. Fetch channel_settings for this hotel
-  const { data: settings, error: settingsError } = await supabaseServiceRole
+  const { data: settings, error: settingsError } = await db
     .from('channel_settings')
     .select('*')
     .eq('hotel_id', hotelId)
@@ -62,7 +64,7 @@ export const getChannelProviderConfig = async (hotelId, requestId = null) => {
   // 2. Fetch hotel record for fallback property_code
   let propertyCodeFallback = null;
   if (!settings?.aiosell_hotel_code) {
-    const { data: hotel } = await supabaseServiceRole
+    const { data: hotel } = await db
       .from('hotels')
       .select('property_code')
       .eq('id', hotelId)
