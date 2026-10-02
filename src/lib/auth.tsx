@@ -307,6 +307,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setCurrentHotelId(null);
         setProfileLoaded(false);
         profileLoadedRef.current = null;
+        try {
+          localStorage.removeItem('hotel_mantri_selected_hotel_id');
+          localStorage.removeItem('hotelmantri_demo_user');
+          sessionStorage.clear();
+        } catch {}
       } else {
         setSession(sess);
         setUser(sess.user);
@@ -390,6 +395,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       localStorage.removeItem('hotel_mantri_selected_hotel_id');
       localStorage.removeItem('hotelmantri_demo_user');
+      sessionStorage.clear();
     } catch {
       // Ignore localStorage error
     }

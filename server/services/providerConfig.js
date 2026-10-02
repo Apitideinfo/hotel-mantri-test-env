@@ -70,7 +70,7 @@ export const getChannelProviderConfig = async (hotelId, requestId = null) => {
     propertyCodeFallback = hotel?.property_code || null;
   }
 
-  const hotelCode = settings?.aiosell_hotel_code || propertyCodeFallback || process.env.AIOSELL_HOTEL_CODE;
+  const hotelCode = settings?.aiosell_hotel_code || propertyCodeFallback || null;
   const partnerId = settings?.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
   const environment = settings?.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
   const username = process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';

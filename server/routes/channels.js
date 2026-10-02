@@ -156,25 +156,53 @@ router.post('/test-connection', checkAuth, async (req, res) => {
     const result = await aiosellService.testConnection(config);
 
     if (result.success) {
+      // Authoritatively update channel_settings in DB
+      await supabaseServiceRole
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'connected',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: 'Connected successfully',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
       return res.json({
         success: true,
         status: 'connected',
         connected: true,
+        provider: 'external_channel_manager',
         hotelId,
         environment: result.environment,
         hotelCode: result.hotelCode,
         partnerId: result.partnerId,
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        mapping: result.mapping,
         latencyMs: result.responseTimeMs,
+        responseTimeMs: result.responseTimeMs,
         message: 'Channel integration connection verified successfully',
         requestId: req.requestId
       });
     } else {
+      // Authoritatively update channel_settings in DB
+      await supabaseServiceRole
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'error',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: result.error?.message || 'Connection test failed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
+      const errorCode = result.error?.errorCode || result.error?.code || 'CONNECTION_TEST_FAILED';
       return res.status(result.status || 502).json({
         success: false,
         status: 'error',
         connected: false,
-        code: result.error?.code || 'CONNECTION_TEST_FAILED',
+        provider: 'external_channel_manager',
+        code: errorCode,
+        errorCode,
         message: result.error?.message || 'Channel integration test failed',
         details: result.diagnostic,
         requestId: req.requestId

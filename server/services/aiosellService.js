@@ -20,7 +20,7 @@ export const resolveConfig = async (hotelConfig = {}) => {
   }
 
   const partnerId = hotelConfig.partnerId || hotelConfig.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
-  const hotelCode = hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || process.env.AIOSELL_HOTEL_CODE;
+  const hotelCode = hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || null;
   const environment = hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
   const username = hotelConfig.username || process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';
   const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '514r1vrb';
@@ -44,7 +44,7 @@ export const getConfig = (hotelConfig = {}) => {
     username: hotelConfig.username || process.env.AIOSELL_USERNAME || '',
     password: hotelConfig.password || process.env.AIOSELL_PASSWORD || '',
     partnerId: hotelConfig.partnerId || hotelConfig.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms',
-    hotelCode: hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || process.env.AIOSELL_HOTEL_CODE,
+    hotelCode: hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || null,
     environment: hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production',
   };
 };
@@ -65,8 +65,10 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
   // 1. Partner is disabled detection
   if (msgLower.includes('partner is disabled') || msgLower.includes('partner disabled')) {
     return {
-      provider: 'channel_integration',
+      success: false,
+      provider: 'external_channel_manager',
       status: 502,
+      errorCode: 'PROVIDER_PARTNER_DISABLED',
       code: 'PROVIDER_PARTNER_DISABLED',
       message: 'The channel integration partner account is disabled. Please contact the channel provider to activate the partner account.',
       requestId: reqId,
@@ -74,36 +76,70 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
     };
   }
 
-  // 2. Authentication failure
-  const isAuthError = status === 401 || status === 403 || msgLower.includes('authentication') || msgLower.includes('unauthorized') || msgLower.includes('invalid credentials');
+  // 2. Authentication failure: ONLY for HTTP 401 or explicit credentials rejection
+  const isAuthError = status === 401 || msgLower.includes('authentication required') || msgLower.includes('invalid credentials') || msgLower.includes('unauthorized');
   if (isAuthError) {
     return {
-      provider: 'channel_integration',
+      success: false,
+      provider: 'external_channel_manager',
       status: 401,
-      code: 'PROVIDER_AUTHENTICATION_FAILED',
-      message: 'Channel integration authentication failed. Verify the server-side integration credentials.',
+      errorCode: 'AIOSSELL_AUTH_FAILED',
+      code: 'AIOSSELL_AUTH_FAILED',
+      message: 'The channel manager rejected the server-side integration credentials.',
       requestId: reqId,
       retryable: false
     };
   }
 
-  // 3. Not Found
-  if (status === 404 || msgLower.includes('not found')) {
+  // 3. Hotel Not Found: 404
+  if (status === 404 || msgLower.includes('not found') || msgLower.includes('hotel not found') || msgLower.includes('property not found')) {
     return {
-      provider: 'channel_integration',
+      success: false,
+      provider: 'external_channel_manager',
       status: 404,
-      code: 'PROVIDER_PROPERTY_NOT_FOUND',
-      message: 'External property or endpoint could not be found.',
+      errorCode: 'AIOSSELL_HOTEL_NOT_FOUND',
+      code: 'AIOSSELL_HOTEL_NOT_FOUND',
+      message: 'The configured hotel code was not found by the channel manager.',
       requestId: reqId,
       retryable: false
     };
   }
 
-  // 4. Rate limit
+  // 4. Access Denied / Property Code Invalid or Not Authorized
+  if (status === 403 || msgLower.includes('access denied')) {
+    return {
+      success: false,
+      provider: 'external_channel_manager',
+      status: 403,
+      errorCode: 'AIOSSELL_HOTEL_CODE_INVALID',
+      code: 'AIOSSELL_HOTEL_CODE_INVALID',
+      message: 'The channel manager denied access to this property code. Please verify the external hotel code.',
+      requestId: reqId,
+      retryable: false
+    };
+  }
+
+  // 5. Mapping failure
+  if (msgLower.includes('mapping failed') || msgLower.includes('room mapping') || msgLower.includes('rate mapping')) {
+    return {
+      success: false,
+      provider: 'external_channel_manager',
+      status: 422,
+      errorCode: 'AIOSSELL_MAPPING_FAILED',
+      code: 'AIOSSELL_MAPPING_FAILED',
+      message: 'The property was authenticated but its room/rate mapping could not be retrieved.',
+      requestId: reqId,
+      retryable: false
+    };
+  }
+
+  // 6. Rate limit
   if (status === 429) {
     return {
-      provider: 'channel_integration',
+      success: false,
+      provider: 'external_channel_manager',
       status: 429,
+      errorCode: 'RATE_LIMIT_EXCEEDED',
       code: 'RATE_LIMIT_EXCEEDED',
       message: 'Channel integration rate limit reached. Please wait before retrying.',
       requestId: reqId,
@@ -111,11 +147,13 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
     };
   }
 
-  // 5. Upstream server error / network error
+  // 7. Upstream server error / network error
   if (status >= 500 || !status || msgLower.includes('fetch failed')) {
     return {
-      provider: 'channel_integration',
+      success: false,
+      provider: 'external_channel_manager',
       status: status && status >= 500 ? status : 503,
+      errorCode: 'PROVIDER_UNAVAILABLE',
       code: 'PROVIDER_UNAVAILABLE',
       message: 'The channel distribution provider is temporarily unavailable. Please retry shortly.',
       requestId: reqId,
@@ -124,9 +162,11 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
   }
 
   return {
-    provider: 'channel_integration',
+    success: false,
+    provider: 'external_channel_manager',
     status: status || 500,
-    code: 'API_ERROR',
+    errorCode: 'AIOSSELL_API_ERROR',
+    code: 'AIOSSELL_API_ERROR',
     message: rawMessage || 'An error occurred while communicating with the channel integration provider.',
     requestId: reqId,
     retryable: false
@@ -239,13 +279,116 @@ export const request = async (endpoint, options = {}, hotelConfig = {}, retries 
         throw sanitizeAiosellError(responseData, status, reqId);
       }
     } catch (error) {
-      if (error.provider === 'channel_integration') throw error;
+      if (error.provider === 'channel_integration' || error.provider === 'external_channel_manager') throw error;
       if (attempt === retries) {
         throw sanitizeAiosellError(error.message, 500, reqId);
       }
       await sleep(backoffs[attempt] || 5000);
       attempt++;
     }
+  }
+};
+
+/**
+ * Automatically provisions partner connection in Aiosell Connect for a hotel property.
+ * Enables zero-manual-intervention onboarding for newly created hotels.
+ */
+export const autoOnboardHotel = async (hotelCode, partnerId = 'hotel-mantri-pms') => {
+  const dashUser = process.env.AIOSELL_DASHBOARD_USERNAME;
+  const dashPass = process.env.AIOSELL_DASHBOARD_PASSWORD;
+  if (!dashUser || !dashPass || !hotelCode) {
+    return { success: false, notConfigured: true, reason: 'Dashboard credentials or hotel code missing' };
+  }
+
+  try {
+    // 1. Authenticate with RMS API
+    const authRes = await fetch('https://live.aiosell.com/api/v1/rms/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: dashUser, password: dashPass }),
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!authRes.ok) {
+      return { success: false, reason: 'RMS authentication failed' };
+    }
+    const authData = await authRes.json();
+    const token = authData.access_token;
+    if (!token) return { success: false, reason: 'No RMS access token received' };
+
+    // 2. Fetch hotel details from RMS
+    const hotelRes = await fetch(`https://live.aiosell.com/api/v1/rms/hotels/${hotelCode}`, {
+      headers: { 'Authorization': `BZ-JWT ${token}` },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!hotelRes.ok) {
+      return { success: false, reason: `RMS hotel lookup failed: ${hotelRes.status}` };
+    }
+    const hotelData = await hotelRes.json();
+    if (!hotelData || !Array.isArray(hotelData.rooms) || hotelData.rooms.length === 0 || !hotelData.globals?.name) {
+      return { success: false, notFound: true, reason: 'Hotel does not exist in Aiosell' };
+    }
+
+    // 3. Construct mappings for rooms and rateplans
+    const roomsMapped = hotelData.rooms.map(r => ({
+      room_id: r.id,
+      room_name: r.name || r.displayName || r.description || r.id,
+      room_code: r.id,
+      rateplans: (hotelData.rateplans || []).filter(rp => rp.roomId === r.id).map(rp => ({
+        rateplan_name: rp.displayName || 'Rooms Only',
+        occupancy: rp.occupancy || '',
+        rateplan_id: rp.rateplanId,
+        mealplan_code: rp.mealplan || 'EP',
+        rateplan_code: rp.rateplanId
+      }))
+    }));
+
+    const webhookUrl = process.env.APP_URL 
+      ? `${process.env.APP_URL.replace(/\/+$/, '')}/api/integrations/aiosell/reservations`
+      : 'https://hotel-mantri-apitide-personal-green.vercel.app/api/integrations/aiosell/reservations';
+
+    const operations = ['inv_in', 'rate_in', 'res_out'];
+    const newConfig = operations.map(op => ({
+      is_enabled: true,
+      partner: partnerId,
+      hotel_code: hotelCode,
+      hotel_name: hotelData.globals?.name || hotelData.name || 'Hotel Property',
+      operation: op,
+      configuration: {
+        authkey: { type: '', key: '' },
+        rooms: roomsMapped,
+        auth_type: '',
+        commision_inclusive: true,
+        auth: {},
+        auth_data: { client_secret: '', type: '', client_id: '', issuer: '', key: '' },
+        actions: [],
+        noshow: {},
+        ...(op === 'res_out' ? {
+          username: process.env.AIOSELL_WEBHOOK_USERNAME || 'hotel-mantri-webhook',
+          password: process.env.AIOSELL_WEBHOOK_PASSWORD || 'HM_wh_8f92a3c74e1d5b6f0a9b8c7d6e5f4a3b',
+          notifyBookings: true,
+          base_url: webhookUrl
+        } : {})
+      }
+    }));
+
+    // 4. Submit to Aiosell Connect config
+    const postRes = await fetch(`https://live.aiosell.com/api/v2/cm/config?hotelId=${hotelCode}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `BZ-JWT ${token}`
+      },
+      body: JSON.stringify(newConfig),
+      signal: AbortSignal.timeout(8000)
+    });
+
+    if (!postRes.ok) {
+      return { success: false, reason: `Connect update failed: ${postRes.status}` };
+    }
+
+    return { success: true, hotelName: hotelData.globals?.name || hotelData.name };
+  } catch (err) {
+    return { success: false, reason: err.message };
   }
 };
 
@@ -265,6 +408,7 @@ export const testConnection = async (hotelConfig) => {
   if (!config.partnerId || !config.hotelCode) {
     return {
       success: false,
+      status: 400,
       error: sanitizeAiosellError('Channel credentials (partner ID or hotel code) are not configured for this hotel.', 400),
       diagnostic: debugDiagnostic
     };
@@ -273,10 +417,13 @@ export const testConnection = async (hotelConfig) => {
   if (!config.username || !config.password) {
     return {
       success: false,
+      status: 401,
       error: {
-        provider: 'channel_integration',
+        success: false,
+        provider: 'external_channel_manager',
         status: 401,
-        code: 'PROVIDER_CONFIGURATION_MISSING',
+        errorCode: 'AIOSSELL_AUTH_FAILED',
+        code: 'AIOSSELL_AUTH_FAILED',
         message: 'Server integration credentials are unavailable.'
       },
       diagnostic: debugDiagnostic
@@ -284,12 +431,64 @@ export const testConnection = async (hotelConfig) => {
   }
 
   try {
-    const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+    let data;
+    try {
+      data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+    } catch (firstErr) {
+      // If access denied, attempt auto-onboarding for newly created hotel
+      if (firstErr.status === 403 || String(firstErr.message).toLowerCase().includes('access denied')) {
+        const onboardResult = await autoOnboardHotel(config.hotelCode, config.partnerId);
+        if (onboardResult.notFound) {
+          throw sanitizeAiosellError('The configured hotel code was not found by the channel manager.', 404);
+        }
+        if (onboardResult.success) {
+          data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+        } else {
+          throw firstErr;
+        }
+      } else {
+        throw firstErr;
+      }
+    }
+
     const responseTimeMs = Date.now() - start;
+
+    const rooms = (data.rooms || []).map(r => ({
+      description: r.description || '',
+      count: parseInt(r.count) || 1,
+      active: r.active !== false,
+      type: r.type || 'primary',
+      rateplans: (r.rateplans || []).map(rp => ({
+        description: rp.description || '',
+        occupancy: rp.occupancy || 1,
+        rateplan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
+        rateplan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || '',
+        no_of_meals: rp.no_of_meals || 0,
+        extra_adult: rp.extra_adult || 0
+      })),
+      room_id: r.room_id || r.roomId || r.roomCode || '',
+      room_name: r.room_name || r.roomName || r.description || '',
+      min_occ: r.min_occ || 1,
+      max_occ: r.max_occ || 3
+    }));
+
+    const ratePlans = [];
+    if (Array.isArray(data.rooms)) {
+      data.rooms.forEach(r => {
+        const roomId = r.room_id || r.roomId || r.roomCode || '';
+        if (Array.isArray(r.rateplans)) {
+          r.rateplans.forEach(rp => ratePlans.push({
+            rate_plan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
+            rate_plan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || rp.rateplanCode || '',
+            room_id: roomId
+          }));
+        }
+      });
+    }
 
     return {
       success: true,
-      provider: 'channel_integration',
+      provider: 'external_channel_manager',
       environment: config.environment,
       hotelCode: config.hotelCode,
       partnerId: config.partnerId,
@@ -297,25 +496,8 @@ export const testConnection = async (hotelConfig) => {
       responseTimeMs,
       message: 'Channel integration connection successful',
       mapping: {
-        rooms: (data.rooms || []).map(r => ({
-          description: r.description || '',
-          count: parseInt(r.count) || 1,
-          active: r.active !== false,
-          type: r.type || 'primary',
-          rateplans: (r.rateplans || []).map(rp => ({
-            description: rp.description || '',
-            occupancy: rp.occupancy || 1,
-            rateplan_id: rp.rateplan_id || rp.rateplanCode || rp.ratePlanId || '',
-            rateplan_name: rp.rateplan_name || rp.rateplanName || rp.ratePlanName || '',
-            no_of_meals: rp.no_of_meals || 0,
-            extra_adult: rp.extra_adult || 0
-          })),
-          room_id: r.room_id || r.roomId || r.roomCode || '',
-          room_name: r.room_name || r.roomName || r.description || '',
-          min_occ: r.min_occ || 1,
-          max_occ: r.max_occ || 3
-        })),
-        ratePlans: []
+        rooms,
+        ratePlans
       }
     };
   } catch (err) {
@@ -337,7 +519,24 @@ export const getPropertyMapping = async (hotelConfig) => {
     throw sanitizeAiosellError('Channel credentials are not configured for this hotel.', 401);
   }
 
-  const data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+  let data;
+  try {
+    data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+  } catch (firstErr) {
+    if (firstErr.status === 403 || String(firstErr.message).toLowerCase().includes('access denied')) {
+      const onboardResult = await autoOnboardHotel(config.hotelCode, config.partnerId);
+      if (onboardResult.notFound) {
+        throw sanitizeAiosellError('The configured hotel code was not found by the channel manager.', 404);
+      }
+      if (onboardResult.success) {
+        data = await request(`/property_details/${config.hotelCode}?partnerId=${config.partnerId}`, {}, config);
+      } else {
+        throw firstErr;
+      }
+    } else {
+      throw firstErr;
+    }
+  }
   
   const rooms = (data.rooms || []).map(r => ({
     room_id: r.room_id || r.roomId || r.roomCode || '',
@@ -357,6 +556,10 @@ export const getPropertyMapping = async (hotelConfig) => {
         }));
       }
     });
+  }
+
+  if (rooms.length === 0) {
+    throw sanitizeAiosellError('The property was authenticated but its room/rate mapping could not be retrieved.', 422);
   }
 
   return {
@@ -501,5 +704,6 @@ export default {
   fetchReservations,
   markNoShow,
   channelMultiplier,
+  autoOnboardHotel,
   sanitizeAiosellError,
 };
