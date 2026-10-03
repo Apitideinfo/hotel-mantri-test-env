@@ -34,9 +34,10 @@ const pendingCoalescedEvents = new Map();
  * (single, double, triple, quad, penta) are accounted for, while filtering
  * out any orphaned or dummy room codes.
  */
-export const resolveAuthoritativeMappings = async (hotelId, hotelConfig, channelId = null) => {
+export const resolveAuthoritativeMappings = async (hotelId, hotelConfig, channelId = null, client = null) => {
+  const db = client || supabase;
   // 1. Query Hotel Categories
-  const { data: allCategories, error: catError } = await supabase
+  const { data: allCategories, error: catError } = await db
     .from('room_categories')
     .select('id, name, default_tariff')
     .eq('hotel_id', hotelId)
@@ -47,7 +48,7 @@ export const resolveAuthoritativeMappings = async (hotelId, hotelConfig, channel
   }
 
   // 2. Query Channel Rate Mappings
-  let mappingQuery = supabase
+  let mappingQuery = db
     .from('channel_rate_mappings')
     .select('id, room_category_id, rate_plan_id, external_room_code, external_rate_plan_code, channel_connection_id, status, is_active')
     .eq('hotel_id', hotelId)
@@ -209,7 +210,8 @@ export const syncRates = async ({
   roomCategoryIds = null,
   ratePlanIds = null,
   skipVerification = false,
-  triggeredBy = 'manual'
+  triggeredBy = 'manual',
+  client = null
 }) => {
   if (!hotelId) throw new Error('Hotel ID is required for syncRates');
   if (!startDate || !endDate) throw new Error('startDate and endDate are required');
@@ -223,10 +225,11 @@ export const syncRates = async ({
 
   const operationPromise = (async () => {
     const startTime = Date.now();
-    const hotelConfig = await getChannelProviderConfig(hotelId);
+    const db = client || supabase;
+    const hotelConfig = await getChannelProviderConfig(hotelId, null, db);
 
     // 1. Resolve mappings
-    const mappings = await resolveAuthoritativeMappings(hotelId, hotelConfig, channelId);
+    const mappings = await resolveAuthoritativeMappings(hotelId, hotelConfig, channelId, db);
     let pairsToSync = mappings.effectivePairs;
 
     if (roomCategoryIds && roomCategoryIds.length > 0) {
@@ -242,7 +245,7 @@ export const syncRates = async ({
 
     // 2. Query inventory restrictions overrides for rates
     const categoryIds = [...new Set(pairsToSync.map(p => p.room_category_id))];
-    const { data: restrictions } = await supabase
+    const { data: restrictions } = await db
       .from('channel_inventory_restrictions')
       .select('date, room_category_id, channel_rate, base_rate')
       .eq('hotel_id', hotelId)
@@ -414,7 +417,8 @@ export const syncInventory = async ({
   endDate,
   roomCategoryIds = null,
   skipVerification = false,
-  triggeredBy = 'manual'
+  triggeredBy = 'manual',
+  client = null
 }) => {
   if (!hotelId) throw new Error('Hotel ID is required for syncInventory');
   if (!startDate || !endDate) throw new Error('startDate and endDate are required');
@@ -428,10 +432,11 @@ export const syncInventory = async ({
 
   const operationPromise = (async () => {
     const startTime = Date.now();
-    const hotelConfig = await getChannelProviderConfig(hotelId);
+    const db = client || supabase;
+    const hotelConfig = await getChannelProviderConfig(hotelId, null, db);
 
     // 1. Resolve mappings
-    const mappings = await resolveAuthoritativeMappings(hotelId, hotelConfig, channelId);
+    const mappings = await resolveAuthoritativeMappings(hotelId, hotelConfig, channelId, db);
     const categoryToExtCode = mappings.categoryToRoomCode;
 
     const targetCategoryIds = roomCategoryIds && roomCategoryIds.length > 0

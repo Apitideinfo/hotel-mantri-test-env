@@ -177,18 +177,156 @@ export const clearDraft = (): BulkDraftMap => {
   return {};
 };
 
+export interface DraftValidationResult {
+  validDrafts: BulkDraftMap;
+  removedItems: { key: string; reason: string; item: BulkDraftItem }[];
+  removedCount: number;
+  remainingCount: number;
+}
+
+/**
+ * Validates every draft entry against the current hotel property and its active categories/rate plans.
+ * Automatically purges foreign-tenant items, returning only valid entries.
+ */
+export const validateAndFilterDraft = (
+  drafts: BulkDraftMap,
+  currentHotelId: string,
+  validCategories: { id: string }[],
+  validRatePlans?: { id: string }[]
+): DraftValidationResult => {
+  const validDrafts: BulkDraftMap = {};
+  const removedItems: { key: string; reason: string; item: BulkDraftItem }[] = [];
+  const validCatSet = new Set((validCategories || []).map((c) => c.id));
+  const validPlanSet = validRatePlans ? new Set(validRatePlans.map((p) => p.id)) : null;
+
+  for (const [key, item] of Object.entries(drafts || {})) {
+    const parsed = parseBulkKey(key);
+
+    // 1. Hotel Tenant Isolation: If draft explicitly specifies a foreign hotel ID, reject
+    if (parsed.hotelId && currentHotelId && parsed.hotelId !== 'hotel' && parsed.hotelId !== currentHotelId) {
+      removedItems.push({ key, reason: 'foreign_hotel', item });
+      continue;
+    }
+
+    // 2. Room Category Ownership: Must exist in current hotel's room categories
+    if (!parsed.roomCategoryId || (validCatSet.size > 0 && !validCatSet.has(parsed.roomCategoryId))) {
+      removedItems.push({ key, reason: 'invalid_room_category_for_hotel', item });
+      continue;
+    }
+
+    // 3. Rate Plan Ownership: If rate plan specified, must belong to current hotel
+    if (parsed.ratePlanId && validPlanSet && validPlanSet.size > 0 && !validPlanSet.has(parsed.ratePlanId)) {
+      removedItems.push({ key, reason: 'invalid_rate_plan_for_hotel', item });
+      continue;
+    }
+
+    // Valid: re-key canonically to current hotel ID
+    const canonicalKey = getBulkKey(
+      currentHotelId || parsed.hotelId,
+      parsed.date,
+      parsed.roomCategoryId,
+      parsed.ratePlanId
+    );
+    validDrafts[canonicalKey] = item;
+  }
+
+  return {
+    validDrafts,
+    removedItems,
+    removedCount: removedItems.length,
+    remainingCount: Object.keys(validDrafts).length,
+  };
+};
+
+/**
+ * Storage key namespaced strictly by hotel ID to prevent cross-tenant draft leakage.
+ */
+export const getTenantDraftStorageKey = (hotelId: string): string => {
+  return `bulkInventoryDraft:${hotelId || 'default'}`;
+};
+
+/**
+ * Loads persisted draft for a specific hotel, validating against current categories.
+ */
+export const loadTenantDraft = (
+  hotelId: string,
+  validCategories?: { id: string }[],
+  validRatePlans?: { id: string }[]
+): { drafts: BulkDraftMap; removedCount: number } => {
+  if (typeof window === 'undefined' || !hotelId) return { drafts: {}, removedCount: 0 };
+  const key = getTenantDraftStorageKey(hotelId);
+  try {
+    const raw = sessionStorage.getItem(key) || localStorage.getItem(key);
+    if (!raw) return { drafts: {}, removedCount: 0 };
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return { drafts: {}, removedCount: 0 };
+
+    if (validCategories && validCategories.length > 0) {
+      const validated = validateAndFilterDraft(parsed, hotelId, validCategories, validRatePlans);
+      if (validated.removedCount > 0) {
+        saveTenantDraft(hotelId, validated.validDrafts);
+      }
+      return { drafts: validated.validDrafts, removedCount: validated.removedCount };
+    }
+    return { drafts: parsed, removedCount: 0 };
+  } catch {
+    return { drafts: {}, removedCount: 0 };
+  }
+};
+
+/**
+ * Persists tenant-scoped draft into sessionStorage.
+ */
+export const saveTenantDraft = (hotelId: string, drafts: BulkDraftMap): void => {
+  if (typeof window === 'undefined' || !hotelId) return;
+  const key = getTenantDraftStorageKey(hotelId);
+  try {
+    if (Object.keys(drafts).length === 0) {
+      sessionStorage.removeItem(key);
+      localStorage.removeItem(key);
+    } else {
+      sessionStorage.setItem(key, JSON.stringify(drafts));
+    }
+  } catch {}
+};
+
+/**
+ * Clears draft for a specific hotel.
+ */
+export const clearTenantDraft = (hotelId: string): void => {
+  if (typeof window === 'undefined' || !hotelId) return;
+  const key = getTenantDraftStorageKey(hotelId);
+  try {
+    sessionStorage.removeItem(key);
+    localStorage.removeItem(key);
+  } catch {}
+};
+
 /**
  * Converts a draft map into a deterministic patch payload array for backend persistence.
- * Filters out empty or no-op items.
+ * Filters out empty, no-op, foreign-hotel, and foreign-category items.
  */
 export const buildPatchListFromDraft = (
   drafts: BulkDraftMap,
-  hotelId?: string | null
+  hotelId?: string | null,
+  validCategories?: { id: string }[]
 ): BulkInventoryPatch[] => {
   const patches: BulkInventoryPatch[] = [];
+  const validCatSet = validCategories && validCategories.length > 0 ? new Set(validCategories.map((c) => c.id)) : null;
 
   for (const [key, item] of Object.entries(drafts)) {
     const parsed = parseBulkKey(key);
+
+    // Strict Tenant Check: Never reassign foreign hotel drafts
+    if (parsed.hotelId && hotelId && parsed.hotelId !== 'hotel' && parsed.hotelId !== hotelId) {
+      continue;
+    }
+
+    // Strict Room Category Check: Never submit categories outside authorized hotel
+    if (validCatSet && !validCatSet.has(parsed.roomCategoryId)) {
+      continue;
+    }
+
     const safeHotelId = hotelId || parsed.hotelId;
 
     const patch: BulkInventoryPatch = {

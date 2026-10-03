@@ -26,7 +26,8 @@ import type {
 import {
   getBulkKey, parseBulkKey, mergeBulkDraft, removeDraftItem,
   clearDraft, buildPatchListFromDraft, summarizeDraft,
-  normalizeToISODate, addDays, daysBetween
+  normalizeToISODate, addDays, daysBetween,
+  validateAndFilterDraft, loadTenantDraft, saveTenantDraft, clearTenantDraft
 } from '@/lib/bulkUpdateDraft';
 import type { BulkDraftItem, BulkDraftMap, BulkInventoryPatch } from '@/lib/bulkUpdateDraft';
 import type { RoomCategory } from '@/lib/types';
@@ -146,8 +147,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
 
   useEffect(() => {
     if (hotelId) {
+      setOverview(null);
       load();
     } else {
+      setOverview(null);
       setLoading(false);
     }
   }, [hotelId, load]);
@@ -416,6 +419,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
           {tab === 'channels' && (
             <ChannelsDashboard
+              key={hotelId || 'channels'}
               connections={overview.connections}
               categories={overview.categories}
               ratePlans={overview.ratePlans}
@@ -426,12 +430,12 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
               loading={loading}
             />
           )}
-          {tab === 'inventory' && <InventoryTab categories={overview.categories} isLiveMode={overview.isLiveMode} />}
-          {tab === 'reservations' && <ReservationsTab reservations={overview.otaReservations} onChanged={load} />}
-          {tab === 'mapping' && <MappingTab categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
-          {tab === 'logs' && <LogsTab logs={overview.syncLogs} connections={overview.connections} />}
-          {tab === 'diagnostics' && <DiagnosticsTab />}
-          {tab === 'settings' && <SettingsTab settings={overview.settings} onChanged={load} />}
+          {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
+          {tab === 'reservations' && <ReservationsTab key={hotelId || 'reservations'} reservations={overview.otaReservations} onChanged={load} />}
+          {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
+          {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
+          {tab === 'diagnostics' && <DiagnosticsTab key={hotelId || 'diagnostics'} />}
+          {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} onChanged={load} />}
         </>
       ) : null}
 
@@ -1460,8 +1464,19 @@ const BulkUpdateDrawer = ({
   const [cta, setCta] = useState<'keep' | 'open' | 'closed'>('keep');
   const [ctd, setCtd] = useState<'keep' | 'open' | 'closed'>('keep');
 
-  // Multi-edit persistent drafts map
-  const [drafts, setDrafts] = useState<BulkDraftMap>({});
+  // Multi-edit persistent drafts map — loaded from tenant-namespaced storage
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<BulkDraftMap>(() => {
+    if (!hotelId) return {};
+    const { drafts: loaded, removedCount } = loadTenantDraft(hotelId, categories);
+    if (removedCount > 0) {
+      // We can't call setState inside useState initialiser, defer via microtask
+      Promise.resolve().then(() => setStaleNotice(
+        `${removedCount} queued inventory change${removedCount !== 1 ? 's' : ''} belonged to another property and ${removedCount !== 1 ? 'were' : 'was'} removed. Please review before saving.`
+      ));
+    }
+    return loaded;
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
@@ -1469,7 +1484,8 @@ const BulkUpdateDrawer = ({
 
   const allDays = useMemo(() => daysBetween(fromDate, toDate), [fromDate, toDate]);
   const summary = useMemo(() => summarizeDraft(drafts), [drafts]);
-  const patchList = useMemo(() => buildPatchListFromDraft(drafts, hotelId || undefined), [drafts, hotelId]);
+  // Pass categories so buildPatchListFromDraft can filter out any foreign items (second defence layer)
+  const patchList = useMemo(() => buildPatchListFromDraft(drafts, hotelId || undefined, categories), [drafts, hotelId, categories]);
 
   const toggleCat = (id: string) => {
     const next = new Set(selectedCats);
@@ -1536,6 +1552,17 @@ const BulkUpdateDrawer = ({
       return;
     }
 
+    // 🔒 Tenant Guard: verify every selected category belongs to this hotel's categories list
+    const validCatIds = new Set(categories.map((c) => c.id));
+    const foreignCats = [...selectedCats].filter((id) => !validCatIds.has(id));
+    if (foreignCats.length > 0) {
+      setSaveError(
+        'One or more selected room categories do not belong to this property. Please deselect them before queuing.'
+      );
+      setSelectedCats((prev) => { const next = new Set(prev); foreignCats.forEach((id) => next.delete(id)); return next; });
+      return;
+    }
+
     const updates: Record<string, Partial<BulkDraftItem>> = {};
 
     for (const catId of selectedCats) {
@@ -1592,7 +1619,12 @@ const BulkUpdateDrawer = ({
       }
     }
 
-    setDrafts((prev) => mergeBulkDraft(prev, updates));
+    setDrafts((prev) => {
+      const merged = mergeBulkDraft(prev, updates);
+      // Persist tenant-scoped draft immediately so it survives a page refresh but never leaks to another hotel
+      if (hotelId) saveTenantDraft(hotelId, merged);
+      return merged;
+    });
     setFeedbackMsg(`✓ Queued updates for ${allDays.length} dates across ${selectedCats.size} categories.`);
     setTimeout(() => setFeedbackMsg(null), 3500);
 
@@ -1615,7 +1647,9 @@ const BulkUpdateDrawer = ({
 
   const handleClearAll = () => {
     if (window.confirm('Discard all unsaved updates in this draft?')) {
-      setDrafts(clearDraft());
+      const empty = clearDraft();
+      setDrafts(empty);
+      if (hotelId) clearTenantDraft(hotelId);
     }
   };
 
@@ -1624,10 +1658,36 @@ const BulkUpdateDrawer = ({
     setSaving(true);
     setSaveError(null);
 
+    // 🔒 Pre-flight tenant validation: filter the patch list against current hotel categories
+    const validCatIds = new Set(categories.map((c) => c.id));
+    const safePatchList = patchList.filter((p) => validCatIds.has(p.roomCategoryId));
+    const blockedCount = patchList.length - safePatchList.length;
+
+    if (blockedCount > 0) {
+      // Purge the foreign entries from draft state and storage
+      const validCatArray = categories.map((c) => ({ id: c.id }));
+      const { validDrafts, removedCount } = validateAndFilterDraft(drafts, hotelId || '', validCatArray);
+      setDrafts(validDrafts);
+      if (hotelId) saveTenantDraft(hotelId, validDrafts);
+      setSaveError(
+        `${removedCount} draft item${removedCount !== 1 ? 's' : ''} belonged to another property and ${removedCount !== 1 ? 'were' : 'was'} removed. Please review the remaining changes and try again.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (safePatchList.length === 0) {
+      setSaveError('No valid inventory changes to save.');
+      setSaving(false);
+      return;
+    }
+
     try {
-      const result = await applyBulkInventoryPatch(patchList);
+      const result = await applyBulkInventoryPatch(safePatchList);
       if (result && result.success) {
-        setDrafts(clearDraft());
+        const empty = clearDraft();
+        setDrafts(empty);
+        if (hotelId) clearTenantDraft(hotelId);
         await onSuccess(result);
       } else {
         throw new Error(result?.message || 'Failed to apply updates.');
@@ -1702,6 +1762,21 @@ const BulkUpdateDrawer = ({
             2. Draft Queue ({summary.totalItems})
           </button>
         </div>
+
+        {/* Stale Cross-Hotel Draft Notice */}
+        {staleNotice && (
+          <div className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs font-medium text-amber-900 flex items-start gap-2 animate-fade-in">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <span className="flex-1">{staleNotice}</span>
+            <button
+              onClick={() => setStaleNotice(null)}
+              className="p-0.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Feedback / Save Error Banner */}
         {feedbackMsg && (
