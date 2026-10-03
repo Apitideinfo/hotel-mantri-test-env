@@ -1,12 +1,14 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Wallet, Banknote, Smartphone, Star, AlertCircle,
   CreditCard, Sparkles, GripVertical, ArrowRightLeft,
+  MoreVertical, CheckCircle2, LogIn, LogOut, Receipt,
+  Clock, ArrowUpRight, ArrowDownLeft, ShieldCheck, ChevronRight,
 } from 'lucide-react';
 import type { BoardBooking } from './types';
 import type { Reservation } from '@/lib/types-reservations';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
-import { fmtMoney, toNum } from '@/lib/calc';
+import { fmtMoney, fmtInt, toNum } from '@/lib/calc';
 
 interface BookingBarProps {
   booking: BoardBooking;
@@ -18,42 +20,153 @@ interface BookingBarProps {
   onMouseDownMove?: (e: React.MouseEvent) => void;
   onMouseDownStretchRight?: (e: React.MouseEvent) => void;
   onMouseDownStretchLeft?: (e: React.MouseEvent) => void;
+  onQuickAction?: (action: 'checkin' | 'checkout' | 'folio' | 'shift' | 'extend' | 'details', booking: BoardBooking) => void;
 }
 
-const SOURCE_COLORS: Record<string, string> = {
-  'OTA': 'bg-sky-500',
-  'Direct/Walking': 'bg-emerald-500',
-  'Corporate/Agent': 'bg-indigo-600',
-  'Phonebook': 'bg-amber-500',
+interface SourceBadgeConfig {
+  label: string;
+  badgeBg: string;
+  badgeText: string;
+  badgeBorder: string;
+  railColor: string;
+}
+
+const getSourceBadge = (sourceName?: string, sourceCat?: string): SourceBadgeConfig => {
+  const s = (sourceName || sourceCat || '').toLowerCase().trim();
+  
+  if (s.includes('makemytrip') || s.includes('mmt')) {
+    return { label: 'MMT', badgeBg: 'bg-rose-50', badgeText: 'text-rose-700', badgeBorder: 'border-rose-200', railColor: 'bg-rose-500' };
+  }
+  if (s.includes('goibibo') || s.includes('ibibo')) {
+    return { label: 'Goibibo', badgeBg: 'bg-orange-50', badgeText: 'text-orange-700', badgeBorder: 'border-orange-200', railColor: 'bg-orange-500' };
+  }
+  if (s.includes('agoda')) {
+    return { label: 'Agoda', badgeBg: 'bg-emerald-50', badgeText: 'text-emerald-800', badgeBorder: 'border-emerald-300', railColor: 'bg-emerald-600' };
+  }
+  if (s.includes('cleartrip')) {
+    return { label: 'Cleartrip', badgeBg: 'bg-sky-50', badgeText: 'text-sky-800', badgeBorder: 'border-sky-300', railColor: 'bg-sky-500' };
+  }
+  if (s.includes('booking')) {
+    return { label: 'Booking.com', badgeBg: 'bg-blue-50', badgeText: 'text-blue-800', badgeBorder: 'border-blue-300', railColor: 'bg-blue-600' };
+  }
+  if (s.includes('travelguru')) {
+    return { label: 'Travelguru', badgeBg: 'bg-amber-50', badgeText: 'text-amber-800', badgeBorder: 'border-amber-300', railColor: 'bg-amber-500' };
+  }
+  if (s.includes('airbnb')) {
+    return { label: 'Airbnb', badgeBg: 'bg-pink-50', badgeText: 'text-pink-700', badgeBorder: 'border-pink-300', railColor: 'bg-pink-500' };
+  }
+  if (s.includes('direct') || s.includes('walk')) {
+    return { label: 'Direct', badgeBg: 'bg-teal-50', badgeText: 'text-teal-800', badgeBorder: 'border-teal-300', railColor: 'bg-teal-600' };
+  }
+  if (s.includes('corporate') || s.includes('agent') || s.includes('company')) {
+    return { label: 'Corporate', badgeBg: 'bg-indigo-50', badgeText: 'text-indigo-800', badgeBorder: 'border-indigo-300', railColor: 'bg-indigo-600' };
+  }
+  if (s.includes('phone')) {
+    return { label: 'Phone', badgeBg: 'bg-violet-50', badgeText: 'text-violet-800', badgeBorder: 'border-violet-300', railColor: 'bg-violet-600' };
+  }
+
+  // Fallback
+  const display = sourceName && sourceName.length <= 10 ? sourceName : sourceCat || 'OTA';
+  return { label: display, badgeBg: 'bg-slate-100', badgeText: 'text-slate-700', badgeBorder: 'border-slate-200', railColor: 'bg-slate-500' };
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  occupied: 'bg-emerald-500',
-  vacant: 'bg-slate-300',
-  complimentary: 'bg-amber-500',
-  confirmed: 'bg-brand-600',
-  checked_in: 'bg-emerald-500',
-  checked_out: 'bg-slate-400',
-  cancelled: 'bg-rose-500',
-  no_show: 'bg-rose-600',
-};
-
-const STATUS_TEXT_COLORS: Record<string, string> = {
-  occupied: 'text-emerald-800',
-  vacant: 'text-slate-500',
-  complimentary: 'text-amber-800',
-  confirmed: 'text-brand-800',
-  checked_in: 'text-emerald-800',
-  checked_out: 'text-slate-500',
-  cancelled: 'text-rose-700',
-  no_show: 'text-rose-700',
+const STATUS_CONFIG: Record<string, {
+  dot: string;
+  beaconRing: string;
+  border: string;
+  hoverBorder: string;
+  cardBg: string;
+  text: string;
+  statusLabel: string;
+  avatarBg: string;
+}> = {
+  occupied: {
+    dot: 'bg-emerald-500',
+    beaconRing: 'ring-emerald-300/60',
+    border: 'border-emerald-300/90',
+    hoverBorder: 'hover:border-emerald-500 hover:shadow-emerald-100/60',
+    cardBg: 'bg-gradient-to-br from-emerald-50/90 via-white to-emerald-50/40',
+    text: 'text-emerald-950',
+    statusLabel: 'In-House',
+    avatarBg: 'bg-emerald-600 text-white',
+  },
+  checked_in: {
+    dot: 'bg-emerald-500',
+    beaconRing: 'ring-emerald-300/60',
+    border: 'border-emerald-300/90',
+    hoverBorder: 'hover:border-emerald-500 hover:shadow-emerald-100/60',
+    cardBg: 'bg-gradient-to-br from-emerald-50/90 via-white to-emerald-50/40',
+    text: 'text-emerald-950',
+    statusLabel: 'In-House',
+    avatarBg: 'bg-emerald-600 text-white',
+  },
+  confirmed: {
+    dot: 'bg-indigo-600',
+    beaconRing: 'ring-indigo-300/60',
+    border: 'border-indigo-200/90',
+    hoverBorder: 'hover:border-indigo-500 hover:shadow-indigo-100/60',
+    cardBg: 'bg-gradient-to-br from-indigo-50/80 via-white to-blue-50/30',
+    text: 'text-indigo-950',
+    statusLabel: 'Reserved',
+    avatarBg: 'bg-indigo-600 text-white',
+  },
+  complimentary: {
+    dot: 'bg-purple-600',
+    beaconRing: 'ring-purple-300/60',
+    border: 'border-purple-200/90',
+    hoverBorder: 'hover:border-purple-500 hover:shadow-purple-100/60',
+    cardBg: 'bg-gradient-to-br from-purple-50/90 via-white to-purple-50/40',
+    text: 'text-purple-950',
+    statusLabel: 'Comp',
+    avatarBg: 'bg-purple-600 text-white',
+  },
+  checked_out: {
+    dot: 'bg-slate-400',
+    beaconRing: 'ring-slate-300/40',
+    border: 'border-slate-200',
+    hoverBorder: 'hover:border-slate-400 hover:shadow-slate-100',
+    cardBg: 'bg-slate-50/90',
+    text: 'text-slate-700',
+    statusLabel: 'Checked Out',
+    avatarBg: 'bg-slate-500 text-white',
+  },
+  cancelled: {
+    dot: 'bg-rose-500',
+    beaconRing: 'ring-rose-300/50',
+    border: 'border-rose-200',
+    hoverBorder: 'hover:border-rose-400',
+    cardBg: 'bg-rose-50/50',
+    text: 'text-rose-950',
+    statusLabel: 'Cancelled',
+    avatarBg: 'bg-rose-600 text-white',
+  },
+  no_show: {
+    dot: 'bg-rose-600',
+    beaconRing: 'ring-rose-300/50',
+    border: 'border-rose-300',
+    hoverBorder: 'hover:border-rose-500',
+    cardBg: 'bg-rose-50/60',
+    text: 'text-rose-950',
+    statusLabel: 'No Show',
+    avatarBg: 'bg-rose-700 text-white',
+  },
 };
 
 const PAY_INDICATOR: Record<string, { icon: typeof Wallet; color: string; label: string }> = {
   Cash: { icon: Wallet, color: 'text-emerald-600', label: 'Cash' },
-  Bank: { icon: Banknote, color: 'text-brand-navy-600', label: 'Bank' },
-  UPI: { icon: Smartphone, color: 'text-brand-600', label: 'UPI' },
+  Bank: { icon: Banknote, color: 'text-indigo-600', label: 'Bank' },
+  UPI: { icon: Smartphone, color: 'text-blue-600', label: 'UPI' },
   Card: { icon: CreditCard, color: 'text-amber-600', label: 'Card' },
+};
+
+// Extract clean initials from guest name
+const getInitials = (name: string): string => {
+  if (!name) return 'G';
+  const clean = name.replace(/^(mr\.|mrs\.|ms\.|dr\.|prof\.)\s*/i, '').trim();
+  const parts = clean.split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return 'G';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 };
 
 export const BookingBar: React.FC<BookingBarProps> = ({
@@ -66,11 +179,26 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   onMouseDownMove,
   onMouseDownStretchRight,
   onMouseDownStretchLeft,
+  onQuickAction,
 }) => {
-  const sourceColor = SOURCE_COLORS[booking.sourceCategory] ?? 'bg-slate-400';
-  const statusColor = STATUS_COLORS[booking.status] ?? 'bg-slate-400';
-  const statusText = STATUS_TEXT_COLORS[booking.status] ?? 'text-slate-700';
+  const [showMenu, setShowMenu] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setShowMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showMenu]);
+
+  const sourceBadge = getSourceBadge(booking.sourceName, booking.sourceCategory);
+  const statusCfg = STATUS_CONFIG[booking.status] ?? STATUS_CONFIG.confirmed;
   const payInfo = PAY_INDICATOR[booking.paymentMode];
+  
   const total = booking.rate * booking.nights;
   const advance = booking.type === 'reservation' ? toNum((booking.raw as Reservation).advance_paid) : toNum((booking.raw as any).pay_advance);
   const balance = Math.max(0, total - advance);
@@ -78,11 +206,15 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   const canEdit = booking.status !== 'cancelled' && booking.status !== 'no_show';
   const canExtend = canEdit && booking.status !== 'checked_out';
 
+  const isMultiDay = booking.nights > 1;
+  const isSingleDay = !isMultiDay;
+  const initials = getInitials(booking.guestName);
+
   return (
     <div
-      className={`relative group/bar mb-1 select-none transition-all ${
+      className={`relative group/bar mb-1.5 select-none transition-all duration-150 ${
         isMoving
-          ? 'opacity-40 scale-95 ring-2 ring-brand-500 rounded-xl'
+          ? 'opacity-40 scale-95 ring-2 ring-indigo-500 rounded-xl'
           : isStretching
           ? 'opacity-50 ring-2 ring-emerald-500 rounded-xl'
           : ''
@@ -91,66 +223,210 @@ export const BookingBar: React.FC<BookingBarProps> = ({
       <div
         onClick={onClick}
         onMouseDown={(e) => {
-          // If clicked directly on the body, start move drag if provided
-          if (onMouseDownMove && e.button === 0) {
+          if (onMouseDownMove && e.button === 0 && !(e.target as HTMLElement).closest('.action-menu-btn')) {
             onMouseDownMove(e);
           }
         }}
-        title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ₹${fmtMoney(booking.rate)}/night · ${booking.status.replace('_', ' ').toUpperCase()}${balance >= 1.0 ? ` · Due ₹${fmtMoney(balance)}` : ''}\n(Drag card to move room/dates, drag right edge to extend stay)`}
-        className={`w-full text-left rounded-xl p-1.5 transition-all duration-150 relative group border bg-white cursor-grab active:cursor-grabbing overflow-hidden ${
-          booking.status === 'checked_in' || booking.status === 'occupied'
-            ? 'border-emerald-200/90 shadow-2xs hover:border-emerald-400 hover:shadow-md'
-            : booking.status === 'confirmed'
-            ? 'border-brand-200/90 shadow-2xs hover:border-brand-400 hover:shadow-md'
-            : 'border-slate-200/90 shadow-2xs hover:border-slate-400 hover:shadow-md'
+        title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ₹${fmtInt(booking.rate)}/night · ${statusCfg.statusLabel}${balance >= 1.0 ? ` · Due ₹${fmtInt(balance)}` : ' · Fully Settled'}\n(Drag card to move room/dates, drag right edge to extend stay)`}
+        className={`w-full text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${
+          isSingleDay
+            ? 'rounded-xl p-2'
+            : isStart
+            ? 'rounded-l-xl rounded-r-sm p-2 border-r-dashed'
+            : isEnd
+            ? 'rounded-r-xl rounded-l-sm p-2 border-l-dashed'
+            : 'rounded-sm p-2 border-x-dashed'
         }`}
       >
-        {/* Source indicator vertical bar */}
-        <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl ${sourceColor}`} />
+        {/* Source / Status Left Ribbon */}
+        {isStart || isSingleDay ? (
+          <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl ${sourceBadge.railColor}`} />
+        ) : (
+          <div className={`absolute left-0 top-0 bottom-0 w-1 ${sourceBadge.railColor} opacity-70`} />
+        )}
 
-        <div className="pl-1.5 pr-3">
-          {/* Guest Name & Status */}
-          <div className="flex items-center gap-1 min-w-0">
-            <span className={`w-1.5 h-1.5 rounded-full ${statusColor} shrink-0 animate-pulse`} />
-            <span className={`font-black text-xs truncate tracking-tight ${statusText}`}>
+        <div className="pl-1 pr-0.5">
+          {/* Top Row: Avatar Initial + Status Beacon + Guest Name + VIP/Arrival tag + Menu */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            {/* Guest Initial Avatar */}
+            <div className={`w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
+              {initials}
+            </div>
+
+            {/* Guest Name */}
+            <span className={`font-black text-[11px] sm:text-[11.5px] truncate tracking-tight group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
               {booking.guestName || 'Guest'}
             </span>
+
+            {/* VIP Badge */}
             {booking.vipType && (
-              <span className={`ml-0.5 inline-flex items-center gap-0.5 text-[8px] px-1 py-0 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-slate-100 text-slate-600 border-slate-300'}`}>
+              <span className={`ml-auto inline-flex items-center gap-0.5 text-[7.5px] px-1 py-0.2 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-amber-100 text-amber-900 border-amber-300'}`}>
                 <Star className="w-2 h-2 text-amber-500 fill-amber-500" />
                 <span>{booking.vipType}</span>
               </span>
             )}
+
+            {/* Stay Continuity Flags (In / Out) */}
+            {isMultiDay && isStart && (
+              <span className="ml-auto text-[7.5px] font-black text-indigo-700 bg-indigo-100/90 px-1 py-0.2 rounded border border-indigo-200 shrink-0 flex items-center gap-0.5" title="Check-In Day">
+                <ArrowDownLeft className="w-2 h-2" /> In
+              </span>
+            )}
+            {isMultiDay && isEnd && (
+              <span className="ml-auto text-[7.5px] font-black text-amber-800 bg-amber-100/90 px-1 py-0.2 rounded border border-amber-300 shrink-0 flex items-center gap-0.5" title="Check-Out Day">
+                <ArrowUpRight className="w-2 h-2" /> Out
+              </span>
+            )}
+
+            {/* Quick 3-Dots Action Menu Trigger */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu((prev) => !prev);
+              }}
+              className="action-menu-btn ml-auto p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-40 group-hover/bar:opacity-100 shrink-0"
+              title="Quick Actions"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+            </button>
           </div>
 
-          {/* Source, Rate & Due Badge */}
-          <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500 flex-wrap font-medium">
-            <span className="truncate text-slate-600 font-semibold max-w-[75px]">
-              {booking.sourceName || booking.sourceCategory}
+          {/* Bottom Row: Source Pill + Rate + Due Warning Pill */}
+          <div className="flex items-center justify-between gap-1 mt-1.5 text-[10px] text-slate-500 font-semibold flex-wrap">
+            {/* Source Brand Pill */}
+            <span className={`px-1.5 py-0.2 rounded-md font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
+              {sourceBadge.label}
             </span>
 
-            {payInfo && booking.hasPayment && (
-              <span className={`flex items-center ${payInfo.color}`} title={`Paid via ${payInfo.label}`}>
-                <payInfo.icon className="w-2.5 h-2.5" />
-              </span>
-            )}
+            {/* Rate & Payment Pill */}
+            <div className="flex items-center gap-1 shrink-0 ml-auto">
+              {payInfo && booking.hasPayment && (
+                <span className={`flex items-center ${payInfo.color}`} title={`Payment mode: ${payInfo.label}`}>
+                  <payInfo.icon className="w-2.5 h-2.5" />
+                </span>
+              )}
 
-            {booking.isComplimentary ? (
-              <span className="text-amber-800 font-black bg-amber-50 px-1 py-0.2 rounded border border-amber-200 text-[9px]">
-                COMP
-              </span>
-            ) : (
-              <span className="text-slate-900 font-black">₹{fmtMoney(booking.rate)}</span>
-            )}
+              {booking.isComplimentary ? (
+                <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded-md border border-purple-300 text-[8.5px] shadow-2xs">
+                  COMP
+                </span>
+              ) : (
+                <span className="text-slate-900 font-black text-[10.5px] tracking-tight">
+                  ₹{fmtInt(booking.rate)}
+                </span>
+              )}
 
-            {balance >= 1.0 && !booking.isComplimentary && (
-              <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1 py-0.2 rounded text-[9px]">
-                Due ₹{fmtMoney(balance)}
-              </span>
-            )}
+              {/* Balance Due Alert Pill */}
+              {balance >= 1.0 && !booking.isComplimentary ? (
+                <span className="text-rose-700 font-black bg-rose-100/90 border border-rose-300 px-1.5 py-0.2 rounded-md text-[8.5px] tracking-tight shadow-2xs flex items-center gap-0.5">
+                  <span className="w-1 h-1 rounded-full bg-rose-600 animate-ping" />
+                  Due ₹{fmtInt(balance)}
+                </span>
+              ) : !booking.isComplimentary && booking.hasPayment ? (
+                <span className="text-emerald-700 font-black bg-emerald-100/80 border border-emerald-300 px-1 py-0.2 rounded text-[8px] flex items-center gap-0.5">
+                  <CheckCircle2 className="w-2 h-2" /> Paid
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Quick Action Dropdown Popover */}
+      {showMenu && (
+        <div
+          ref={menuRef}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute right-0 top-7 z-40 bg-slate-900 text-white rounded-xl shadow-2xl border border-slate-700 py-1.5 min-w-[170px] animate-scale-in text-xs font-semibold backdrop-blur-md"
+        >
+          <div className="px-3 py-1 border-b border-slate-800 text-[10px] text-slate-400 font-bold truncate">
+            {booking.guestName || 'Guest'} · Room {booking.roomNo}
+          </div>
+          
+          <button
+            type="button"
+            onClick={() => {
+              setShowMenu(false);
+              onClick();
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 text-slate-200 hover:text-white transition cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+            <span>View Full Details</span>
+          </button>
+
+          {onQuickAction && (
+            <>
+              {booking.status === 'confirmed' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    onQuickAction('checkin', booking);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-emerald-950/80 flex items-center gap-2 text-emerald-400 hover:text-emerald-300 transition cursor-pointer"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Quick Check-In</span>
+                </button>
+              )}
+
+              {(booking.status === 'checked_in' || booking.status === 'occupied') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    onQuickAction('checkout', booking);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-amber-950/80 flex items-center gap-2 text-amber-400 hover:text-amber-300 transition cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Check-Out Guest</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenu(false);
+                  onQuickAction('folio', booking);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 text-slate-300 hover:text-white transition cursor-pointer"
+              >
+                <Receipt className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Guest Folio & Pay</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMenu(false);
+                  onQuickAction('shift', booking);
+                }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 text-slate-300 hover:text-white transition cursor-pointer"
+              >
+                <ArrowRightLeft className="w-3.5 h-3.5 text-blue-400" />
+                <span>Shift Room / Dates</span>
+              </button>
+
+              {canExtend && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMenu(false);
+                    onQuickAction('extend', booking);
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-800 flex items-center gap-2 text-slate-300 hover:text-white transition cursor-pointer"
+                >
+                  <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Extend Stay</span>
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Left interactive handle for adjusting check-in date */}
       {isStart && onMouseDownStretchLeft && canEdit && (
@@ -159,7 +435,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
             e.stopPropagation();
             onMouseDownStretchLeft(e);
           }}
-          className="absolute left-0 top-0 bottom-1 w-3.5 cursor-ew-resize flex items-center justify-center bg-slate-100/90 hover:bg-brand-600 text-slate-400 hover:text-white rounded-l-xl z-30 transition-all group/handle shadow-2xs border-r border-slate-200 hover:border-brand-600 opacity-0 group-hover/bar:opacity-100"
+          className="absolute left-0 top-0 bottom-1 w-3.5 cursor-ew-resize flex items-center justify-center bg-slate-100/95 hover:bg-indigo-600 text-slate-400 hover:text-white rounded-l-xl z-30 transition-all group/handle shadow-2xs border-r border-slate-200 hover:border-indigo-600 opacity-0 group-hover/bar:opacity-100"
           title="Drag left/right to adjust check-in date"
         >
           <div className="flex flex-col gap-0.5 items-center justify-center pointer-events-none">
@@ -175,7 +451,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
             e.stopPropagation();
             onMouseDownStretchRight(e);
           }}
-          className="absolute right-0 top-0 bottom-1 w-4.5 cursor-ew-resize flex items-center justify-center bg-slate-100/90 hover:bg-emerald-600 text-slate-400 hover:text-white rounded-r-xl z-30 transition-all group/handle shadow-2xs border-l border-slate-200 hover:border-emerald-600"
+          className="absolute right-0 top-0 bottom-1 w-4.5 cursor-ew-resize flex items-center justify-center bg-slate-100/95 hover:bg-emerald-600 text-slate-400 hover:text-white rounded-r-xl z-30 transition-all group/handle shadow-2xs border-l border-slate-200 hover:border-emerald-600"
           title="Drag right/left to resize stay duration"
         >
           <div className="flex flex-col gap-0.5 items-center justify-center pointer-events-none">

@@ -1,4 +1,5 @@
 import React from 'react';
+import { RevealOnScroll } from './RevealOnScroll';
 
 export const TrustedPioneersSection: React.FC = () => {
   const brandLogos = [
@@ -24,7 +25,6 @@ export const TrustedPioneersSection: React.FC = () => {
       id: 'hotel-orange',
       component: (
         <div className="flex items-center gap-2.5 px-3">
-          {/* Orange Swirl Icon */}
           <svg className="w-8 h-8 shrink-0" viewBox="0 0 36 36" fill="none">
             <circle cx="18" cy="18" r="16" fill="#FFF7ED" />
             <path
@@ -67,7 +67,6 @@ export const TrustedPioneersSection: React.FC = () => {
       id: 'river-and-sky',
       component: (
         <div className="flex items-center gap-1.5 px-3">
-          {/* Sunburst on top of script */}
           <div className="flex flex-col items-center">
             <div className="flex items-center gap-1">
               <span className="text-[15px] font-serif font-black italic text-red-600 tracking-tight">
@@ -190,31 +189,33 @@ export const TrustedPioneersSection: React.FC = () => {
           
           {/* ── Left Title ── */}
           <div className="lg:col-span-4 shrink-0">
-            <h3 className="text-xl sm:text-2xl font-extrabold text-black tracking-tight leading-snug">
-              Trusted by hospitality<br className="hidden sm:inline" />
-              {' '}pioneers around the world
-            </h3>
+            <RevealOnScroll variant="fade-right" duration={700}>
+              <h3 className="text-xl sm:text-2xl font-extrabold text-black tracking-tight leading-snug">
+                Trusted by hospitality<br className="hidden sm:inline" />
+                {' '}pioneers around the world
+              </h3>
+            </RevealOnScroll>
           </div>
 
           {/* ── Right Moving Marquee Ticker ── */}
           <div className="lg:col-span-8 overflow-hidden relative">
-            
-            {/* Left & Right Gradient Fades for smooth edge look */}
-            <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-16 sm:w-24 bg-gradient-to-r from-white via-white/80 to-transparent z-10" />
-            <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-16 sm:w-24 bg-gradient-to-l from-white via-white/80 to-transparent z-10" />
+            <RevealOnScroll variant="fade-left" duration={700} delay={100}>
+              {/* Left & Right Gradient Fades for smooth edge look */}
+              <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-16 sm:w-24 bg-gradient-to-r from-white via-white/80 to-transparent z-10" />
+              <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-16 sm:w-24 bg-gradient-to-l from-white via-white/80 to-transparent z-10" />
 
-            {/* Continuous Marquee Track */}
-            <div className="flex animate-marquee items-center gap-10 sm:gap-14 py-2">
-              {marqueeItems.map((item, idx) => (
-                <div
-                  key={`${item.id}-${idx}`}
-                  className="shrink-0 transition-transform duration-200 hover:scale-105 flex items-center justify-center"
-                >
-                  {item.component}
-                </div>
-              ))}
-            </div>
-
+              {/* Continuous Marquee Track */}
+              <div className="flex animate-marquee items-center gap-10 sm:gap-14 py-2">
+                {marqueeItems.map((item, idx) => (
+                  <div
+                    key={`${item.id}-${idx}`}
+                    className="shrink-0 transition-transform duration-200 hover:scale-105 flex items-center justify-center"
+                  >
+                    {item.component}
+                  </div>
+                ))}
+              </div>
+            </RevealOnScroll>
           </div>
 
         </div>

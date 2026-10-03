@@ -819,6 +819,8 @@ export const getRoomShifts = async (entryId: string): Promise<RoomShift[]> => {
 
 export const validateCheckIn = (params: CheckInParams): string | null => {
   if (!params.guestName?.trim()) return 'Guest name is required.';
+  const cleanPhone = (params.phone || '').trim();
+  if (!cleanPhone) return 'Mobile number is required.';
   const cleanEmail = (params.email || '').trim();
   if (!cleanEmail) return 'Guest email is required.';
   if (!isValidEmail(cleanEmail)) return 'Please enter a valid email address.';

@@ -147,21 +147,227 @@ function ScreenLoader() {
 
 
 
+const SCREEN_TO_HASH: Record<string, string> = {
+  'operations': 'operations-board',
+  'dashboard': 'dashboard',
+  'reservations': 'reservations',
+  'arrivals': 'arrivals',
+  'departures': 'departures',
+  'inhouse': 'inhouse',
+  'channel-manager': 'channel-manager',
+  'roomchart': 'daily-entry',
+  'property': 'property-master',
+  'other': 'other-entries',
+  'ledger': 'company-ledger',
+  'entry': 'entry-form',
+  'report': 'daily-report',
+  'mtd': 'mtd-report',
+  'ytd': 'ytd-report',
+  'mis-report': 'mis-report',
+  'pdf': 'pdf-reports',
+  'whatsapp': 'whatsapp',
+  'history': 'history',
+  'settings': 'settings',
+  'subscription': 'subscription',
+  'finance': 'finance',
+  'close-day': 'close-day',
+  'housekeeping': 'housekeeping',
+  'laundry-linen': 'laundry-linen',
+  'crm': 'crm',
+  'crm-directory': 'guest-directory',
+  'crm-corporate': 'corporate-guests',
+  'crm-vip': 'vip-guests',
+  'crm-agents': 'travel-agents',
+  'crm-loyalty': 'loyalty',
+  'analytics': 'analytics',
+  'owner-dashboard': 'owner-dashboard',
+  'expense-entry': 'expense-entry',
+  'expense-ledger': 'expense-ledger',
+  'staff': 'staff-master',
+  'salary-advance': 'salary-advance',
+  'salary-settlement': 'salary-settlement',
+  'electricity': 'electricity',
+  'utility-bills': 'utility-bills',
+  'laundry': 'laundry',
+  'monthly-bills': 'monthly-bills',
+  'profitability': 'profitability',
+  'gst-report': 'gst-report',
+  'ledgers': 'ledgers',
+  'pl-report': 'profit-loss',
+  'finance-dashboard': 'finance-dashboard',
+  'chart-of-accounts': 'chart-of-accounts',
+  'journals': 'journals',
+  'cash-book': 'cash-book',
+  'bank-book': 'bank-book',
+  'vouchers': 'vouchers',
+  'receivables': 'receivables',
+  'payables': 'payables',
+  'vendor-ledger': 'vendor-ledger',
+  'accounting-pl': 'accounting-pl',
+  'trial-balance': 'trial-balance',
+  'balance-sheet': 'balance-sheet',
+  'reconciliation': 'reconciliation',
+  'finance-exceptions': 'finance-exceptions',
+  'opening-balances': 'opening-balances',
+  'budgets': 'budgets',
+  'historical-posting': 'historical-posting',
+  'posting-rules': 'posting-rules',
+  'pos-dashboard': 'pos-dashboard',
+  'pos-new-order': 'pos-new-order',
+  'pos-kds': 'pos-kds',
+  'pos-billing': 'pos-billing',
+  'pos-tables': 'pos-tables',
+  'pos-menu': 'pos-menu',
+  'pos-reports': 'pos-reports',
+  'reservations-board': 'reservations-board',
+  'reservations-groups': 'reservations-groups',
+  'reservations-rates': 'reservations-rates',
+  'reservations-waitlist': 'reservations-waitlist',
+  'reservations-reports': 'reservations-reports',
+  'analytics-booking': 'analytics-booking',
+  'analytics-category': 'analytics-category',
+  'analytics-payment': 'analytics-payment',
+  'analytics-gst': 'analytics-gst',
+  'analytics-expense': 'analytics-expense',
+  'analytics-occupancy': 'analytics-occupancy',
+  'analytics-revenue': 'analytics-revenue',
+};
+
+const HASH_TO_SCREEN: Record<string, string> = {
+  'operations-board': 'operations',
+  'operations': 'operations',
+  'dashboard': 'dashboard',
+  'reservations': 'reservations',
+  'arrivals': 'arrivals',
+  'departures': 'departures',
+  'inhouse': 'inhouse',
+  'channel-manager': 'channel-manager',
+  'daily-entry': 'roomchart',
+  'roomchart': 'roomchart',
+  'property-master': 'property',
+  'property': 'property',
+  'other-entries': 'other',
+  'other': 'other',
+  'company-ledger': 'ledger',
+  'ledger': 'ledger',
+  'entry-form': 'entry',
+  'entry': 'entry',
+  'daily-report': 'report',
+  'report': 'report',
+  'mtd-report': 'mtd',
+  'mtd': 'mtd',
+  'ytd-report': 'ytd',
+  'ytd': 'ytd',
+  'mis-report': 'mis-report',
+  'pdf-reports': 'pdf',
+  'pdf': 'pdf',
+  'whatsapp': 'whatsapp',
+  'history': 'history',
+  'settings': 'settings',
+  'subscription': 'subscription',
+  'finance': 'finance',
+  'close-day': 'close-day',
+  'housekeeping': 'housekeeping',
+  'laundry-linen': 'laundry-linen',
+  'crm': 'crm',
+  'guest-directory': 'crm-directory',
+  'corporate-guests': 'crm-corporate',
+  'vip-guests': 'crm-vip',
+  'travel-agents': 'crm-agents',
+  'loyalty': 'crm-loyalty',
+  'analytics': 'analytics',
+  'owner-dashboard': 'owner-dashboard',
+  'expense-entry': 'expense-entry',
+  'expense-ledger': 'expense-ledger',
+  'staff-master': 'staff',
+  'staff': 'staff',
+  'salary-advance': 'salary-advance',
+  'salary-settlement': 'salary-settlement',
+  'electricity': 'electricity',
+  'utility-bills': 'utility-bills',
+  'laundry': 'laundry',
+  'monthly-bills': 'monthly-bills',
+  'profitability': 'profitability',
+  'gst-report': 'gst-report',
+  'ledgers': 'ledgers',
+  'profit-loss': 'pl-report',
+  'pl-report': 'pl-report',
+  'finance-dashboard': 'finance-dashboard',
+  'chart-of-accounts': 'chart-of-accounts',
+  'journals': 'journals',
+  'cash-book': 'cash-book',
+  'bank-book': 'bank-book',
+  'vouchers': 'vouchers',
+  'receivables': 'receivables',
+  'payables': 'payables',
+  'vendor-ledger': 'vendor-ledger',
+  'accounting-pl': 'accounting-pl',
+  'trial-balance': 'trial-balance',
+  'balance-sheet': 'balance-sheet',
+  'reconciliation': 'reconciliation',
+  'finance-exceptions': 'finance-exceptions',
+  'opening-balances': 'opening-balances',
+  'budgets': 'budgets',
+  'historical-posting': 'historical-posting',
+  'posting-rules': 'posting-rules',
+  'pos-dashboard': 'pos-dashboard',
+  'pos-new-order': 'pos-new-order',
+  'pos-kds': 'pos-kds',
+  'pos-billing': 'pos-billing',
+  'pos-tables': 'pos-tables',
+  'pos-menu': 'pos-menu',
+  'pos-reports': 'pos-reports',
+  'reservations-board': 'reservations-board',
+  'reservations-groups': 'reservations-groups',
+  'reservations-rates': 'reservations-rates',
+  'reservations-waitlist': 'reservations-waitlist',
+  'reservations-reports': 'reservations-reports',
+  'analytics-booking': 'analytics-booking',
+  'analytics-category': 'analytics-category',
+  'analytics-payment': 'analytics-payment',
+  'analytics-gst': 'analytics-gst',
+  'analytics-expense': 'analytics-expense',
+  'analytics-occupancy': 'analytics-occupancy',
+  'analytics-revenue': 'analytics-revenue',
+};
+
 function AppInner() {
   const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
   const { hotelId, hotel, isSuperAdmin, status: hotelStatus, error: hotelError, setSelectedHotel } = useHotel();
   const [showSuperAdminHotelSelector, setShowSuperAdminHotelSelector] = useState(false);
   const [nav, setNav] = useState<NavState>(() => {
     try {
-      const st = window.history.state;
-      if (st && st.screen) {
-        return { screen: st.screen as Screen, date: st.date ?? getTodayLocal() };
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      if (hash) {
+        if (hash.startsWith('cm-')) {
+          return { screen: 'channel-manager', date: getTodayLocal() };
+        }
+        if (HASH_TO_SCREEN[hash]) {
+          return { screen: HASH_TO_SCREEN[hash] as Screen, date: getTodayLocal() };
+        }
+      }
+      const st = typeof window !== 'undefined' ? window.history?.state : null;
+      if (st && st.screen && HASH_TO_SCREEN[st.screen]) {
+        return { screen: (HASH_TO_SCREEN[st.screen] || st.screen) as Screen, date: st.date ?? getTodayLocal() };
       }
     } catch {}
     return { screen: 'dashboard', date: getTodayLocal() };
   });
+
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
-  const [publicView, setPublicView] = useState<PublicView>('landing');
+  const [publicView, setPublicView] = useState<PublicView>(() => {
+    try {
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      if (hash === 'login') return 'login';
+      if (hash === 'signup') return 'signup';
+      if (hash === 'checkout') return 'checkout';
+      if (hash === 'otp-verify') return 'otp-verify';
+      if (hash === 'hotel-details') return 'hotel-details';
+      if (hash === 'payment-success') return 'payment-success';
+    } catch {}
+    return 'landing';
+  });
+
   const [selectedPlanId, setSelectedPlanId] = useState<string>('pro');
   const [registeredEmail, setRegisteredEmail] = useState<string>('');
   const [signupData, setSignupData] = useState<{ fullName: string; email: string; mobile: string; password: string } | null>(null);
@@ -169,10 +375,6 @@ function AppInner() {
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   
   const [superAdminMode, setSuperAdminMode] = useState<'panel' | 'dashboard'>('panel');
-  
-  // NOTE: Removed the useEffect that changed superAdminMode on mount
-  // to avoid race conditions. superAdminMode starts as 'panel' so the 
-  // user immediately sees EnterpriseHQ.
 
   useEffect(() => {
     if (user && profileLoaded && role && role !== 'super_admin' && role !== 'company_user' && hotelId) {
@@ -252,28 +454,99 @@ function AppInner() {
     };
   }, [hotelId, hotelStatus]);
 
-
-  // Keep browser history in sync with internal nav state so Back/Forward work naturally
+  // Handle URL hash synchronization for public landing views
   useEffect(() => {
-    // Replace initial history entry with current nav if it doesn't have our state
+    if (loading) return;
+    if (!user) {
+      try {
+        const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+        const isAppScreenHash = Boolean(HASH_TO_SCREEN[rawHash] || rawHash.startsWith('cm-'));
+        const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success'].includes(rawHash);
+
+        if (publicView === 'landing') {
+          // If unauthenticated on landing page with an authenticated app hash or public subview hash, clean the URL
+          if (isAppScreenHash || isPublicHash) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+        } else if (publicView === 'login' && rawHash !== 'login') {
+          window.history.replaceState(null, '', '#login');
+        } else if (publicView === 'signup' && rawHash !== 'signup') {
+          window.history.replaceState(null, '', '#signup');
+        } else if (publicView === 'checkout' && rawHash !== 'checkout') {
+          window.history.replaceState(null, '', '#checkout');
+        }
+      } catch {}
+    }
+  }, [user, loading, publicView]);
+
+  // Keep browser history in sync with internal nav state when authenticated
+  useEffect(() => {
+    if (loading || !user || !profileLoaded) return;
+
     try {
-      if (!window.history.state || !window.history.state.screen) {
-        window.history.replaceState({ screen: nav.screen, date: nav.date }, '');
+      const currentHash = SCREEN_TO_HASH[nav.screen] || nav.screen;
+      const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success'].includes(rawHash);
+
+      // If on channel-manager and sub-tab hash exists (#cm-...), preserve it
+      if (nav.screen === 'channel-manager' && rawHash.startsWith('cm-')) {
+        // preserve current cm- sub-tab
+      } else if (!rawHash || rawHash === '#' || isPublicHash) {
+        window.history.replaceState({ screen: nav.screen, date: nav.date }, '', '#' + currentHash);
+      } else if (HASH_TO_SCREEN[rawHash] && HASH_TO_SCREEN[rawHash] !== nav.screen) {
+        window.history.replaceState({ screen: nav.screen, date: nav.date }, '', '#' + currentHash);
       }
     } catch {
       // ignore
     }
+  }, [user, profileLoaded, loading, nav.screen, nav.date]);
 
-    const onPop = (e: PopStateEvent) => {
-      const st = e.state as { screen?: string; date?: string } | null;
-      if (st && st.screen) {
-        setNav({ screen: st.screen as Screen, date: st.date });
-      }
+  // Listen to browser Back/Forward (popstate) and hash changes
+  useEffect(() => {
+    const handleLocationChange = (e?: PopStateEvent) => {
+      try {
+        const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+
+        if (!user) {
+          if (hash === 'login') setPublicView('login');
+          else if (hash === 'signup') setPublicView('signup');
+          else if (hash === 'checkout') setPublicView('checkout');
+          else if (hash === 'otp-verify') setPublicView('otp-verify');
+          else if (hash === 'hotel-details') setPublicView('hotel-details');
+          else if (hash === 'payment-success') setPublicView('payment-success');
+          else if (HASH_TO_SCREEN[hash] || hash.startsWith('cm-')) {
+            setPublicView('landing');
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          } else {
+            setPublicView('landing');
+          }
+          return;
+        }
+
+        if (hash && hash.startsWith('cm-')) {
+          setNav((prev) => (prev.screen === 'channel-manager' ? prev : { screen: 'channel-manager', date: prev.date }));
+          return;
+        }
+        if (hash && HASH_TO_SCREEN[hash]) {
+          const matched = HASH_TO_SCREEN[hash] as Screen;
+          setNav((prev) => (prev.screen === matched ? prev : { screen: matched, date: prev.date }));
+          return;
+        }
+        const st = e?.state as { screen?: string; date?: string } | null;
+        if (st && st.screen && HASH_TO_SCREEN[st.screen]) {
+          const matched = (HASH_TO_SCREEN[st.screen] || st.screen) as Screen;
+          setNav({ screen: matched, date: st.date });
+        }
+      } catch {}
     };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, [user]);
 
   if (loading || (user && !profileLoaded)) {
     return (
@@ -480,7 +753,10 @@ function AppInner() {
     const date = (payload as { date?: string } | undefined)?.date;
     const next = { screen: screen as Screen, date: date ?? nav.date };
     try {
-      window.history.pushState({ screen: next.screen, date: next.date }, '');
+      const targetHash = screen === 'channel-manager' && window.location.hash.startsWith('#cm-')
+        ? window.location.hash
+        : '#' + (SCREEN_TO_HASH[screen] || screen);
+      window.history.pushState({ screen: next.screen, date: next.date }, '', targetHash);
       (window as any)._hotelMantriHasHistory = true; // Track that we've pushed at least once
     } catch {
       // ignore

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X, ArrowRight, BedDouble, Calendar, Users, DollarSign,
   AlertCircle, CheckCircle2, Loader2, Sparkles, ShieldAlert,
@@ -40,6 +40,14 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
   onClose,
   onConfirm,
 }) => {
+  useEffect(() => {
+    const originalStyle = window.getComputedStyle(document.body).overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalStyle;
+    };
+  }, []);
+
   const { booking } = payload;
   const [targetRoomNo, setTargetRoomNo] = useState(payload.targetRoomNo || booking.roomNo);
   const [targetCheckIn, setTargetCheckIn] = useState(payload.targetCheckIn || booking.checkIn);

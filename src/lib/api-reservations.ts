@@ -1435,7 +1435,7 @@ export const getReservationsPaginated = async (
         reservations: res.reservations || [],
         totalCount: res.totalCount || 0,
         page: res.page || 1,
-        pageSize: res.pageSize || 20,
+        pageSize: res.pageSize || 5,
         totalPages: res.totalPages || 1,
       };
     }
@@ -1446,7 +1446,7 @@ export const getReservationsPaginated = async (
   // Fallback to direct Supabase query
   const hotelId = getCurrentHotelId();
   const pageNum = params.page || 1;
-  const limit = params.pageSize || 20;
+  const limit = params.pageSize || 5;
   const offset = (pageNum - 1) * limit;
 
   let q = supabase
