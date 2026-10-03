@@ -58,6 +58,25 @@ import reservationRoutes from './routes/reservations.js';
 import hotelBrandingRoutes from './routes/hotelBranding.js';
 import notificationRoutes from './routes/notifications.js';
 
+// Root / Health check endpoints
+app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Hotel Mantri Backend API Server is running',
+    version: '1.0.0',
+    frontendUrl: 'http://localhost:5173',
+    endpoints: [
+      '/api/reservations',
+      '/api/channels',
+      '/api/hotel-branding',
+      '/api/notifications',
+      '/api/aiosell',
+      '/api/create-order',
+      '/api/verify-payment'
+    ]
+  });
+});
+
 // Mount API routes with both /api prefix and direct path for total serverless compatibility
 app.use('/api/aiosell', aiosellRoutes);
 app.use('/aiosell', aiosellRoutes);

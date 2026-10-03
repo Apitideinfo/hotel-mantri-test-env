@@ -1098,8 +1098,8 @@ export interface DashboardSummary {
   cashFlow?: CashFlowData;
 }
 
-export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
-  const todayStr = getTodayLocal();
+export const getOperationsBoardData = async (targetDate?: string): Promise<DashboardSummary> => {
+  const todayStr = targetDate && /^\d{4}-\d{2}-\d{2}$/.test(targetDate) ? targetDate : getTodayLocal();
   let hotelId = '';
   try {
     hotelId = getCurrentHotelId();
@@ -1130,9 +1130,9 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
 
   const totalRooms = s.total_rooms || 20;
   const openingBalance = s.opening_cash_balance || 5000;
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
+  const dateParts = todayStr.split('-').map(Number);
+  const year = dateParts[0] || new Date().getFullYear();
+  const month = dateParts[1] || (new Date().getMonth() + 1);
 
 
   try {
@@ -1185,9 +1185,7 @@ export const getOperationsBoardData = async (): Promise<DashboardSummary> => {
       ).then(({ data }) => data ?? []).catch(() => []),
     ]);
 
-    const prevDay = new Date(now);
-    prevDay.setDate(prevDay.getDate() - 1);
-    const prevStr = prevDay.toISOString().slice(0, 10);
+    const prevStr = addDays(todayStr, -1);
     const prevReport = monthReports.find((r: DerivedReport) => r.report_date === prevStr);
     const prevClosing = prevReport ? prevReport.cash_closing : openingBalance;
 

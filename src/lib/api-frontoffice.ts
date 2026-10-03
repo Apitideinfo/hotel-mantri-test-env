@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany } from './api';
 import { updateReservationStatus } from './api-reservations';
 import { dispatchChannelEvent } from './api-channel';
-import { toNum, calcGstFull, calcStayNights } from './calc';
+import { toNum, calcGstFull, calcStayNights, isStayOverlapping } from './calc';
 import { isValidEmail } from './types-reservations';
 import type {
   RoomChartEntry, RoomChartEntryInput, Room, HousekeepingStatus,
@@ -643,34 +643,47 @@ export const extendStay = async (params: {
     throw new Error('New checkout date must be after the check-in date.');
   }
 
-  // Check room availability for extended period
-  const { data: overlap } = await supabase
+  // Check room availability for extended period (excluding this entry and its linked reservation)
+  const roomKey = entry.room_no.trim().toLowerCase();
+  const ci = (entry.arrival ?? entry.report_date).slice(0, 10);
+  const co = params.newCheckOut.slice(0, 10);
+
+  const { data: allActiveEntries } = await supabase
     .from('room_chart_entries')
-    .select('id')
+    .select('id, room_no, arrival, departure, report_date, reservation_id')
     .eq('hotel_id', hotelId)
-    .eq('room_no', entry.room_no)
     .neq('id', params.entryId)
-    .is('checked_out_at', null)
-    .or(`and(arrival.lte.${params.newCheckOut},departure.gte.${(entry.arrival ?? entry.report_date)})`)
-    .maybeSingle();
-  if (overlap) {
+    .is('checked_out_at', null);
+
+  const overlapEntry = (allActiveEntries ?? []).find(e => {
+    if ((e.room_no || '').trim().toLowerCase() !== roomKey) return false;
+    if (entry.reservation_id && e.reservation_id === entry.reservation_id) return false;
+    const eCi = (e.arrival ?? e.report_date ?? '').slice(0, 10);
+    const eCo = (e.departure ?? e.report_date ?? '').slice(0, 10);
+    return isStayOverlapping(ci, co, eCi, eCo);
+  });
+
+  if (overlapEntry) {
     throw new Error('Room is not available for the extended period (overlap detected).');
   }
 
   // Also check reservations
-  const { data: resOverlaps } = await supabase
+  const { data: allActiveRes } = await supabase
     .from('reservations')
-    .select('id, room_chart_entry_id')
+    .select('id, room_no, check_in_date, check_out_date, room_chart_entry_id')
     .eq('hotel_id', hotelId)
-    .eq('room_no', entry.room_no)
-    .in('status', ['confirmed', 'checked_in'])
-    .or(`and(check_in_date.lte.${params.newCheckOut},check_out_date.gte.${(entry.arrival ?? entry.report_date)})`);
+    .in('status', ['confirmed', 'checked_in']);
     
-  if (resOverlaps && resOverlaps.length > 0) {
-    const actualOverlap = resOverlaps.find(r => r.room_chart_entry_id !== params.entryId);
-    if (actualOverlap) {
-      throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
-    }
+  const overlapRes = (allActiveRes ?? []).find(r => {
+    if ((r.room_no || '').trim().toLowerCase() !== roomKey) return false;
+    if (r.id === entry.reservation_id || r.room_chart_entry_id === params.entryId) return false;
+    const rCi = (r.check_in_date ?? '').slice(0, 10);
+    const rCo = (r.check_out_date ?? '').slice(0, 10);
+    return isStayOverlapping(ci, co, rCi, rCo);
+  });
+
+  if (overlapRes) {
+    throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
   }
 
   // Recalculate billing

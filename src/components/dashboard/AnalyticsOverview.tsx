@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { TrendingUp, PieChart, BarChart2 } from 'lucide-react';
+import { TrendingUp, PieChart, BarChart2, CalendarDays, ArrowUpRight } from 'lucide-react';
 import { DonutChart, LineChart } from '@/components/charts';
 import { calcTotalRevenue, calcTotalExpenses, calcOcc, fmtInt, fmtMoney, addDays, getTodayLocal } from '@/lib/calc';
 import type { DashboardSummary } from '@/lib/api';
@@ -9,11 +9,11 @@ interface AnalyticsOverviewProps {
 }
 
 const COLORS = {
-  blue: '#2563eb',
-  navy: '#1f3559',
-  gold: '#f59e0b',
-  emerald: '#16a34a',
-  red: '#dc2626',
+  blue: '#0284c7',
+  navy: '#0f172a',
+  gold: '#d97706',
+  emerald: '#10b981',
+  red: '#ef4444',
   teal: '#0d9488',
   slate: '#64748b',
 };
@@ -23,22 +23,38 @@ const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'num
 interface AnalyticsCardProps {
   title: string;
   subtitle?: string;
+  topBadge?: string;
+  badgeColor?: string;
   icon: React.ReactNode;
+  iconBg?: string;
   children: React.ReactNode;
 }
 
-const AnalyticsCard = ({ title, subtitle, icon, children }: AnalyticsCardProps) => (
-  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden flex flex-col justify-between">
-    <div className="px-5 py-4 border-b border-slate-100/80 flex items-center justify-between bg-slate-50/40">
+const AnalyticsCard = ({
+  title,
+  subtitle,
+  topBadge,
+  badgeColor = 'bg-slate-100 text-slate-700',
+  icon,
+  iconBg = 'bg-slate-50',
+  children,
+}: AnalyticsCardProps) => (
+  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden flex flex-col justify-between group">
+    <div className="px-5 py-4 border-b border-slate-100/80 flex items-center justify-between bg-slate-50/50">
       <div className="flex items-center gap-2.5">
-        <div className="w-8 h-8 rounded-xl bg-white border border-slate-200/60 shadow-sm flex items-center justify-center text-slate-700 shrink-0">
+        <div className={`w-8 h-8 rounded-xl border border-slate-200/60 shadow-2xs flex items-center justify-center shrink-0 ${iconBg}`}>
           {icon}
         </div>
         <div>
-          <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-          {subtitle && <p className="text-[11px] font-medium text-slate-400">{subtitle}</p>}
+          <h3 className="text-sm font-bold text-slate-900 leading-tight">{title}</h3>
+          {subtitle && <p className="text-[11px] font-medium text-slate-400 leading-tight">{subtitle}</p>}
         </div>
       </div>
+      {topBadge && (
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-200/60 shadow-2xs ${badgeColor}`}>
+          {topBadge}
+        </span>
+      )}
     </div>
     <div className="p-5 flex-1 flex flex-col justify-center">{children}</div>
   </div>
@@ -108,6 +124,16 @@ export const AnalyticsOverview = ({ summary }: AnalyticsOverviewProps) => {
     }));
   }, [full7DaySeries]);
 
+  const avgWeekOcc = useMemo(() => {
+    if (full7DaySeries.length === 0) return 0;
+    const sum = full7DaySeries.reduce((acc, curr) => acc + curr.occupancy, 0);
+    return Math.round(sum / full7DaySeries.length);
+  }, [full7DaySeries]);
+
+  const totalWeekRevenue = useMemo(() => {
+    return full7DaySeries.reduce((acc, curr) => acc + curr.revenue, 0);
+  }, [full7DaySeries]);
+
   const mtdCollectionDonut = useMemo(() => {
     if (!mtd) return [];
     const cash = Math.round(mtd.payCash || 0);
@@ -118,7 +144,7 @@ export const AnalyticsOverview = ({ summary }: AnalyticsOverviewProps) => {
       { label: 'Cash', value: cash, color: COLORS.emerald },
       { label: 'Bank Direct', value: bank, color: COLORS.navy },
       { label: 'UPI', value: upi, color: COLORS.blue },
-      { label: 'Card', value: card, color: COLORS.gold },
+      { label: 'Card POS', value: card, color: COLORS.gold },
     ].filter((s) => s.value > 0);
   }, [mtd]);
 
@@ -127,18 +153,32 @@ export const AnalyticsOverview = ({ summary }: AnalyticsOverviewProps) => {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5">
       {/* Revenue vs Expenses Line Chart */}
-      <AnalyticsCard title="Revenue vs Expenses" subtitle="Last 7 days" icon={<TrendingUp className="w-4 h-4 text-brand-600" />}>
+      <AnalyticsCard
+        title="Revenue vs Expenses"
+        subtitle="Last 7 days performance"
+        topBadge={`7D Rev: ${rs(totalWeekRevenue)}`}
+        badgeColor="bg-blue-50 text-brand-700 border-blue-200/60"
+        icon={<TrendingUp className="w-4 h-4 text-brand-600" />}
+        iconBg="bg-brand-50"
+      >
         <LineChart series={revExpBar} yFormat={(v: number) => '\u20B9' + fmtInt(v)} height={220} />
       </AnalyticsCard>
 
       {/* Collection Breakup Donut Chart */}
-      <AnalyticsCard title="Collection Breakup" subtitle="MTD Method Split" icon={<PieChart className="w-4 h-4 text-emerald-600" />}>
+      <AnalyticsCard
+        title="Collection Channels"
+        subtitle="MTD Payment Method Split"
+        topBadge="Realized Funds"
+        badgeColor="bg-emerald-50 text-emerald-700 border-emerald-200/60"
+        icon={<PieChart className="w-4 h-4 text-emerald-600" />}
+        iconBg="bg-emerald-50"
+      >
         {mtdCollectionDonut.length > 0 ? (
           <DonutChart
             slices={mtdCollectionDonut}
             size={180}
             centerValue={rs(totalCollected)}
-            centerLabel="Collected"
+            centerLabel="Total Realized"
           />
         ) : (
           <EmptyChartState />
@@ -146,14 +186,20 @@ export const AnalyticsOverview = ({ summary }: AnalyticsOverviewProps) => {
       </AnalyticsCard>
 
       {/* Occupancy Trend Line Chart */}
-      <AnalyticsCard title="Occupancy Trend" subtitle="Last 7 days (%)" icon={<BarChart2 className="w-4 h-4 text-amber-600" />}>
+      <AnalyticsCard
+        title="Occupancy Velocity"
+        subtitle="7-Day Occupancy Trend (%)"
+        topBadge={`Avg ${avgWeekOcc}%`}
+        badgeColor="bg-amber-50 text-amber-800 border-amber-200/60"
+        icon={<BarChart2 className="w-4 h-4 text-amber-600" />}
+        iconBg="bg-amber-50"
+      >
         <LineChart
           series={[{ name: 'Occupancy', color: COLORS.gold, points: occTrend }]}
           yFormat={(v: number) => `${v.toFixed(0)}%`}
           height={220}
         />
       </AnalyticsCard>
-
     </div>
   );
 };

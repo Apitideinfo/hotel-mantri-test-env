@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, ArrowRight } from 'lucide-react';
-import { Logo } from '../login/Logo';
+import { Menu, X, ChevronDown } from 'lucide-react';
 
 interface HeaderProps {
   onNavigateLogin: () => void;
@@ -8,22 +7,11 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
 
-  useEffect(() => {
-    const handleScroll = () => {
-      setScrolled(window.scrollY > 20);
-    };
-    window.addEventListener('scroll', handleScroll);
-    return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  // Keyboard Escape Key & Body Scroll Lock
+  // Keyboard Escape & Body Scroll Lock
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && mobileMenuOpen) {
-        setMobileMenuOpen(false);
-      }
+      if (e.key === 'Escape' && mobileMenuOpen) setMobileMenuOpen(false);
     };
     if (mobileMenuOpen) {
       document.body.style.overflow = 'hidden';
@@ -44,87 +32,110 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
       return;
     }
     const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (el) el.scrollIntoView({ behavior: 'smooth' });
   };
 
   const NAV_ITEMS = [
-    { label: 'Home', id: 'home' },
-    { label: 'About', id: 'about' },
-    { label: 'Features', id: 'features' },
-    { label: 'Product', id: 'product' },
-    { label: 'Why Us', id: 'why-hotelmantri' },
+    { label: 'Solutions', id: 'features', hasDropdown: true },
+    { label: 'Platform', id: 'overview', hasDropdown: true },
+    { label: 'Services', id: 'integrations', hasDropdown: true },
+    { label: 'Resources', id: 'testimonials', hasDropdown: true },
+    { label: 'Pricing', id: 'overview', hasDropdown: false },
   ];
 
   return (
     <header
-      className={`sticky top-0 z-50 transition-all duration-300 ${
-        scrolled
-          ? 'bg-[#06152F]/95 backdrop-blur-xl border-b border-white/10 shadow-2xl py-3.5'
-          : 'bg-[#06152F]/80 backdrop-blur-md border-b border-white/5 py-4'
-      }`}
+      className="fixed top-0 left-0 right-0 w-full z-50 bg-white shadow-[0_1px_15px_rgba(0,0,0,0.06)] border-b border-gray-100 py-3.5"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
-        {/* Desktop Navigation Links */}
-        <nav className="hidden md:flex items-center gap-7 text-sm font-semibold text-slate-300">
+
+        {/* ── Brand Name — "HotelMantri" with H and M capital ── */}
+        <button
+          onClick={() => handleNavClick('home')}
+          className="shrink-0 cursor-pointer select-none"
+        >
+          <span className="text-xl font-black tracking-tight">
+            <span className="text-[#7B5CF5]">Hotel</span>
+            <span className="text-[#22B8CF]">Mantri</span>
+          </span>
+        </button>
+
+        {/* ── Desktop Nav — centered, matching video ── */}
+        <nav className="hidden md:flex items-center gap-1">
           {NAV_ITEMS.map((item) => (
             <button
               key={item.id}
               onClick={() => handleNavClick(item.id)}
-              className="hover:text-white transition-colors cursor-pointer py-1"
+              className="flex items-center gap-1 px-3.5 py-2 text-sm font-medium text-gray-700 hover:text-black hover:bg-gray-50 rounded-lg transition-all duration-150 cursor-pointer"
             >
               {item.label}
+              {item.hasDropdown && <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
             </button>
           ))}
         </nav>
 
-        {/* Right Actions */}
-        <div className="hidden md:flex items-center gap-4">
+        {/* ── Right CTAs — Book a Demo (filled) + Login (outline) ── */}
+        <div className="hidden md:flex items-center gap-3">
           <button
+            id="header-book-demo-btn"
             onClick={onNavigateLogin}
-            className="group bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 text-white text-sm font-extrabold px-6 py-2.5 rounded-xl shadow-lg shadow-blue-500/25 transition-all duration-200 flex items-center gap-2 cursor-pointer transform hover:-translate-y-0.5"
+            className="bg-black hover:bg-neutral-800 text-white text-sm font-bold px-5 py-2.5 rounded-lg transition-all duration-200 cursor-pointer shadow-sm hover:shadow-md"
           >
-            <span>Login</span>
-            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+            Book a Demo
+          </button>
+          <button
+            id="header-login-btn"
+            onClick={onNavigateLogin}
+            className="text-sm font-semibold text-gray-700 hover:text-black border border-gray-300 hover:border-gray-400 px-4 py-2.5 rounded-lg transition-all duration-200 cursor-pointer bg-white hover:bg-gray-50"
+          >
+            Login
           </button>
         </div>
 
-        {/* Mobile Hamburger Toggle Button */}
+        {/* ── Mobile hamburger ── */}
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="md:hidden text-slate-300 hover:text-white p-2 focus:outline-none focus:ring-2 focus:ring-cyan-400 rounded-lg"
-          aria-label="Toggle Navigation Menu"
+          className="md:hidden p-2 rounded-lg text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition focus:outline-none"
+          aria-label="Toggle menu"
           aria-expanded={mobileMenuOpen}
         >
-          {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
         </button>
       </div>
 
-      {/* Mobile Menu Drawer */}
+      {/* ── Mobile Menu Drawer ── */}
       {mobileMenuOpen && (
-        <div className="md:hidden bg-[#06152F]/98 border-b border-white/10 px-6 py-6 space-y-4 shadow-2xl backdrop-blur-2xl">
-          <nav className="flex flex-col space-y-3 text-base font-semibold text-slate-300">
+        <div className="md:hidden bg-white border-t border-gray-100 px-5 py-5 space-y-1 shadow-xl">
+          <nav className="flex flex-col">
             {NAV_ITEMS.map((item) => (
               <button
                 key={item.id}
                 onClick={() => handleNavClick(item.id)}
-                className="text-left hover:text-white transition py-1.5 border-b border-white/5"
+                className="flex items-center justify-between w-full py-3 text-left text-sm font-semibold text-gray-800 border-b border-gray-50 hover:text-blue-600"
               >
-                {item.label}
+                <span>{item.label}</span>
+                <ChevronDown className="w-4 h-4 text-gray-400" />
               </button>
             ))}
           </nav>
-
-          <div className="pt-4 flex flex-col gap-3">
+          <div className="pt-4 flex flex-col gap-2.5">
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
                 onNavigateLogin();
               }}
-              className="w-full text-center bg-[#1a68fb] text-white font-extrabold py-3.5 rounded-xl shadow-lg shadow-blue-500/25 transition cursor-pointer"
+              className="w-full bg-[#111827] text-white py-3 rounded-xl font-bold text-sm text-center"
             >
-              Login to Platform →
+              Get Started
+            </button>
+            <button
+              onClick={() => {
+                setMobileMenuOpen(false);
+                onNavigateLogin();
+              }}
+              className="w-full border border-gray-300 text-gray-800 py-2.5 rounded-xl font-semibold text-sm text-center bg-white"
+            >
+              Login
             </button>
           </div>
         </div>
@@ -132,4 +143,3 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
     </header>
   );
 };
-

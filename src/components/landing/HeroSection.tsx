@@ -1,90 +1,84 @@
-import React, { useRef, useState, useEffect } from 'react';
-import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
 
 interface HeroSectionProps {
   onLogin?: () => void;
   onExploreFeatures?: () => void;
 }
 
-export const HeroSection: React.FC<HeroSectionProps> = () => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [isMuted, setIsMuted] = useState(true);
+export const HeroSection: React.FC<HeroSectionProps> = ({ onLogin, onExploreFeatures }) => {
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.play().then(() => {
-        setIsPlaying(true);
-      }).catch((err) => {
-        console.warn("Autoplay muted fallback:", err);
-      });
-    }
+    const timer = setTimeout(() => setLoaded(true), 60);
+    return () => clearTimeout(timer);
   }, []);
 
-  const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-      }
-    }
-  };
-
-  const toggleMute = () => {
-    if (videoRef.current) {
-      videoRef.current.muted = !isMuted;
-      setIsMuted(!isMuted);
-    }
-  };
-
   return (
-    <section className="relative w-full min-h-[70vh] sm:min-h-[80vh] lg:min-h-[88vh] overflow-hidden select-none bg-[#06152F] flex items-center">
-      {/* 1. Full Edge-to-Edge Clean Video Presentation */}
+    <section className="relative w-full min-h-[90vh] md:min-h-[92vh] overflow-hidden select-none flex items-center justify-center bg-[#111] pt-16">
+
+      {/* ── Hotel lobby atrium background image — Clean, natural & uniform ── */}
       <div className="absolute inset-0 w-full h-full">
-        <video
-          ref={videoRef}
-          autoPlay
-          loop
-          muted={isMuted}
-          playsInline
-          preload="auto"
-          className="w-full h-full object-cover object-center scale-105 filter brightness-100 contrast-100"
-        >
-          <source src="/hero_video.mp4" type="video/mp4" />
-          Your browser does not support video playback.
-        </video>
-        {/* Subtle Bottom Gradient for seamless section transition */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#06152F] via-transparent to-black/10 pointer-events-none" />
+        <img
+          src="/hero_bg.jpg"
+          alt="Luxury Hotel Atrium"
+          className="w-full h-full object-cover object-center brightness-[0.65] contrast-[1.05]"
+          draggable={false}
+        />
+        
+        {/* Clean uniform dark overlay — no blotchy radial patches */}
+        <div className="absolute inset-0 bg-black/45 pointer-events-none" />
       </div>
 
-      {/* 2. Bottom Right Floating Video Controls */}
-      <div className="absolute bottom-6 right-6 z-30 flex items-center gap-2 bg-slate-950/80 backdrop-blur-md border border-white/20 rounded-full px-4 py-2 text-xs text-white shadow-2xl">
-        <button
-          onClick={togglePlay}
-          type="button"
-          className="p-1 text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer"
-          title={isPlaying ? "Pause Video" : "Play Video"}
-        >
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
+      {/* ── Hero Content — Perfectly Centered with crisp white typography ── */}
+      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 sm:px-6 text-center py-24 md:py-32 flex flex-col items-center justify-center">
 
-        <button
-          onClick={toggleMute}
-          type="button"
-          className="p-1 text-slate-300 hover:text-cyan-400 transition-colors cursor-pointer"
-          title={isMuted ? "Unmute Audio" : "Mute Audio"}
+        {/* ── Main Headline — Pure clean bold text ── */}
+        <h1
+          className={`font-bold text-white leading-[1.08] tracking-tight transition-all duration-700 ease-out
+            text-4xl sm:text-6xl md:text-7xl lg:text-[80px] xl:text-[86px]
+            ${loaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-6'}
+          `}
         >
-          {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-        </button>
+          Unified <span className="text-[#38b6ff]">Hospitality</span>
+          <br />
+          Management.
+        </h1>
 
-        <span className="text-[10px] font-extrabold tracking-wider uppercase text-cyan-300 pl-2 border-l border-white/20">
-          HD Video
-        </span>
+        {/* ── Subtitle — Crisp white text ── */}
+        <p
+          className={`mt-6 text-white/95 text-base sm:text-lg md:text-[19px] font-normal leading-relaxed max-w-2xl mx-auto transition-all duration-700 ease-out delay-150
+            ${loaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}
+          `}
+        >
+          One platform to manage reservations, distribution, and guest experiences.
+        </p>
+
+        {/* ── Action Buttons ── */}
+        <div
+          className={`mt-8 flex flex-row items-center justify-center gap-4 transition-all duration-700 ease-out delay-300
+            ${loaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}
+          `}
+        >
+          {/* Left Button — Solid Black */}
+          <button
+            id="hero-primary-btn"
+            onClick={onLogin}
+            className="px-7 py-3 rounded-lg bg-black hover:bg-neutral-900 text-white font-medium text-sm sm:text-[15px] transition-all duration-200 cursor-pointer shadow-lg hover:shadow-black/60 hover:-translate-y-0.5 active:translate-y-0"
+          >
+            Try Hotel Mantri Now
+          </button>
+
+          {/* Right Button — Translucent Dark with white border */}
+          <button
+            id="hero-secondary-btn"
+            onClick={onExploreFeatures}
+            className="px-7 py-3 rounded-lg bg-[#2a2a2a]/75 hover:bg-[#383838]/85 text-white font-medium text-sm sm:text-[15px] border border-white/30 hover:border-white/50 backdrop-blur-md transition-all duration-200 cursor-pointer shadow-lg hover:-translate-y-0.5 active:translate-y-0"
+          >
+            Unlock a Free Trial
+          </button>
+        </div>
       </div>
+
     </section>
   );
 };
-
-

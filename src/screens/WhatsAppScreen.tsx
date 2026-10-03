@@ -21,7 +21,7 @@ import {
   XCircle,
   Loader2,
   Sliders,
-  DollarSign,
+  IndianRupee,
   TrendingUp,
   Users,
 } from 'lucide-react';
@@ -585,7 +585,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
                 <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
                   <span>Room Revenue</span>
-                  <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                  <IndianRupee className="w-3.5 h-3.5 text-emerald-600" />
                 </div>
                 <div className="text-lg font-bold text-emerald-700 font-mono">
                   ₹{summary.revenue.roomRevenue.toLocaleString('en-IN')}

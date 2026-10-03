@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   Plus, Search, X, Calendar, ChevronLeft, ChevronRight,
   BedDouble, Users, LogIn, LogOut, TrendingUp, Wallet, Banknote,
@@ -31,11 +31,10 @@ import {
   updateReservationStatus, checkRoomAvailability, extendReservation,
   extractUnassignedReason,
 } from '@/lib/api-reservations';
-import { extendStay } from '@/lib/api-frontoffice';
+import { extendStay, shiftRoom } from '@/lib/api-frontoffice';
 import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
-import { VIP_BADGE_COLORS } from '@/lib/types-crm';
-import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal } from '@/lib/calc';
+import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal, isStayOverlapping, calcGstFull } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
 import { NewBookingModal } from '@/components/NewBookingModal';
 import { CheckInModal } from '@/components/frontoffice/CheckInModal';
@@ -47,76 +46,23 @@ import { GuestFolio } from '@/components/frontoffice/GuestFolio';
 import { useAuth } from '@/lib/auth';
 import { useHotel } from '@/lib/hotel-context';
 
+// Modular Subcomponents
+import type { BoardBooking, ViewMode, TodayStats } from './operations/types';
+import { OperationsHeader } from './operations/OperationsHeader';
+import { OperationsActions } from './operations/OperationsActions';
+import { OperationsKpiStrip } from './operations/OperationsKpiStrip';
+import { OperationsFilterBar } from './operations/OperationsFilterBar';
+import { BookingBar } from './operations/BookingBar';
+import { UnassignedBookingsBanner } from './operations/UnassignedBookingsBanner';
+import { AdjustAvailabilityModal } from './operations/AdjustAvailabilityModal';
+import { RoomMoveModal, type RoomMovePayload } from './operations/RoomMoveModal';
+
 interface OperationsBoardProps {
   date: string;
   onBack: () => void;
   onSaved: () => void;
   onNavigate?: (screen: string) => void;
 }
-
-type ViewMode = 'day' | 'week';
-
-interface BoardBooking {
-  id: string;
-  type: 'entry' | 'reservation';
-  roomNo: string;
-  guestName: string;
-  sourceCategory: string;
-  sourceName: string;
-  status: string;
-  paymentMode: string;
-  checkIn: string;
-  checkOut: string;
-  rate: number;
-  nights: number;
-  phone: string;
-  email: string;
-  remarks: string;
-  isComplimentary: boolean;
-  hasPayment: boolean;
-  vipType: string;
-  raw: RoomChartEntry | Reservation;
-  rawReservation?: Reservation | null;
-  rawEntry?: RoomChartEntry | null;
-}
-
-const SOURCE_COLORS: Record<string, string> = {
-  'OTA': 'bg-brand-600',
-  'Direct/Walking': 'bg-emerald-500',
-  'Corporate/Agent': 'bg-brand-navy-500',
-  'Phonebook': 'bg-brand-gold-500',
-};
-
-// Per Phase 2 spec: Confirmed=Blue, Checked In=Green, Arrival Today=Cyan,
-// Departure Today=Orange, Hold=Gold, Blocked=Grey, OOO=Red, House Use=Teal, Comp=Gold accent
-const STATUS_COLORS: Record<string, string> = {
-  occupied: 'bg-emerald-500',
-  vacant: 'bg-slate-300',
-  complimentary: 'bg-brand-gold-500',
-  confirmed: 'bg-brand-600',
-  checked_in: 'bg-emerald-500',
-  checked_out: 'bg-slate-400',
-  cancelled: 'bg-red-400',
-  no_show: 'bg-red-500',
-};
-
-const STATUS_TEXT_COLORS: Record<string, string> = {
-  occupied: 'text-emerald-700',
-  vacant: 'text-slate-500',
-  complimentary: 'text-brand-gold-600',
-  confirmed: 'text-brand-600',
-  checked_in: 'text-emerald-700',
-  checked_out: 'text-slate-500',
-  cancelled: 'text-red-600',
-  no_show: 'text-red-600',
-};
-
-const PAY_INDICATOR: Record<string, { icon: typeof Wallet; color: string; label: string }> = {
-  Cash: { icon: Wallet, color: 'text-emerald-600', label: 'Cash' },
-  Bank: { icon: Banknote, color: 'text-brand-navy-600', label: 'Bank' },
-  UPI: { icon: Smartphone, color: 'text-brand-600', label: 'UPI' },
-  Card: { icon: Banknote, color: 'text-brand-gold-600', label: 'Card' },
-};
 
 const fmtDay = (d: string): string => {
   if (!d) return '';
@@ -144,7 +90,32 @@ const daysBetween = (start: string, end: string): string[] => {
   return days;
 };
 
-export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: OperationsBoardProps) => {
+const HK_DOT_COLORS: Record<string, string> = {
+  'Vacant Clean': 'bg-emerald-500',
+  'Vacant Dirty': 'bg-amber-500',
+  'Occupied': 'bg-brand-500',
+  'Occupied Clean': 'bg-teal-500',
+  'Occupied Service Due': 'bg-orange-500',
+  'Cleaning In Progress': 'bg-sky-500',
+  'Ready for Inspection': 'bg-violet-500',
+  'Inspected / Ready': 'bg-indigo-500',
+  'Out Of Order': 'bg-red-500',
+  'Blocked': 'bg-slate-500',
+};
+
+const HkDot = ({ status }: { status: string }) => (
+  <span
+    className={`w-2 h-2 rounded-full shrink-0 ${HK_DOT_COLORS[status] ?? 'bg-slate-300'}`}
+    title={`Housekeeping: ${status}`}
+  />
+);
+
+export const OperationsBoard: React.FC<OperationsBoardProps> = ({
+  date,
+  onBack,
+  onSaved,
+  onNavigate,
+}) => {
   const [settings, setSettings] = useState<HotelSettings | null>(null);
   const [sources, setSources] = useState<CompanySource[]>([]);
   const [categories, setCategories] = useState<RoomCategory[]>([]);
@@ -189,13 +160,46 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
   const [hotSeasons, setHotSeasons] = useState<HotSeason[]>([]);
   const [futureCount, setFutureCount] = useState(0);
 
-  // Drag-to-resize state
+  // Drag-to-move booking state (Room shift / Date shift)
+  const [movingBooking, setMovingBooking] = useState<BoardBooking | null>(null);
+  const [moveTargetRoom, setMoveTargetRoom] = useState<string | null>(null);
+  const [moveTargetCheckIn, setMoveTargetCheckIn] = useState<string | null>(null);
+  const movingBookingRef = useRef<BoardBooking | null>(null);
+  const moveTargetRoomRef = useRef<string | null>(null);
+  const moveTargetCheckInRef = useRef<string | null>(null);
+  const dragCandidateRef = useRef<{ booking: BoardBooking; startX: number; startY: number } | null>(null);
+
+  // Drag-to-resize stay extension (Check-out)
   const [stretchingBooking, setStretchingBooking] = useState<BoardBooking | null>(null);
   const [stretchTargetDate, setStretchTargetDate] = useState<string | null>(null);
+  const stretchingBookingRef = useRef<BoardBooking | null>(null);
+  const stretchTargetDateRef = useRef<string | null>(null);
+
+  // Drag-to-resize stay start (Check-in adjustment)
+  const [adjustingCheckInBooking, setAdjustingCheckInBooking] = useState<BoardBooking | null>(null);
+  const [adjustCheckInTargetDate, setAdjustCheckInTargetDate] = useState<string | null>(null);
+  const adjustingCheckInBookingRef = useRef<BoardBooking | null>(null);
+  const adjustCheckInTargetDateRef = useRef<string | null>(null);
+
+  // Room Move / Edit Confirmation Modal State
+  const [roomMovePayload, setRoomMovePayload] = useState<RoomMovePayload | null>(null);
+  const [roomMoveSaving, setRoomMoveSaving] = useState(false);
+  const [roomMoveError, setRoomMoveError] = useState<string | null>(null);
+
+  const [actionToast, setActionToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+
+  useEffect(() => {
+    if (actionToast) {
+      const timer = setTimeout(() => setActionToast(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [actionToast]);
 
   const { role: authRole } = useAuth();
   const foRole: FrontOfficeRole | null = authRole ? mapAuthRoleToFrontOffice(authRole) : null;
-  const { hotelId, status: hotelStatus } = useHotel();
+  const { hotel, hotelId, status: hotelStatus } = useHotel();
+
+  const displayHotelName = hotel?.hotel_name || settings?.hotel_name || 'Hotel Mantri';
 
   const daysToShow = viewMode === 'day' ? 1 : 7;
   const timelineStart = viewMode === 'day' ? centerDate : addDays(centerDate, -3);
@@ -260,8 +264,6 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       setLoading(false);
     }
   }, [timelineDates, centerDate, hotelId, hotelStatus]);
-
-
 
   useEffect(() => { load(); }, [load]);
 
@@ -333,6 +335,10 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       }
       await load();
       setAdjustModalData(null);
+      setActionToast({
+        type: 'success',
+        message: '✓ Availability and channel restrictions updated successfully.',
+      });
     } catch (err: any) {
       console.error('[OperationsBoard] Failed to save availability:', err);
       setAdjustError(err.message || 'Failed to update availability');
@@ -489,7 +495,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     return map;
   }, [filteredBookings]);
 
-  const todayStats = useMemo(() => {
+  const todayStats: TodayStats = useMemo(() => {
     const selectedDate = centerDate;
     const occupiedRoomNos = new Set<string>();
     let todayRevenue = 0;
@@ -740,28 +746,59 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     const currentCheckOut = booking.checkOut;
     
     if (newCheckOutStr === currentCheckOut) {
+      stretchingBookingRef.current = null;
+      stretchTargetDateRef.current = null;
+      setStretchingBooking(null);
+      setStretchTargetDate(null);
+      return;
+    }
+
+    if (newCheckOutStr <= booking.checkIn) {
+      setActionToast({
+        type: 'error',
+        message: 'Stay duration must be at least 1 night.',
+      });
+      stretchingBookingRef.current = null;
+      stretchTargetDateRef.current = null;
       setStretchingBooking(null);
       setStretchTargetDate(null);
       return;
     }
     
-    // Local validation
+    // Check overlap validation (exclude self and linked entry/reservation)
     if (newCheckOutStr > currentCheckOut) {
       const roomKey = booking.roomNo.trim().toLowerCase();
-      const hasEntryOverlap = entries.some(e => 
-        e.id !== booking.id && e.room_no.trim().toLowerCase() === roomKey &&
-        !e.checked_out_at &&
-        (e.arrival ?? e.report_date) < newCheckOutStr &&
-        (e.departure ?? e.report_date) > currentCheckOut
-      );
-      const hasResOverlap = reservations.some(r => 
-        r.id !== booking.id && r.room_no.trim().toLowerCase() === roomKey &&
-        (r.status === 'confirmed' || r.status === 'checked_in') &&
-        r.check_in_date < newCheckOutStr &&
-        r.check_out_date > currentCheckOut
-      );
+      const linkedResId = booking.rawReservation?.id || (booking.type === 'reservation' ? booking.id : (booking.raw as RoomChartEntry)?.reservation_id);
+      const linkedEntryId = booking.rawEntry?.id || (booking.type === 'entry' ? booking.id : (booking.raw as Reservation)?.room_chart_entry_id);
+
+      const ci = booking.checkIn;
+      const co = newCheckOutStr;
+
+      const hasEntryOverlap = entries.some(e => {
+        if (e.id === booking.id || e.id === linkedEntryId || (linkedResId && e.reservation_id === linkedResId)) return false;
+        if ((e.room_no || '').trim().toLowerCase() !== roomKey) return false;
+        if (e.checked_out_at) return false;
+        const eCi = (e.arrival || e.report_date || '').slice(0, 10);
+        const eCo = (e.departure || e.report_date || '').slice(0, 10);
+        return isStayOverlapping(ci, co, eCi, eCo);
+      });
+
+      const hasResOverlap = reservations.some(r => {
+        if (r.id === booking.id || r.id === linkedResId || (linkedEntryId && r.room_chart_entry_id === linkedEntryId)) return false;
+        if ((r.room_no || '').trim().toLowerCase() !== roomKey) return false;
+        if (r.status !== 'confirmed' && r.status !== 'checked_in') return false;
+        const rCi = (r.check_in_date || '').slice(0, 10);
+        const rCo = (r.check_out_date || '').slice(0, 10);
+        return isStayOverlapping(ci, co, rCi, rCo);
+      });
+
       if (hasEntryOverlap || hasResOverlap) {
-        alert('Room unavailable for the selected dates.');
+        setActionToast({
+          type: 'error',
+          message: `Cannot extend stay: Room ${booking.roomNo} is already occupied or reserved by another guest for these dates.`,
+        });
+        stretchingBookingRef.current = null;
+        stretchTargetDateRef.current = null;
         setStretchingBooking(null);
         setStretchTargetDate(null);
         return;
@@ -777,27 +814,392 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
       }
       await load();
       onSaved?.();
+      const totalNights = calcStayNights(booking.checkIn, newCheckOutStr);
+      setActionToast({
+        type: 'success',
+        message: `✓ Stay extended for ${booking.guestName || 'Guest'} (Room ${booking.roomNo}) to ${fmtDateFull(newCheckOutStr)} (${totalNights} nights total)!`,
+      });
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Failed to resize stay');
+      setActionToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'Failed to resize stay dates.',
+      });
     } finally {
       setSaving(false);
+      stretchingBookingRef.current = null;
+      stretchTargetDateRef.current = null;
       setStretchingBooking(null);
       setStretchTargetDate(null);
     }
   }, [load, onSaved, entries, reservations]);
 
-  useEffect(() => {
-    const handleGlobalMouseUp = () => {
-      if (stretchingBooking && stretchTargetDate) {
-        commitStretch(stretchingBooking, stretchTargetDate);
+  const commitAdjustCheckIn = useCallback(async (booking: BoardBooking, targetDate: string) => {
+    if (targetDate === booking.checkIn) {
+      adjustingCheckInBookingRef.current = null;
+      adjustCheckInTargetDateRef.current = null;
+      setAdjustingCheckInBooking(null);
+      setAdjustCheckInTargetDate(null);
+      return;
+    }
+
+    if (targetDate >= booking.checkOut) {
+      setActionToast({
+        type: 'error',
+        message: 'Check-in date must be before check-out date.',
+      });
+      adjustingCheckInBookingRef.current = null;
+      adjustCheckInTargetDateRef.current = null;
+      setAdjustingCheckInBooking(null);
+      setAdjustCheckInTargetDate(null);
+      return;
+    }
+
+    if (targetDate < booking.checkIn) {
+      const isAvail = await checkRoomAvailability(booking.roomNo, targetDate, booking.checkIn, booking.id);
+      if (!isAvail) {
+        setActionToast({
+          type: 'error',
+          message: `Cannot adjust check-in: Room ${booking.roomNo} is already occupied on ${targetDate}.`,
+        });
+        adjustingCheckInBookingRef.current = null;
+        adjustCheckInTargetDateRef.current = null;
+        setAdjustingCheckInBooking(null);
+        setAdjustCheckInTargetDate(null);
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      const newNights = calcStayNights(targetDate, booking.checkOut);
+      if (booking.type === 'reservation') {
+        const res = (booking.rawReservation || booking.raw) as Reservation;
+        const subtotal = booking.rate * newNights;
+        const { taxable, gst, invoiceTotal } = calcGstFull(subtotal, (res.gst_type as GstType) || 'No Scope', (res.gst_slab as GstSlab) || 0);
+        await saveReservation({
+          ...res,
+          check_in_date: targetDate,
+          taxable_amount: taxable,
+          gst_amount: gst,
+          invoice_total: invoiceTotal,
+        }, booking.id);
       } else {
-        setStretchingBooking(null);
-        setStretchTargetDate(null);
+        const entry = (booking.rawEntry || booking.raw) as RoomChartEntry;
+        const subtotal = booking.rate * newNights;
+        const { taxable, gst, invoiceTotal } = calcGstFull(subtotal, entry.gst_type, entry.gst_slab);
+        const totalRec = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+        await supabase
+          .from('room_chart_entries')
+          .update({
+            arrival: targetDate,
+            report_date: targetDate,
+            nights: newNights,
+            total: subtotal,
+            taxable_amount: taxable,
+            gst_amount: gst,
+            invoice_total: invoiceTotal,
+            pay_balance: Math.max(0, invoiceTotal - totalRec),
+          })
+          .eq('id', entry.id);
+
+        if (entry.reservation_id) {
+          await supabase
+            .from('reservations')
+            .update({
+              check_in_date: targetDate,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', entry.reservation_id);
+        }
+      }
+      await load();
+      onSaved?.();
+      setActionToast({
+        type: 'success',
+        message: `✓ Check-in date updated to ${fmtDateFull(targetDate)} (${newNights} nights total)!`,
+      });
+    } catch (e) {
+      setActionToast({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'Failed to adjust check-in date.',
+      });
+    } finally {
+      setSaving(false);
+      adjustingCheckInBookingRef.current = null;
+      adjustCheckInTargetDateRef.current = null;
+      setAdjustingCheckInBooking(null);
+      setAdjustCheckInTargetDate(null);
+    }
+  }, [load, onSaved]);
+
+  const handleConfirmRoomMove = async (payload: RoomMovePayload) => {
+    setRoomMoveSaving(true);
+    setRoomMoveError(null);
+    const { booking, targetRoomNo, targetCheckIn, targetCheckOut, newRate, reason } = payload;
+    const nights = calcStayNights(targetCheckIn, targetCheckOut);
+    const effectiveRate = newRate !== undefined ? newRate : booking.rate;
+
+    try {
+      const isPhysical = targetRoomNo && targetRoomNo.trim().toLowerCase() !== 'unassigned' && targetRoomNo.trim().toLowerCase() !== 'tbd';
+
+      if (isPhysical) {
+        const isAvail = await checkRoomAvailability(targetRoomNo, targetCheckIn, targetCheckOut, booking.id);
+        if (!isAvail) {
+          throw new Error(`Room ${targetRoomNo} is already occupied or reserved between ${targetCheckIn} and ${targetCheckOut}.`);
+        }
+      }
+
+      const roomData = activeRooms.find((r) => r.room_no.trim().toLowerCase() === targetRoomNo.trim().toLowerCase());
+
+      if (booking.type === 'reservation') {
+        const currentRes = (booking.rawReservation || booking.raw) as Reservation;
+        const subtotal = effectiveRate * nights;
+        const discount = toNum(currentRes.discount);
+        const afterDiscount = Math.max(0, subtotal - discount);
+        const { taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, (currentRes.gst_type as GstType) || 'No Scope', (currentRes.gst_slab as GstSlab) || 0);
+
+        await saveReservation({
+          ...currentRes,
+          room_no: targetRoomNo,
+          room_id: roomData?.id || null,
+          check_in_date: targetCheckIn,
+          check_out_date: targetCheckOut,
+          rate: effectiveRate,
+          taxable_amount: taxable,
+          gst_amount: gst,
+          invoice_total: invoiceTotal,
+          remarks: reason ? `${currentRes.remarks ? currentRes.remarks + ' | ' : ''}Moved: ${reason}` : currentRes.remarks,
+        }, booking.id);
+      } else {
+        const entry = (booking.rawEntry || booking.raw) as RoomChartEntry;
+        const subtotal = effectiveRate * nights;
+        const { taxable, gst, invoiceTotal } = calcGstFull(subtotal, entry.gst_type, entry.gst_slab);
+        const totalRec = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+
+        if (entry.room_no.trim().toLowerCase() !== targetRoomNo.trim().toLowerCase()) {
+          await shiftRoom({
+            entryId: entry.id,
+            fromRoom: entry.room_no,
+            toRoom: targetRoomNo,
+            reason,
+          });
+        }
+
+        const { error: updErr } = await supabase
+          .from('room_chart_entries')
+          .update({
+            room_no: targetRoomNo,
+            arrival: targetCheckIn,
+            departure: targetCheckOut,
+            report_date: targetCheckIn,
+            nights,
+            room_rate: effectiveRate,
+            total: subtotal,
+            taxable_amount: taxable,
+            gst_amount: gst,
+            invoice_total: invoiceTotal,
+            pay_balance: Math.max(0, invoiceTotal - totalRec),
+            remarks: reason ? `${entry.remarks ? entry.remarks + ' | ' : ''}${reason}` : entry.remarks,
+          })
+          .eq('id', entry.id);
+
+        if (updErr) throw updErr;
+
+        if (entry.reservation_id) {
+          await supabase
+            .from('reservations')
+            .update({
+              room_no: targetRoomNo,
+              room_id: roomData?.id || null,
+              check_in_date: targetCheckIn,
+              check_out_date: targetCheckOut,
+              rate: effectiveRate,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', entry.reservation_id);
+        }
+      }
+
+      await load();
+      onSaved?.();
+      setRoomMovePayload(null);
+      setActionToast({
+        type: 'success',
+        message: `✓ Successfully moved ${booking.guestName || 'Guest'} to Room ${targetRoomNo} (${fmtDay(targetCheckIn)} – ${fmtDay(targetCheckOut)})!`,
+      });
+    } catch (err: any) {
+      setRoomMoveError(err.message || 'Failed to move booking');
+      throw err;
+    } finally {
+      setRoomMoveSaving(false);
+    }
+  };
+
+  const handleMouseDownBooking = (b: BoardBooking, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    dragCandidateRef.current = {
+      booking: b,
+      startX: e.clientX,
+      startY: e.clientY,
+    };
+  };
+
+  const handleMouseDownStretchRight = (b: BoardBooking, targetDate: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    stretchingBookingRef.current = b;
+    stretchTargetDateRef.current = targetDate;
+    setStretchingBooking(b);
+    setStretchTargetDate(targetDate);
+  };
+
+  const handleMouseDownStretchLeft = (b: BoardBooking, targetDate: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    adjustingCheckInBookingRef.current = b;
+    adjustCheckInTargetDateRef.current = targetDate;
+    setAdjustingCheckInBooking(b);
+    setAdjustCheckInTargetDate(targetDate);
+  };
+
+  // Global mousemove and mouseup listeners for seamless drag operations
+  useEffect(() => {
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // 1. Activate drag on threshold
+      if (dragCandidateRef.current && !movingBookingRef.current) {
+        const dx = Math.abs(e.clientX - dragCandidateRef.current.startX);
+        const dy = Math.abs(e.clientY - dragCandidateRef.current.startY);
+        if (dx > 4 || dy > 4) {
+          const b = dragCandidateRef.current.booking;
+          movingBookingRef.current = b;
+          moveTargetRoomRef.current = b.roomNo;
+          moveTargetCheckInRef.current = b.checkIn;
+          setMovingBooking(b);
+          setMoveTargetRoom(b.roomNo);
+          setMoveTargetCheckIn(b.checkIn);
+          dragCandidateRef.current = null;
+        }
+      }
+
+      const activeMoving = movingBookingRef.current;
+      const activeStretching = stretchingBookingRef.current;
+      const activeAdjusting = adjustingCheckInBookingRef.current;
+
+      if (!activeMoving && !activeStretching && !activeAdjusting) return;
+
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const cellEl = el?.closest('[data-timeline-date]') as HTMLElement | null;
+      const cellDate = cellEl?.dataset.timelineDate;
+      const cellRoom = cellEl?.dataset.roomNo;
+
+      if (activeMoving && cellDate && cellRoom) {
+        moveTargetRoomRef.current = cellRoom;
+        moveTargetCheckInRef.current = cellDate;
+        setMoveTargetRoom(cellRoom);
+        setMoveTargetCheckIn(cellDate);
+      } else if (activeStretching && cellDate && cellRoom && cellRoom.trim().toLowerCase() === activeStretching.roomNo.trim().toLowerCase()) {
+        if (cellDate >= activeStretching.checkIn) {
+          stretchTargetDateRef.current = cellDate;
+          setStretchTargetDate(cellDate);
+        }
+      } else if (activeAdjusting && cellDate && cellRoom && cellRoom.trim().toLowerCase() === activeAdjusting.roomNo.trim().toLowerCase()) {
+        if (cellDate < activeAdjusting.checkOut) {
+          adjustCheckInTargetDateRef.current = cellDate;
+          setAdjustCheckInTargetDate(cellDate);
+        }
       }
     };
+
+    const handleGlobalMouseUp = () => {
+      dragCandidateRef.current = null;
+
+      const mBooking = movingBookingRef.current;
+      const mRoom = moveTargetRoomRef.current;
+      const mDate = moveTargetCheckInRef.current;
+
+      const sBooking = stretchingBookingRef.current;
+      const sDate = stretchTargetDateRef.current;
+
+      const aBooking = adjustingCheckInBookingRef.current;
+      const aDate = adjustCheckInTargetDateRef.current;
+
+      // Reset active drag state
+      movingBookingRef.current = null;
+      moveTargetRoomRef.current = null;
+      moveTargetCheckInRef.current = null;
+      setMovingBooking(null);
+      setMoveTargetRoom(null);
+      setMoveTargetCheckIn(null);
+
+      stretchingBookingRef.current = null;
+      stretchTargetDateRef.current = null;
+      setStretchingBooking(null);
+      setStretchTargetDate(null);
+
+      adjustingCheckInBookingRef.current = null;
+      adjustCheckInTargetDateRef.current = null;
+      setAdjustingCheckInBooking(null);
+      setAdjustCheckInTargetDate(null);
+
+      if (mBooking && mRoom && mDate) {
+        const isRoomChanged = mRoom.trim().toLowerCase() !== mBooking.roomNo.trim().toLowerCase();
+        const isDateChanged = mDate !== mBooking.checkIn;
+        if (isRoomChanged || isDateChanged) {
+          const targetCheckOut = addDays(mDate, mBooking.nights);
+          setRoomMovePayload({
+            booking: mBooking,
+            targetRoomNo: mRoom,
+            targetCheckIn: mDate,
+            targetCheckOut,
+            newRate: mBooking.rate,
+          });
+        }
+      } else if (sBooking && sDate) {
+        commitStretch(sBooking, sDate);
+      } else if (aBooking && aDate) {
+        commitAdjustCheckIn(aBooking, aDate);
+      }
+    };
+
+    window.addEventListener('mousemove', handleGlobalMouseMove);
     window.addEventListener('mouseup', handleGlobalMouseUp);
-    return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [stretchingBooking, stretchTargetDate, commitStretch]);
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove);
+      window.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [commitStretch, commitAdjustCheckIn]);
+
+  const isMoveConflict = useMemo(() => {
+    if (!movingBooking || !moveTargetRoom || !moveTargetCheckIn) return false;
+    const targetCheckOut = addDays(moveTargetCheckIn, movingBooking.nights);
+    const targetRoomKey = moveTargetRoom.trim().toLowerCase();
+    if (targetRoomKey === 'tbd' || targetRoomKey === 'unassigned') return false;
+
+    const linkedResId = movingBooking.rawReservation?.id || (movingBooking.type === 'reservation' ? movingBooking.id : (movingBooking.raw as RoomChartEntry)?.reservation_id);
+    const linkedEntryId = movingBooking.rawEntry?.id || (movingBooking.type === 'entry' ? movingBooking.id : (movingBooking.raw as Reservation)?.room_chart_entry_id);
+
+    const hasEntryOverlap = entries.some(e => {
+      if (e.id === movingBooking.id || e.id === linkedEntryId || (linkedResId && e.reservation_id === linkedResId)) return false;
+      if ((e.room_no || '').trim().toLowerCase() !== targetRoomKey) return false;
+      if (e.checked_out_at) return false;
+      const eCi = (e.arrival || e.report_date || '').slice(0, 10);
+      const eCo = (e.departure || e.report_date || '').slice(0, 10);
+      return isStayOverlapping(moveTargetCheckIn, targetCheckOut, eCi, eCo);
+    });
+
+    const hasResOverlap = reservations.some(r => {
+      if (r.id === movingBooking.id || r.id === linkedResId || (linkedEntryId && r.room_chart_entry_id === linkedEntryId)) return false;
+      if ((r.room_no || '').trim().toLowerCase() !== targetRoomKey) return false;
+      if (r.status !== 'confirmed' && r.status !== 'checked_in') return false;
+      const rCi = (r.check_in_date || '').slice(0, 10);
+      const rCo = (r.check_out_date || '').slice(0, 10);
+      return isStayOverlapping(moveTargetCheckIn, targetCheckOut, rCi, rCo);
+    });
+
+    return hasEntryOverlap || hasResOverlap;
+  }, [movingBooking, moveTargetRoom, moveTargetCheckIn, entries, reservations]);
 
   const shiftTimeline = (delta: number) => {
     setCenterDate((d) => addDays(d, delta));
@@ -812,307 +1214,188 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
     setFilterPayment('');
   };
 
-  const hasActiveFilters = search || filterCategory || filterFloor || filterSource || filterStatus || filterPayment;
+  const hasActiveFilters = Boolean(search || filterCategory || filterFloor || filterSource || filterStatus || filterPayment);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
-      {/* Top bar */}
-      <div className="bg-white border-b border-slate-200/80 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition">
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-brand-50 border border-brand-100 flex items-center justify-center text-brand-600">
-              <BedDouble className="w-4 h-4" />
-            </div>
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900">Operations Board</h1>
+      {/* 1. Operations Header */}
+      <OperationsHeader
+        hotelName={displayHotelName}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        timelineDates={timelineDates}
+        businessDate={date}
+        loading={loading}
+        onShiftTimeline={shiftTimeline}
+        onGoToToday={() => setCenterDate(getTodayLocal())}
+        onRefresh={load}
+        onBack={onBack}
+      />
+
+      {/* Action Toast Notification */}
+      {actionToast && (
+        <div className={`px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs font-bold transition-all border-b shadow-2xs ${
+          actionToast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : actionToast.type === 'error'
+            ? 'bg-rose-50 border-rose-200 text-rose-800'
+            : 'bg-blue-50 border-blue-200 text-blue-800'
+        }`}>
+          <div className="flex items-center gap-2">
+            {actionToast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+            {actionToast.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
+            {actionToast.type === 'info' && <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />}
+            <span>{actionToast.message}</span>
           </div>
-        </div>
-
-        {/* Segmented Day/Week switcher */}
-        <div className="flex items-center gap-1 bg-slate-100/90 border border-slate-200/80 rounded-xl p-1">
           <button
-            onClick={() => setViewMode('day')}
-            className={`px-3.5 py-1.5 text-xs sm:text-sm rounded-lg transition-all ${viewMode === 'day' ? 'bg-brand-600 text-white font-bold shadow-soft-blue' : 'text-slate-600 hover:text-slate-900 font-semibold'}`}
+            onClick={() => setActionToast(null)}
+            className="p-1 hover:bg-black/5 rounded text-current opacity-70 hover:opacity-100 transition"
           >
-            Day
-          </button>
-          <button
-            onClick={() => setViewMode('week')}
-            className={`px-3.5 py-1.5 text-xs sm:text-sm rounded-lg transition-all ${viewMode === 'week' ? 'bg-brand-600 text-white font-bold shadow-soft-blue' : 'text-slate-600 hover:text-slate-900 font-semibold'}`}
-          >
-            Week
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
+      )}
 
-        {/* Date Navigator */}
-        <div className="flex items-center gap-2 bg-white border border-slate-200/80 px-3 py-1.5 rounded-xl shadow-sm">
-          <button onClick={() => shiftTimeline(viewMode === 'day' ? -1 : -7)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition">
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <span className="text-xs sm:text-sm text-slate-800 font-bold min-w-[130px] text-center">
-            {fmtDateFull(timelineDates[0])}
-            {viewMode === 'week' && ` – ${fmtDateFull(timelineDates[6])}`}
-          </span>
-          <button onClick={() => shiftTimeline(viewMode === 'day' ? 1 : 7)} className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition">
-            <ChevronRight className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setCenterDate(getTodayLocal())}
-            className="ml-1 px-2.5 py-1 text-xs text-brand-700 bg-brand-50 hover:bg-brand-100 border border-brand-200/80 rounded-lg font-bold transition"
-          >
-            Today
-          </button>
-        </div>
+      {/* 2. Quick Actions Toolbar / Selected Booking Dock */}
+      <OperationsActions
+        selectedBooking={selectedBooking}
+        onClearSelection={() => setSelectedBooking(null)}
+        onNewReservation={() => setShowNewBooking(true)}
+        onWalkIn={() => setShowWalkIn(true)}
+        onAdjustAvailability={() => {
+          if (categories.length > 0) {
+            const firstCat = categories[0];
+            const item = categoryAvailability.get(`${firstCat.id}_${centerDate}`);
+            const fallbackAvail = activeRooms.filter(r => r.category_id === firstCat.id).length;
+            setAdjustError(null);
+            setAdjustModalData({
+              categoryId: firstCat.id,
+              categoryName: firstCat.name,
+              startDate: centerDate,
+              endDate: centerDate,
+              availability: item !== undefined ? item.available : fallbackAvail,
+              stopSell: Boolean(item?.stop_sell),
+            });
+          }
+        }}
+        onDailyEntry={() => onNavigate?.('roomchart')}
+        onCheckIn={handleCheckIn}
+        onCheckOut={handleCheckOut}
+        onCollectPayment={handleViewFolio}
+        onRoomShift={handleRoomShift}
+        onExtendStay={handleExtendStay}
+        onViewDetails={(b) => setSelectedBooking(b)}
+      />
 
-        <button
-          onClick={load}
-          className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition active:rotate-180 duration-300"
-          title="Refresh Operations Board"
-        >
-          <RefreshCw className="w-4 h-4" />
-        </button>
-      </div>
+      {/* 3. Operational KPI Strip (2 Logical Groups) */}
+      <OperationsKpiStrip
+        stats={todayStats}
+        totalActiveRooms={activeRooms.length}
+        rooms={activeRooms}
+      />
 
-      {/* Quick Actions Toolbar */}
-      <div className="px-4 sm:px-6 py-3 bg-white border-b border-slate-200/80 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Quick Actions</span>
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-5 2xl:grid-cols-9 gap-2.5">
-          <button
-            onClick={() => setShowNewBooking(true)}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl shadow-soft-blue hover:shadow-md transition active:scale-95 shrink-0"
-          >
-            <Plus className="w-4 h-4" /> <span className="whitespace-nowrap">New Reservation</span>
-          </button>
-          <button
-            onClick={() => setShowWalkIn(true)}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-brand-navy-600 hover:bg-brand-navy-700 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Walk-In</span>
-          </button>
-          <button
-            onClick={() => {
-              if (categories.length > 0) {
-                const firstCat = categories[0];
-                const item = categoryAvailability.get(`${firstCat.id}_${centerDate}`);
-                const fallbackAvail = activeRooms.filter(r => r.category_id === firstCat.id).length;
-                setAdjustError(null);
-                setAdjustModalData({
-                  categoryId: firstCat.id,
-                  categoryName: firstCat.name,
-                  startDate: centerDate,
-                  endDate: centerDate,
-                  availability: item !== undefined ? item.available : fallbackAvail,
-                  stopSell: Boolean(item?.stop_sell),
-                });
-              }
-            }}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-            title="Adjust sellable room availability & restrictions"
-          >
-            <Sliders className="w-4 h-4" /> <span className="whitespace-nowrap">Adjust Availability</span>
-          </button>
-          <button
-            onClick={() => selectedBooking && handleCheckIn(selectedBooking)}
-            disabled={!selectedBooking || selectedBooking.status !== 'confirmed'}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <LogIn className="w-4 h-4" /> <span className="whitespace-nowrap">Check-In</span>
-          </button>
-          <button
-            onClick={() => selectedBooking && handleCheckOut(selectedBooking)}
-            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <LogOut className="w-4 h-4" /> <span className="whitespace-nowrap">Check-Out</span>
-          </button>
-          <button
-            onClick={() => onNavigate?.('roomchart')}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <FileText className="w-4 h-4" /> <span className="whitespace-nowrap">Daily Entry</span>
-          </button>
-          <button
-            onClick={() => selectedBooking && handleViewFolio(selectedBooking)}
-            disabled={!selectedBooking}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <Wallet className="w-4 h-4" /> <span className="whitespace-nowrap">Collect Payment</span>
-          </button>
-          <button
-            onClick={() => selectedBooking && handleRoomShift(selectedBooking)}
-            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-slate-600 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <ArrowRightLeft className="w-4 h-4" /> <span className="whitespace-nowrap">Room Shift</span>
-          </button>
-          <button
-            onClick={() => selectedBooking && handleExtendStay(selectedBooking)}
-            disabled={!selectedBooking || (selectedBooking.status !== 'checked_in' && selectedBooking.status !== 'occupied')}
-            className="flex items-center justify-center gap-2 h-[42px] px-3.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold rounded-xl shadow-sm transition active:scale-95 shrink-0"
-          >
-            <CalendarPlus className="w-4 h-4" /> <span className="whitespace-nowrap">Extend Stay</span>
-          </button>
-        </div>
-      </div>
+      {/* 4. Filters & Search Toolbar */}
+      <OperationsFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        categories={categories}
+        filterCategory={filterCategory}
+        onCategoryChange={setFilterCategory}
+        floors={floors}
+        filterFloor={filterFloor}
+        onFloorChange={setFilterFloor}
+        filterSource={filterSource}
+        onSourceChange={setFilterSource}
+        filterStatus={filterStatus}
+        onStatusChange={setFilterStatus}
+        filterPayment={filterPayment}
+        onPaymentChange={setFilterPayment}
+        onClearFilters={clearFilters}
+        hasActiveFilters={hasActiveFilters}
+        totalFilteredCount={filteredBookings.length}
+        totalBookingsCount={allBookings.length}
+      />
 
-      {/* KPI Cards Grid */}
-      <div className="px-4 sm:px-6 py-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 2xl:grid-cols-8 gap-3 sm:gap-4">
-        <KpiCard icon={BedDouble} label="Occupied" value={fmtInt(todayStats.occupied)} color="text-emerald-600 bg-emerald-50 border border-emerald-100" />
-        <KpiCard icon={BedDouble} label="Vacant" value={fmtInt(todayStats.vacant)} color="text-slate-600 bg-slate-100 border border-slate-200" />
-        <KpiCard icon={LogIn} label="Arrivals" value={fmtInt(todayStats.arrivals)} color="text-brand-600 bg-brand-50 border border-brand-100" />
-        <KpiCard icon={LogOut} label="Departures" value={fmtInt(todayStats.departures)} color="text-orange-600 bg-orange-50 border border-orange-100" />
-        <KpiCard icon={Calendar} label="Future" value={fmtInt(todayStats.futureBookings)} color="text-brand-navy-600 bg-brand-navy-50 border border-brand-navy-100" />
-        <KpiCard icon={IndianRupee} label="Revenue" value={`₹${fmtMoney(todayStats.todayRevenue)}`} color="text-emerald-600 bg-emerald-50 border border-emerald-100" />
-        <KpiCard icon={AlertCircle} label="Missing Tariff" value={fmtInt(todayStats.missingTariff)} color="text-rose-600 bg-rose-50 border border-rose-100" />
-        <KpiCard icon={AlertCircle} label="Missing Pay" value={fmtInt(todayStats.missingPayment)} color="text-rose-600 bg-rose-50 border border-rose-100" />
-      </div>
-
-      {/* Housekeeping Indicators Strip */}
-      <div className="px-4 sm:px-6 pb-2">
-        <HkIndicator rooms={activeRooms} />
-      </div>
-
-
-      {/* Search + Filters */}
-      <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search guest, room, phone, booking ID…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-400"
-          />
-        </div>
-        <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Categories</option>
-          {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
-        </select>
-        <select value={filterFloor} onChange={(e) => setFilterFloor(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Floors</option>
-          {floors.map((f) => <option key={f} value={f}>{f}</option>)}
-        </select>
-        <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Sources</option>
-          {SOURCE_CATEGORIES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Status</option>
-          <option value="occupied">Occupied</option>
-          <option value="vacant">Vacant</option>
-          <option value="complimentary">Complimentary</option>
-          <option value="confirmed">Confirmed</option>
-          <option value="checked_in">Checked In</option>
-          <option value="checked_out">Checked Out</option>
-        </select>
-        <select value={filterPayment} onChange={(e) => setFilterPayment(e.target.value)} className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Payments</option>
-          <option value="paid">Paid</option>
-          <option value="unpaid">Unpaid</option>
-        </select>
-        {hasActiveFilters && (
-          <button onClick={clearFilters} className="text-sm text-red-500 hover:text-red-700 px-2 py-1 flex items-center gap-1">
-            <X className="w-3.5 h-3.5" /> Clear
-          </button>
-        )}
-      </div>
-
-      {/* Error */}
+      {/* Global Error Banner */}
       {error && (
-        <div className="mx-4 mb-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
-          {error}
-          <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
+        <div className="mx-4 sm:mx-6 mb-2 bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm rounded-xl p-3 flex items-center gap-2 shadow-2xs">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
+          <span className="flex-1 font-medium">{error}</span>
+          <button onClick={() => setError(null)} className="p-1 hover:bg-rose-100 rounded-lg text-rose-600">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      {/* Unassigned Bookings Notification */}
-      {unassignedBookings.length > 0 && (
-        <div className="mx-4 mb-2 bg-amber-50 border border-amber-200 rounded-xl p-3">
-          <div className="flex items-center justify-between gap-2 mb-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span className="text-xs font-bold text-amber-900">
-                {unassignedBookings.length} Unassigned OTA Reservation{unassignedBookings.length > 1 ? 's' : ''} (Need Room Allocation)
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {unassignedBookings.map((b) => {
-              const reason = extractUnassignedReason(b.rawReservation);
-              return (
-                <button
-                  key={b.id}
-                  onClick={() => setSelectedBooking(b)}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs text-slate-800 hover:bg-amber-100/50 transition shrink-0 shadow-xs text-left cursor-pointer"
-                >
-                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                  <span className="font-bold text-slate-900">{b.guestName || 'Guest'}</span>
-                  <span className="text-slate-500">({b.checkIn} → {b.checkOut})</span>
-                  {reason && reason !== 'UNASSIGNED' ? (
-                    <span className="text-[10px] font-semibold text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded">
-                      Allocation blocked: {reason}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
-                      Allocation Pending
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* Unassigned OTA Bookings Banner */}
+      <UnassignedBookingsBanner
+        unassignedBookings={unassignedBookings}
+        onSelectBooking={(b) => setSelectedBooking(b)}
+      />
 
-      {/* Timeline Grid */}
-      <div className="flex-1 overflow-auto px-4 pb-4">
+      {/* 5. Room Chart Weekly Grid Canvas */}
+      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4">
         {loading ? (
-          <div className="flex items-center justify-center h-64 text-slate-400">
-            <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading board…
+          <div className="flex flex-col items-center justify-center h-64 text-slate-400 bg-white rounded-2xl border border-slate-200/90 shadow-card">
+            <Loader2 className="w-8 h-8 animate-spin text-brand-600 mb-2" />
+            <span className="text-sm font-bold text-slate-700">Loading Operations Matrix…</span>
+            <span className="text-xs text-slate-400 mt-0.5">Synchronizing rooms, rates & reservations</span>
           </div>
         ) : activeRooms.length === 0 ? (
-          <div className="flex items-center justify-center h-64 text-slate-400 text-sm">
-            No rooms configured. Add rooms in Property Master first.
+          <div className="flex flex-col items-center justify-center h-64 text-slate-400 bg-white rounded-2xl border border-slate-200/90 shadow-card">
+            <BedDouble className="w-10 h-10 text-slate-300 mb-2" />
+            <span className="text-sm font-bold text-slate-700">No rooms configured</span>
+            <span className="text-xs text-slate-400 mt-0.5">Add rooms in Property Master to populate the room chart.</span>
           </div>
         ) : (
-          <div className="bg-white rounded-xl border border-slate-200 shadow-card overflow-hidden">
-            {/* Date header row */}
-            <div className="flex border-b border-slate-200 bg-slate-50 sticky top-0 z-10">
-              <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 text-xs font-bold text-slate-500 uppercase tracking-wide border-r border-slate-200">
-                Room
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-card overflow-hidden">
+            {/* Date Header Row */}
+            <div className="flex border-b border-slate-200/90 bg-slate-50/90 sticky top-0 z-20 backdrop-blur-xs">
+              <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2.5 text-xs font-black text-slate-500 uppercase tracking-wider border-r border-slate-200/90 bg-slate-50 flex items-center justify-between sticky left-0 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                <span>Room</span>
+                <span className="text-[10px] font-bold text-slate-400">{activeRooms.length} Total</span>
               </div>
               {timelineDates.map((d) => {
                 const isToday = d === date;
                 const isHot = isHotSeasonDate(d, hotSeasons);
+                const [y, m, dayNum] = d.slice(0, 10).split('-').map(Number);
+                const dt = new Date(Date.UTC(y, m - 1, dayNum));
+                const dayOfWeek = dt.getUTCDay();
+                const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
                 return (
                   <div
                     key={d}
-                    className={`flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center text-xs font-bold border-r border-slate-200 ${
-                      isHot
-                        ? isToday
-                          ? 'bg-rose-100 text-rose-700 border-b-2 border-rose-500'
-                          : 'bg-rose-50 text-rose-700'
-                        : isToday
-                        ? 'bg-brand-100 text-brand-700'
-                        : 'text-slate-600'
+                    className={`flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center border-r border-slate-200/90 transition ${
+                      isToday
+                        ? 'bg-brand-50/90 border-b-2 border-b-brand-600'
+                        : isHot
+                        ? 'bg-rose-50/50'
+                        : isWeekend
+                        ? 'bg-slate-100/50'
+                        : 'bg-slate-50/70'
                     }`}
                   >
-                    {fmtDay(d)}
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className={`text-xs font-extrabold ${isToday ? 'text-brand-700' : 'text-slate-700'}`}>
+                        {fmtDay(d)}
+                      </span>
+                      {isToday && (
+                        <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black bg-brand-600 text-white uppercase tracking-wider">
+                          Today
+                        </span>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
-            {/* Unassigned / Pending Room Allocation Timeline Row */}
+
+            {/* Unassigned / Pending Allocation Row */}
             {unassignedBookings.length > 0 && (
               <div className="border-b-2 border-amber-300 bg-amber-50/20">
                 <div className="flex border-b border-amber-200 bg-amber-100/70 sticky left-0 z-[6]">
-                  <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-100/90 flex items-center justify-between">
+                  <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-100/90 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                     <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
                       UNASSIGNED
                     </span>
@@ -1127,7 +1410,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                   </div>
                 </div>
                 <div className="flex border-b border-amber-200/60 hover:bg-amber-100/30 transition">
-                  <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-50 sticky left-0 z-[5] flex flex-col justify-center">
+                  <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-50 sticky left-0 z-[5] flex flex-col justify-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                     <div className="flex items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
                       <span className="text-sm font-bold text-amber-900">TBD</span>
@@ -1142,12 +1425,24 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                     return (
                       <div
                         key={d}
-                        className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-amber-100 ${
+                        data-timeline-date={d}
+                        data-room-no="UNASSIGNED"
+                        className={`flex-1 min-w-[95px] sm:min-w-[110px] px-1 py-1.5 border-r border-amber-100 ${
                           isToday ? 'bg-amber-50/50' : ''
                         }`}
                       >
                         {dayBookings.map((b) => (
-                          <BookingBar key={b.id} booking={b} onClick={() => setSelectedBooking(b)} />
+                          <BookingBar
+                            key={b.id}
+                            booking={b}
+                            onClick={() => setSelectedBooking(b)}
+                            isStart={b.checkIn === d}
+                            isEnd={addDays(b.checkOut, -1) === d}
+                            isMoving={movingBooking?.id === b.id}
+                            onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
+                            onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
+                            onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
+                          />
                         ))}
                       </div>
                     );
@@ -1155,19 +1450,20 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 </div>
               </div>
             )}
-            {/* Room rows grouped by category */}
+
+            {/* Room Rows Grouped by Category */}
             {(() => {
               const sortedRooms = [...activeRooms].sort((a, b) => compareRoomNo(a.room_no, b.room_no));
               const grouped = groupRoomsByCategory(sortedRooms, categories);
               return grouped.map((group) => (
                 <div key={group.cat?.id ?? '__uncategorized'}>
-                  {/* Category header row with authoritative availability & click-to-edit */}
-                  <div className="flex border-b border-slate-200 bg-brand-navy-50 sticky left-0 z-[6]">
-                    <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200 bg-brand-navy-50 flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-brand-navy-700 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
+                  {/* Category Header Row with Authoritative Availability & Click-to-Edit */}
+                  <div className="flex border-b border-slate-200 bg-slate-900 text-white sticky left-0 z-[6]">
+                    <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-700 bg-slate-900 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.2)]">
+                      <span className="text-[11px] font-extrabold text-slate-100 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
                         {group.cat?.name ?? 'Uncategorized'}
                       </span>
-                      <span className="text-[10px] font-bold text-brand-navy-600 bg-white/70 px-1.5 py-0.5 rounded border border-brand-navy-200/80 shadow-2xs">
+                      <span className="text-[10px] font-bold text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 shadow-2xs">
                         {group.rooms.length}
                       </span>
                     </div>
@@ -1187,7 +1483,7 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                       return (
                         <div
                           key={d}
-                          className="flex-1 min-w-[90px] sm:min-w-[100px] px-1.5 py-1 border-r border-brand-navy-100 flex items-center justify-center bg-brand-navy-50/70"
+                          className="flex-1 min-w-[95px] sm:min-w-[110px] px-1.5 py-1 border-r border-slate-800 flex items-center justify-center bg-slate-900"
                         >
                           {catId ? (
                             <button
@@ -1203,20 +1499,20 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                                   stopSell: isStopSell,
                                 });
                               }}
-                              className={`w-full h-7 px-1.5 rounded-md text-[11px] font-bold transition flex items-center justify-between gap-1 shadow-2xs group cursor-pointer ${
+                              className={`w-full h-7 px-2 rounded-lg text-[11px] font-extrabold transition flex items-center justify-between gap-1 shadow-2xs group cursor-pointer ${
                                 isStopSell
-                                  ? 'bg-red-50 text-red-700 border border-red-200 hover:bg-red-100'
+                                  ? 'bg-rose-950/80 text-rose-300 border border-rose-800 hover:bg-rose-900'
                                   : availVal === 0
-                                  ? 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
-                                  : 'bg-emerald-50 text-emerald-800 border border-emerald-200/80 hover:bg-emerald-100 hover:border-emerald-300'
+                                  ? 'bg-amber-950/80 text-amber-300 border border-amber-800 hover:bg-amber-900'
+                                  : 'bg-slate-800 text-emerald-400 border border-slate-700 hover:bg-slate-750 hover:border-slate-600'
                               }`}
                               title={`Category: ${group.cat?.name ?? 'Room'}\nDate: ${d}\nAvailability: ${availVal} sellable (${group.rooms.length} physical)\nStatus: ${isStopSell ? 'Stop Sell' : isOverridden ? 'Manual Override' : 'Standard'}\nClick to adjust`}
                             >
                               <span className="truncate flex items-center gap-1">
-                                {isOverridden && <span className="w-1.5 h-1.5 rounded-full bg-brand-600 shrink-0" title="Manual restriction active" />}
+                                {isOverridden && <span className="w-1.5 h-1.5 rounded-full bg-brand-400 shrink-0" title="Manual restriction active" />}
                                 {isStopSell ? 'Stop Sell' : `${availVal} Avail`}
                               </span>
-                              <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-brand-600 shrink-0 opacity-70 group-hover:opacity-100" />
+                              <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-white shrink-0 opacity-70 group-hover:opacity-100" />
                             </button>
                           ) : (
                             <span className="text-[10px] text-slate-400">{availVal} Avail</span>
@@ -1225,36 +1521,57 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                       );
                     })}
                   </div>
-                  {/* Room rows */}
+
+                  {/* Room Rows */}
                   {group.rooms.map((room) => {
                     const roomKey = room.room_no.trim().toLowerCase();
                     const roomBookings = bookingByRoom.get(roomKey) ?? [];
                     const cat = categories.find((c) => c.id === room.category_id);
                     return (
-                      <div key={room.id} className="flex border-b border-slate-100 hover:bg-slate-50/50 transition">
-                        {/* Sticky room label */}
-                        <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200 bg-white sticky left-0 z-[5] flex flex-col justify-center">
+                      <div key={room.id} className="flex border-b border-slate-100 hover:bg-slate-50/60 transition group/row">
+                        {/* Sticky Room Info Column */}
+                        <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/90 bg-white sticky left-0 z-[5] flex flex-col justify-center shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)] group-hover/row:bg-slate-50/80 transition">
                           <div className="flex items-center gap-1.5">
                             <HkDot status={room.housekeeping_status} />
-                            <span className="text-sm font-bold text-brand-navy-700">{room.room_no}</span>
+                            <span className="text-sm font-extrabold text-slate-900 tracking-tight">{room.room_no}</span>
+                            {room.floor && (
+                              <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1 py-0 rounded">
+                                F{room.floor}
+                              </span>
+                            )}
                           </div>
-                          {cat && <span className="text-[10px] text-slate-400 truncate">{cat.name}</span>}
+                          {cat && <span className="text-[10px] text-slate-500 font-medium truncate mt-0.5">{cat.name}</span>}
                         </div>
-                        {/* Timeline cells */}
+
+                        {/* Timeline Cells */}
                         {timelineDates.map((d) => {
                           let dayBookings = roomBookings.filter((b) => {
                             if (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) {
                               const newCheckOutStr = addDays(stretchTargetDate, 1);
                               return (d >= b.checkIn && d < newCheckOutStr) || (d === b.checkIn && b.checkIn === newCheckOutStr);
                             }
+                            if (adjustingCheckInBooking && b.id === adjustingCheckInBooking.id && adjustCheckInTargetDate) {
+                              return (d >= adjustCheckInTargetDate && d < b.checkOut) || (d === adjustCheckInTargetDate && adjustCheckInTargetDate === b.checkOut);
+                            }
                             return (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut);
                           });
                           const isToday = d === date;
                           const isHot = isHotSeasonDate(d, hotSeasons);
                           
+                          // Drag move target preview for this cell
+                          const isMoveTargetPreview = Boolean(
+                            movingBooking &&
+                            moveTargetRoom &&
+                            moveTargetCheckIn &&
+                            moveTargetRoom.trim().toLowerCase() === room.room_no.trim().toLowerCase() &&
+                            d >= moveTargetCheckIn &&
+                            d < addDays(moveTargetCheckIn, movingBooking.nights)
+                          );
+
+                          // Drag stretch checkout preview
                           const isStretchPreview = Boolean(
                             stretchingBooking &&
-                            stretchingBooking.roomNo === room.room_no &&
+                            stretchingBooking.roomNo.trim().toLowerCase() === room.room_no.trim().toLowerCase() &&
                             stretchTargetDate &&
                             d > addDays(stretchingBooking.checkOut, -1) &&
                             d <= stretchTargetDate
@@ -1273,66 +1590,124 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
                           const isStretchShrinkPreview = Boolean(
                             stretchingBooking &&
-                            stretchingBooking.roomNo === room.room_no &&
+                            stretchingBooking.roomNo.trim().toLowerCase() === room.room_no.trim().toLowerCase() &&
                             stretchTargetDate &&
                             d > stretchTargetDate &&
                             d <= addDays(stretchingBooking.checkOut, -1)
+                          );
+
+                          // Drag adjust checkin preview
+                          const isCheckInStretchPreview = Boolean(
+                            adjustingCheckInBooking &&
+                            adjustingCheckInBooking.roomNo.trim().toLowerCase() === room.room_no.trim().toLowerCase() &&
+                            adjustCheckInTargetDate &&
+                            d >= adjustCheckInTargetDate &&
+                            d < adjustingCheckInBooking.checkIn
                           );
                           
                           return (
                             <div
                               key={d}
-                              title={isStretchInvalid ? 'Room unavailable' : undefined}
-                              onMouseEnter={() => {
-                                if (stretchingBooking && stretchingBooking.roomNo === room.room_no) {
-                                  if (d >= stretchingBooking.checkIn) {
-                                    setStretchTargetDate(d);
-                                  }
-                                }
-                              }}
-                              className={`flex-1 min-w-[90px] sm:min-w-[100px] px-1 py-1.5 border-r border-slate-100 transition-colors ${
-                                isStretchInvalid ? 'bg-red-50/80 ring-1 ring-red-400 z-10 cursor-not-allowed' :
-                                isStretchPreview ? 'bg-emerald-100/80 ring-1 ring-emerald-400 z-10' :
-                                isStretchShrinkPreview ? 'bg-rose-50/80 ring-1 ring-rose-400 opacity-60 z-10' :
-                                isHot
+                              data-timeline-date={d}
+                              data-room-no={room.room_no}
+                              title={isStretchInvalid ? 'Room unavailable for extension' : undefined}
+                              className={`flex-1 min-w-[95px] sm:min-w-[110px] px-1 py-1.5 border-r border-slate-100 transition-colors relative ${
+                                isMoveTargetPreview
+                                  ? isMoveConflict
+                                    ? 'bg-rose-100/90 ring-2 ring-rose-500 z-10'
+                                    : 'bg-brand-100/90 ring-2 ring-brand-500 z-10'
+                                  : isStretchInvalid
+                                  ? 'bg-rose-50 ring-2 ring-rose-400 z-10 cursor-not-allowed'
+                                  : isStretchPreview || isCheckInStretchPreview
+                                  ? 'bg-emerald-100/90 ring-2 ring-emerald-500 ring-dashed z-10'
+                                  : isStretchShrinkPreview
+                                  ? 'bg-rose-50/80 ring-1 ring-rose-400 opacity-60 z-10'
+                                  : isHot
                                   ? 'bg-rose-50/20'
                                   : isToday
-                                  ? 'bg-brand-50/40'
+                                  ? 'bg-brand-50/30'
                                   : ''
                               }`}
                             >
-                              {dayBookings.length === 0 ? (
+                              {/* Target Move Preview Placeholder */}
+                              {isMoveTargetPreview && dayBookings.length === 0 && (
+                                <div className={`w-full h-full min-h-[32px] rounded-xl border-2 border-dashed flex flex-col items-center justify-center p-1 pointer-events-none transition-all shadow-md animate-pulse ${
+                                  isMoveConflict
+                                    ? 'bg-rose-200/90 border-rose-500 text-rose-900'
+                                    : 'bg-brand-200/90 border-brand-600 text-brand-950 ring-2 ring-brand-400/50'
+                                }`}>
+                                  <div className="flex items-center gap-1 font-black text-[11px] truncate">
+                                    {isMoveConflict ? <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" /> : <Sparkles className="w-3 h-3 text-brand-600 shrink-0" />}
+                                    <span className="truncate">{movingBooking?.guestName || 'Guest'}</span>
+                                  </div>
+                                  <span className="text-[9px] font-bold opacity-80">
+                                    {isMoveConflict ? 'Room Conflict' : `Move to ${room.room_no}`}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Stretch Checkout Preview */}
+                              {isStretchPreview && dayBookings.length === 0 && (
+                                <div className="w-full h-full min-h-[28px] rounded-lg bg-emerald-200/80 border border-dashed border-emerald-500 text-emerald-900 text-[10px] font-bold flex flex-col items-center justify-center shadow-2xs pointer-events-none animate-pulse">
+                                  <span>+ Extend Stay</span>
+                                  <span className="text-[8px] text-emerald-700 font-semibold">{fmtDay(d)}</span>
+                                </div>
+                              )}
+
+                              {/* Stretch Check-In Preview */}
+                              {isCheckInStretchPreview && dayBookings.length === 0 && (
+                                <div className="w-full h-full min-h-[28px] rounded-lg bg-emerald-200/80 border border-dashed border-emerald-500 text-emerald-900 text-[10px] font-bold flex flex-col items-center justify-center shadow-2xs pointer-events-none animate-pulse">
+                                  <span>Early Check-In</span>
+                                  <span className="text-[8px] text-emerald-700 font-semibold">{fmtDay(d)}</span>
+                                </div>
+                              )}
+
+                              {isStretchInvalid && dayBookings.length === 0 && (
+                                <div className="w-full h-full min-h-[28px] rounded-lg bg-rose-100 border border-rose-300 text-rose-800 text-[10px] font-bold flex items-center justify-center gap-1 pointer-events-none">
+                                  <AlertTriangle className="w-3 h-3 text-rose-600" />
+                                  <span>Conflict</span>
+                                </div>
+                              )}
+
+                              {!isMoveTargetPreview && !isStretchPreview && !isCheckInStretchPreview && !isStretchInvalid && dayBookings.length === 0 ? (
                                 <button
+                                  type="button"
                                   onClick={() => {
                                     setPreselectRoom(room.room_no);
                                     setPreselectCheckIn(d);
                                     setPreselectCheckOut(addDays(d, 1));
                                     setShowNewBooking(true);
                                   }}
-                                  className="w-full h-full min-h-[28px] rounded-md border border-dashed border-slate-200 hover:border-brand-400 hover:bg-brand-50/30 transition flex items-center justify-center group"
+                                  className="w-full h-full min-h-[30px] rounded-lg border border-dashed border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 transition flex items-center justify-center group/empty cursor-pointer"
+                                  title={`Book Room ${room.room_no} for ${d}`}
                                 >
-                                  <Plus className="w-3 h-3 text-slate-300 group-hover:text-brand-500 transition" />
+                                  <Plus className="w-3.5 h-3.5 text-slate-300 group-hover/empty:text-brand-600 transition" />
                                 </button>
                               ) : (
                                 dayBookings.map((b) => {
                                   const effectiveCheckOut = (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) 
                                     ? addDays(stretchTargetDate, 1) 
                                     : b.checkOut;
+                                  const effectiveCheckIn = (adjustingCheckInBooking && b.id === adjustingCheckInBooking.id && adjustCheckInTargetDate)
+                                    ? adjustCheckInTargetDate
+                                    : b.checkIn;
+                                  const isStart = effectiveCheckIn === d;
                                   const isEnd = addDays(effectiveCheckOut, -1) === d;
-                                  const isStretching = stretchingBooking?.id === b.id;
+                                  const isStretching = (stretchingBooking?.id === b.id) || (adjustingCheckInBooking?.id === b.id);
+                                  const isMoving = movingBooking?.id === b.id;
+
                                   return (
                                     <BookingBar 
                                       key={b.id} 
                                       booking={b} 
                                       onClick={() => setSelectedBooking(b)} 
+                                      isStart={isStart}
                                       isEnd={isEnd}
                                       isStretching={isStretching}
-                                      onMouseDownStretch={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        setStretchingBooking(b);
-                                        setStretchTargetDate(d);
-                                      }}
+                                      isMoving={isMoving}
+                                      onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
+                                      onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
+                                      onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
                                     />
                                   );
                                 })
@@ -1346,12 +1721,12 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                 </div>
               ));
             })()}
-            
-            {/* Daily Summary Footer */}
-            <div className="border-t-2 border-slate-200 bg-slate-50/90 flex flex-col text-xs sticky bottom-0 z-[15]">
+
+            {/* Daily Summary Sticky Footer */}
+            <div className="border-t-2 border-slate-200 bg-slate-50/95 flex flex-col text-xs sticky bottom-0 z-[15] backdrop-blur-xs">
               {/* Occupied Row */}
               <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                   Occupied
                 </div>
                 {timelineDates.map((d) => {
@@ -1361,15 +1736,16 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                     return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
                   }).length;
                   return (
-                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-slate-900 border-r border-slate-200/80 tabular-nums">
+                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-slate-900 border-r border-slate-200/80 tabular-nums">
                       {occCount}
                     </div>
                   );
                 })}
               </div>
+
               {/* Available Row */}
               <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                   Available
                 </div>
                 {timelineDates.map((d) => {
@@ -1389,15 +1765,16 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                     }
                   });
                   return (
-                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
+                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
                       {totalAvail}
                     </div>
                   );
                 })}
               </div>
+
               {/* Occupancy % Row */}
               <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                   Occupancy %
                 </div>
                 {timelineDates.map((d) => {
@@ -1408,15 +1785,16 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                   }).length;
                   const pct = activeRooms.length > 0 ? Math.round((occCount / activeRooms.length) * 100) : 0;
                   return (
-                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-brand-600 border-r border-slate-200/80 tabular-nums">
+                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-brand-600 border-r border-slate-200/80 tabular-nums">
                       {pct}%
                     </div>
                   );
                 })}
               </div>
+
               {/* Daily Tariff Row */}
               <div className="flex">
-                <div className="w-28 sm:w-32 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                   Daily Tariff
                 </div>
                 {timelineDates.map((d) => {
@@ -1427,8 +1805,8 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
                     return sum + (activeBooking ? activeBooking.rate : 0);
                   }, 0);
                   return (
-                    <div key={d} className="flex-1 min-w-[90px] sm:min-w-[100px] px-2 py-2 text-center font-bold text-emerald-700 border-r border-slate-200/80 tabular-nums">
-                      {`₹${Math.round(rev).toLocaleString('en-IN')}`}
+                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-emerald-700 border-r border-slate-200/80 tabular-nums">
+                      ₹{Math.round(rev).toLocaleString('en-IN')}
                     </div>
                   );
                 })}
@@ -1437,6 +1815,105 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
           </div>
         )}
       </div>
+
+      {/* Floating Drag-to-Move HUD Banner */}
+      {movingBooking && moveTargetRoom && moveTargetCheckIn && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 backdrop-blur-md text-white px-5 sm:px-6 py-3.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-4 animate-scale-in max-w-lg w-[92vw] pointer-events-none select-none">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+            isMoveConflict 
+              ? 'bg-rose-500/20 text-rose-400 border-rose-500/30' 
+              : 'bg-brand-500/20 text-brand-400 border-brand-500/30'
+          }`}>
+            {isMoveConflict ? <AlertTriangle className="w-5 h-5 text-rose-400 animate-bounce" /> : <ArrowRightLeft className="w-5 h-5 text-brand-400 animate-pulse" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-white truncate">{movingBooking.guestName || 'Guest'}</span>
+              <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
+                isMoveConflict
+                  ? 'bg-rose-900/80 text-rose-300 border-rose-700'
+                  : 'bg-brand-900/80 text-brand-300 border-brand-700'
+              }`}>
+                {movingBooking.roomNo} → Room {moveTargetRoom}
+              </span>
+            </div>
+            <div className="text-xs text-slate-300 flex items-center gap-1.5 mt-1 flex-wrap">
+              <span>Dates: <strong className="text-white">{fmtDay(moveTargetCheckIn)}</strong> → <strong className="text-emerald-400 font-bold">{fmtDay(addDays(moveTargetCheckIn, movingBooking.nights))}</strong></span>
+              <span className={`px-1.5 py-0.2 rounded font-bold border text-[10px] ${
+                isMoveConflict
+                  ? 'bg-rose-950/80 text-rose-300 border-rose-800'
+                  : 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+              }`}>
+                {isMoveConflict ? 'Conflict (Occupied)' : `${movingBooking.nights} Night${movingBooking.nights > 1 ? 's' : ''} (₹${fmtMoney(movingBooking.rate * movingBooking.nights)})`}
+              </span>
+            </div>
+          </div>
+          <div className="text-right shrink-0 border-l border-slate-700 pl-3">
+            <span className={`text-[11px] font-bold block ${isMoveConflict ? 'text-rose-400' : 'text-emerald-400'}`}>
+              {isMoveConflict ? 'Unavailable' : 'Release mouse'}
+            </span>
+            <span className="text-[10px] text-slate-400">{isMoveConflict ? 'Choose another room' : 'to edit & confirm'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Drag-to-Extend HUD Banner */}
+      {stretchingBooking && stretchTargetDate && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 backdrop-blur-md text-white px-5 sm:px-6 py-3.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-4 animate-scale-in max-w-lg w-[92vw] pointer-events-none select-none">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
+            <ArrowRightLeft className="w-5 h-5 text-emerald-400 animate-pulse" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-white truncate">{stretchingBooking.guestName || 'Guest'}</span>
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-emerald-900/80 text-emerald-300 border border-emerald-700">
+                Room {stretchingBooking.roomNo}
+              </span>
+            </div>
+            <div className="text-xs text-slate-300 flex items-center gap-1.5 mt-1 flex-wrap">
+              <span>From <strong className="text-white">{fmtDay(stretchingBooking.checkIn)}</strong></span>
+              <span>→</span>
+              <span>New Checkout: <strong className="text-emerald-400 font-bold">{fmtDay(addDays(stretchTargetDate, 1))}</strong></span>
+              <span className="px-1.5 py-0.2 rounded bg-emerald-950/80 text-emerald-300 font-bold border border-emerald-800 text-[10px]">
+                {calcStayNights(stretchingBooking.checkIn, addDays(stretchTargetDate, 1))} Night{calcStayNights(stretchingBooking.checkIn, addDays(stretchTargetDate, 1)) > 1 ? 's' : ''} (₹{fmtMoney(stretchingBooking.rate * calcStayNights(stretchingBooking.checkIn, addDays(stretchTargetDate, 1)))})
+              </span>
+            </div>
+          </div>
+          <div className="text-right shrink-0 border-l border-slate-700 pl-3">
+            <span className="text-[11px] font-bold text-emerald-400 block">Release mouse</span>
+            <span className="text-[10px] text-slate-400">to extend stay</span>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Drag-to-Adjust-CheckIn HUD Banner */}
+      {adjustingCheckInBooking && adjustCheckInTargetDate && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 backdrop-blur-md text-white px-5 sm:px-6 py-3.5 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-4 animate-scale-in max-w-lg w-[92vw] pointer-events-none select-none">
+          <div className="w-10 h-10 rounded-xl bg-brand-500/20 text-brand-400 flex items-center justify-center shrink-0 border border-brand-500/30">
+            <ArrowRightLeft className="w-5 h-5 text-brand-400 animate-pulse" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-white truncate">{adjustingCheckInBooking.guestName || 'Guest'}</span>
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-brand-900/80 text-brand-300 border border-brand-700">
+                Room {adjustingCheckInBooking.roomNo}
+              </span>
+            </div>
+            <div className="text-xs text-slate-300 flex items-center gap-1.5 mt-1 flex-wrap">
+              <span>New Check-In: <strong className="text-brand-300 font-bold">{fmtDay(adjustCheckInTargetDate)}</strong></span>
+              <span>→</span>
+              <span>Checkout: <strong className="text-white">{fmtDay(adjustingCheckInBooking.checkOut)}</strong></span>
+              <span className="px-1.5 py-0.2 rounded bg-brand-950/80 text-brand-300 font-bold border border-brand-800 text-[10px]">
+                {calcStayNights(adjustCheckInTargetDate, adjustingCheckInBooking.checkOut)} Night{calcStayNights(adjustCheckInTargetDate, adjustingCheckInBooking.checkOut) > 1 ? 's' : ''} (₹{fmtMoney(adjustingCheckInBooking.rate * calcStayNights(adjustCheckInTargetDate, adjustingCheckInBooking.checkOut))})
+              </span>
+            </div>
+          </div>
+          <div className="text-right shrink-0 border-l border-slate-700 pl-3">
+            <span className="text-[11px] font-bold text-brand-400 block">Release mouse</span>
+            <span className="text-[10px] text-slate-400">to adjust check-in</span>
+          </div>
+        </div>
+      )}
 
       {/* Booking Detail Panel */}
       {selectedBooking && !showCheckIn && !showCheckOut && !showRoomShift && !showExtendStay && !showFolio && (
@@ -1602,359 +2079,35 @@ export const OperationsBoard = ({ date, onBack, onSaved, onNavigate }: Operation
 
       {/* Availability Adjustment Modal */}
       {adjustModalData && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden animate-scale-in">
-            <div className="bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center text-brand-gold-400">
-                  <Sliders className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-base text-white">Adjust Room Availability</h3>
-                  <p className="text-xs text-slate-400">Update sellable rooms & restrictions</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAdjustModalData(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                await handleSaveAvailability({
-                  categoryId: adjustModalData.categoryId,
-                  startDate: adjustModalData.startDate,
-                  endDate: adjustModalData.endDate,
-                  availability: adjustModalData.availability,
-                  stopSell: adjustModalData.stopSell,
-                });
-              }}
-              className="p-5 space-y-4"
-            >
-              {adjustError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                  <span>{adjustError}</span>
-                </div>
-              )}
-
-              {/* Room Category */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Room Category
-                </label>
-                <select
-                  value={adjustModalData.categoryId}
-                  onChange={(e) => {
-                    const newCatId = e.target.value;
-                    const catObj = categories.find((c) => c.id === newCatId);
-                    const item = categoryAvailability.get(`${newCatId}_${adjustModalData.startDate}`);
-                    const fallbackAvail = activeRooms.filter((r) => r.category_id === newCatId).length;
-                    setAdjustModalData({
-                      ...adjustModalData,
-                      categoryId: newCatId,
-                      categoryName: catObj?.name ?? 'Category',
-                      availability: item !== undefined ? item.available : fallbackAvail,
-                      stopSell: Boolean(item?.stop_sell),
-                    });
-                  }}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
-                >
-                  {categories.map((c) => {
-                    const roomCount = activeRooms.filter((r) => r.category_id === c.id).length;
-                    return (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({roomCount} physical rooms)
-                      </option>
-                    );
-                  })}
-                </select>
-              </div>
-
-              {/* Date Range */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    Start Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={adjustModalData.startDate}
-                    onChange={(e) => {
-                      const newStart = e.target.value;
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        startDate: newStart,
-                        endDate: adjustModalData.endDate < newStart ? newStart : adjustModalData.endDate,
-                      });
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                    End Date
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    min={adjustModalData.startDate}
-                    value={adjustModalData.endDate}
-                    onChange={(e) =>
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        endDate: e.target.value,
-                      })
-                    }
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:border-brand-500 focus:outline-none transition"
-                  />
-                </div>
-              </div>
-
-              {/* Availability Count */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                    Sellable Availability
-                  </label>
-                  {(() => {
-                    const physicalTotal = activeRooms.filter((r) => r.category_id === adjustModalData.categoryId).length;
-                    return (
-                      <span className="text-[11px] font-semibold text-slate-500">
-                        Max Physical: {physicalTotal} rooms
-                      </span>
-                    );
-                  })()}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        availability: Math.max(0, adjustModalData.availability - 1),
-                      })
-                    }
-                    className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-lg flex items-center justify-center transition active:scale-95 cursor-pointer"
-                  >
-                    -
-                  </button>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    required
-                    value={adjustModalData.availability}
-                    onChange={(e) => {
-                      const v = parseInt(e.target.value, 10);
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        availability: isNaN(v) ? 0 : Math.max(0, v),
-                      });
-                    }}
-                    className="flex-1 text-center py-2 bg-slate-50 border border-slate-200 rounded-xl text-base font-bold text-slate-900 focus:bg-white focus:border-brand-500 focus:outline-none transition tabular-nums"
-                  />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        availability: adjustModalData.availability + 1,
-                      })
-                    }
-                    className="w-10 h-10 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-lg flex items-center justify-center transition active:scale-95 cursor-pointer"
-                  >
-                    +
-                  </button>
-                </div>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Enter the number of rooms to make available for booking across all channels.
-                </p>
-              </div>
-
-              {/* Stop Sell Toggle */}
-              <div className="pt-2 border-t border-slate-100">
-                <label className="flex items-center gap-3 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={adjustModalData.stopSell}
-                    onChange={(e) =>
-                      setAdjustModalData({
-                        ...adjustModalData,
-                        stopSell: e.target.checked,
-                      })
-                    }
-                    className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 border-slate-300"
-                  />
-                  <div>
-                    <span className="text-xs font-bold text-slate-800">Stop Sell (Close Room Category)</span>
-                    <p className="text-[11px] text-slate-500">
-                      Forces sellable availability to 0 and blocks incoming reservations.
-                    </p>
-                  </div>
-                </label>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setAdjustModalData(null)}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 transition rounded-xl cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={adjustSaving}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-soft-blue transition active:scale-95 cursor-pointer"
-                >
-                  {adjustSaving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Saving...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>Save Availability</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AdjustAvailabilityModal
+          data={adjustModalData}
+          categories={categories}
+          activeRooms={activeRooms}
+          categoryAvailability={categoryAvailability}
+          saving={adjustSaving}
+          error={adjustError}
+          onClose={() => setAdjustModalData(null)}
+          onSave={handleSaveAvailability}
+          onChangeData={setAdjustModalData}
+        />
       )}
-    </div>
-  );
-};
 
-// ── Sub-components ──────────────────────────────────────────
-
-const KpiCard = ({
-  icon: Icon, label, value, color,
-}: { icon: typeof BedDouble; label: string; value: string; color: string }) => (
-  <div className="bg-white rounded-xl border border-slate-200 p-2.5 flex items-center gap-2.5 shadow-card">
-    <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${color}`}>
-      <Icon className="w-4 h-4" />
-    </div>
-    <div className="min-w-0">
-      <p className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">{label}</p>
-      <p className="text-sm font-bold text-brand-navy-800 truncate">{value}</p>
-    </div>
-  </div>
-);
-
-const BookingBar = ({
-  booking, onClick, isEnd = false, isStretching = false, onMouseDownStretch,
-}: { booking: BoardBooking; onClick: () => void; isEnd?: boolean; isStretching?: boolean; onMouseDownStretch?: (e: React.MouseEvent) => void }) => {
-  const sourceColor = SOURCE_COLORS[booking.sourceCategory] ?? 'bg-slate-400';
-  const statusColor = STATUS_COLORS[booking.status] ?? 'bg-slate-400';
-  const statusText = STATUS_TEXT_COLORS[booking.status] ?? 'text-slate-600';
-  const payInfo = PAY_INDICATOR[booking.paymentMode];
-  const total = booking.rate * booking.nights;
-  const balance = Math.max(0, total - (booking.type === 'reservation' ? toNum((booking.raw as Reservation).advance_paid) : 0));
-
-  return (
-    <div className={`relative ${isStretching ? 'opacity-50' : ''}`}>
-      <button
-      onClick={onClick}
-      title={`${booking.guestName || 'Guest'} · ${booking.sourceCategory} · ₹${fmtMoney(booking.rate)}/night${balance >= 1.0 ? ` · Due ₹${fmtMoney(balance)}` : ''}`}
-      className="w-full text-left rounded-md px-2 py-1 mb-1 text-xs transition hover:shadow-md hover:z-20 relative group border border-slate-200 bg-white"
-    >
-      <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l ${sourceColor}`} />
-      <div className="pl-1.5">
-        <div className="flex items-center gap-1">
-          <span className={`w-1.5 h-1.5 rounded-full ${statusColor} flex-shrink-0`} />
-          <span className={`font-semibold truncate ${statusText}`}>{booking.guestName || 'Guest'}</span>
-          {booking.vipType && (
-            <span className={`ml-1 inline-flex items-center gap-0.5 text-[8px] px-1 py-0 rounded-full font-bold border ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-slate-100 text-slate-600 border-slate-300'}`}>
-              <Star className="w-2 h-2" /> {booking.vipType}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-400">
-          <span className="truncate">{booking.sourceName || booking.sourceCategory}</span>
-          {payInfo && booking.hasPayment && (
-            <span className={`flex items-center gap-0.5 ${payInfo.color}`}>
-              <payInfo.icon className="w-2.5 h-2.5" />
-            </span>
-          )}
-          {booking.isComplimentary ? (
-            <span className="text-brand-gold-600 font-bold">COMP</span>
-          ) : (
-            <span className="text-slate-700 font-semibold">₹{fmtMoney(booking.rate)}</span>
-          )}
-          {balance >= 1.0 && !booking.isComplimentary && (
-            <span className="text-amber-700 font-bold bg-amber-50 border border-amber-200 px-1 py-0.2 rounded text-[9px]">Due ₹{fmtMoney(balance)}</span>
-          )}
-        </div>
-      </div>
-    </button>
-    {/* Drag handle for resizing stay */}
-    {isEnd && onMouseDownStretch && booking.type === 'entry' && (
-      <div
-        onMouseDown={onMouseDownStretch}
-        className="absolute right-0 top-0 bottom-1 w-3.5 cursor-ew-resize flex items-center justify-center bg-brand-gold-400/40 hover:bg-brand-gold-500/80 rounded-r z-20 transition group/handle"
-        title="Drag to extend or shorten stay"
-      >
-        <div className="w-1 h-3 bg-brand-gold-800/80 rounded-full group-hover/handle:bg-white shrink-0" />
-      </div>
-    )}
-  </div>
-  );
-};
-
-// ── Housekeeping indicators ──
-
-const HK_DOT_COLORS: Record<string, string> = {
-  'Vacant Clean': 'bg-emerald-500',
-  'Vacant Dirty': 'bg-amber-500',
-  'Occupied': 'bg-brand-500',
-  'Occupied Clean': 'bg-teal-500',
-  'Occupied Service Due': 'bg-orange-500',
-  'Cleaning In Progress': 'bg-sky-500',
-  'Ready for Inspection': 'bg-violet-500',
-  'Inspected / Ready': 'bg-indigo-500',
-  'Out Of Order': 'bg-red-500',
-  'Blocked': 'bg-slate-500',
-};
-
-const HkDot = ({ status }: { status: string }) => (
-  <span
-    className={`w-2 h-2 rounded-full shrink-0 ${HK_DOT_COLORS[status] ?? 'bg-slate-300'}`}
-    title={`Housekeeping: ${status}`}
-  />
-);
-
-const HkIndicator = ({ rooms }: { rooms: Room[] }) => {
-  const counts: Record<string, number> = {};
-  for (const r of rooms) {
-    counts[r.housekeeping_status] = (counts[r.housekeeping_status] ?? 0) + 1;
-  }
-  const indicators: { status: string; icon: typeof BedDouble }[] = [
-    { status: 'Vacant Clean', icon: Sparkles },
-    { status: 'Vacant Dirty', icon: BedDouble },
-    { status: 'Cleaning In Progress', icon: Play },
-    { status: 'Ready for Inspection', icon: ClipboardCheck },
-    { status: 'Out Of Order', icon: Wrench },
-    { status: 'Blocked', icon: Ban },
-  ];
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-2.5 flex items-center gap-3 shadow-card overflow-x-auto">
-      {indicators.map(({ status, icon: Icon }) => (
-        <div key={status} className="flex items-center gap-1.5 shrink-0" title={status}>
-          <Icon className={`w-3.5 h-3.5 ${HK_DOT_COLORS[status]?.replace('bg-', 'text-') ?? 'text-slate-400'}`} />
-          <span className="text-sm font-bold text-brand-navy-800 tabular-nums">{counts[status] ?? 0}</span>
-        </div>
-      ))}
+      {/* Room Move / Date Shift Confirmation Modal */}
+      {roomMovePayload && (
+        <RoomMoveModal
+          payload={roomMovePayload}
+          rooms={activeRooms}
+          categories={categories}
+          role={foRole}
+          saving={roomMoveSaving}
+          error={roomMoveError}
+          onClose={() => {
+            setRoomMovePayload(null);
+            setRoomMoveError(null);
+          }}
+          onConfirm={handleConfirmRoomMove}
+        />
+      )}
     </div>
   );
 };
