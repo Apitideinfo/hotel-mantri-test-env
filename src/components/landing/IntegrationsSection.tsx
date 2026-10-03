@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowRight, Sparkles } from 'lucide-react';
+import { RevealOnScroll } from './RevealOnScroll';
 
 interface IntegrationsSectionProps {
   onLogin?: () => void;
@@ -12,9 +13,6 @@ export const IntegrationsSection: React.FC<IntegrationsSectionProps> = ({ onLogi
     { id: 'ota', label: 'ONLINE TRAVEL AGENCIES' },
     { id: 'payment', label: 'PAYMENT GATEWAYS' },
     { id: 'meta', label: 'META SEARCH ENGINES' },
-    { id: 'channel', label: 'CHANNEL MANAGERS' },
-    { id: 'b2b', label: 'B2B PARTNERS' },
-    { id: 'demand', label: 'DEMAND & SUPPLY PLATFORMS' },
   ];
 
   // Authentic original vector brand logos without surrounding boxes
@@ -34,7 +32,6 @@ export const IntegrationsSection: React.FC<IntegrationsSectionProps> = ({ onLogi
         id: 'easemytrip',
         logo: (
           <div className="flex items-center gap-2.5">
-            {/* Turquoise paper airplane */}
             <svg className="w-9 h-7 text-[#00AEEF] shrink-0" viewBox="0 0 36 24" fill="currentColor">
               <path d="M2 12L34 2L20 22L16 14L2 12Z" />
               <path d="M16 14L34 2L22 13L16 14Z" fill="#0077B6" />
@@ -251,82 +248,6 @@ export const IntegrationsSection: React.FC<IntegrationsSectionProps> = ({ onLogi
         ),
       },
     ],
-    channel: [
-      {
-        id: 'siteminder',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-tight text-[#00205B] font-sans">
-              SiteMinder
-            </span>
-          </div>
-        ),
-      },
-      {
-        id: 'staah',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-wider text-[#EE3124] uppercase font-sans">
-              STAAH
-            </span>
-          </div>
-        ),
-      },
-      {
-        id: 'rategain',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-tight text-[#1A73E8] font-sans">
-              RateGain
-            </span>
-          </div>
-        ),
-      },
-    ],
-    b2b: [
-      {
-        id: 'tbo',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-tight text-[#0084FF] font-sans">
-              TBO Holidays
-            </span>
-          </div>
-        ),
-      },
-      {
-        id: 'hotelbeds',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-tight text-[#E60000] font-sans">
-              hotelbeds
-            </span>
-          </div>
-        ),
-      },
-    ],
-    demand: [
-      {
-        id: 'amadeus',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-wider text-[#005EB8] uppercase font-sans">
-              AMADEUS
-            </span>
-          </div>
-        ),
-      },
-      {
-        id: 'sabre',
-        logo: (
-          <div className="flex items-center">
-            <span className="text-2xl sm:text-[28px] font-black tracking-wider text-[#E51937] uppercase font-sans">
-              SABRE
-            </span>
-          </div>
-        ),
-      },
-    ],
   };
 
   const currentLogos = brandLogos[activeCategory] || brandLogos.ota;
@@ -339,47 +260,49 @@ export const IntegrationsSection: React.FC<IntegrationsSectionProps> = ({ onLogi
     >
       <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-10">
         
-        {/* Top Split: Left Headline/Desc, Right 6 Category Tabs */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-start mb-12">
-          
-          {/* Left Side */}
-          <div className="lg:col-span-6 flex flex-col justify-center">
-            <span className="text-xs font-bold tracking-[0.25em] text-gray-500 uppercase block mb-3">
-              INTEGRATIONS
-            </span>
-            <h2 className="text-3xl sm:text-4xl lg:text-[44px] font-extrabold text-black tracking-tight leading-[1.12] mb-4">
-              Connect with your tools
-            </h2>
-            <p className="text-gray-600 text-sm sm:text-base leading-relaxed font-normal max-w-lg">
-              Seamlessly integrate with the platforms and services you already use. Build workflows that work for you.
-            </p>
+        {/* Top Split: Left Headline/Desc, Right 3 Category Tabs */}
+        <RevealOnScroll variant="fade-up" duration={700}>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center mb-12">
+            
+            {/* Left Side */}
+            <div className="lg:col-span-6 flex flex-col justify-center">
+              <span className="text-xs font-bold tracking-[0.25em] text-gray-500 uppercase block mb-3">
+                INTEGRATIONS
+              </span>
+              <h2 className="text-3xl sm:text-4xl lg:text-[44px] font-extrabold text-black tracking-tight leading-[1.12] mb-4">
+                Connect with your tools
+              </h2>
+              <p className="text-gray-600 text-sm sm:text-base leading-relaxed font-normal max-w-lg">
+                Seamlessly integrate with the platforms and services you already use. Build workflows that work for you.
+              </p>
+            </div>
+
+            {/* Right Side: Category Pill Tabs (Filtered to the 3 remaining categories) */}
+            <div className="lg:col-span-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {categories.map((cat) => {
+                const isSelected = activeCategory === cat.id;
+
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setActiveCategory(cat.id)}
+                    className={`px-4 py-3.5 rounded-xl text-[11px] sm:text-xs font-bold tracking-wider text-center transition-all duration-200 cursor-pointer border ${
+                      isSelected
+                        ? 'bg-black text-white border-black shadow-md scale-[1.02]'
+                        : 'bg-white text-gray-700 border-gray-200/90 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    {cat.label}
+                  </button>
+                );
+              })}
+            </div>
+
           </div>
-
-          {/* Right Side: Category Pill Tabs */}
-          <div className="lg:col-span-6 grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-            {categories.map((cat) => {
-              const isSelected = activeCategory === cat.id;
-
-              return (
-                <button
-                  key={cat.id}
-                  onClick={() => setActiveCategory(cat.id)}
-                  className={`px-3.5 py-3 rounded-xl text-[11px] sm:text-xs font-bold tracking-wider text-center transition-all cursor-pointer border ${
-                    isSelected
-                      ? 'bg-black text-white border-black shadow-sm'
-                      : 'bg-white text-gray-700 border-gray-200/90 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  {cat.label}
-                </button>
-              );
-            })}
-          </div>
-
-        </div>
+        </RevealOnScroll>
       </div>
 
-      {/* Continuous Moving Integrations Marquee Track — Edge to edge full screen width without logo box frames */}
+      {/* Continuous Moving Integrations Marquee Track */}
       <div className="w-full overflow-hidden relative py-10 my-4 border-t border-b border-gray-100 bg-gray-50/40">
         <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-24 sm:w-44 bg-gradient-to-r from-white via-white/80 to-transparent z-10" />
         <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-24 sm:w-44 bg-gradient-to-l from-white via-white/80 to-transparent z-10" />
@@ -398,27 +321,29 @@ export const IntegrationsSection: React.FC<IntegrationsSectionProps> = ({ onLogi
 
       <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-10">
         {/* Custom Integration Callout Card */}
-        <div className="w-full mt-10 p-7 sm:p-9 lg:p-10 rounded-3xl bg-gray-50/90 border border-gray-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 shadow-sm">
-          <div>
-            <div className="flex items-center gap-2.5 mb-1.5">
-              <Sparkles className="w-5 h-5 text-cyan-600" />
-              <h4 className="font-bold text-gray-950 text-base sm:text-lg lg:text-xl tracking-tight">
-                Need a custom integration?
-              </h4>
+        <RevealOnScroll variant="fade-up" duration={700} delay={100}>
+          <div className="w-full mt-10 p-7 sm:p-9 lg:p-10 rounded-3xl bg-gray-50/90 border border-gray-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 shadow-sm hover:shadow-md transition-shadow">
+            <div>
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <Sparkles className="w-5 h-5 text-cyan-600" />
+                <h4 className="font-bold text-gray-950 text-base sm:text-lg lg:text-xl tracking-tight">
+                  Need a custom integration?
+                </h4>
+              </div>
+              <p className="text-gray-500 text-xs sm:text-sm lg:text-[15px] font-normal max-w-2xl">
+                Our API and developer tools make it easy to build exactly what you need.
+              </p>
             </div>
-            <p className="text-gray-500 text-xs sm:text-sm lg:text-[15px] font-normal max-w-2xl">
-              Our API and developer tools make it easy to build exactly what you need.
-            </p>
-          </div>
 
-          <button
-            onClick={onLogin}
-            className="animate-pulse-shake inline-flex items-center gap-2.5 px-7 py-3.5 rounded-xl bg-black text-white text-xs sm:text-sm font-bold hover:bg-neutral-800 transition-all shadow-md shrink-0 cursor-pointer"
-          >
-            Integration Hub
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
+            <button
+              onClick={onLogin}
+              className="animate-pulse-shake inline-flex items-center gap-2.5 px-7 py-3.5 rounded-xl bg-black text-white text-xs sm:text-sm font-bold hover:bg-neutral-800 transition-all shadow-md shrink-0 cursor-pointer"
+            >
+              Integration Hub
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </RevealOnScroll>
 
       </div>
     </section>

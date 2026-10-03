@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Calendar, BedDouble, AlertCircle, CheckCircle2, Loader2, ArrowRight } from 'lucide-react';
 import type { Reservation } from '@/lib/types-reservations';
 import { assignPhysicalRoom, extendReservation, checkInReservation, checkRoomAvailability } from '@/lib/api-reservations';
@@ -18,6 +18,13 @@ export const AssignRoomModal: React.FC<AssignRoomModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
   const [selectedRoom, setSelectedRoom] = useState(
     reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' && reservation.room_no.toLowerCase() !== 'tbd'
       ? reservation.room_no
@@ -132,6 +139,13 @@ export const ExtendStayModal: React.FC<ExtendStayModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
   const [newCheckOut, setNewCheckOut] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

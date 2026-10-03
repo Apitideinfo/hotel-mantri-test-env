@@ -30,6 +30,14 @@ export const RoomShiftModal = ({
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = orig;
+    };
+  }, []);
+
+  useEffect(() => {
     getVacantRooms(fromRoom).then((r) => {
       setVacantRooms(r);
       setLoading(false);

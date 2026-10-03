@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle, ArrowRight, BedDouble, Calendar, User, CheckCircle2, RefreshCw } from 'lucide-react';
 import type { Reservation } from '@/lib/types-reservations';
 import { assignPhysicalRoom, updateReservationStatus, checkRoomAvailability } from '@/lib/api-reservations';
@@ -23,6 +23,13 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
   onClose,
   onResolved,
 }) => {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [selectedRoom, setSelectedRoom] = useState<string>('');
   const [busy, setBusy] = useState(false);

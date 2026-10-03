@@ -55,7 +55,14 @@ export const WalkInModal = ({
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [vacantRooms, setVacantRooms] = useState<Room[]>([]);
+  // Background Scroll Lock
+  useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = orig;
+    };
+  }, []);
 
   // Load vacant rooms on mount
   useEffect(() => {

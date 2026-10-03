@@ -396,6 +396,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       localStorage.removeItem('hotel_mantri_selected_hotel_id');
       localStorage.removeItem('hotelmantri_demo_user');
       sessionStorage.clear();
+      if (typeof window !== 'undefined' && window.history?.replaceState) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
     } catch {
       // Ignore localStorage error
     }

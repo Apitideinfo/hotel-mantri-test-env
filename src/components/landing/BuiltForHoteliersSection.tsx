@@ -1,4 +1,5 @@
 import React from 'react';
+import { RevealOnScroll } from './RevealOnScroll';
 
 export const BuiltForHoteliersSection: React.FC = () => {
   return (
@@ -10,34 +11,36 @@ export const BuiltForHoteliersSection: React.FC = () => {
           
           {/* ── Left Column: Heading ── */}
           <div className="lg:col-span-5">
-            <h2 className="text-3xl sm:text-4xl lg:text-[50px] font-extrabold text-black tracking-tight leading-[1.08]">
-              Built for hoteliers,<br />
-              by hoteliers.
-            </h2>
+            <RevealOnScroll variant="fade-right" duration={700}>
+              <h2 className="text-3xl sm:text-4xl lg:text-[50px] font-extrabold text-black tracking-tight leading-[1.08]">
+                Built for hoteliers,<br />
+                by hoteliers.
+              </h2>
+            </RevealOnScroll>
           </div>
 
           {/* ── Right Column: Descriptive Paragraphs & Photo Card ── */}
           <div className="lg:col-span-7 flex flex-col">
-            
-            {/* Paragraphs */}
-            <div className="flex flex-col gap-4 text-gray-700 text-sm sm:text-[15px] leading-relaxed font-normal mb-8 max-w-2xl">
-              <p>
-                HotelMantri unifies PMS, channel management, and bookings into one platform. No more juggling disconnected systems or scattered workflows.
-              </p>
-              <p>
-                Technology should stay invisible and effortless. So your team can focus on guests while operations run smoothly.
-              </p>
-            </div>
+            <RevealOnScroll variant="fade-left" duration={700} delay={100}>
+              {/* Paragraphs */}
+              <div className="flex flex-col gap-4 text-gray-700 text-sm sm:text-[15px] leading-relaxed font-normal mb-8 max-w-2xl">
+                <p>
+                  HotelMantri unifies PMS, channel management, and bookings into one platform. No more juggling disconnected systems or scattered workflows.
+                </p>
+                <p>
+                  Technology should stay invisible and effortless. So your team can focus on guests while operations run smoothly.
+                </p>
+              </div>
 
-            {/* Photo Card inside the Right Column */}
-            <div className="relative w-full h-[280px] sm:h-[380px] lg:h-[440px] rounded-2xl sm:rounded-3xl overflow-hidden shadow-lg border border-gray-100 group">
-              <img
-                src="/hotel_sunset_cabana.jpg"
-                alt="Built for Hoteliers - Luxury Resort Cabana"
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
-              />
-            </div>
-
+              {/* Photo Card inside the Right Column */}
+              <div className="relative w-full h-[280px] sm:h-[380px] lg:h-[440px] rounded-2xl sm:rounded-3xl overflow-hidden shadow-lg border border-gray-100 group">
+                <img
+                  src="/hotel_sunset_cabana.jpg"
+                  alt="Built for Hoteliers - Luxury Resort Cabana"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out"
+                />
+              </div>
+            </RevealOnScroll>
           </div>
 
         </div>
