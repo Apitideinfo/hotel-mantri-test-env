@@ -418,25 +418,30 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
   }
 
   // 1. Verify hotel exists in database
-  try {
-    const { data: hotelRecord, error: hotelErr } = await supabaseServiceRole
-      .from('hotels')
-      .select('id, hotel_name')
-      .eq('id', hotelId)
-      .maybeSingle();
+  if (req.auth?.hotelId && req.auth.hotelId === hotelId && req.auth.hotel) {
+    // Authorized hotel already verified by requireHotelAccess middleware
+  } else {
+    try {
+      const dbClient = req.scopedSupabase || supabaseServiceRole;
+      const { data: hotelRecord, error: hotelErr } = await dbClient
+        .from('hotels')
+        .select('id, hotel_name')
+        .eq('id', hotelId)
+        .maybeSingle();
 
-    if (hotelErr || !hotelRecord) {
-      return res.status(404).json({
-        success: false,
-        error: {
-          code: 'HOTEL_NOT_FOUND',
-          message: 'The specified hotel property does not exist.',
-          requestId
-        }
-      });
+      if (hotelErr || !hotelRecord) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'HOTEL_NOT_FOUND',
+            message: 'The specified hotel property does not exist.',
+            requestId
+          }
+        });
+      }
+    } catch (hErr) {
+      console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
     }
-  } catch (hErr) {
-    console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
   }
 
   if (updates.length === 0) {

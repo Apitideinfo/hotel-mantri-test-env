@@ -88,7 +88,7 @@ export async function openRazorpayCheckout(options: RazorpayOptions): Promise<{
     const orderData = await orderResponse.json();
     const { order_id, amount, currency, key_id } = orderData;
 
-    const razorpayKeyId = key_id || import.meta.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
+    const razorpayKeyId = key_id || import.meta.env.VITE_RAZORPAY_KEY_ID || '';
 
     // 3. Step 2: Open Razorpay Standard Checkout Modal
     return new Promise((resolve) => {
@@ -101,9 +101,9 @@ export async function openRazorpayCheckout(options: RazorpayOptions): Promise<{
         image: 'https://cdn-icons-png.flaticon.com/512/2983/2983780.png',
         order_id,
         prefill: {
-          name: options.prefill?.name || 'Hotel Admin',
-          email: options.prefill?.email || 'admin@gmail.com',
-          contact: options.prefill?.contact || '9876543210',
+          name: options.prefill?.name || '',
+          email: options.prefill?.email || '',
+          contact: options.prefill?.contact || '',
         },
         theme: {
           color: '#1a68fb',

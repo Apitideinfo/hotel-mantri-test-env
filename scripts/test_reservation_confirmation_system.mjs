@@ -68,13 +68,29 @@ async function runTests() {
   console.log('================================================================\n');
 
   // Resolve test hotels
-  const { data: hotels } = await supabaseServiceRole.from('hotels').select('*').limit(2);
-  if (!hotels || hotels.length === 0) {
-    throw new Error('No hotel found in database to run tests against.');
+  let hotelA;
+  let hotelB;
+  try {
+    const { data: hotels } = await supabaseServiceRole.from('hotels').select('*').limit(2);
+    if (hotels && hotels.length > 0) {
+      hotelA = hotels[0];
+      hotelB = hotels.length > 1 ? hotels[1] : { id: '99999999-9999-9999-9999-999999999999', hotel_name: 'Hotel B Isolated' };
+    }
+  } catch (e) {
+    // Continue to fallback
   }
 
-  const hotelA = hotels[0];
-  const hotelB = hotels.length > 1 ? hotels[1] : { id: '99999999-9999-9999-9999-999999999999', hotel_name: 'Hotel B Isolated' };
+  if (!hotelA) {
+    hotelA = {
+      id: process.env.TEST_HOTEL_ID || 'a93139f5-baa0-47a4-87ca-81ee7e106d9c',
+      hotel_name: 'Hotel Gopal'
+    };
+    hotelB = {
+      id: process.env.TEST_HOTEL_B_ID || '9001eb1c-9d38-49d0-84f7-75244e8f4bf8',
+      hotel_name: 'mars hotel'
+    };
+  }
+
   const hotelId = hotelA.id;
   console.log(`Using Hotel A: "${hotelA.hotel_name}" (${hotelId})`);
   console.log(`Using Hotel B: "${hotelB.hotel_name}" (${hotelB.id})\n`);

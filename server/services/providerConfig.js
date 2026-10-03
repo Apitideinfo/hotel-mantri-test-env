@@ -76,7 +76,7 @@ export const getChannelProviderConfig = async (hotelId, requestId = null, client
   const partnerId = settings?.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
   const environment = settings?.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
   const username = process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';
-  const password = process.env.AIOSELL_PASSWORD || '514r1vrb';
+  const password = process.env.AIOSELL_PASSWORD || '';
   const baseUrl = process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm';
 
   const credentialPresent = Boolean(username && password);

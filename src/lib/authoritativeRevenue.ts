@@ -15,7 +15,7 @@
  *   - Reservation creation/processing date never dictates room revenue date.
  */
 
-import { toNum, calcStayNights } from './calc';
+import { toNum, calcStayNights } from './calc.ts';
 import type { SourceCategory, RoomChartEntry } from './types';
 import type { Reservation } from './types-reservations';
 

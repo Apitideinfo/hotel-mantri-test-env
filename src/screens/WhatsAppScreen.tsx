@@ -539,12 +539,6 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
             </p>
             <div className="pt-2 flex justify-center gap-2">
               <button
-                onClick={() => setSelectedDate('2026-09-01')}
-                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border"
-              >
-                View 01 Sep (Historical)
-              </button>
-              <button
                 onClick={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
                 className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border"
               >

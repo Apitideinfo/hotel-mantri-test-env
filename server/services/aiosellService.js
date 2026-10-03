@@ -23,7 +23,7 @@ export const resolveConfig = async (hotelConfig = {}) => {
   const hotelCode = hotelConfig.hotelCode || hotelConfig.aiosell_hotel_code || null;
   const environment = hotelConfig.environment || hotelConfig.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
   const username = hotelConfig.username || process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';
-  const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '514r1vrb';
+  const password = hotelConfig.password || process.env.AIOSELL_PASSWORD || '';
   const baseUrl = (hotelConfig.baseUrl || process.env.AIOSELL_BASE_URL || 'https://live.aiosell.com/api/v2/cm').replace(/\/+$/, '');
 
   return {
@@ -364,7 +364,7 @@ export const autoOnboardHotel = async (hotelCode, partnerId = 'hotel-mantri-pms'
         noshow: {},
         ...(op === 'res_out' ? {
           username: process.env.AIOSELL_WEBHOOK_USERNAME || 'hotel-mantri-webhook',
-          password: process.env.AIOSELL_WEBHOOK_PASSWORD || 'HM_wh_8f92a3c74e1d5b6f0a9b8c7d6e5f4a3b',
+          password: process.env.AIOSELL_WEBHOOK_PASSWORD || '',
           notifyBookings: true,
           base_url: webhookUrl
         } : {})

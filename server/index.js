@@ -86,13 +86,13 @@ app.use('/reports/whatsapp', notificationRoutes);
 app.use('/api/reports', notificationRoutes);
 app.use('/reports', notificationRoutes);
 
-const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
-const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
+const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
+const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 
-const razorpay = new Razorpay({
+const razorpay = KEY_ID && KEY_SECRET ? new Razorpay({
   key_id: KEY_ID,
   key_secret: KEY_SECRET,
-});
+}) : null;
 
 /**
  * STEP 1: Backend Endpoint to Create Order
@@ -112,6 +112,10 @@ app.post(['/api/create-order', '/create-order'], async (req, res) => {
       receipt: receipt || `rcpt_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       notes: notes || { platform: 'HotelMantri' },
     };
+
+    if (!razorpay) {
+      return res.status(503).json({ error: 'Razorpay payment gateway is not configured on server.' });
+    }
 
     const order = await razorpay.orders.create(options);
 
@@ -214,10 +218,13 @@ const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === path.r
 if (isDirectRun && !process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`Backend Server running on http://localhost:${PORT}`);
-    // Run background reconciliation on startup for active properties
-    processPendingRoomAllocations('a93139f5-baa0-47a4-87ca-81ee7e106d9c').catch(e => {
-      console.warn('[Startup] Automatic allocation reconciliation warning:', e.message);
-    });
+    // Run background reconciliation on startup for active property if configured
+    const targetHotelId = process.env.HOTEL_ID || process.env.DEFAULT_HOTEL_ID;
+    if (targetHotelId) {
+      processPendingRoomAllocations(targetHotelId).catch(e => {
+        console.warn('[Startup] Automatic allocation reconciliation warning:', e.message);
+      });
+    }
   });
 }
 

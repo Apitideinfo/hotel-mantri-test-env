@@ -1,7 +1,7 @@
-import type { DailyReport, DailyReportInput, RoomChartEntry, OtherDailyEntriesInput, SourceCategory, DerivedReport, GstMode, GstType, GstSlab, MtdYtdData, CashFlowData } from './types';
-import type { PaymentTransaction } from './financialLedger';
-import { reconcilePaymentLedger } from './financialLedger';
-export { generateOccupiedStayNights } from './authoritativeRevenue';
+import type { DailyReport, DailyReportInput, RoomChartEntry, OtherDailyEntriesInput, SourceCategory, DerivedReport, GstMode, GstType, GstSlab, MtdYtdData, CashFlowData } from './types.ts';
+import type { PaymentTransaction } from './financialLedger.ts';
+import { reconcilePaymentLedger } from './financialLedger.ts';
+export { generateOccupiedStayNights } from './authoritativeRevenue.ts';
 
 export const toNum = (v: unknown): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -722,11 +722,11 @@ export const buildCashFlow = (
   };
 };
 
-import { getCurrentHotelId } from './api';
-
 // Convert a DerivedReport to the legacy DailyReport shape (for existing screens).
-export const derivedToDaily = (d: DerivedReport, id: string = ''): DailyReport => ({
-  id, hotel_id: getCurrentHotelId(), ...d,
+export const derivedToDaily = (d: DerivedReport, id: string = '', hotelId?: string): DailyReport => ({
+  id,
+  hotel_id: hotelId || (typeof window !== 'undefined' ? localStorage.getItem('hotel_id') || '' : ''),
+  ...d,
 });
 
 // Aggregate a set of derived reports for MTD/YTD.
