@@ -367,17 +367,37 @@ export const dispatchChannelEvent = async (
   }
 };
 
-export const applyBulkInventoryPatch = async (
-  patches: BulkInventoryPatch[],
-  skipSync = false
-): Promise<{
+export interface ExternalSyncResult {
+  success: boolean;
+  status: 'VERIFIED' | 'PARTIAL_SUCCESS' | 'FAILED' | 'NOT_CONFIGURED' | 'SKIPPED' | 'NOT_NEEDED' | string;
+  message?: string;
+  failureReasons?: string[];
+  rateSync?: any;
+  inventorySync?: any;
+}
+
+export interface BulkInventoryPatchResult {
   success: boolean;
   updatedCount: number;
   allVerified?: boolean;
+  externalSync?: ExternalSyncResult | null;
   rateSync?: any;
   inventorySync?: any;
   message?: string;
-}> => {
+  updated?: any[];
+  localUpdate?: {
+    success: boolean;
+    count: number;
+  };
+  hasRate?: boolean;
+  hasInv?: boolean;
+  dateRange?: string;
+}
+
+export const applyBulkInventoryPatch = async (
+  patches: BulkInventoryPatch[],
+  skipSync = false
+): Promise<BulkInventoryPatchResult> => {
   const hotelId = getCurrentHotelId();
   if (!hotelId) throw new Error('Hotel context is required to update inventory/rates');
   if (!patches || patches.length === 0) {
@@ -586,7 +606,7 @@ export const applyBulkInventoryPatch = async (
 
 export const upsertInventoryRestriction = async (
   input: InventoryRestrictionInput
-): Promise<void> => {
+): Promise<any> => {
   const patch: BulkInventoryPatch = {
     roomCategoryId: input.room_category_id,
     date: normalizeToISODate(input.date) || input.date,
@@ -599,7 +619,7 @@ export const upsertInventoryRestriction = async (
     ...(input.closed_to_arrival !== undefined ? { closedToArrival: input.closed_to_arrival } : {}),
     ...(input.closed_to_departure !== undefined ? { closedToDeparture: input.closed_to_departure } : {}),
   };
-  await applyBulkInventoryPatch([patch]);
+  return await applyBulkInventoryPatch([patch]);
 };
 
 export const bulkUpdateInventory = async (
