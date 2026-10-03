@@ -405,6 +405,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
   const rawList = req.body?.updates || req.body?.patches;
   const updates = Array.isArray(rawList) ? rawList : [];
   const { skipSync = false } = req.body || {};
+  const dbClient = req.scopedSupabase || supabaseServiceRole;
 
   if (!hotelId) {
     return res.status(400).json({
@@ -422,7 +423,6 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     // Authorized hotel already verified by requireHotelAccess middleware
   } else {
     try {
-      const dbClient = req.scopedSupabase || supabaseServiceRole;
       const { data: hotelRecord, error: hotelErr } = await dbClient
         .from('hotels')
         .select('id, hotel_name')
@@ -472,7 +472,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
 
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
-    // 2. Strict Payload Validation
+    // 2. Strict Payload Validation & Tenant Cross-Hotel Boundary Check
     for (let i = 0; i < updates.length; i++) {
       const item = updates[i];
       if (!item || typeof item !== 'object') {
@@ -481,6 +481,21 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
           error: {
             code: 'INVALID_INVENTORY_UPDATE',
             message: `Update item at index ${i} must be an object.`,
+            requestId
+          }
+        });
+      }
+
+      // Check if update item explicitly targets a foreign hotel ID
+      const itemHotelId = item.hotelId || item.hotel_id;
+      if (itemHotelId && itemHotelId !== 'hotel' && itemHotelId !== hotelId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'HOTEL_ACCESS_DENIED',
+            message: `Cross-hotel inventory updates are strictly prohibited. Update item at index ${i} targets hotel ${itemHotelId}, but active authorized hotel is ${hotelId}.`,
+            hotelId,
+            foreignHotelId: itemHotelId,
             requestId
           }
         });
@@ -615,11 +630,14 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       });
     }
 
-    // 3. Verify target room categories belong to this hotel
-    const { data: dbCategories, error: catFetchErr } = await supabaseServiceRole
+    // 3. Verify target room categories belong to this authorized hotel
+    // NOTE: We query by ID alone first (RLS-safe for super-admin sessions), then verify
+    // hotel_id ownership in application code. This prevents a subtle RLS issue where
+    // combining .eq('hotel_id', x) with .in('id', [...]) can return empty results even
+    // for valid categories when using an auth-session client without service role key.
+    const { data: dbCategories, error: catFetchErr } = await dbClient
       .from('room_categories')
-      .select('id, name')
-      .eq('hotel_id', hotelId)
+      .select('id, name, hotel_id')
       .in('id', targetCatIds);
 
     if (catFetchErr) {
@@ -627,22 +645,99 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       throw catFetchErr;
     }
 
-    const foundCatIds = new Set((dbCategories || []).map(c => c.id));
-    const missingCatIds = targetCatIds.filter(id => !foundCatIds.has(id));
+    const foundCatMap = new Map((dbCategories || []).map(c => [c.id, c]));
+
+    // Check 1: category UUID doesn't exist in the DB at all
+    const missingCatIds = targetCatIds.filter(id => !foundCatMap.has(id));
     if (missingCatIds.length > 0) {
       return res.status(400).json({
         success: false,
         error: {
-          code: 'INVALID_INVENTORY_UPDATE',
+          code: 'INVALID_ROOM_CATEGORY_FOR_HOTEL',
           message: `One or more room categories do not exist for this hotel: ${missingCatIds.join(', ')}`,
           missingCategories: missingCatIds,
+          hotelId,
           requestId
         }
       });
     }
 
+    // Check 2: category exists but belongs to a DIFFERENT hotel — cross-hotel contamination
+    const foreignCatIds = targetCatIds.filter(id => {
+      const cat = foundCatMap.get(id);
+      return cat && cat.hotel_id !== hotelId;
+    });
+    if (foreignCatIds.length > 0) {
+      const foreignDetails = foreignCatIds.map(id => {
+        const cat = foundCatMap.get(id);
+        return `${id} (belongs to hotel ${cat?.hotel_id || 'unknown'})`;
+      });
+      console.error(`[inventory-restrictions/patch] 🔒 CROSS-HOTEL CONTAMINATION DETECTED: request for hotel ${hotelId} contains foreign categories: ${foreignDetails.join(', ')}`);
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'HOTEL_ACCESS_DENIED',
+          message: `Cross-hotel inventory update blocked. One or more room categories belong to a different property: ${foreignCatIds.join(', ')}`,
+          foreignCategories: foreignCatIds,
+          hotelId,
+          requestId
+        }
+      });
+    }
+
+
+    // 3.5. Verify target rate plans belong to this authorized hotel (if specified)
+    // Same RLS-safe approach as room category validation above.
+    const targetRatePlanIds = [...new Set(updates.map(u => u.ratePlanId || u.rate_plan_id).filter(Boolean))];
+    if (targetRatePlanIds.length > 0) {
+      const { data: dbRatePlans, error: planFetchErr } = await dbClient
+        .from('rate_plans')
+        .select('id, plan_name, hotel_id')
+        .in('id', targetRatePlanIds);
+
+      if (planFetchErr) {
+        console.error('[inventory-restrictions/patch] Error fetching rate plans:', planFetchErr);
+        throw planFetchErr;
+      }
+
+      const foundPlanMap = new Map((dbRatePlans || []).map(p => [p.id, p]));
+      const missingPlanIds = targetRatePlanIds.filter(id => !foundPlanMap.has(id));
+      if (missingPlanIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_RATE_PLAN_FOR_HOTEL',
+            message: `One or more rate plans do not exist for this hotel: ${missingPlanIds.join(', ')}`,
+            missingRatePlans: missingPlanIds,
+            hotelId,
+            requestId
+          }
+        });
+      }
+
+      // Cross-hotel rate plan check
+      const foreignPlanIds = targetRatePlanIds.filter(id => {
+        const plan = foundPlanMap.get(id);
+        return plan && plan.hotel_id !== hotelId;
+      });
+      if (foreignPlanIds.length > 0) {
+        console.error(`[inventory-restrictions/patch] 🔒 CROSS-HOTEL RATE PLAN CONTAMINATION: hotel ${hotelId} contains foreign rate plans: ${foreignPlanIds.join(', ')}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'HOTEL_ACCESS_DENIED',
+            message: `Cross-hotel rate plan update blocked. One or more rate plans belong to a different property.`,
+            foreignRatePlans: foreignPlanIds,
+            hotelId,
+            requestId
+          }
+        });
+      }
+    }
+
+
     // 4. Query existing records for target tuples
-    const { data: existingRows, error: fetchErr } = await supabaseServiceRole
+    const { data: existingRows, error: fetchErr } = await dbClient
       .from('channel_inventory_restrictions')
       .select('*')
       .eq('hotel_id', hotelId)
@@ -781,7 +876,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     }
 
     // 7. Atomic Upsert into database
-    const { error: upsertErr } = await supabaseServiceRole
+    const { error: upsertErr } = await dbClient
       .from('channel_inventory_restrictions')
       .upsert(mergedPayload, { onConflict: 'hotel_id,room_category_id,date' });
 
@@ -808,7 +903,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
         };
       });
 
-      await supabaseServiceRole.from('channel_sync_logs').insert({
+      await dbClient.from('channel_sync_logs').insert({
         hotel_id: hotelId,
         log_type: 'BULK_UPDATE',
         direction: 'outbound',
@@ -824,7 +919,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     // 8. Determine external channel manager configuration state
     let isChannelConfigured = false;
     try {
-      const config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
+      const config = await getChannelProviderConfig(hotelId, requestId, dbClient);
       if (config && config.hotelCode && config.credentialPresent) {
         isChannelConfigured = true;
       }
@@ -858,7 +953,8 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
             startDate: minDate,
             endDate: maxDate,
             roomCategoryIds: targetCatIds,
-            triggeredBy: 'bulk_update_rates'
+            triggeredBy: 'bulk_update_rates',
+            client: dbClient
           });
         } catch (rErr) {
           console.warn('[inventory-restrictions/patch] Rate sync non-fatal warning:', rErr.message);
@@ -874,7 +970,8 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
             startDate: minDate,
             endDate: maxDate,
             roomCategoryIds: targetCatIds,
-            triggeredBy: 'bulk_update_inventory'
+            triggeredBy: 'bulk_update_inventory',
+            client: dbClient
           });
         } catch (iErr) {
           console.warn('[inventory-restrictions/patch] Inventory sync non-fatal warning:', iErr.message);

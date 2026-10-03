@@ -21,6 +21,56 @@ const SUITE_ID = '9e82c94b-bfc0-4c86-94f9-940b3df4769f';
 const DELUXE_ID = 'ca773df6-63e4-43ed-963b-05bbc2494499';
 const FOURBED_ID = 'b2b5b71b-72e5-494f-a906-824b87dfd88b';
 
+/** All calendar dates used by any backend test suite */
+const ALL_TEST_DATES = [
+  '2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23',
+  '2026-12-24', '2026-12-25', '2026-12-26', '2026-12-27',
+  '2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31',
+  '2027-01-01', '2027-01-02', '2027-01-03', '2027-01-04', '2027-01-05',
+];
+
+/**
+ * Create the three test room categories in the database for HOTEL_ID.
+ * Uses upsert with ignoreDuplicates so repeated runs are safe.
+ */
+async function setupTestFixtures() {
+  // Allow the async signInWithPassword elevation in supabaseClient to complete
+  // (needs ~5s to resolve in practice when SUPABASE_SERVICE_ROLE_KEY is absent)
+  await new Promise(r => setTimeout(r, 5500));
+  const cats = [
+    { id: SUITE_ID, hotel_id: HOTEL_ID, name: '[TEST] Suite', sort_order: 0, is_active: true },
+    { id: DELUXE_ID, hotel_id: HOTEL_ID, name: '[TEST] Deluxe', sort_order: 1, is_active: true },
+    { id: FOURBED_ID, hotel_id: HOTEL_ID, name: '[TEST] Fourbed', sort_order: 2, is_active: true },
+  ];
+  const { error } = await supabaseServiceRole
+    .from('room_categories')
+    .upsert(cats, { onConflict: 'id', ignoreDuplicates: false });
+  if (error) {
+    console.error('[setupTestFixtures] Could not create test room categories:', error.message);
+    throw error;
+  }
+  console.log('  [setup] Test room categories created for Hotel Gopal (test fixtures).');
+}
+
+/**
+ * Remove test room categories and all their inventory rows.
+ * Runs in teardown so test data never leaks into production.
+ */
+async function cleanupTestFixtures() {
+  const testIds = [SUITE_ID, DELUXE_ID, FOURBED_ID];
+  await supabaseServiceRole
+    .from('channel_inventory_restrictions')
+    .delete()
+    .eq('hotel_id', HOTEL_ID)
+    .in('room_category_id', testIds);
+  await supabaseServiceRole
+    .from('room_categories')
+    .delete()
+    .in('id', testIds);
+  console.log('  [teardown] Test room categories and inventory rows removed.');
+}
+
+
 let testServer;
 let testPort = 5000;
 
@@ -266,12 +316,16 @@ async function runTests() {
   // ─────────────────────────────────────────────────────────────
   console.log('\n--- SUITE 3: Backend Non-Destructive PATCH Semantics ---');
 
-  // Clean test date records before starting backend tests
+  // Create test fixtures (room categories must exist in DB for backend to accept them)
+  await setupTestFixtures();
+
+  // Wipe ALL inventory rows for the test dates / test categories to guarantee clean state
   await supabaseServiceRole
     .from('channel_inventory_restrictions')
     .delete()
     .eq('hotel_id', HOTEL_ID)
-    .in('date', ['2026-12-20', '2026-12-21', '2026-12-22', '2026-12-23']);
+    .in('room_category_id', [SUITE_ID, DELUXE_ID, FOURBED_ID])
+    .in('date', ALL_TEST_DATES);
 
   await testAsync('Test J: Rate-only patch persists baseRate and leaves availability NULL', async () => {
     const res = await sendPatch([{
@@ -616,6 +670,10 @@ async function runTests() {
 
   console.log('\n===============================================================');
   console.log(` RESULTS: ${passed} / ${total} TESTS PASSED`);
+
+  // Always clean up test fixtures so they never pollute production data
+  await cleanupTestFixtures();
+
   if (passed === total) {
     console.log(' ALL BULK UPDATE INTEGRITY TESTS PASSED PERFECTLY!');
   } else {
@@ -630,8 +688,10 @@ async function runTests() {
   }
 }
 
+
 runTests().then(() => process.exit(0)).catch((err) => {
   console.error('Fatal test error:', err);
   if (testServer) testServer.close();
-  process.exit(1);
+  // Best-effort cleanup on fatal error
+  cleanupTestFixtures().catch(() => {}).finally(() => process.exit(1));
 });
