@@ -728,7 +728,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <KpiCard icon={<Bed className="w-4 h-4" />} label="Occupied" value={`${fmtInt(occupiedTotal)}`} sub={`${fmtInt(closingRooms)} vacant`} color="emerald" />
             <KpiCard icon={<BedDouble className="w-4 h-4" />} label="Vacant" value={fmtInt(closingRooms)} sub="Available" color="slate" />
-            <KpiCard icon={<DollarSign className="w-4 h-4" />} label="Room Revenue" value={`₹${fmtMoney(roomRevenue)}`} sub={`ARR ₹${fmtMoney(agg.roomsOccupied > 0 ? roomRevenue / agg.roomsOccupied : 0)}`} color="sky" />
+            <KpiCard icon={<IndianRupee className="w-4 h-4" />} label="Room Revenue" value={`₹${fmtMoney(roomRevenue)}`} sub={`ARR ₹${fmtMoney(agg.roomsOccupied > 0 ? roomRevenue / agg.roomsOccupied : 0)}`} color="sky" />
             <KpiCard icon={<Wallet className="w-4 h-4" />} label="Collection" value={`₹${fmtMoney(totalCollection)}`} sub="Today" color="amber" />
             <KpiCard icon={<TrendingUp className="w-4 h-4" />} label="Other Rev" value={`₹${fmtMoney(otherRevenueTotal)}`} sub={`${revenues.length} entries`} color="violet" />
           </div>

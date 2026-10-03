@@ -21,14 +21,13 @@ interface DashboardProps {
 }
 
 export const Dashboard = ({ onNavigate }: DashboardProps) => {
-  const { role } = useAuth();
+  const { role, hotelName } = useAuth();
   void role; // Available for staff specific conditionals if needed
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const todayStr = useMemo(() => getTodayLocal(), []);
-  const monthName = new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
   // Date filter state
   const [dateFilter, setDateFilter] = useState<RevenueDateFilter>('today');
@@ -38,23 +37,25 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
 
   const [periodRevenue, setPeriodRevenue] = useState<DayWiseRevenueData | null>(null);
   const [revenueLoading, setRevenueLoading] = useState(false);
+  void revenueLoading;
 
   // History modal state
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historyModalDate, setHistoryModalDate] = useState<string | undefined>(undefined);
 
-  const loadSummary = useCallback(async () => {
+  const loadSummary = useCallback(async (dateToFetch?: string) => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getDashboardSummary();
+      const target = dateToFetch ?? selectedDate;
+      const data = await getDashboardSummary(target);
       setSummary(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedDate]);
 
   const loadPeriodRevenue = useCallback(async () => {
     try {
@@ -62,11 +63,9 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
       let res: DayWiseRevenueData;
       if (dateFilter === 'today') {
         res = await getDayWiseRevenue({ date: todayStr });
-        setSelectedDate(todayStr);
       } else if (dateFilter === 'yesterday') {
         const yStr = addDays(todayStr, -1);
         res = await getDayWiseRevenue({ date: yStr });
-        setSelectedDate(yStr);
       } else if (dateFilter === 'custom_date') {
         res = await getDayWiseRevenue({ date: selectedDate });
       } else if (dateFilter === 'range') {
@@ -99,7 +98,17 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
 
   const handleFilterChange = (filter: RevenueDateFilter, custom?: { date?: string; start?: string; end?: string }) => {
     setDateFilter(filter);
-    if (custom?.date) setSelectedDate(custom.date);
+    if (custom?.date) {
+      setSelectedDate(custom.date);
+      loadSummary(custom.date);
+    } else if (filter === 'today') {
+      setSelectedDate(todayStr);
+      loadSummary(todayStr);
+    } else if (filter === 'yesterday') {
+      const yStr = addDays(todayStr, -1);
+      setSelectedDate(yStr);
+      loadSummary(yStr);
+    }
     if (custom?.start) setRangeStart(custom.start);
     if (custom?.end) setRangeEnd(custom.end);
   };
@@ -109,12 +118,29 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
     setShowHistoryModal(true);
   };
 
+  const refreshAll = () => {
+    loadSummary();
+    loadPeriodRevenue();
+  };
+
+  // Dynamic month name based on selected date
+  const monthName = useMemo(() => {
+    try {
+      const [y, m, d] = selectedDate.split('-').map(Number);
+      const dateObj = new Date(y, m - 1, d || 1);
+      return dateObj.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    } catch {
+      return new Date().toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+    }
+  }, [selectedDate]);
+
   const mtd = summary?.mtd ?? null;
   const ytd = summary?.ytd ?? null;
   const lastClosedDate = summary?.lastClosedDate ?? null;
   const ranking = summary?.ranking ?? [];
   const roomPreview = summary?.roomPreview ?? { categories: [] };
   const opsToday = summary?.opsToday ?? { arrivals: 0, departures: 0, inHouse: 0, available: 0, occupied: 0, dueCheckouts: 0, todayCheckins: 0 };
+  const totalRooms = summary?.settings?.total_rooms || 20;
 
   const isTodayOpen = periodRevenue?.dailyBreakdown?.[0]?.businessDateStatus !== 'closed';
 
@@ -139,20 +165,34 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
   if (loading && !summary) {
     return (
       <div className="px-4 lg:px-8 py-6 w-full max-w-[1600px] mx-auto space-y-6 animate-pulse">
-        <div className="h-12 bg-slate-200/80 rounded-2xl w-full" />
-        <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="h-28 bg-slate-200/80 rounded-2xl" />
+        {/* Header skeleton */}
+        <div className="h-28 bg-slate-200/70 rounded-2xl w-full" />
+
+        {/* 4 Primary KPI cards skeleton */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-36 bg-slate-200/70 rounded-2xl" />
           ))}
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-44 bg-slate-200/80 rounded-2xl" />
+
+        {/* 4 Secondary KPI strip skeleton */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-20 bg-slate-200/70 rounded-xl" />
           ))}
         </div>
+
+        {/* Financial overview 4 cards skeleton */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-52 bg-slate-200/70 rounded-2xl" />
+          ))}
+        </div>
+
+        {/* Charts skeleton */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-64 bg-slate-200/80 rounded-2xl" />
+            <div key={i} className="h-72 bg-slate-200/70 rounded-2xl" />
           ))}
         </div>
       </div>
@@ -169,18 +209,21 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
             <span>{error}</span>
           </div>
           <button
-            onClick={() => { loadSummary(); loadPeriodRevenue(); }}
-            className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-xl transition-all active:scale-[0.98]"
+            onClick={refreshAll}
+            className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white px-3 py-1.5 rounded-xl transition-all active:scale-[0.98] cursor-pointer"
           >
             <RefreshCw className="w-3.5 h-3.5" /> Retry
           </button>
         </div>
       )}
 
-      {/* 1. Context & Date Filter Toolbar */}
+      {/* 1. Context & Interactive Date Filter Toolbar */}
       <DashboardContextBar
         monthName={monthName}
         lastClosedDate={lastClosedDate}
+        hotelName={hotelName}
+        onRefresh={refreshAll}
+        isRefreshing={loading}
         activeFilter={dateFilter}
         onFilterChange={handleFilterChange}
         selectedDate={selectedDate}
@@ -190,9 +233,10 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
         isOpenBusinessDate={isTodayOpen}
       />
 
-      {/* 2. KPI Summary Cards (8 Cards) - Reflects active day / range revenue */}
+      {/* 2. Tiered KPI Summary Cards (8 Cards) - Reflects active day / range / MTD revenue */}
       <KpiSection
         mtd={mtd}
+        today={summary?.today}
         periodTotalRevenue={periodRevenue?.summary.totalIncome}
         periodSub={
           dateFilter === 'today'
@@ -206,28 +250,32 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
         periodArr={periodRevenue?.summary.arr}
         periodRevpar={periodRevenue?.summary.revpar}
         periodOcc={periodRevenue?.summary.occupancyPercent}
+        selectedDate={selectedDate}
+        totalRooms={totalRooms}
       />
 
       {/* 3. Financial Breakdown Cards (4 Cards) - With Day-Wise Breakup & History Drilldown */}
       <FinancialOverview
         mtd={mtd}
+        today={summary?.today}
         periodSummary={periodRevenue?.summary}
         periodSubtitle={periodSubtitle}
         periodBadge={periodBadge}
+        selectedDate={selectedDate}
         onOpenHistory={() => handleOpenHistory(selectedDate)}
         onDrilldownRoomRevenue={() => handleOpenHistory(selectedDate)}
       />
 
-      {/* 4. Analytics & Charts (3 Cards) */}
+      {/* 4. Analytics & Trend Visualizers (3 Cards) */}
       <AnalyticsOverview summary={summary} />
 
-      {/* 5. Today's Operational Summary (7 Status Metrics) */}
-      <OperationalSummaryStrip opsToday={opsToday} todayStr={todayStr} />
+      {/* 5. Today's / Selected Date's Operational Pulse */}
+      <OperationalSummaryStrip opsToday={opsToday} todayStr={selectedDate} />
 
-      {/* 6. Room Chart Preview Section */}
-      <RoomChartPreviewSection roomPreview={roomPreview} todayStr={todayStr} onNavigate={onNavigate} />
+      {/* 6. Room Inventory & Allocation Matrix Section */}
+      <RoomChartPreviewSection roomPreview={roomPreview} todayStr={selectedDate} onNavigate={onNavigate} />
 
-      {/* 7. YTD Summary + Top Booking Sources (2 Columns) */}
+      {/* 7. YTD Executive Summary + Channel Leaderboard */}
       <YtdAndBookingSources ytd={ytd} ranking={ranking} />
 
       {/* 8. Quick Actions Toolbar (8 Action Buttons) */}
