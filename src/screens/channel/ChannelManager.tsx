@@ -6,7 +6,7 @@ import {
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter, Activity,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-  RefreshCcw, Download } from 'lucide-react';
+  RefreshCcw, Download, Info } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
   bulkUpdateInventory, applyBulkInventoryPatch, saveChannelConnection, deleteChannelConnection,
@@ -674,7 +674,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   const [syncNotice, setSyncNotice] = useState<{
     title: string;
     message: string;
-    type: 'success' | 'warning' | 'error';
+    type: 'success' | 'warning' | 'error' | 'info';
     details?: string;
   } | null>(null);
 
@@ -1131,13 +1131,13 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           restriction={getR(cellEdit.catId, cellEdit.date)}
           onClose={() => setCellEdit(null)}
           onSave={async (patch) => {
-            await upsertInventoryRestriction({
+            const res = await upsertInventoryRestriction({
               room_category_id: cellEdit.catId,
               date: cellEdit.date,
               ...patch,
             });
-            setCellEdit(null);
             await load();
+            return res;
           }}
         />
       )}
@@ -1152,14 +1152,64 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           hotelId={hotelId}
           onClose={() => setBulkOpen(false)}
           onSuccess={async (result?: any) => {
-            setBulkOpen(false);
             await load();
-            if (result && result.externalSync && !result.externalSync.success && result.externalSync.status !== 'SKIPPED' && result.externalSync.status !== 'NOT_CONFIGURED') {
+            if (!result) {
+              setBulkOpen(false);
+              return;
+            }
+
+            const extSync = result.externalSync;
+            const status = extSync?.status;
+
+            if (status === 'VERIFIED' || (result.allVerified && extSync?.success)) {
+              setBulkOpen(false);
               setSyncNotice({
-                title: 'PMS Saved, Channel Sync Warning',
-                message: 'Authoritative inventory was saved to the PMS database, but external channel manager synchronization reported an issue.',
+                title: 'Inventory & Rates Updated and Verified',
+                message: result.message || 'Authoritative rates and inventory were saved to PMS and verified with the external channel manager.',
+                type: 'success'
+              });
+            } else if (status === 'NOT_CONFIGURED') {
+              setBulkOpen(false);
+              setSyncNotice({
+                title: 'PMS Saved (Local Only)',
+                message: 'Authoritative inventory and rates were saved to the PMS database. Channel manager integration is not configured for this hotel, so external channels were not updated.',
+                type: 'info'
+              });
+            } else if (status === 'SKIPPED') {
+              setBulkOpen(false);
+              setSyncNotice({
+                title: 'PMS Saved (Sync Skipped)',
+                message: 'Authoritative inventory and rates were saved to the PMS database. External channel manager sync was skipped as requested.',
+                type: 'info'
+              });
+            } else if (status === 'PARTIAL_SUCCESS') {
+              const failureDetails = [
+                ...(extSync?.failureReasons || []),
+                extSync?.rateSync?.error ? `Rate Sync Error: ${extSync.rateSync.error}` : null,
+                extSync?.inventorySync?.error ? `Inventory Sync Error: ${extSync.inventorySync.error}` : null,
+                extSync?.rateSync?.discrepancies?.length ? `Rate Verification: ${extSync.rateSync.discrepancies.length} discrepancy items` : null,
+                extSync?.inventorySync?.discrepancies?.length ? `Inventory Verification: ${extSync.inventorySync.discrepancies.length} discrepancy items` : null
+              ].filter(Boolean).join('\n');
+
+              setSyncNotice({
+                title: 'Partial Channel Manager Sync',
+                message: 'PMS inventory was saved, but external channel manager sync partially failed. Your draft has been preserved so you can retry.',
                 type: 'warning',
-                details: result.externalSync.message || result.externalSync.inventorySync?.error || 'External channel manager push could not be fully verified.'
+                details: failureDetails || extSync?.message || 'One or more channel updates could not be confirmed.'
+              });
+            } else {
+              const failureDetails = [
+                ...(extSync?.failureReasons || []),
+                extSync?.rateSync?.error ? `Rate Sync Error: ${extSync.rateSync.error}` : null,
+                extSync?.inventorySync?.error ? `Inventory Sync Error: ${extSync.inventorySync.error}` : null,
+                extSync?.message ? `Reason: ${extSync.message}` : null
+              ].filter(Boolean).join('\n');
+
+              setSyncNotice({
+                title: 'External Channel Manager Sync Failed',
+                message: 'Authoritative inventory and rates were saved to the PMS database, but the external channel manager sync failed or was rejected. Your draft has been preserved so you can retry.',
+                type: 'error',
+                details: failureDetails || 'External channel manager rejected update or verification failed.'
               });
             }
           }}
@@ -1174,11 +1224,12 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
               {syncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
               {syncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
               {syncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+              {syncNotice.type === 'info' && <Info className="w-6 h-6 text-blue-600 flex-shrink-0" />}
               <h4 className="text-base font-bold text-slate-900">{syncNotice.title}</h4>
             </div>
             <p className="text-sm text-slate-600 leading-relaxed">{syncNotice.message}</p>
             {syncNotice.details && (
-              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono">
+              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono whitespace-pre-wrap">
                 {syncNotice.details}
               </pre>
             )}
@@ -1205,7 +1256,7 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   categoryName: string;
   restriction: Partial<ChannelInventoryRestriction>;
   onClose: () => void;
-  onSave: (patch: Partial<ChannelInventoryRestriction>) => Promise<void>;
+  onSave: (patch: Partial<ChannelInventoryRestriction>) => Promise<any>;
 }) => {
   const initAvailStr = restriction.availability !== undefined && restriction.availability !== null ? String(restriction.availability) : '';
   const initRateStr = restriction.base_rate !== undefined && restriction.base_rate !== null && Number(restriction.base_rate) > 0 ? String(restriction.base_rate) : '';
@@ -1223,11 +1274,13 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   const [cta, setCta] = useState(initCta);
   const [ctd, setCtd] = useState(initCtd);
   const [saving, setSaving] = useState(false);
-  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'warning' | 'error'>('idle');
+  const [syncNoticeText, setSyncNoticeText] = useState<string>('');
 
   const handleSave = async () => {
     setSaving(true);
     setSyncState('syncing');
+    setSyncNoticeText('');
     try {
       const patch: Partial<ChannelInventoryRestriction> = {};
 
@@ -1253,13 +1306,34 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
         patch.closed_to_departure = ctd;
       }
 
-      await onSave(patch);
-      setSyncState('synced');
-      setTimeout(() => {
-        onClose();
-      }, 500);
+      const result = await onSave(patch);
+
+      if (result?.externalSync?.status === 'NOT_CONFIGURED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved to PMS (channel not configured)');
+        setTimeout(() => onClose(), 1000);
+      } else if (result?.externalSync?.status === 'SKIPPED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved to PMS (channel sync skipped)');
+        setTimeout(() => onClose(), 1000);
+      } else if (result?.allVerified === true || result?.externalSync?.status === 'VERIFIED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved and verified with channel manager');
+        setTimeout(() => onClose(), 800);
+      } else if (result?.externalSync?.status === 'PARTIAL_SUCCESS') {
+        setSyncState('warning');
+        setSyncNoticeText(result.externalSync.message || 'Saved locally, but channel sync partially failed');
+      } else if (result?.externalSync && !result.externalSync.success) {
+        setSyncState('warning');
+        setSyncNoticeText(result.externalSync.message || 'Saved locally, external channel push failed');
+      } else {
+        setSyncState('synced');
+        setSyncNoticeText('Saved successfully');
+        setTimeout(() => onClose(), 800);
+      }
     } catch (err: any) {
       setSyncState('error');
+      setSyncNoticeText(err.message || 'Failed to save');
       setSaving(false);
     }
   };
@@ -1355,13 +1429,19 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
             {syncState === 'synced' && (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="font-semibold text-emerald-700">✓ Saved and synced</span>
+                <span className="font-semibold text-emerald-700">✓ {syncNoticeText || 'Saved and synced'}</span>
+              </>
+            )}
+            {syncState === 'warning' && (
+              <>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                <span className="font-semibold text-amber-700">{syncNoticeText || 'Saved locally (external sync warning)'}</span>
               </>
             )}
             {syncState === 'error' && (
               <>
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                <span className="font-semibold text-amber-700">Saved locally (channel sync queued)</span>
+                <XCircle className="w-3.5 h-3.5 text-red-600" />
+                <span className="font-semibold text-red-700">{syncNoticeText || 'Error saving update'}</span>
               </>
             )}
           </div>
@@ -1685,9 +1765,16 @@ const BulkUpdateDrawer = ({
     try {
       const result = await applyBulkInventoryPatch(safePatchList);
       if (result && result.success) {
-        const empty = clearDraft();
-        setDrafts(empty);
-        if (hotelId) clearTenantDraft(hotelId);
+        const isNotConfigured = result.externalSync?.status === 'NOT_CONFIGURED';
+        const isSkipped = result.externalSync?.status === 'SKIPPED';
+        const isVerified = result.allVerified === true || result.externalSync?.status === 'VERIFIED';
+
+        // Clear draft only when changes are fully verified, skipped, or channel is not configured
+        if (isVerified || isNotConfigured || isSkipped) {
+          const empty = clearDraft();
+          setDrafts(empty);
+          if (hotelId) clearTenantDraft(hotelId);
+        }
         await onSuccess(result);
       } else {
         throw new Error(result?.message || 'Failed to apply updates.');

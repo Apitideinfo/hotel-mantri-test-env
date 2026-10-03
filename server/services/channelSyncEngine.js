@@ -24,6 +24,90 @@ export const getCleanDateList = (startDateStr, endDateStr) => {
   return dates;
 };
 
+/**
+ * Defensive normalizer for live rate fetch verification.
+ * Extracts rate values regardless of whether the external API responds with:
+ * - nested updates array: { updates: [ { startDate, rates: [ { roomCode, rateplanCode, rate } ] } ] }
+ * - nested data object: { data: { updates: [...] } } or { data: [...] }
+ * - flat array: [ { date, roomCode, rateplanCode, rate } ]
+ */
+export const normalizeRateFetchResponse = (fetched) => {
+  const rateMap = new Map();
+  if (!fetched) return rateMap;
+
+  const rawList = fetched?.updates 
+    || fetched?.data?.updates 
+    || fetched?.rates 
+    || fetched?.data?.rates 
+    || (Array.isArray(fetched?.data) ? fetched.data : null)
+    || (Array.isArray(fetched) ? fetched : []);
+
+  for (const item of rawList) {
+    if (!item) continue;
+    const date = item.startDate || item.date || item.start_date;
+    if (Array.isArray(item.rates)) {
+      for (const r of item.rates) {
+        if (!r) continue;
+        const room = r.roomCode || r.room_code || r.roomId || r.room_id;
+        const plan = r.rateplanCode || r.rate_plan_code || r.ratePlanCode || r.rateplan_id || r.ratePlanId;
+        const val = r.rate ?? r.price ?? r.amount;
+        if (date && room && plan && val !== undefined && val !== null) {
+          rateMap.set(`${date}_${room}_${plan}`, Number(val));
+        }
+      }
+    } else {
+      const room = item.roomCode || item.room_code || item.roomId || item.room_id;
+      const plan = item.rateplanCode || item.rate_plan_code || item.ratePlanCode || item.rateplan_id || item.ratePlanId;
+      const val = item.rate ?? item.price ?? item.amount;
+      if (date && room && plan && val !== undefined && val !== null) {
+        rateMap.set(`${date}_${room}_${plan}`, Number(val));
+      }
+    }
+  }
+
+  return rateMap;
+};
+
+/**
+ * Defensive normalizer for live inventory fetch verification.
+ * Extracts available counts regardless of response nesting or property naming.
+ */
+export const normalizeInventoryFetchResponse = (fetched) => {
+  const invMap = new Map();
+  if (!fetched) return invMap;
+
+  const rawList = fetched?.updates 
+    || fetched?.data?.updates 
+    || fetched?.rooms 
+    || fetched?.inventory 
+    || fetched?.data?.inventory 
+    || (Array.isArray(fetched?.data) ? fetched.data : null)
+    || (Array.isArray(fetched) ? fetched : []);
+
+  for (const item of rawList) {
+    if (!item) continue;
+    const date = item.startDate || item.date || item.start_date;
+    if (Array.isArray(item.rooms)) {
+      for (const rm of item.rooms) {
+        if (!rm) continue;
+        const room = rm.roomCode || rm.room_code || rm.roomId || rm.room_id;
+        const avail = rm.available ?? rm.availability ?? rm.count ?? rm.qty;
+        if (date && room && avail !== undefined && avail !== null) {
+          invMap.set(`${date}_${room}`, Number(avail));
+        }
+      }
+    } else {
+      const room = item.roomCode || item.room_code || item.roomId || item.room_id;
+      const avail = item.available ?? item.availability ?? item.count ?? item.qty;
+      if (date && room && avail !== undefined && avail !== null) {
+        invMap.set(`${date}_${room}`, Number(avail));
+      }
+    }
+  }
+
+  return invMap;
+};
+
 // In-flight sync mutex to prevent duplicate concurrent pushes & coalesce rapid events
 const inFlightOperations = new Map();
 const pendingCoalescedEvents = new Map();
@@ -327,25 +411,45 @@ export const syncRates = async ({
       try {
         await new Promise(r => setTimeout(r, 1200));
         const fetched = await aiosellService.fetchRates(startDate, endDate, hotelConfig);
-        const fetchedUpdates = fetched?.updates || (Array.isArray(fetched) ? fetched : []);
+        const rateMap = normalizeRateFetchResponse(fetched);
 
         for (const expectedUpdate of updates) {
-          const matchingFetched = fetchedUpdates.find(u => u.startDate === expectedUpdate.startDate);
+          const date = expectedUpdate.startDate;
           for (const expectedRate of expectedUpdate.rates) {
-            const match = matchingFetched?.rates?.find(
-              r => r.roomCode === expectedRate.roomCode && r.rateplanCode === expectedRate.rateplanCode
-            );
-            if (match && Number(match.rate) === Number(expectedRate.rate)) {
-              verifiedCount++;
+            const key = `${date}_${expectedRate.roomCode}_${expectedRate.rateplanCode}`;
+            if (rateMap.has(key)) {
+              const actualRate = rateMap.get(key);
+              if (Number(actualRate) === Number(expectedRate.rate)) {
+                verifiedCount++;
+              } else {
+                verified = false;
+                discrepancies.push({
+                  date,
+                  roomCode: expectedRate.roomCode,
+                  rateplanCode: expectedRate.rateplanCode,
+                  expected: expectedRate.rate,
+                  actual: actualRate
+                });
+              }
             } else {
-              verified = false;
-              discrepancies.push({
-                date: expectedUpdate.startDate,
-                roomCode: expectedRate.roomCode,
-                rateplanCode: expectedRate.rateplanCode,
-                expected: expectedRate.rate,
-                actual: match ? match.rate : 'missing'
-              });
+              // Also check if fallback nested array had it directly
+              const fetchedUpdates = fetched?.updates || (Array.isArray(fetched) ? fetched : []);
+              const matchingFetched = fetchedUpdates.find?.(u => (u.startDate || u.date) === date);
+              const match = matchingFetched?.rates?.find?.(
+                r => (r.roomCode || r.room_code) === expectedRate.roomCode && (r.rateplanCode || r.rate_plan_code) === expectedRate.rateplanCode
+              );
+              if (match && Number(match.rate ?? match.price) === Number(expectedRate.rate)) {
+                verifiedCount++;
+              } else {
+                verified = false;
+                discrepancies.push({
+                  date,
+                  roomCode: expectedRate.roomCode,
+                  rateplanCode: expectedRate.rateplanCode,
+                  expected: expectedRate.rate,
+                  actual: match ? (match.rate ?? match.price) : 'missing'
+                });
+              }
             }
           }
         }
@@ -357,10 +461,10 @@ export const syncRates = async ({
     }
 
     const durationMs = Date.now() - startTime;
-    const syncStatus = verified ? 'VERIFIED' : (discrepancies.length > 0 ? 'PARTIAL' : 'SUCCESS');
+    const syncStatus = verified ? 'VERIFIED' : 'PUSHED_NOT_VERIFIED';
     const syncMessage = verified
       ? `Rates synchronized and verified across ${updates.length} dates (${verifiedCount} rate plans confirmed)`
-      : `Rates accepted by channel manager, but verification detected ${discrepancies.length} discrepancies`;
+      : `Rates accepted by channel manager, but read-after-write verification detected ${discrepancies.length} discrepancies`;
 
     await logSyncSafely({
       hotelId,
@@ -451,7 +555,7 @@ export const syncInventory = async ({
     }
 
     // 2. Compute Authoritative Inventory Matrix
-    const { matrix } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, targetCategoryIds);
+    const { matrix } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, targetCategoryIds, { client: db });
 
     // 3. Build updates payload
     const dates = getCleanDateList(startDate, endDate);
@@ -513,22 +617,41 @@ export const syncInventory = async ({
       try {
         await new Promise(r => setTimeout(r, 1200));
         const fetched = await aiosellService.fetchInventory(startDate, endDate, hotelConfig);
-        const fetchedUpdates = fetched?.updates || (Array.isArray(fetched) ? fetched : []);
+        const invMap = normalizeInventoryFetchResponse(fetched);
 
         for (const expectedUpdate of updates) {
-          const matchingFetched = fetchedUpdates.find(u => u.startDate === expectedUpdate.startDate);
+          const date = expectedUpdate.startDate;
           for (const expectedRoom of expectedUpdate.rooms) {
-            const match = matchingFetched?.rooms?.find(r => r.roomCode === expectedRoom.roomCode);
-            if (match && Number(match.available) === Number(expectedRoom.available)) {
-              verifiedRoomsCount++;
+            const key = `${date}_${expectedRoom.roomCode}`;
+            if (invMap.has(key)) {
+              const actualAvail = invMap.get(key);
+              if (Number(actualAvail) === Number(expectedRoom.available)) {
+                verifiedRoomsCount++;
+              } else {
+                verified = false;
+                discrepancies.push({
+                  date,
+                  roomCode: expectedRoom.roomCode,
+                  expected: expectedRoom.available,
+                  actual: actualAvail
+                });
+              }
             } else {
-              verified = false;
-              discrepancies.push({
-                date: expectedUpdate.startDate,
-                roomCode: expectedRoom.roomCode,
-                expected: expectedRoom.available,
-                actual: match ? Number(match.available) : null
-              });
+              // Also check if fallback nested array had it directly
+              const fetchedUpdates = fetched?.updates || (Array.isArray(fetched) ? fetched : []);
+              const matchingFetched = fetchedUpdates.find?.(u => (u.startDate || u.date) === date);
+              const match = matchingFetched?.rooms?.find?.(r => (r.roomCode || r.room_code) === expectedRoom.roomCode);
+              if (match && Number(match.available ?? match.count) === Number(expectedRoom.available)) {
+                verifiedRoomsCount++;
+              } else {
+                verified = false;
+                discrepancies.push({
+                  date,
+                  roomCode: expectedRoom.roomCode,
+                  expected: expectedRoom.available,
+                  actual: match ? Number(match.available ?? match.count) : null
+                });
+              }
             }
           }
         }
@@ -540,8 +663,10 @@ export const syncInventory = async ({
     }
 
     const durationMs = Date.now() - startTime;
-    const syncStatus = verified ? 'VERIFIED' : (discrepancies.length > 0 ? 'PARTIAL' : 'SUCCESS');
-    const safeLogMsg = `Inventory synchronized (${updates.length} dates, ${verifiedRoomsCount} room dates verified)`;
+    const syncStatus = verified ? 'VERIFIED' : 'PUSHED_NOT_VERIFIED';
+    const safeLogMsg = verified
+      ? `Inventory synchronized and verified across ${updates.length} dates (${verifiedRoomsCount} room dates confirmed)`
+      : `Inventory accepted by channel manager, but read-after-write verification detected ${discrepancies.length} discrepancies`;
 
     await logSyncSafely({
       hotelId,
@@ -674,7 +799,7 @@ export const reconcileInventory = async ({
   const categoryToExtCode = mappings.categoryToRoomCode;
 
   // 1. Authoritative PMS inventory
-  const { matrix } = await calculateAuthoritativeInventory(hotelId, sDate, eDate, roomCategoryIds);
+  const { matrix } = await calculateAuthoritativeInventory(hotelId, sDate, eDate, roomCategoryIds, { client: supabase });
 
   // 2. Fetch external inventory from provider
   let externalUpdates = [];

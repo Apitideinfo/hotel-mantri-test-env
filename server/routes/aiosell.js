@@ -1,6 +1,7 @@
 import express from 'express';
 import aiosellService from '../services/aiosellService.js';
 import { createClient } from '@supabase/supabase-js';
+import { supabaseServiceRole } from '../supabaseClient.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
 import { resolveAuthorizedHotel, requireHotelAccess } from '../middleware/auth.js';
@@ -224,12 +225,7 @@ const getDates = (start, end) => getCleanDateList(start, end);
 
 let supabaseInstance = null;
 const getSupabase = () => {
-  if (!supabaseInstance) {
-    const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
-    supabaseInstance = createClient(supabaseUrl, supabaseKey);
-  }
-  return supabaseInstance;
+  return supabaseServiceRole;
 };
 
 // Helper to sanitize secrets from logs
@@ -322,7 +318,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     specificCategoryIds = null;
   }
   const dates = getDates(startDate, endDate);
-  const supabase = getSupabase();
+  const supabase = options?.client || getSupabase();
 
   // 1. Get physical rooms
   const { data: physicalRooms, error: roomsError } = await supabase
@@ -559,8 +555,8 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
 
         const remainingManual = Math.max(0, manualVal - newReservationsAfterUpdate);
         // Authoritative PMS inventory rule:
-        // Cap at physical availability to prevent impossible inventory (Section 18)
-        sellable = Math.min(remainingManual, calculatedAvailable);
+        // Cap at physical availability if physical rooms are configured, otherwise respect manual value
+        sellable = physical > 0 ? Math.min(remainingManual, calculatedAvailable) : remainingManual;
       }
 
       matrix.push({
@@ -783,7 +779,13 @@ router.all('/inventory/matrix', async (req, res) => {
       });
     }
 
-    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(hotelId, startDate, endDate, null, { persistToDb: false });
+    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(
+      hotelId,
+      startDate,
+      endDate,
+      null,
+      { persistToDb: false, client: req.scopedSupabase || supabaseServiceRole }
+    );
     res.json({
       success: true,
       startDate,

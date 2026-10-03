@@ -931,6 +931,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     let rateSyncResult = null;
     let invSyncResult = null;
     let externalSync = null;
+    let syncHadFailure = false;
 
     if (!isChannelConfigured) {
       externalSync = {
@@ -945,7 +946,6 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
         message: 'External channel synchronization skipped by request.'
       };
     } else {
-      let syncHadFailure = false;
       if (hasRate) {
         try {
           rateSyncResult = await syncRates({
@@ -956,9 +956,12 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
             triggeredBy: 'bulk_update_rates',
             client: dbClient
           });
+          if (!rateSyncResult || rateSyncResult.success === false || rateSyncResult.verified === false) {
+            syncHadFailure = true;
+          }
         } catch (rErr) {
           console.warn('[inventory-restrictions/patch] Rate sync non-fatal warning:', rErr.message);
-          rateSyncResult = { success: false, error: rErr.message };
+          rateSyncResult = { success: false, error: rErr.message, code: rErr.code || 'RATE_SYNC_ERROR' };
           syncHadFailure = true;
         }
       }
@@ -973,24 +976,49 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
             triggeredBy: 'bulk_update_inventory',
             client: dbClient
           });
+          if (!invSyncResult || invSyncResult.success === false || invSyncResult.verified === false) {
+            syncHadFailure = true;
+          }
         } catch (iErr) {
           console.warn('[inventory-restrictions/patch] Inventory sync non-fatal warning:', iErr.message);
-          invSyncResult = { success: false, error: iErr.message };
+          invSyncResult = { success: false, error: iErr.message, code: iErr.code || 'INVENTORY_SYNC_ERROR' };
           syncHadFailure = true;
         }
       }
 
+      const failureReasons = [];
+      if (hasRate && rateSyncResult?.error) failureReasons.push(`Rate Sync: ${rateSyncResult.error}`);
+      if (hasRate && rateSyncResult?.verified === false && rateSyncResult?.discrepancies?.length) {
+        failureReasons.push(`Rate Verification: ${rateSyncResult.discrepancies.length} discrepancy detected`);
+      }
+      if (hasInv && invSyncResult?.error) failureReasons.push(`Inventory Sync: ${invSyncResult.error}`);
+      if (hasInv && invSyncResult?.verified === false && invSyncResult?.discrepancies?.length) {
+        failureReasons.push(`Inventory Verification: ${invSyncResult.discrepancies.length} discrepancy detected`);
+      }
+
+      const overallSyncStatus = !syncHadFailure
+        ? 'VERIFIED'
+        : ((rateSyncResult?.success && rateSyncResult?.verified) || (invSyncResult?.success && invSyncResult?.verified) ? 'PARTIAL_SUCCESS' : 'FAILED');
+
       externalSync = {
         success: !syncHadFailure,
-        status: syncHadFailure ? 'PARTIAL_SUCCESS' : 'VERIFIED',
+        status: overallSyncStatus,
+        message: failureReasons.length > 0 
+          ? failureReasons.join('; ') 
+          : (!syncHadFailure ? 'All channel manager updates synchronized and verified.' : 'External channel manager synchronization reported an issue.'),
+        failureReasons,
         rateSync: rateSyncResult,
         inventorySync: invSyncResult
       };
     }
 
-    const allVerified =
-      (!hasRate || (rateSyncResult && rateSyncResult.verified !== false)) &&
-      (!hasInv || (invSyncResult && invSyncResult.verified !== false));
+    const allVerified = Boolean(
+      isChannelConfigured &&
+      !skipSync &&
+      !syncHadFailure &&
+      (!hasRate || rateSyncResult?.verified === true) &&
+      (!hasInv || invSyncResult?.verified === true)
+    );
 
     const updated = mergedPayload.map(m => ({
       roomCategoryId: m.room_category_id,
@@ -1004,6 +1032,12 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       closedToArrival: m.closed_to_arrival,
       closedToDeparture: m.closed_to_departure
     }));
+
+    const responseMessage = isChannelConfigured && allVerified
+      ? `Successfully saved ${mergedPayload.length} record updates. All channel manager updates verified.`
+      : isChannelConfigured && !allVerified
+      ? `Successfully saved ${mergedPayload.length} record updates. External channel sync requires attention.`
+      : `Successfully saved ${mergedPayload.length} record updates. Channel manager not configured — local save only.`;
 
     res.json({
       success: true,
@@ -1020,7 +1054,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       allVerified,
       rateSync: rateSyncResult,
       inventorySync: invSyncResult,
-      message: `Successfully saved ${mergedPayload.length} record updates.${isChannelConfigured && allVerified ? ' All channel manager updates verified.' : ''}`,
+      message: responseMessage,
       requestId
     });
   } catch (err) {
