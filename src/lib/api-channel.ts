@@ -965,6 +965,7 @@ export interface ChannelManagerOverview {
     connected: boolean;
     status: string;
     message?: string;
+    errorCode?: string;
   };
 }
 
@@ -999,7 +1000,13 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
 
   const dbConnected = settings?.aiosell_status === 'connected' && Boolean(settings?.aiosell_hotel_code);
   let isLiveMode = dbConnected;
-  let channelStatus = {
+  let channelStatus: {
+    configured: boolean;
+    connected: boolean;
+    status: string;
+    message?: string;
+    errorCode?: string;
+  } = {
     configured: Boolean(settings?.channel_manager_enabled && settings?.aiosell_hotel_code),
     connected: dbConnected,
     status: dbConnected ? 'CONNECTED' : (settings?.aiosell_status || 'NOT_CONFIGURED').toUpperCase(),
@@ -1015,7 +1022,8 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
         configured: data.configured ?? channelStatus.configured,
         connected: isLiveMode,
         status: (data.status || (isLiveMode ? 'CONNECTED' : 'DISCONNECTED')).toUpperCase(),
-        message: data.message || ''
+        message: data.message || '',
+        errorCode: (data as any).errorCode || (data as any).error || undefined
       };
     }
   } catch (err) {

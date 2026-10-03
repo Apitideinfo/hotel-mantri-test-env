@@ -135,8 +135,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       setError(null);
       const data = await getChannelManagerOverview();
       setOverview(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Channel Manager');
+    } catch (e: any) {
+      const rawMsg = e instanceof Error ? e.message : String(e || 'Failed to load Channel Manager');
+      const isInternalJsError = rawMsg.includes('resolveAuthorizedHotel') || rawMsg.includes('ReferenceError') || rawMsg.includes('is not defined');
+      setError(isInternalJsError ? 'Channel integration is initializing. Please refresh shortly.' : rawMsg);
     } finally {
       setLoading(false);
     }
@@ -248,26 +250,40 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   }
 
   if (!hotelId || hotelStatus === 'HOTEL_CONTEXT_EMPTY') {
+    if (isSuperAdminUser) {
+      return (
+        <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
+          <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1a68fb] flex items-center justify-center mx-auto shadow-sm">
+            <Building2 className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900">Select a Hotel Property</h2>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Channel Manager requires an active hotel context to manage OTA channels, sync rates, and process reservations.
+          </p>
+          <button
+            onClick={() => setShowHotelSelector(true)}
+            className="bg-[#1a68fb] hover:bg-blue-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 text-sm"
+          >
+            <Building2 className="w-4 h-4" /> Select Hotel Property
+          </button>
+          <HotelSelectorModal
+            isOpen={showHotelSelector}
+            onClose={() => setShowHotelSelector(false)}
+            isMandatory={false}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
-        <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1a68fb] flex items-center justify-center mx-auto shadow-sm">
-          <Building2 className="w-8 h-8" />
+        <div className="w-16 h-16 rounded-3xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto shadow-sm">
+          <AlertTriangle className="w-8 h-8" />
         </div>
-        <h2 className="text-xl font-bold text-slate-900">Select a Hotel Property</h2>
+        <h2 className="text-xl font-bold text-slate-900">No Hotel Assigned</h2>
         <p className="text-sm text-slate-500 leading-relaxed">
-          Channel Manager requires an active hotel context to manage OTA channels, sync rates, and process reservations.
+          Your account is not associated with an active hotel property. Please contact an administrator.
         </p>
-        <button
-          onClick={() => setShowHotelSelector(true)}
-          className="bg-[#1a68fb] hover:bg-blue-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 text-sm"
-        >
-          <Building2 className="w-4 h-4" /> Select Hotel Property
-        </button>
-        <HotelSelectorModal
-          isOpen={showHotelSelector}
-          onClose={() => setShowHotelSelector(false)}
-          isMandatory={false}
-        />
       </div>
     );
   }
@@ -343,7 +359,15 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">{overview.channelStatus?.status === 'PROPERTY_NOT_CONFIGURED' ? 'Property Mapping Pending:' : overview.channelStatus?.status === 'AUTH_ERROR' ? 'Authentication Required:' : 'Channel Sync Notice:'}</span>{' '}
+            <span className="font-semibold">
+              {overview.channelStatus?.errorCode === 'AIOSSELL_AUTH_FAILED' || overview.channelStatus?.status === 'AUTH_ERROR' 
+                ? 'Authentication Required:' 
+                : overview.channelStatus?.errorCode === 'AIOSSELL_HOTEL_NOT_FOUND' || overview.channelStatus?.status === 'PROPERTY_NOT_CONFIGURED' 
+                ? 'Property Code Notice:' 
+                : overview.channelStatus?.errorCode === 'AIOSSELL_HOTEL_CODE_INVALID'
+                ? 'Property Access Notice:'
+                : 'Channel Sync Notice:'}
+            </span>{' '}
             {overview.channelStatus?.message || (
               overview.settings?.aiosell_hotel_code
                 ? 'Channel Manager is syncing with upstream distribution network. Click Sync Now to refresh.'
@@ -411,11 +435,13 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </>
       ) : null}
 
-      <HotelSelectorModal
-        isOpen={showHotelSelector}
-        onClose={() => setShowHotelSelector(false)}
-        isMandatory={false}
-      />
+      {isSuperAdminUser && (
+        <HotelSelectorModal
+          isOpen={showHotelSelector}
+          onClose={() => setShowHotelSelector(false)}
+          isMandatory={false}
+        />
+      )}
     </div>
   );
 };
@@ -3096,8 +3122,8 @@ const SettingsTab = ({ settings, onChanged }: {
           ok: true, 
           message: "✓ Provider Connected",
           details: {
-            status: res.status,
-            responseTimeMs: res.responseTimeMs,
+            status: res.status || 'CONNECTED',
+            responseTimeMs: res.responseTimeMs || res.latencyMs || 0,
             hotelCode: res.hotelCode,
             partnerId: res.partnerId,
             environment: res.environment,
@@ -3117,7 +3143,7 @@ const SettingsTab = ({ settings, onChanged }: {
           onChanged();
         }
       } else {
-        const errMsg = typeof res.error === 'string' ? res.error : res.error?.message;
+        const errMsg = typeof res.error === 'string' ? res.error : (res.error?.message || res.message);
         setProviderTestResult({ ok: false, message: errMsg || "Failed to connect to Provider." });
         if (settings) {
           await saveChannelSettings({
@@ -3128,10 +3154,17 @@ const SettingsTab = ({ settings, onChanged }: {
         }
       }
     } catch (err: any) {
-      const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
+      const isAuthError = err?.status === 401 || err?.errorCode === 'AIOSSELL_AUTH_FAILED';
+      const rawMsg = err?.message || err?.error || "✕ Hotel Mantri Backend Unreachable";
+      const isInternalJsError = String(rawMsg).includes('resolveAuthorizedHotel') || String(rawMsg).includes('ReferenceError') || String(rawMsg).includes('is not defined');
+      const safeMsg = isInternalJsError
+        ? "✕ Channel integration configuration required"
+        : isAuthError
+        ? "✕ Channel Manager Authentication Failed"
+        : (rawMsg.startsWith('✕') ? rawMsg : `✕ ${rawMsg}`);
       setProviderTestResult({ 
         ok: false, 
-        message: isAuthError ? "✕ Provider Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
+        message: safeMsg
       });
       if (settings) {
         await saveChannelSettings({

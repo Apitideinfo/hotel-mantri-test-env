@@ -1,13 +1,18 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
-const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
-const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
+const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
+const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 
-const razorpayInstance = new Razorpay({
-  key_id: KEY_ID,
-  key_secret: KEY_SECRET,
-});
+const getRazorpayInstance = () => {
+  if (!KEY_ID || !KEY_SECRET) {
+    throw new Error('Razorpay credentials (KEY_ID and KEY_SECRET) are not configured on server.');
+  }
+  return new Razorpay({
+    key_id: KEY_ID,
+    key_secret: KEY_SECRET,
+  });
+};
 
 export interface CreateOrderParams {
   amount: number; // in paise (min 100 = ₹1)
@@ -39,7 +44,8 @@ export async function createRazorpayOrder(params: CreateOrderParams) {
     notes: notes || { platform: 'HotelMantri' },
   };
 
-  const order = await razorpayInstance.orders.create(options);
+  const razorpay = getRazorpayInstance();
+  const order = await razorpay.orders.create(options);
 
   return {
     order_id: order.id,

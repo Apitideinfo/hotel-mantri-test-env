@@ -3,12 +3,18 @@ import { Wallet, IndianRupee, Receipt, Clock, Info, CheckCircle2, ChevronDown, C
 import { fmtMoney } from '@/lib/calc';
 import type { DashboardSummary } from '@/lib/api';
 import type { DerivedReport } from '@/lib/types';
+import type { DayWiseRevenueData } from '@/lib/api-revenue';
 
 interface FinancialOverviewProps {
   mtd: DashboardSummary['mtd'] | null;
   today?: DerivedReport | null;
+  periodSummary?: DayWiseRevenueData['summary'] | null;
+  periodSubtitle?: string;
+  periodBadge?: string;
   viewScope?: 'daily' | 'mtd';
   selectedDate?: string;
+  onOpenHistory?: () => void;
+  onDrilldownRoomRevenue?: () => void;
 }
 
 const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
@@ -59,6 +65,7 @@ const RowItem = ({
   barPercentage,
   barColor = 'bg-brand-500',
   isTotal,
+  onClick,
 }: {
   label: string;
   value: number;
@@ -67,11 +74,13 @@ const RowItem = ({
   barPercentage?: number;
   barColor?: string;
   isTotal?: boolean;
+  onClick?: () => void;
 }) => (
   <div
+    onClick={onClick}
     className={`space-y-1.5 py-1.5 ${
       isTotal ? 'pt-3 mt-2 border-t-2 border-slate-200/80 bg-slate-50/60 -mx-5 px-5 rounded-b-2xl' : ''
-    }`}
+    } ${onClick ? 'cursor-pointer hover:bg-slate-50/80 -mx-2 px-2 rounded-lg transition-colors' : ''}`}
   >
     <div className="flex items-center justify-between gap-2">
       <div className="min-w-0 pr-2">
@@ -104,13 +113,18 @@ const RowItem = ({
 export const FinancialOverview = ({
   mtd,
   today,
+  periodSummary,
+  periodSubtitle,
+  periodBadge,
   viewScope = 'daily',
   selectedDate,
+  onOpenHistory,
+  onDrilldownRoomRevenue,
 }: FinancialOverviewProps) => {
   const [showReconDetails, setShowReconDetails] = useState(false);
   const isDaily = viewScope === 'daily';
 
-  // ── Daily Values ──
+  // ── Daily Values from today ──
   const dailyRoomRev = today?.room_revenue || today?.room_sale_amount || 0;
   const dailyFbRev = today?.fb_revenue || today?.kitchen || 0;
   const dailyMiscRev = (today?.misc_revenue || today?.other_income || 0) + (today?.other_revenue_entries || 0);
@@ -142,26 +156,18 @@ export const FinancialOverview = ({
   const inHouseDue = mtd?.currentInHouseDue ?? 0;
   const timingDifference = mtdEarnedRevenue - mtdTotalCollection;
 
-  const mtdRoomRev = mtd?.roomRevenue ?? 0;
-  const mtdFbRev = mtd?.fbRevenue ?? 0;
-  const mtdMiscRev = (mtd?.miscRevenue ?? 0) + (mtd?.otherRevenue ?? 0);
+  // Active revenue numbers: prioritize periodSummary when provided, else scope
+  const activeRoomRev = periodSummary ? periodSummary.roomRevenue : isDaily ? dailyRoomRev : (mtd?.roomRevenue ?? 0);
+  const activeFbRev = periodSummary ? periodSummary.fbRevenue : isDaily ? dailyFbRev : (mtd?.fbRevenue ?? 0);
+  const activeMiscRev = periodSummary ? periodSummary.otherIncome : isDaily ? dailyMiscRev : ((mtd?.miscRevenue ?? 0) + (mtd?.otherRevenue ?? 0));
+  const activeEarnedRevenue = periodSummary ? periodSummary.totalIncome : isDaily ? dailyEarnedRevenue : mtdEarnedRevenue;
 
-  const mtdPayCash = mtd?.payCash ?? 0;
-  const mtdPayBank = mtd?.payBank ?? 0;
-  const mtdPayUpi = mtd?.payUpi ?? 0;
-  const mtdPayCard = mtd?.payCard ?? 0;
-
-  // Active Scope mappings
-  const activeEarnedRevenue = isDaily ? dailyEarnedRevenue : mtdEarnedRevenue;
-  const activeRoomRev = isDaily ? dailyRoomRev : mtdRoomRev;
-  const activeFbRev = isDaily ? dailyFbRev : mtdFbRev;
-  const activeMiscRev = isDaily ? dailyMiscRev : mtdMiscRev;
-
-  const activeTotalCollection = isDaily ? dailyTotalCollection : mtdTotalCollection;
-  const activePayCash = isDaily ? dailyPayCash : mtdPayCash;
-  const activePayBank = isDaily ? dailyPayBank : mtdPayBank;
-  const activePayUpi = isDaily ? dailyPayUpi : mtdPayUpi;
-  const activePayCard = isDaily ? dailyPayCard : mtdPayCard;
+  // Active collections
+  const activePayCash = periodSummary ? periodSummary.collections.cash : isDaily ? dailyPayCash : (mtd?.payCash ?? 0);
+  const activePayBank = periodSummary ? periodSummary.collections.bank : isDaily ? dailyPayBank : (mtd?.payBank ?? 0);
+  const activePayUpi = periodSummary ? periodSummary.collections.upi : isDaily ? dailyPayUpi : (mtd?.payUpi ?? 0);
+  const activePayCard = periodSummary ? periodSummary.collections.card : isDaily ? dailyPayCard : (mtd?.payCard ?? 0);
+  const activeTotalCollection = periodSummary ? periodSummary.collections.total : isDaily ? dailyTotalCollection : mtdTotalCollection;
 
   const activeUncollected = isDaily ? dailyUncollected : mtdUncollected;
 
@@ -172,8 +178,8 @@ export const FinancialOverview = ({
         {/* 1. Income Breakup (Accrual Earned Revenue) */}
         <BreakdownCard
           title="Income Breakup"
-          subtitle={isDaily ? `Daily Earned (${selectedDate ?? 'Selected'})` : 'MTD Earned Revenue'}
-          badge="Accrual"
+          subtitle={periodSubtitle || (isDaily ? `Daily Earned (${selectedDate ?? 'Selected'})` : 'MTD Earned Revenue')}
+          badge={periodBadge || "Accrual"}
           badgeColor="bg-blue-50 text-brand-700 border-blue-200/60"
           icon={<IndianRupee className="w-4 h-4 text-brand-600" />}
           iconBg="bg-brand-50"
@@ -181,11 +187,12 @@ export const FinancialOverview = ({
           <div className="space-y-1">
             <RowItem
               label="Room Revenue"
-              sublabel={isDaily ? 'Daily room charges' : 'Occupied room nights'}
+              sublabel={onDrilldownRoomRevenue || onOpenHistory ? "Occupied room nights (Click to view)" : "Occupied room nights"}
               value={activeRoomRev}
               color="text-brand-600"
               barPercentage={activeEarnedRevenue > 0 ? (activeRoomRev / activeEarnedRevenue) * 100 : 0}
               barColor="bg-brand-600"
+              onClick={onDrilldownRoomRevenue || onOpenHistory}
             />
             <RowItem
               label="F&B Revenue"
@@ -204,18 +211,28 @@ export const FinancialOverview = ({
               barColor="bg-teal-500"
             />
           </div>
-          <RowItem
-            label={isDaily ? 'Total Daily Earned' : 'Total Earned Income'}
-            sublabel={isDaily ? `For ${selectedDate}` : 'Cumulative period'}
-            value={activeEarnedRevenue}
-            isTotal
-          />
+          <div>
+            <RowItem
+              label={isDaily ? 'Total Daily Earned' : 'Total Earned Income'}
+              sublabel={isDaily ? `For ${selectedDate}` : 'Cumulative period'}
+              value={activeEarnedRevenue}
+              isTotal
+            />
+            {onOpenHistory && (
+              <button
+                onClick={onOpenHistory}
+                className="mt-2 text-[11px] font-bold text-brand-600 hover:text-brand-800 transition flex items-center gap-1 cursor-pointer"
+              >
+                <span>View Day-Wise Breakdown & History →</span>
+              </button>
+            )}
+          </div>
         </BreakdownCard>
 
         {/* 2. Collection Breakup (Actual Money Received) */}
         <BreakdownCard
           title="Collection Breakup"
-          subtitle={isDaily ? `Daily Funds (${selectedDate ?? 'Selected'})` : 'MTD Realized Funds'}
+          subtitle={periodSubtitle ? periodSubtitle.replace('Earned Revenue', 'Money Received') : isDaily ? `Daily Funds (${selectedDate ?? 'Selected'})` : 'MTD Realized Funds'}
           badge="Cash Basis"
           badgeColor="bg-emerald-50 text-emerald-700 border-emerald-200/60"
           icon={<Wallet className="w-4 h-4 text-emerald-600" />}
@@ -372,7 +389,7 @@ export const FinancialOverview = ({
               <span className="font-bold text-slate-900">Financial Audit Status: </span>
               <span className="text-slate-600">
                 {isDaily
-                  ? `Selected Date (${selectedDate}): Earned Revenue = ${rs(dailyEarnedRevenue)}, Collections = ${rs(dailyTotalCollection)}, Pending = ${rs(dailyUncollected)}.`
+                  ? `Selected Date (${selectedDate}): Earned Revenue = ${rs(activeEarnedRevenue)}, Collections = ${rs(activeTotalCollection)}, Pending = ${rs(activeUncollected)}.`
                   : `Earned Revenue (${rs(mtdEarnedRevenue)}) = Collected (${rs(mtdEarnedCollected)}) + Outstanding (${rs(mtdEarnedOutstanding)}).`}
               </span>
             </div>
@@ -396,7 +413,7 @@ export const FinancialOverview = ({
                 <p className="text-[11px] leading-relaxed text-slate-500">
                   Revenue is recognized per occupied room night, while collections reflect payment posting dates.
                   {isDaily
-                    ? ` On ${selectedDate}, room charges total ₹${fmtMoney(dailyRoomRev)} with ₹${fmtMoney(dailyTotalCollection)} realized in cash/UPI/card/bank.`
+                    ? ` On ${selectedDate}, room charges total ₹${fmtMoney(activeRoomRev)} with ₹${fmtMoney(activeTotalCollection)} realized in cash/UPI/card/bank.`
                     : ` The ₹${fmtMoney(timingDifference)} variance is the net of uncollected bookings (₹${fmtMoney(mtdEarnedOutstanding)}) minus receipts for prior stays and advance bookings (₹${fmtMoney(mtd?.collectionsForOtherPeriods ?? 0)}).`}
                 </p>
               </div>

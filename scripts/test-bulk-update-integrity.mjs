@@ -25,22 +25,18 @@ let testServer;
 let testPort = 5000;
 
 async function setupServer() {
-  try {
-    const res = await fetch(`http://localhost:5000/api/channels/catalog`, {
-      headers: { 'x-hotel-id': HOTEL_ID },
-    });
-    if (res.status < 500) {
-      testPort = 5000;
-      return;
-    }
-  } catch {
-    // Port 5000 not active, start in-process test server on port 5123
-  }
-
   testPort = 5123;
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use((req, res, next) => {
+    req.user = { id: 'test-user-id', email: 'test@hotel.com' };
+    req.auth = { userId: 'test-user-id', role: 'hotel_admin', hotelId: HOTEL_ID, hotel: { id: HOTEL_ID } };
+    req.hotelId = HOTEL_ID;
+    req.userRole = 'hotel_admin';
+    req.requestId = `TEST-${Date.now()}`;
+    next();
+  });
   app.use('/api/channels', channelRoutes);
 
   await new Promise((resolve) => {

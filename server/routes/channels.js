@@ -122,10 +122,10 @@ router.post('/discover', checkAuth, async (req, res) => {
     }
 
     // Verify hotel configuration exists
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     res.status(501).json({ 
-      success: false,
+      success: false, 
       code: 'DISCOVERY_NOT_SUPPORTED',
       message: 'Automatic OTA discovery is not supported for this integration account. Please use Add Channel to connect your distribution channels.',
       discovered: [],
@@ -152,29 +152,57 @@ router.post('/test-connection', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
     }
 
-    const config = await getChannelProviderConfig(hotelId, req.requestId);
+    const config = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.testConnection(config);
 
     if (result.success) {
+      // Authoritatively update channel_settings in DB
+      await (req.scopedSupabase || supabaseServiceRole)
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'connected',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: 'Connected successfully',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
       return res.json({
         success: true,
         status: 'connected',
         connected: true,
+        provider: 'external_channel_manager',
         hotelId,
         environment: result.environment,
         hotelCode: result.hotelCode,
         partnerId: result.partnerId,
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        mapping: result.mapping,
         latencyMs: result.responseTimeMs,
+        responseTimeMs: result.responseTimeMs,
         message: 'Channel integration connection verified successfully',
         requestId: req.requestId
       });
     } else {
+      // Authoritatively update channel_settings in DB
+      await (req.scopedSupabase || supabaseServiceRole)
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'error',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: result.error?.message || 'Connection test failed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
+      const errorCode = result.error?.errorCode || result.error?.code || 'CONNECTION_TEST_FAILED';
       return res.status(result.status || 502).json({
         success: false,
         status: 'error',
         connected: false,
-        code: result.error?.code || 'CONNECTION_TEST_FAILED',
+        provider: 'external_channel_manager',
+        code: errorCode,
+        errorCode,
         message: result.error?.message || 'Channel integration test failed',
         details: result.diagnostic,
         requestId: req.requestId
@@ -390,25 +418,30 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
   }
 
   // 1. Verify hotel exists in database
-  try {
-    const { data: hotelRecord, error: hotelErr } = await supabaseServiceRole
-      .from('hotels')
-      .select('id, hotel_name')
-      .eq('id', hotelId)
-      .maybeSingle();
+  if (req.auth?.hotelId && req.auth.hotelId === hotelId && req.auth.hotel) {
+    // Authorized hotel already verified by requireHotelAccess middleware
+  } else {
+    try {
+      const dbClient = req.scopedSupabase || supabaseServiceRole;
+      const { data: hotelRecord, error: hotelErr } = await dbClient
+        .from('hotels')
+        .select('id, hotel_name')
+        .eq('id', hotelId)
+        .maybeSingle();
 
-    if (hotelErr || !hotelRecord) {
-      return res.status(404).json({
-        success: false,
-        error: {
-          code: 'HOTEL_NOT_FOUND',
-          message: 'The specified hotel property does not exist.',
-          requestId
-        }
-      });
+      if (hotelErr || !hotelRecord) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'HOTEL_NOT_FOUND',
+            message: 'The specified hotel property does not exist.',
+            requestId
+          }
+        });
+      }
+    } catch (hErr) {
+      console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
     }
-  } catch (hErr) {
-    console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
   }
 
   if (updates.length === 0) {
@@ -791,7 +824,7 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
     // 8. Determine external channel manager configuration state
     let isChannelConfigured = false;
     try {
-      const config = await getChannelProviderConfig(hotelId, requestId);
+      const config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
       if (config && config.hotelCode && config.credentialPresent) {
         isChannelConfigured = true;
       }
@@ -971,7 +1004,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     // 1. Resolve channel configuration
     let config;
     try {
-      config = await getChannelProviderConfig(hotelId, requestId);
+      config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
     } catch (cfgErr) {
       return res.status(200).json({
         success: false,
@@ -1703,7 +1736,7 @@ router.post('/:channelId/fetch/inventory', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchInventory(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1744,7 +1777,7 @@ router.post('/:channelId/fetch/rates', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchRates(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1797,10 +1830,10 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
     }
 
     // Resolve provider config properly using the centralized resolver
-    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Fetch channel details to know channel_name
-    const { data: connection } = await supabaseServiceRole
+    const { data: connection } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('channel_name, channel_type')
       .eq('id', channelId)
@@ -1949,10 +1982,10 @@ router.post('/', checkAuth, async (req, res) => {
     if (!channelType || !displayName) return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'channelType and displayName required', requestId: req.requestId });
 
     // Validate that integration is setup
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Check for duplicate channel
-    const { data: existingChannel } = await supabaseServiceRole
+    const { data: existingChannel } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('id')
       .eq('hotel_id', hotelId)

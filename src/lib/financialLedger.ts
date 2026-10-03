@@ -16,7 +16,7 @@
  *   checkOut is EXCLUDED (departure date; NOT an occupied night).
  */
 
-import { toNum, calcStayNights } from './calc';
+import { toNum, calcStayNights } from './calc.ts';
 import type { SourceCategory } from './types';
 
 // ── Types ───────────────────────────────────────────────────────────────────

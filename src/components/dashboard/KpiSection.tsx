@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { IndianRupee, Wallet, Banknote, Receipt, TrendingUp, TrendingDown, Percent, BarChart3, Activity, Sparkles, Calendar } from 'lucide-react';
+import { IndianRupee, Wallet, Banknote, TrendingUp, TrendingDown, Percent, BarChart3, Activity, Sparkles } from 'lucide-react';
 import { fmtMoney, fmtInt } from '@/lib/calc';
 import type { DashboardSummary } from '@/lib/api';
 import type { DerivedReport } from '@/lib/types';
@@ -7,6 +7,13 @@ import type { DerivedReport } from '@/lib/types';
 interface KpiSectionProps {
   mtd: DashboardSummary['mtd'] | null;
   today?: DerivedReport | null;
+  periodTotalRevenue?: number;
+  periodSub?: string;
+  periodCash?: number;
+  periodBank?: number;
+  periodArr?: number;
+  periodRevpar?: number;
+  periodOcc?: number;
   viewScope?: 'daily' | 'mtd';
   selectedDate?: string;
   totalRooms?: number;
@@ -112,6 +119,13 @@ const SecondaryKpiCard = ({ label, value, sub, icon, iconBg, textColor = 'text-s
 export const KpiSection = ({
   mtd,
   today,
+  periodTotalRevenue,
+  periodSub,
+  periodCash,
+  periodBank,
+  periodArr,
+  periodRevpar,
+  periodOcc,
   viewScope = 'daily',
   selectedDate,
   totalRooms = 20,
@@ -119,7 +133,7 @@ export const KpiSection = ({
 }: KpiSectionProps) => {
   const isDaily = viewScope === 'daily';
 
-  // ── Daily Calculations for Selected Date ──
+  // Fallbacks from today / mtd
   const dailyRoomRev = today?.room_revenue || today?.room_sale_amount || 0;
   const dailyFbRev = today?.fb_revenue || today?.kitchen || 0;
   const dailyMiscRev = (today?.misc_revenue || today?.other_income || 0) + (today?.other_revenue_entries || 0);
@@ -136,26 +150,38 @@ export const KpiSection = ({
   const dailyExpenses = today?.finance_expenses || today?.other_expense || 0;
   const dailyNetIncome = dailyEarnedRevenue - dailyExpenses;
 
-  // ── MTD Calculations ──
-  const mtdEarnedRevenue = mtd?.totalRevenue ?? 0;
-  const mtdTotalCollections = mtd?.totalCollections ?? (mtd ? (mtd.payCash || 0) + (mtd.payBank || 0) + (mtd.payCard || 0) + (mtd.payUpi || 0) : 0);
-  const mtdOcc = mtd?.occ ?? 0;
-  const mtdArr = mtd?.arr ?? 0;
-  const mtdRevpar = mtd?.revpar ?? 0;
-  const mtdNetIncome = mtd?.netIncome ?? 0;
+  // Authoritative period calculations priority
+  const displayEarnedRevenue = periodTotalRevenue !== undefined
+    ? periodTotalRevenue
+    : isDaily ? dailyEarnedRevenue : (mtd?.totalRevenue ?? 0);
 
-  // Active metrics based on viewScope
-  const displayEarnedRevenue = isDaily ? dailyEarnedRevenue : mtdEarnedRevenue;
+  const displayCash = periodCash !== undefined
+    ? periodCash
+    : isDaily ? dailyCash : (mtd?.cash ?? 0);
+
+  const displayBank = periodBank !== undefined
+    ? periodBank
+    : isDaily ? dailyBank : (mtd?.bank ?? 0);
+
+  const displayArr = periodArr !== undefined
+    ? periodArr
+    : isDaily ? dailyArr : (mtd?.arr ?? 0);
+
+  const displayRevpar = periodRevpar !== undefined
+    ? periodRevpar
+    : isDaily ? dailyRevpar : (mtd?.revpar ?? 0);
+
+  const displayOcc = periodOcc !== undefined
+    ? periodOcc
+    : isDaily ? dailyOcc : (mtd?.occ ?? 0);
+
   const displayRoomRev = isDaily ? dailyRoomRev : (mtd?.roomRevenue ?? 0);
-  const displayOcc = isDaily ? dailyOcc : mtdOcc;
-  const displayArr = isDaily ? dailyArr : mtdArr;
-  const displayRevpar = isDaily ? dailyRevpar : mtdRevpar;
-  const displayTotalCollections = isDaily ? dailyTotalCollections : mtdTotalCollections;
-  const displayCash = isDaily ? dailyCash : (mtd?.cash ?? 0);
-  const displayBank = isDaily ? dailyBank : (mtd?.bank ?? 0);
-  const displayNetIncome = isDaily ? dailyNetIncome : mtdNetIncome;
-  const displayExpenses = isDaily ? dailyExpenses : (mtd?.totalExpenses ?? 0);
+  const displayTotalCollections = displayCash + displayBank > 0
+    ? displayCash + displayBank
+    : isDaily ? dailyTotalCollections : (mtd?.totalCollections ?? 0);
 
+  const displayExpenses = isDaily ? dailyExpenses : (mtd?.totalExpenses ?? 0);
+  const displayNetIncome = isDaily ? dailyNetIncome : (mtd?.netIncome ?? (displayEarnedRevenue - displayExpenses));
   const isPositiveNet = displayNetIncome >= 0;
 
   return (
@@ -164,9 +190,9 @@ export const KpiSection = ({
       <div className="flex items-center justify-between flex-wrap gap-2 px-1">
         <div className="flex items-center gap-2">
           <span className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
-            {isDaily ? 'Daily Performance Key Metrics' : 'MTD Cumulative Key Metrics'}
+            {periodSub ? periodSub : isDaily ? 'Daily Performance Key Metrics' : 'MTD Cumulative Key Metrics'}
           </span>
-          {isDaily && selectedDate && (
+          {isDaily && selectedDate && !periodSub && (
             <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
               <Sparkles className="w-3 h-3 text-emerald-600" />
               {selectedDate}
@@ -191,10 +217,10 @@ export const KpiSection = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {/* Total Earned Revenue */}
         <PrimaryKpiCard
-          label={isDaily ? 'Daily Earned Revenue' : 'Earned Revenue (MTD)'}
+          label={periodSub ? 'Earned Revenue' : isDaily ? 'Daily Earned Revenue' : 'Earned Revenue (MTD)'}
           value={rs(displayEarnedRevenue)}
           sublabel={isDaily ? `Room: ${rs(displayRoomRev)} • F&B: ${rs(dailyFbRev)}` : `Room: ${rs(displayRoomRev)}`}
-          pillText={isDaily ? `Daily (${selectedDate ?? 'Selected'})` : 'MTD Accrual'}
+          pillText={periodSub ? 'Accrual' : isDaily ? `Daily (${selectedDate ?? 'Selected'})` : 'MTD Accrual'}
           pillColor={isDaily ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' : 'bg-blue-50 text-brand-700 border border-blue-200/60'}
           icon={<IndianRupee className="w-5 h-5 text-brand-600" />}
           iconBg="bg-brand-50 text-brand-600"
@@ -205,7 +231,7 @@ export const KpiSection = ({
 
         {/* Occupancy Rate */}
         <PrimaryKpiCard
-          label={isDaily ? 'Daily Occupancy' : 'Occupancy Rate'}
+          label="Occupancy Rate"
           value={`${displayOcc.toFixed(0)}%`}
           sublabel={isDaily ? `${dailyRoomsOccupied} of ${totalRooms} Rooms Occupied` : `${fmtInt(mtd?.roomNights ?? 0)} Room Nights Sold`}
           pillText={displayOcc >= 70 ? 'High Demand' : displayOcc >= 40 ? 'Moderate' : 'Capacity Available'}
@@ -247,9 +273,9 @@ export const KpiSection = ({
       {/* 2. Secondary Financial Velocity Strip (4 Cash & Operational Metrics) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         <SecondaryKpiCard
-          label={isDaily ? 'Daily Collection' : 'Total Collection'}
+          label="Total Collection"
           value={rs(displayTotalCollections)}
-          sub={isDaily ? `Realized Funds (${selectedDate})` : 'Realized Cash & Digital'}
+          sub={isDaily ? `Realized Funds (${selectedDate ?? 'Selected'})` : 'Realized Cash & Digital'}
           icon={<Wallet className="w-4 h-4 text-emerald-600" />}
           iconBg="bg-emerald-50"
           textColor="text-emerald-700"
@@ -257,9 +283,9 @@ export const KpiSection = ({
         />
 
         <SecondaryKpiCard
-          label={isDaily ? 'Daily Cash' : 'Cash In Hand'}
+          label="Cash In Hand"
           value={rs(displayCash)}
-          sub={isDaily ? 'Cash Received Today' : 'MTD Cash Received'}
+          sub="Physical Currency Received"
           icon={<Banknote className="w-4 h-4 text-blue-600" />}
           iconBg="bg-blue-50"
           textColor="text-slate-900"
@@ -267,9 +293,9 @@ export const KpiSection = ({
         />
 
         <SecondaryKpiCard
-          label={isDaily ? 'Daily Bank & OTA' : 'Bank & OTA Recv'}
+          label="Bank & OTA"
           value={rs(displayBank)}
-          sub={isDaily ? 'UPI & Bank Payments' : 'Digital / Channel Recv'}
+          sub="UPI, Bank & Channels"
           icon={<IndianRupee className="w-4 h-4 text-indigo-600" />}
           iconBg="bg-indigo-50"
           textColor="text-slate-900"
@@ -277,7 +303,7 @@ export const KpiSection = ({
         />
 
         <SecondaryKpiCard
-          label={isDaily ? 'Daily Net Margin' : 'Net Profit Margin'}
+          label="Net Margin"
           value={rs(displayNetIncome)}
           sub={`Expenses: ${rs(displayExpenses)}`}
           icon={isPositiveNet ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-rose-600" />}
