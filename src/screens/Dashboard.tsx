@@ -13,7 +13,6 @@ import { AnalyticsOverview } from '@/components/dashboard/AnalyticsOverview';
 import { OperationalSummaryStrip } from '@/components/dashboard/OperationalSummaryStrip';
 import { RoomChartPreviewSection } from '@/components/dashboard/RoomChartPreviewSection';
 import { YtdAndBookingSources } from '@/components/dashboard/YtdAndBookingSources';
-import { QuickActionsToolbar } from '@/components/dashboard/QuickActionsToolbar';
 import { DailyRevenueHistoryModal } from '@/components/dashboard/DailyRevenueHistoryModal';
 
 interface DashboardProps {
@@ -277,9 +276,6 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
 
       {/* 7. YTD Executive Summary + Channel Leaderboard */}
       <YtdAndBookingSources ytd={ytd} ranking={ranking} />
-
-      {/* 8. Quick Actions Toolbar (8 Action Buttons) */}
-      <QuickActionsToolbar onNavigate={onNavigate} todayStr={todayStr} />
 
       {/* Dedicated Day-Wise Revenue History Modal */}
       <DailyRevenueHistoryModal

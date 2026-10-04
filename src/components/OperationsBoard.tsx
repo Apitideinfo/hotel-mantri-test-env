@@ -713,6 +713,15 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     setShowFolio(true);
   };
 
+  const handleBookingQuickAction = (action: 'checkin' | 'checkout' | 'folio' | 'shift' | 'extend' | 'details', b: BoardBooking) => {
+    if (action === 'checkin') handleCheckIn(b);
+    else if (action === 'checkout') handleCheckOut(b);
+    else if (action === 'folio') handleViewFolio(b);
+    else if (action === 'shift') handleRoomShift(b);
+    else if (action === 'extend') handleExtendStay(b);
+    else if (action === 'details') setSelectedBooking(b);
+  };
+
   const handleCheckInComplete = async () => {
     setShowCheckIn(false);
     setSelectedBooking(null);
@@ -1334,26 +1343,55 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       />
 
       {/* 5. Room Chart Weekly Grid Canvas */}
-      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4">
+      <div className="flex-1 overflow-auto px-4 sm:px-6 pb-4 max-w-[1920px] mx-auto w-full">
         {loading ? (
-          <div className="flex flex-col items-center justify-center h-64 text-slate-400 bg-white rounded-2xl border border-slate-200/90 shadow-card">
-            <Loader2 className="w-8 h-8 animate-spin text-brand-600 mb-2" />
-            <span className="text-sm font-bold text-slate-700">Loading Operations Matrix…</span>
-            <span className="text-xs text-slate-400 mt-0.5">Synchronizing rooms, rates & reservations</span>
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-8 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                  <Loader2 className="w-5 h-5 animate-spin text-indigo-600" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-black text-slate-900">Synchronizing Operations Matrix…</h4>
+                  <p className="text-xs font-medium text-slate-400">Loading authoritative availability, reservations & housekeeping</p>
+                </div>
+              </div>
+            </div>
+            {/* Skeleton Grid */}
+            <div className="space-y-2.5 pt-2 animate-pulse">
+              <div className="h-9 bg-slate-100 rounded-xl w-full" />
+              <div className="h-12 bg-slate-100/80 rounded-xl w-full" />
+              <div className="h-12 bg-slate-100/60 rounded-xl w-full" />
+              <div className="h-12 bg-slate-100/80 rounded-xl w-full" />
+              <div className="h-12 bg-slate-100/60 rounded-xl w-full" />
+            </div>
           </div>
         ) : activeRooms.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-64 text-slate-400 bg-white rounded-2xl border border-slate-200/90 shadow-card">
-            <BedDouble className="w-10 h-10 text-slate-300 mb-2" />
-            <span className="text-sm font-bold text-slate-700">No rooms configured</span>
-            <span className="text-xs text-slate-400 mt-0.5">Add rooms in Property Master to populate the room chart.</span>
+          <div className="flex flex-col items-center justify-center py-16 px-4 text-center bg-white rounded-2xl border border-slate-200/90 shadow-sm">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3 shadow-2xs">
+              <BedDouble className="w-7 h-7 stroke-[2]" />
+            </div>
+            <h3 className="text-base font-black text-slate-900">No rooms configured</h3>
+            <p className="text-xs font-medium text-slate-500 max-w-sm mt-1 mb-4">
+              Add rooms in Property Master to populate and activate the live Operations Matrix.
+            </p>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate('property-master')}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition active:scale-95 cursor-pointer"
+              >
+                Go to Property Master
+              </button>
+            )}
           </div>
         ) : (
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-card overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
             {/* Date Header Row */}
-            <div className="flex border-b border-slate-200/90 bg-slate-50/90 sticky top-0 z-20 backdrop-blur-xs">
-              <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2.5 text-xs font-black text-slate-500 uppercase tracking-wider border-r border-slate-200/90 bg-slate-50 flex items-center justify-between sticky left-0 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+            <div className="flex border-b border-slate-200/90 bg-slate-50/95 sticky top-0 z-20 backdrop-blur-md">
+              <div className="w-28 sm:w-36 flex-shrink-0 px-3.5 py-3 text-xs font-black text-slate-600 uppercase tracking-wider border-r border-slate-200/90 bg-slate-50 flex items-center justify-between sticky left-0 z-30 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)]">
                 <span>Room</span>
-                <span className="text-[10px] font-bold text-slate-400">{activeRooms.length} Total</span>
+                <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-1.5 py-0.2 rounded">{activeRooms.length}</span>
               </div>
               {timelineDates.map((d) => {
                 const isToday = d === date;
@@ -1366,24 +1404,27 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                 return (
                   <div
                     key={d}
-                    className={`flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center border-r border-slate-200/90 transition ${
+                    className={`flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2.5 text-center border-r border-slate-200/90 transition-colors ${
                       isToday
-                        ? 'bg-brand-50/90 border-b-2 border-b-brand-600'
+                        ? 'bg-indigo-50/90 border-b-2 border-b-indigo-600'
                         : isHot
                         ? 'bg-rose-50/50'
                         : isWeekend
-                        ? 'bg-slate-100/50'
-                        : 'bg-slate-50/70'
+                        ? 'bg-slate-100/60'
+                        : 'bg-slate-50/80'
                     }`}
                   >
                     <div className="flex items-center justify-center gap-1.5">
-                      <span className={`text-xs font-extrabold ${isToday ? 'text-brand-700' : 'text-slate-700'}`}>
+                      <span className={`text-xs font-black tracking-tight ${isToday ? 'text-indigo-900' : 'text-slate-800'}`}>
                         {fmtDay(d)}
                       </span>
                       {isToday && (
-                        <span className="px-1.5 py-0.2 rounded-full text-[9px] font-black bg-brand-600 text-white uppercase tracking-wider">
+                        <span className="px-1.5 py-0.2 rounded-md text-[9px] font-black bg-indigo-600 text-white uppercase tracking-wider shadow-2xs">
                           Today
                         </span>
+                      )}
+                      {isHot && !isToday && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" title="Hot Season Period" />
                       )}
                     </div>
                   </div>
@@ -1442,6 +1483,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                             onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
                             onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
                             onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
+                            onQuickAction={handleBookingQuickAction}
                           />
                         ))}
                       </div>
@@ -1458,12 +1500,12 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
               return grouped.map((group) => (
                 <div key={group.cat?.id ?? '__uncategorized'}>
                   {/* Category Header Row with Authoritative Availability & Click-to-Edit */}
-                  <div className="flex border-b border-slate-200 bg-slate-900 text-white sticky left-0 z-[6]">
-                    <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-700 bg-slate-900 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.2)]">
-                      <span className="text-[11px] font-extrabold text-slate-100 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
+                  <div className="flex border-b border-slate-800 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white sticky left-0 z-[6]">
+                    <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-800 bg-slate-900 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.25)]">
+                      <span className="text-[11px] font-black text-slate-100 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
                         {group.cat?.name ?? 'Uncategorized'}
                       </span>
-                      <span className="text-[10px] font-bold text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 shadow-2xs">
+                      <span className="text-[10px] font-black text-slate-300 bg-slate-800 px-1.5 py-0.5 rounded-md border border-slate-700 shadow-2xs">
                         {group.rooms.length}
                       </span>
                     </div>
@@ -1483,7 +1525,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                       return (
                         <div
                           key={d}
-                          className="flex-1 min-w-[95px] sm:min-w-[110px] px-1.5 py-1 border-r border-slate-800 flex items-center justify-center bg-slate-900"
+                          className="flex-1 min-w-[95px] sm:min-w-[110px] px-1.5 py-1 border-r border-slate-800/80 flex items-center justify-center bg-slate-900/90"
                         >
                           {catId ? (
                             <button
@@ -1501,10 +1543,10 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                               }}
                               className={`w-full h-7 px-2 rounded-lg text-[11px] font-extrabold transition flex items-center justify-between gap-1 shadow-2xs group cursor-pointer ${
                                 isStopSell
-                                  ? 'bg-rose-950/80 text-rose-300 border border-rose-800 hover:bg-rose-900'
+                                  ? 'bg-rose-950/90 text-rose-300 border border-rose-800 hover:bg-rose-900 hover:text-white'
                                   : availVal === 0
-                                  ? 'bg-amber-950/80 text-amber-300 border border-amber-800 hover:bg-amber-900'
-                                  : 'bg-slate-800 text-emerald-400 border border-slate-700 hover:bg-slate-750 hover:border-slate-600'
+                                  ? 'bg-amber-950/90 text-amber-300 border border-amber-800 hover:bg-amber-900 hover:text-white'
+                                  : 'bg-slate-800/90 text-emerald-400 border border-slate-700/90 hover:bg-slate-700 hover:border-slate-600 hover:text-emerald-300'
                               }`}
                               title={`Category: ${group.cat?.name ?? 'Room'}\nDate: ${d}\nAvailability: ${availVal} sellable (${group.rooms.length} physical)\nStatus: ${isStopSell ? 'Stop Sell' : isOverridden ? 'Manual Override' : 'Standard'}\nClick to adjust`}
                             >
@@ -1515,7 +1557,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                               <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-white shrink-0 opacity-70 group-hover:opacity-100" />
                             </button>
                           ) : (
-                            <span className="text-[10px] text-slate-400">{availVal} Avail</span>
+                            <span className="text-[10px] text-slate-400 font-bold">{availVal} Avail</span>
                           )}
                         </div>
                       );
@@ -1535,7 +1577,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                             <HkDot status={room.housekeeping_status} />
                             <span className="text-sm font-extrabold text-slate-900 tracking-tight">{room.room_no}</span>
                             {room.floor && (
-                              <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1 py-0 rounded">
+                              <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                                 F{room.floor}
                               </span>
                             )}
@@ -1614,19 +1656,19 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                               className={`flex-1 min-w-[95px] sm:min-w-[110px] px-1 py-1.5 border-r border-slate-100 transition-colors relative ${
                                 isMoveTargetPreview
                                   ? isMoveConflict
-                                    ? 'bg-rose-100/90 ring-2 ring-rose-500 z-10'
-                                    : 'bg-brand-100/90 ring-2 ring-brand-500 z-10'
-                                  : isStretchInvalid
-                                  ? 'bg-rose-50 ring-2 ring-rose-400 z-10 cursor-not-allowed'
-                                  : isStretchPreview || isCheckInStretchPreview
-                                  ? 'bg-emerald-100/90 ring-2 ring-emerald-500 ring-dashed z-10'
-                                  : isStretchShrinkPreview
-                                  ? 'bg-rose-50/80 ring-1 ring-rose-400 opacity-60 z-10'
-                                  : isHot
-                                  ? 'bg-rose-50/20'
-                                  : isToday
-                                  ? 'bg-brand-50/30'
-                                  : ''
+                                  ? 'bg-rose-100/90 ring-2 ring-rose-500 z-10'
+                                  : 'bg-brand-100/90 ring-2 ring-brand-500 z-10'
+                                : isStretchInvalid
+                                ? 'bg-rose-50 ring-2 ring-rose-400 z-10 cursor-not-allowed'
+                                : isStretchPreview || isCheckInStretchPreview
+                                ? 'bg-emerald-100/90 ring-2 ring-emerald-500 ring-dashed z-10'
+                                : isStretchShrinkPreview
+                                ? 'bg-rose-50/80 ring-1 ring-rose-400 opacity-60 z-10'
+                                : isHot
+                                ? 'bg-rose-50/20'
+                                : isToday
+                                ? 'bg-brand-50/30'
+                                : ''
                               }`}
                             >
                               {/* Target Move Preview Placeholder */}
@@ -1708,6 +1750,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                       onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
                                       onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
                                       onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
+                                      onQuickAction={handleBookingQuickAction}
                                     />
                                   );
                                 })
@@ -1721,97 +1764,6 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                 </div>
               ));
             })()}
-
-            {/* Daily Summary Sticky Footer */}
-            <div className="border-t-2 border-slate-200 bg-slate-50/95 flex flex-col text-xs sticky bottom-0 z-[15] backdrop-blur-xs">
-              {/* Occupied Row */}
-              <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                  Occupied
-                </div>
-                {timelineDates.map((d) => {
-                  const occCount = activeRooms.filter((r) => {
-                    const roomKey = r.room_no.trim().toLowerCase();
-                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
-                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
-                  }).length;
-                  return (
-                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-slate-900 border-r border-slate-200/80 tabular-nums">
-                      {occCount}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Available Row */}
-              <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                  Available
-                </div>
-                {timelineDates.map((d) => {
-                  let totalAvail = 0;
-                  categories.forEach((cat) => {
-                    const authItem = categoryAvailability.get(`${cat.id}_${d}`);
-                    if (authItem !== undefined) {
-                      totalAvail += authItem.available;
-                    } else {
-                      const catRooms = activeRooms.filter((r) => r.category_id === cat.id);
-                      const occCount = catRooms.filter((r) => {
-                        const roomKey = r.room_no.trim().toLowerCase();
-                        const roomBookings = bookingByRoom.get(roomKey) ?? [];
-                        return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
-                      }).length;
-                      totalAvail += Math.max(0, catRooms.length - occCount);
-                    }
-                  });
-                  return (
-                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-emerald-600 border-r border-slate-200/80 tabular-nums">
-                      {totalAvail}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Occupancy % Row */}
-              <div className="flex border-b border-slate-200/80">
-                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                  Occupancy %
-                </div>
-                {timelineDates.map((d) => {
-                  const occCount = activeRooms.filter((r) => {
-                    const roomKey = r.room_no.trim().toLowerCase();
-                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
-                    return roomBookings.some((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
-                  }).length;
-                  const pct = activeRooms.length > 0 ? Math.round((occCount / activeRooms.length) * 100) : 0;
-                  return (
-                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-brand-600 border-r border-slate-200/80 tabular-nums">
-                      {pct}%
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Daily Tariff Row */}
-              <div className="flex">
-                <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-200/80 bg-slate-50 font-bold text-slate-700 sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                  Daily Tariff
-                </div>
-                {timelineDates.map((d) => {
-                  const rev = activeRooms.reduce((sum, r) => {
-                    const roomKey = r.room_no.trim().toLowerCase();
-                    const roomBookings = bookingByRoom.get(roomKey) ?? [];
-                    const activeBooking = roomBookings.find((b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut));
-                    return sum + (activeBooking ? activeBooking.rate : 0);
-                  }, 0);
-                  return (
-                    <div key={d} className="flex-1 min-w-[95px] sm:min-w-[110px] px-2 py-2 text-center font-bold text-emerald-700 border-r border-slate-200/80 tabular-nums">
-                      ₹{Math.round(rev).toLocaleString('en-IN')}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
           </div>
         )}
       </div>

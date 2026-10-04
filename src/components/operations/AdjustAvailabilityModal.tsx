@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Sliders, X, AlertCircle, Loader2, Check } from 'lucide-react';
 import type { RoomCategory, Room } from '@/lib/types';
 import type { AuthoritativeMatrixItem } from '@/lib/api-channel';
@@ -46,6 +46,14 @@ export const AdjustAvailabilityModal: React.FC<AdjustAvailabilityModalProps> = (
   onSave,
   onChangeData,
 }) => {
+  useEffect(() => {
+    const originalStyle = window.getComputedStyle(document.body).overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalStyle;
+    };
+  }, []);
+
   const physicalTotal = activeRooms.filter((r) => r.category_id === data.categoryId).length;
 
   return (

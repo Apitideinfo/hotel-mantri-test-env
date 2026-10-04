@@ -28,6 +28,14 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
+  useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = orig;
+    };
+  }, []);
+
   const currentNights = toNum(entry.nights);
   const newNights = useMemo(() => {
     if (!newCheckOut) return currentNights;

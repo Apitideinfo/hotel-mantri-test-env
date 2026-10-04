@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Plus, Trash2, Users, Building2, Save, Loader2, AlertCircle } from 'lucide-react';
 import { createGroupBooking } from '@/lib/api-reservations';
 
@@ -8,6 +8,13 @@ interface GroupBookingModalProps {
 }
 
 export const GroupBookingModal = ({ onClose, onSaved }: GroupBookingModalProps) => {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = 'unset';
+    };
+  }, []);
+
   const [groupName, setGroupName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
   const [contactPhone, setContactPhone] = useState('');
