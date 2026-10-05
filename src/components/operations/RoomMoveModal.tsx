@@ -153,30 +153,30 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 transition-opacity animate-fade-in"
+        className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs z-50 transition-opacity animate-fade-in"
         onClick={onClose}
       />
 
-      {/* Modal Dialog — Centered with ample top and bottom breathing room */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 pointer-events-none overflow-y-auto">
-        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[85vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in my-auto">
+      {/* Modal Dialog — Centered with comfortable viewport margins */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 md:p-6 pointer-events-none overflow-y-auto">
+        <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[88vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in my-auto">
           
-          {/* Header — Spacious Navy Gradient Header */}
-          <div className="px-6 py-4.5 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white flex items-center justify-between shrink-0 shadow-sm border-b border-slate-800">
-            <div className="flex items-center gap-3.5 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center justify-center shrink-0 shadow-inner">
-                <ArrowRightLeft className="w-5 h-5 text-blue-400" />
+          {/* Header — Spacious Navy Banner */}
+          <div className="px-5 sm:px-6 py-3.5 sm:py-4 bg-slate-900 text-white flex items-center justify-between shrink-0 shadow-xs border-b border-slate-800">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center justify-center shrink-0">
+                <ArrowRightLeft className="w-4.5 h-4.5 text-blue-400" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2.5 flex-wrap">
-                  <h2 className="text-base font-black text-white tracking-tight leading-tight">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-sm sm:text-base font-bold text-white tracking-tight leading-tight">
                     {booking.type === 'stay' || booking.status === 'checked_in'
                       ? 'Shift Room & Stay Adjustment'
                       : 'Move / Shift Reservation'}
                   </h2>
                   {statusBadge}
                 </div>
-                <p className="text-xs text-slate-300 font-medium mt-0.5 truncate">
+                <p className="text-[11px] sm:text-xs text-slate-300 font-medium mt-0.5 truncate">
                   Guest: <strong className="text-white">{booking.guestName || 'Guest'}</strong> · Room {booking.roomNo} · Ref #{booking.id.slice(0, 8).toUpperCase()}
                 </p>
               </div>
@@ -184,7 +184,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0 ml-2"
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0 ml-2"
               title="Close modal"
             >
               <X className="w-5 h-5" />
@@ -192,75 +192,75 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
           </div>
 
           {/* Body Form */}
-          <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+          <form onSubmit={handleSave} className="flex-1 overflow-y-auto modal-scroll px-5 sm:px-6 py-3.5 sm:py-4 space-y-3.5 sm:space-y-4">
             {errorMessage && (
-              <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm rounded-xl p-3.5 flex items-center gap-2.5 shadow-2xs">
+              <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm rounded-xl p-3 flex items-center gap-2.5 shadow-2xs">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                 <span className="font-semibold">{errorMessage}</span>
               </div>
             )}
 
             {/* Current vs Target Comparison Banner */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {/* Origin */}
-              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Current Stay</span>
-                  <span className="text-[11px] font-bold text-slate-700">{booking.nights} Night{booking.nights > 1 ? 's' : ''}</span>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/90 flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Current Stay</span>
+                  <span className="text-[10px] font-bold text-slate-700 bg-slate-200/70 px-1.5 py-0.5 rounded">{booking.nights} Night{booking.nights > 1 ? 's' : ''}</span>
                 </div>
-                <div className="flex items-center gap-2 text-slate-900 font-extrabold text-sm mb-1">
-                  <BedDouble className="w-4 h-4 text-slate-500 shrink-0" />
+                <div className="flex items-center gap-2 text-slate-900 font-bold text-xs sm:text-sm mb-0.5">
+                  <BedDouble className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span>Room {booking.roomNo || 'TBD'}</span>
-                  {originCat && <span className="text-xs font-semibold text-slate-500">({originCat.name})</span>}
+                  {originCat && <span className="text-[11px] font-normal text-slate-500">({originCat.name})</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-slate-600 mt-1">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <div className="flex items-center gap-1.5 text-[11px] text-slate-600 mt-1">
+                  <Calendar className="w-3 h-3 text-slate-400 shrink-0" />
                   <span>{booking.checkIn} → {booking.checkOut}</span>
                 </div>
               </div>
 
               {/* Destination */}
-              <div className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors ${
+              <div className={`p-3 rounded-xl border flex flex-col justify-between transition-colors ${
                 isRoomChanged || isDatesChanged
-                  ? 'bg-blue-50/90 border-blue-200 text-blue-950'
-                  : 'bg-slate-50 border-slate-200 text-slate-900'
+                  ? 'bg-blue-50/80 border-blue-200 text-blue-950'
+                  : 'bg-slate-50 border-slate-200/90 text-slate-900'
               }`}>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1">
                     <Sparkles className="w-3 h-3 text-blue-600" /> Target Destination
                   </span>
-                  <span className="text-[11px] font-bold text-blue-800 bg-blue-100 px-2 py-0.2 rounded-full">
+                  <span className="text-[10px] font-bold text-blue-800 bg-blue-100 px-1.5 py-0.5 rounded">
                     {newNights} Night{newNights > 1 ? 's' : ''}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-blue-950 font-extrabold text-sm mb-1">
-                  <BedDouble className="w-4 h-4 text-blue-600 shrink-0" />
+                <div className="flex items-center gap-2 text-blue-950 font-bold text-xs sm:text-sm mb-0.5">
+                  <BedDouble className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <span>Room {targetRoomNo}</span>
-                  {targetCat && <span className="text-xs font-semibold text-blue-700">({targetCat.name})</span>}
+                  {targetCat && <span className="text-[11px] font-semibold text-blue-700">({targetCat.name})</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-blue-800 font-medium mt-1">
-                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <div className="flex items-center gap-1.5 text-[11px] text-blue-800 font-medium mt-1">
+                  <Calendar className="w-3 h-3 text-blue-600 shrink-0" />
                   <span>{targetCheckIn} → {targetCheckOut}</span>
                 </div>
               </div>
             </div>
 
             {/* Target Room Selection Grid */}
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
                 Select Destination Room <span className="text-rose-500">*</span>
               </label>
-              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-2xl p-3 bg-slate-50/50 space-y-3">
+              <div className="max-h-36 overflow-y-auto modal-scroll border border-slate-200 rounded-xl p-2.5 bg-slate-50/50 space-y-2">
                 {groupedRooms.map((group) => {
                   const isCurrentGroup = group.cat?.id === originCat?.id;
                   return (
                     <div key={group.cat?.id ?? '__uncat'}>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
                           {group.cat?.name ?? 'Standard Rooms'}
                         </span>
                         {isCurrentGroup && (
-                          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded">
+                          <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded">
                             Same Category
                           </span>
                         )}
@@ -274,9 +274,9 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                               key={r.id}
                               type="button"
                               onClick={() => setTargetRoomNo(r.room_no)}
-                              className={`px-2.5 py-2 text-xs rounded-xl font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
+                              className={`px-2 py-1.5 text-xs rounded-lg font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
                                 isSelected
-                                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 scale-[1.02]'
+                                  ? 'bg-blue-600 text-white shadow-xs shadow-blue-500/20 scale-[1.02]'
                                   : isCurrent
                                   ? 'bg-slate-200 text-slate-700 border border-slate-300'
                                   : 'bg-white text-slate-700 border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50'
@@ -294,35 +294,35 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
             </div>
 
             {/* Dates & Tariff Adjustments */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Check-In Date <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="date"
                   value={targetCheckIn}
                   onChange={(e) => setTargetCheckIn(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                  className="w-full px-2.5 py-1.5 text-xs sm:text-sm font-semibold border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Check-Out Date <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="date"
                   value={targetCheckOut}
                   onChange={(e) => setTargetCheckOut(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                  className="w-full px-2.5 py-1.5 text-xs sm:text-sm font-semibold border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Rate / Night (₹)
                 </label>
                 <input
@@ -331,26 +331,26 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                   step="50"
                   value={customRate}
                   onChange={(e) => setCustomRate(Math.max(0, toNum(e.target.value)))}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-bold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                  className="w-full px-2.5 py-1.5 text-xs sm:text-sm font-bold border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                 />
               </div>
             </div>
 
             {/* Live Financial Summary */}
-            <div className="p-3.5 rounded-2xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+            <div className="p-3 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
               <div>
-                <span className="text-[11px] font-bold text-slate-400 block uppercase tracking-wider">Calculated Total</span>
-                <span className="text-lg font-black text-white">₹{fmtMoney(newTotal)}</span>
-                <span className="text-xs text-slate-400 ml-1.5 font-medium">({newNights} nights @ ₹{fmtMoney(customRate)})</span>
+                <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">Calculated Total</span>
+                <span className="text-base sm:text-lg font-black text-white">₹{fmtMoney(newTotal)}</span>
+                <span className="text-[11px] text-slate-400 ml-1.5 font-medium">({newNights} nights @ ₹{fmtMoney(customRate)})</span>
               </div>
-              <div className="flex items-center gap-4 text-right">
+              <div className="flex items-center gap-3 text-right">
                 <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Advance Paid</span>
-                  <span className="text-sm font-bold text-emerald-400">₹{fmtMoney(advancePaid)}</span>
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Advance Paid</span>
+                  <span className="text-xs sm:text-sm font-bold text-emerald-400">₹{fmtMoney(advancePaid)}</span>
                 </div>
-                <div className="border-l border-slate-700 pl-4">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Balance Due</span>
-                  <span className={`text-sm font-black ${newBalance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                <div className="border-l border-slate-700 pl-3">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Balance Due</span>
+                  <span className={`text-xs sm:text-sm font-black ${newBalance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
                     ₹{fmtMoney(newBalance)}
                   </span>
                 </div>
@@ -359,7 +359,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
 
             {/* Reason / Notes */}
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                 Reason for Move / Modification
               </label>
               <input
@@ -367,18 +367,18 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder="e.g. Guest requested AC upgrade, extended holiday stay, etc."
-                className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
+                className="w-full px-2.5 py-1.5 text-xs sm:text-sm border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
               />
             </div>
           </form>
 
           {/* Footer Actions */}
-          <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
+          <div className="px-5 sm:px-6 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={onClose}
               disabled={saving}
-              className="px-4 py-2.5 text-xs sm:text-sm font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-xl transition cursor-pointer"
+              className="px-4 py-2 text-xs sm:text-sm font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 rounded-xl transition cursor-pointer"
             >
               Cancel
             </button>

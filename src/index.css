@@ -35,6 +35,13 @@ body {
 .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 .sidebar-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; }
 
+/* Modal scrollbar */
+.modal-scroll::-webkit-scrollbar { width: 5px; height: 5px; }
+.modal-scroll::-webkit-scrollbar-track { background: transparent; }
+.modal-scroll::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.35); border-radius: 6px; }
+.modal-scroll::-webkit-scrollbar-thumb:hover { background: rgba(100, 116, 139, 0.6); }
+.modal-scroll { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, 0.35) transparent; }
+
 /* Remove number input spinners for a cleaner mobile look */
 input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
