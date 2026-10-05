@@ -321,121 +321,122 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             </div>
           </div>
         ) : (
-          /* Series Timeline Navigator & Integrated Filter Toolbar */
-          <div className="flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+          /* Series Timeline Navigator & Integrated Filter Deck */
+          <div className="space-y-2 pt-1 border-t border-slate-100">
             
-            {/* Left: View Switcher & Timeline Date Navigator (Series Flow) */}
-            <div className="flex items-center flex-wrap sm:flex-nowrap gap-2 shrink-0">
-              {/* Day / Week Switcher */}
-              <div className="flex items-center bg-slate-100/90 p-0.5 sm:p-1 rounded-xl border border-slate-200/80 shadow-2xs shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onViewModeChange('day')}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
-                    viewMode === 'day'
-                      ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  <span>Day</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onViewModeChange('week')}
-                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
-                    viewMode === 'week'
-                      ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <CalendarDays className="w-3.5 h-3.5" />
-                  <span>Week</span>
-                </button>
-              </div>
-
-              {/* Timeline Date Picker Bar */}
-              <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-0.5 sm:p-1 shadow-2xs hover:border-slate-300 transition shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onShiftTimeline(viewMode === 'day' ? -1 : -7)}
-                  className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
-                  title="Previous Period"
-                >
-                  <ChevronLeft className="w-4 h-4 stroke-[2.2]" />
-                </button>
-                
-                <div className="relative flex items-center">
-                  <input
-                    type="date"
-                    id="ops-timeline-date-picker"
-                    value={timelineDates[0] || businessDate}
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        onDateSelect(e.target.value);
-                      }
-                    }}
-                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                    title="Click to choose date"
-                  />
-                  <div className="flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 text-center min-w-[130px] sm:min-w-[180px] rounded-lg group hover:bg-slate-50 transition cursor-pointer">
-                    <Calendar className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
-                    <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors block">
-                      {fmtDateFull(timelineDates[0])}
-                      {viewMode === 'week' && timelineDates.length > 1 && (
-                        <>
-                          <span className="text-slate-400 font-normal mx-1">–</span>
-                          {fmtDateFull(timelineDates[timelineDates.length - 1])}
-                        </>
-                      )}
-                    </span>
-                  </div>
+            {/* ── TIER 2: Timeline Navigation (Left) & Quick Search (Right) ── */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              
+              {/* Left: View Switcher & Timeline Date Navigator */}
+              <div className="flex items-center flex-wrap sm:flex-nowrap gap-2 shrink-0">
+                {/* Day / Week Switcher */}
+                <div className="flex items-center bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 shadow-2xs shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onViewModeChange('day')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
+                      viewMode === 'day'
+                        ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>Day</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onViewModeChange('week')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
+                      viewMode === 'week'
+                        ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <CalendarDays className="w-3.5 h-3.5" />
+                    <span>Week</span>
+                  </button>
                 </div>
 
+                {/* Timeline Date Picker Bar */}
+                <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-1 shadow-2xs hover:border-slate-300 transition shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onShiftTimeline(viewMode === 'day' ? -1 : -7)}
+                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
+                    title="Previous Period"
+                  >
+                    <ChevronLeft className="w-4 h-4 stroke-[2.2]" />
+                  </button>
+                  
+                  <div className="relative flex items-center">
+                    <input
+                      type="date"
+                      id="ops-timeline-date-picker"
+                      value={timelineDates[0] || businessDate}
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          onDateSelect(e.target.value);
+                        }
+                      }}
+                      className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                      title="Click to choose date"
+                    />
+                    <div className="flex items-center gap-1.5 px-3 py-0.5 text-center min-w-[140px] sm:min-w-[190px] rounded-lg group hover:bg-slate-50 transition cursor-pointer">
+                      <Calendar className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
+                      <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors block">
+                        {fmtDateFull(timelineDates[0])}
+                        {viewMode === 'week' && timelineDates.length > 1 && (
+                          <>
+                            <span className="text-slate-400 font-normal mx-1">–</span>
+                            {fmtDateFull(timelineDates[timelineDates.length - 1])}
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onShiftTimeline(viewMode === 'day' ? 1 : 7)}
+                    className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
+                    title="Next Period"
+                  >
+                    <ChevronRight className="w-4 h-4 stroke-[2.2]" />
+                  </button>
+                </div>
+
+                {/* Jump to Today Button */}
                 <button
                   type="button"
-                  onClick={() => onShiftTimeline(viewMode === 'day' ? 1 : 7)}
-                  className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
-                  title="Next Period"
+                  onClick={onGoToToday}
+                  className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/90 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer flex items-center gap-1.5 shrink-0"
+                  title="Jump to Today's Date"
                 >
-                  <ChevronRight className="w-4 h-4 stroke-[2.2]" />
+                  <Calendar className="w-3.5 h-3.5 text-indigo-600 stroke-[2.2]" />
+                  <span>Today</span>
+                </button>
+
+                {/* Refresh Button */}
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-600 hover:text-slate-900 border border-slate-200/80 transition-all active:rotate-180 duration-300 disabled:opacity-50 cursor-pointer shadow-2xs shrink-0"
+                  title="Refresh Matrix"
+                >
+                  <RefreshCw className={`w-4 h-4 stroke-[2.2] ${loading ? 'animate-spin text-indigo-600' : ''}`} />
                 </button>
               </div>
 
-              {/* Jump to Today Button */}
-              <button
-                type="button"
-                onClick={onGoToToday}
-                className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/90 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer flex items-center gap-1.5 shrink-0"
-                title="Jump to Today's Date"
-              >
-                <Calendar className="w-3.5 h-3.5 text-indigo-600 stroke-[2.2]" />
-                <span>Today</span>
-              </button>
-
-              {/* Refresh Button */}
-              <button
-                type="button"
-                onClick={onRefresh}
-                disabled={loading}
-                className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-xl text-slate-600 hover:text-slate-900 border border-slate-200/80 transition-all active:rotate-180 duration-300 disabled:opacity-50 cursor-pointer shadow-2xs shrink-0"
-                title="Refresh Matrix"
-              >
-                <RefreshCw className={`w-4 h-4 stroke-[2.2] ${loading ? 'animate-spin text-indigo-600' : ''}`} />
-              </button>
-            </div>
-
-            {/* Right: Search & Filter Dropdowns Strip */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 2xl:pb-0 flex-wrap sm:flex-nowrap flex-1 justify-start 2xl:justify-end">
-              {/* Search Input */}
-              <div className="relative min-w-[180px] max-w-xs flex-1">
+              {/* Right: Quick Search Input */}
+              <div className="relative w-full sm:w-72 md:w-80 lg:w-96 shrink-0">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Search guest, room #, phone…"
+                  placeholder="Search guest, room #, phone, OTA source…"
                   value={search}
                   onChange={(e) => onSearchChange(e.target.value)}
-                  className="w-full pl-8.5 pr-7 py-1.5 bg-slate-50 border border-slate-200/90 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-2xs"
+                  className="w-full pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200/90 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-2xs"
                 />
                 {search && (
                   <button
@@ -448,134 +449,150 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
                 )}
               </div>
 
-              {/* Room Category */}
-              <div className="relative shrink-0">
-                <select
-                  value={filterCategory}
-                  onChange={(e) => onCategoryChange(e.target.value)}
-                  className={`text-xs font-bold border rounded-xl px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-6 ${
-                    filterCategory
-                      ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
-                      : 'border-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  <option value="">All Categories</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.name}>{c.name}</option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]">
-                  ▼
-                </div>
-              </div>
-
-              {/* Floor */}
-              <div className="relative shrink-0">
-                <select
-                  value={filterFloor}
-                  onChange={(e) => onFloorChange(e.target.value)}
-                  className={`text-xs font-bold border rounded-xl px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-6 ${
-                    filterFloor
-                      ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
-                      : 'border-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  <option value="">All Floors</option>
-                  {floors.map((f) => (
-                    <option key={f} value={f}>Floor {f}</option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]">
-                  ▼
-                </div>
-              </div>
-
-              {/* Booking Source */}
-              <div className="relative shrink-0">
-                <select
-                  value={filterSource}
-                  onChange={(e) => onSourceChange(e.target.value)}
-                  className={`text-xs font-bold border rounded-xl px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-6 ${
-                    filterSource
-                      ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
-                      : 'border-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  <option value="">All Sources</option>
-                  {SOURCE_CATEGORIES.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]">
-                  ▼
-                </div>
-              </div>
-
-              {/* Reservation Status */}
-              <div className="relative shrink-0">
-                <select
-                  value={filterStatus}
-                  onChange={(e) => onStatusChange(e.target.value)}
-                  className={`text-xs font-bold border rounded-xl px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-6 ${
-                    filterStatus
-                      ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
-                      : 'border-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  <option value="">All Statuses</option>
-                  <option value="confirmed">Confirmed</option>
-                  <option value="checked_in">Checked In</option>
-                  <option value="occupied">Occupied</option>
-                  <option value="complimentary">Complimentary</option>
-                  <option value="checked_out">Checked Out</option>
-                </select>
-                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]">
-                  ▼
-                </div>
-              </div>
-
-              {/* Payment Status */}
-              <div className="relative shrink-0">
-                <select
-                  value={filterPayment}
-                  onChange={(e) => onPaymentChange(e.target.value)}
-                  className={`text-xs font-bold border rounded-xl px-2.5 py-1.5 bg-slate-50 hover:bg-white focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-6 ${
-                    filterPayment
-                      ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
-                      : 'border-slate-200/90 text-slate-700'
-                  }`}
-                >
-                  <option value="">All Payment</option>
-                  <option value="paid">Paid / Advance</option>
-                  <option value="unpaid">Unpaid / Due</option>
-                </select>
-                <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 text-[8px]">
-                  ▼
-                </div>
-              </div>
-
-              {/* Reset Filters */}
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={onClearFilters}
-                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-black text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition active:scale-95 shrink-0 cursor-pointer shadow-2xs"
-                  title="Reset filters"
-                >
-                  <RotateCcw className="w-3 h-3" />
-                  <span>Reset</span>
-                </button>
-              )}
-
-              {/* Filter Count */}
-              {hasActiveFilters && (
-                <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 border border-slate-200 text-[10px] font-bold text-slate-600 shrink-0">
-                  <span>{totalFilteredCount}</span>
-                  <span className="text-slate-400">/</span>
-                  <span>{totalBookingsCount}</span>
-                </div>
-              )}
             </div>
+
+            {/* ── TIER 3: Dedicated Filter Deck Ribbon (100% Visibility, Zero Overlap) ── */}
+            <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100 flex-wrap">
+              
+              {/* Left: Filter Pills Group */}
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 sm:pb-0 flex-wrap min-w-0">
+                <div className="flex items-center gap-1.5 text-slate-400 text-xs font-bold shrink-0 mr-1">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-slate-600">Filters:</span>
+                </div>
+
+                {/* Room Category */}
+                <div className="relative shrink-0 min-w-[130px]">
+                  <select
+                    value={filterCategory}
+                    onChange={(e) => onCategoryChange(e.target.value)}
+                    className={`w-full text-xs font-bold border rounded-xl px-3 py-1.5 bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-7 ${
+                      filterCategory
+                        ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <option value="">All Categories</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[9px]">
+                    ▼
+                  </div>
+                </div>
+
+                {/* Floor */}
+                <div className="relative shrink-0 min-w-[110px]">
+                  <select
+                    value={filterFloor}
+                    onChange={(e) => onFloorChange(e.target.value)}
+                    className={`w-full text-xs font-bold border rounded-xl px-3 py-1.5 bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-7 ${
+                      filterFloor
+                        ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <option value="">All Floors</option>
+                    {floors.map((f) => (
+                      <option key={f} value={f}>Floor {f}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[9px]">
+                    ▼
+                  </div>
+                </div>
+
+                {/* Booking Source */}
+                <div className="relative shrink-0 min-w-[125px]">
+                  <select
+                    value={filterSource}
+                    onChange={(e) => onSourceChange(e.target.value)}
+                    className={`w-full text-xs font-bold border rounded-xl px-3 py-1.5 bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-7 ${
+                      filterSource
+                        ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <option value="">All Sources</option>
+                    {SOURCE_CATEGORIES.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[9px]">
+                    ▼
+                  </div>
+                </div>
+
+                {/* Reservation Status */}
+                <div className="relative shrink-0 min-w-[130px]">
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => onStatusChange(e.target.value)}
+                    className={`w-full text-xs font-bold border rounded-xl px-3 py-1.5 bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-7 ${
+                      filterStatus
+                        ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="checked_in">Checked In</option>
+                    <option value="occupied">Occupied</option>
+                    <option value="complimentary">Complimentary</option>
+                    <option value="checked_out">Checked Out</option>
+                  </select>
+                  <div className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[9px]">
+                    ▼
+                  </div>
+                </div>
+
+                {/* Payment Status */}
+                <div className="relative shrink-0 min-w-[120px]">
+                  <select
+                    value={filterPayment}
+                    onChange={(e) => onPaymentChange(e.target.value)}
+                    className={`w-full text-xs font-bold border rounded-xl px-3 py-1.5 bg-white hover:bg-slate-50 focus:bg-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer shadow-2xs appearance-none pr-7 ${
+                      filterPayment
+                        ? 'border-indigo-500 text-indigo-900 bg-indigo-50/80 ring-1 ring-indigo-500/30'
+                        : 'border-slate-200/90 text-slate-700'
+                    }`}
+                  >
+                    <option value="">All Payment</option>
+                    <option value="paid">Paid / Advance</option>
+                    <option value="unpaid">Unpaid / Due</option>
+                  </select>
+                  <div className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[9px]">
+                    ▼
+                  </div>
+                </div>
+              </div>
+
+              {/* Right: Active Status & Reset Button */}
+              <div className="flex items-center gap-2 shrink-0">
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={onClearFilters}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-xl transition active:scale-95 shrink-0 cursor-pointer shadow-2xs"
+                    title="Reset all filters"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset Filters</span>
+                  </button>
+                )}
+
+                {hasActiveFilters && (
+                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-100 border border-slate-200 text-xs font-bold text-slate-700 shrink-0">
+                    <span className="text-indigo-600 font-extrabold">{totalFilteredCount}</span>
+                    <span className="text-slate-400">/</span>
+                    <span>{totalBookingsCount} Bookings</span>
+                  </div>
+                )}
+              </div>
+
+            </div>
+
           </div>
         )}
 
