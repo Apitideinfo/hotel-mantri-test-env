@@ -38,22 +38,28 @@ const BreakdownCard = ({
   iconBg = 'bg-slate-50 text-slate-700',
   children,
 }: BreakdownCardProps) => (
-  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-card hover:shadow-card-hover transition-all duration-200 overflow-hidden flex flex-col justify-between group">
-    <div className="px-5 py-4 border-b border-slate-100/80 flex items-center justify-between bg-slate-50/50">
-      <div className="flex items-center gap-2.5">
+  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col justify-between group">
+    <div className="px-4 sm:px-5 py-3.5 border-b border-slate-100/90 flex items-center justify-between gap-2.5 bg-slate-50/60">
+      <div className="flex items-center gap-2.5 min-w-0 flex-1">
         <div className={`w-8 h-8 rounded-xl border border-slate-200/60 shadow-2xs flex items-center justify-center shrink-0 ${iconBg}`}>
           {icon}
         </div>
-        <div>
-          <h3 className="text-sm font-bold text-slate-900 leading-tight">{title}</h3>
-          {subtitle && <p className="text-[11px] font-medium text-slate-400 leading-tight">{subtitle}</p>}
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-bold text-slate-900 leading-tight truncate">{title}</h3>
+          {subtitle && (
+            <p className="text-[11px] font-medium text-slate-400 leading-tight mt-0.5 truncate" title={subtitle}>
+              {subtitle}
+            </p>
+          )}
         </div>
       </div>
-      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${badgeColor}`}>
-        {badge}
-      </span>
+      {badge && (
+        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border shrink-0 whitespace-nowrap ${badgeColor}`}>
+          {badge}
+        </span>
+      )}
     </div>
-    <div className="p-5 flex-1 flex flex-col justify-between space-y-3">{children}</div>
+    <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between space-y-3">{children}</div>
   </div>
 );
 
@@ -78,13 +84,13 @@ const RowItem = ({
 }) => (
   <div
     onClick={onClick}
-    className={`space-y-1.5 py-1.5 ${
-      isTotal ? 'pt-3 mt-2 border-t-2 border-slate-200/80 bg-slate-50/60 -mx-5 px-5 rounded-b-2xl' : ''
+    className={`space-y-1 py-1.5 ${
+      isTotal ? 'pt-3 mt-2 border-t border-slate-200 bg-slate-50/60 -mx-4 sm:-mx-5 px-4 sm:px-5 rounded-b-2xl' : ''
     } ${onClick ? 'cursor-pointer hover:bg-slate-50/80 -mx-2 px-2 rounded-lg transition-colors' : ''}`}
   >
     <div className="flex items-center justify-between gap-2">
-      <div className="min-w-0 pr-2">
-        <span className={`text-xs block ${isTotal ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+      <div className="min-w-0 flex-1 pr-1">
+        <span className={`text-xs block truncate ${isTotal ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
           {label}
         </span>
         {sublabel && <span className="text-[10px] text-slate-400 block -mt-0.5 truncate">{sublabel}</span>}
@@ -178,7 +184,7 @@ export const FinancialOverview = ({
         {/* 1. Income Breakup (Accrual Earned Revenue) */}
         <BreakdownCard
           title="Income Breakup"
-          subtitle={periodSubtitle || (isDaily ? `Daily Earned (${selectedDate ?? 'Selected'})` : 'MTD Earned Revenue')}
+          subtitle={isDaily ? 'Accrual Revenue' : 'MTD Earned Revenue'}
           badge={periodBadge || "Accrual"}
           badgeColor="bg-blue-50 text-brand-700 border-blue-200/60"
           icon={<IndianRupee className="w-4 h-4 text-brand-600" />}
@@ -187,7 +193,7 @@ export const FinancialOverview = ({
           <div className="space-y-1">
             <RowItem
               label="Room Revenue"
-              sublabel={onDrilldownRoomRevenue || onOpenHistory ? "Occupied room nights (Click to view)" : "Occupied room nights"}
+              sublabel={onDrilldownRoomRevenue || onOpenHistory ? "Occupied stay nights · View" : "Occupied stay nights"}
               value={activeRoomRev}
               color="text-brand-600"
               barPercentage={activeEarnedRevenue > 0 ? (activeRoomRev / activeEarnedRevenue) * 100 : 0}
@@ -232,7 +238,7 @@ export const FinancialOverview = ({
         {/* 2. Collection Breakup (Actual Money Received) */}
         <BreakdownCard
           title="Collection Breakup"
-          subtitle={periodSubtitle ? periodSubtitle.replace('Earned Revenue', 'Money Received') : isDaily ? `Daily Funds (${selectedDate ?? 'Selected'})` : 'MTD Realized Funds'}
+          subtitle={isDaily ? 'Realized Inflow' : 'MTD Realized Funds'}
           badge="Cash Basis"
           badgeColor="bg-emerald-50 text-emerald-700 border-emerald-200/60"
           icon={<Wallet className="w-4 h-4 text-emerald-600" />}
@@ -283,8 +289,8 @@ export const FinancialOverview = ({
         {/* 3. Receivables & Outstanding (Distinct Scope) */}
         <BreakdownCard
           title="Receivables & Due"
-          subtitle={isDaily ? `Daily Folios (${selectedDate ?? 'Selected'})` : 'Outstanding Scope'}
-          badge="Folio / Bal"
+          subtitle={isDaily ? 'Pending & In-House Folios' : 'Outstanding Scope'}
+          badge="Receivables"
           badgeColor="bg-amber-50 text-amber-800 border-amber-200/60"
           icon={<Clock className="w-4 h-4 text-amber-600" />}
           iconBg="bg-amber-50"
@@ -328,8 +334,8 @@ export const FinancialOverview = ({
         {/* 4. Expense Breakup (Operating Expenses) */}
         <BreakdownCard
           title="Expense Breakup"
-          subtitle={isDaily ? `Daily Outflows (${selectedDate ?? 'Selected'})` : 'MTD Operating Outflows'}
-          badge="Outflows"
+          subtitle={isDaily ? 'Operational Outflows' : 'MTD Operating Outflows'}
+          badge="Expenses"
           badgeColor="bg-rose-50 text-rose-700 border-rose-200/60"
           icon={<Receipt className="w-4 h-4 text-rose-600" />}
           iconBg="bg-rose-50"
