@@ -97,12 +97,12 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
     return groupRoomsByCategory(sorted, categories);
   }, [activeRooms, categories]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setLocalError(null);
 
     if (!targetRoomNo || !targetRoomNo.trim()) {
-      setLocalError('Please select a target room.');
+      setLocalError('Please select a destination room.');
       return;
     }
     if (!targetCheckIn || !targetCheckOut) {
@@ -110,17 +110,9 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
       return;
     }
     if (targetCheckIn >= targetCheckOut) {
-      setLocalError('Check-out date must be after check-in date.');
+      setLocalError('Check-out date must be strictly after check-in date.');
       return;
     }
-
-    setShowConfirmModal(true);
-  };
-  const handleInitialClick = handleSubmit;
-
-  const handleFinalConfirm = async () => {
-    setShowConfirmModal(false);
-    setLocalError(null);
 
     try {
       await onConfirm({
@@ -132,7 +124,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
         reason,
       });
     } catch (err: any) {
-      setLocalError(err.message || 'Failed to update booking');
+      setLocalError(err?.message || 'Failed to update booking');
     }
   };
 
@@ -148,8 +140,8 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
       );
     }
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-xs">
-        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-500/20 text-blue-300 border border-blue-500/40 shadow-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
         Confirmed
       </span>
     );
@@ -161,21 +153,22 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-slate-950/75 backdrop-blur-md z-50 transition-opacity animate-fade-in"
+        className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 transition-opacity animate-fade-in"
         onClick={onClose}
       />
 
-      {/* Modal Dialog */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 pointer-events-none overflow-y-auto">
-        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[90vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in my-auto">
-          {/* Header */}
-          <div className="px-6 py-4.5 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white flex items-center justify-between relative overflow-hidden shrink-0 shadow-xs border-b border-slate-800">
-            <div className="flex items-center gap-3.5 z-10 min-w-0">
-              <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center shrink-0 shadow-inner">
-                <ArrowRightLeft className="w-5 h-5 text-indigo-400" />
+      {/* Modal Dialog — Centered with ample top and bottom breathing room */}
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 pointer-events-none overflow-y-auto">
+        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[85vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in my-auto">
+          
+          {/* Header — Spacious Navy Gradient Header */}
+          <div className="px-6 py-4.5 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white flex items-center justify-between shrink-0 shadow-sm border-b border-slate-800">
+            <div className="flex items-center gap-3.5 min-w-0">
+              <div className="w-10 h-10 rounded-2xl bg-blue-500/20 text-blue-300 border border-blue-400/30 flex items-center justify-center shrink-0 shadow-inner">
+                <ArrowRightLeft className="w-5 h-5 text-blue-400" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-2.5 flex-wrap">
                   <h2 className="text-base font-black text-white tracking-tight leading-tight">
                     {booking.type === 'stay' || booking.status === 'checked_in'
                       ? 'Shift Room & Stay Adjustment'
@@ -191,7 +184,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition z-10 cursor-pointer shrink-0 ml-2"
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0 ml-2"
               title="Close modal"
             >
               <X className="w-5 h-5" />
@@ -199,7 +192,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
           </div>
 
           {/* Body Form */}
-          <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
+          <form onSubmit={handleSave} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-5">
             {errorMessage && (
               <div className="bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm rounded-xl p-3.5 flex items-center gap-2.5 shadow-2xs">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
@@ -229,24 +222,24 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
               {/* Destination */}
               <div className={`p-3.5 rounded-2xl border flex flex-col justify-between transition-colors ${
                 isRoomChanged || isDatesChanged
-                  ? 'bg-brand-50/80 border-brand-200 text-brand-900'
+                  ? 'bg-blue-50/90 border-blue-200 text-blue-950'
                   : 'bg-slate-50 border-slate-200 text-slate-900'
               }`}>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-[11px] font-bold text-brand-700 uppercase tracking-wider flex items-center gap-1">
-                    <Sparkles className="w-3 h-3 text-brand-600" /> Target Destination
+                  <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-blue-600" /> Target Destination
                   </span>
-                  <span className="text-[11px] font-bold text-brand-800 bg-brand-100 px-2 py-0.2 rounded-full">
+                  <span className="text-[11px] font-bold text-blue-800 bg-blue-100 px-2 py-0.2 rounded-full">
                     {newNights} Night{newNights > 1 ? 's' : ''}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-brand-950 font-extrabold text-sm mb-1">
-                  <BedDouble className="w-4 h-4 text-brand-600 shrink-0" />
+                <div className="flex items-center gap-2 text-blue-950 font-extrabold text-sm mb-1">
+                  <BedDouble className="w-4 h-4 text-blue-600 shrink-0" />
                   <span>Room {targetRoomNo}</span>
-                  {targetCat && <span className="text-xs font-semibold text-brand-700">({targetCat.name})</span>}
+                  {targetCat && <span className="text-xs font-semibold text-blue-700">({targetCat.name})</span>}
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-brand-800 font-medium mt-1">
-                  <Calendar className="w-3.5 h-3.5 text-brand-600 shrink-0" />
+                <div className="flex items-center gap-1.5 text-xs text-blue-800 font-medium mt-1">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <span>{targetCheckIn} → {targetCheckOut}</span>
                 </div>
               </div>
@@ -267,7 +260,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                           {group.cat?.name ?? 'Standard Rooms'}
                         </span>
                         {isCurrentGroup && (
-                          <span className="text-[10px] font-bold text-brand-600 bg-brand-50 px-1.5 py-0.2 rounded">
+                          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded">
                             Same Category
                           </span>
                         )}
@@ -283,10 +276,10 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                               onClick={() => setTargetRoomNo(r.room_no)}
                               className={`px-2.5 py-2 text-xs rounded-xl font-bold transition flex items-center justify-center gap-1 cursor-pointer ${
                                 isSelected
-                                  ? 'bg-brand-600 text-white shadow-md shadow-brand-500/20 scale-[1.02]'
+                                  ? 'bg-blue-600 text-white shadow-md shadow-blue-500/20 scale-[1.02]'
                                   : isCurrent
                                   ? 'bg-slate-200 text-slate-700 border border-slate-300'
-                                  : 'bg-white text-slate-700 border border-slate-200 hover:border-brand-400 hover:bg-brand-50/50'
+                                  : 'bg-white text-slate-700 border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50'
                               }`}
                             >
                               <span>{r.room_no}</span>
@@ -310,7 +303,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                   type="date"
                   value={targetCheckIn}
                   onChange={(e) => setTargetCheckIn(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition"
+                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                   required
                 />
               </div>
@@ -323,7 +316,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                   type="date"
                   value={targetCheckOut}
                   onChange={(e) => setTargetCheckOut(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition"
+                  className="w-full px-3 py-2 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                   required
                 />
               </div>
@@ -338,7 +331,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                   step="50"
                   value={customRate}
                   onChange={(e) => setCustomRate(Math.max(0, toNum(e.target.value)))}
-                  className="w-full px-3 py-2 text-xs sm:text-sm font-bold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition"
+                  className="w-full px-3 py-2 text-xs sm:text-sm font-bold border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
                 />
               </div>
             </div>
@@ -374,7 +367,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 placeholder="e.g. Guest requested AC upgrade, extended holiday stay, etc."
-                className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition"
+                className="w-full px-3 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition"
               />
             </div>
           </form>
@@ -391,9 +384,9 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleInitialClick}
+              onClick={() => handleSave()}
               disabled={saving || !targetRoomNo}
-              className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-extrabold rounded-xl shadow-md shadow-brand-500/20 transition disabled:opacity-60 cursor-pointer"
+              className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs sm:text-sm font-extrabold rounded-xl shadow-md shadow-blue-500/20 transition disabled:opacity-60 cursor-pointer"
             >
               {saving ? (
                 <>
@@ -410,67 +403,6 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
           </div>
         </div>
       </div>
-
-      {/* ── Room Shift / Modification Confirmation Popup ── */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md p-6 text-center animate-in zoom-in-95 duration-200">
-            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto mb-4 shadow-inner">
-              <AlertTriangle className="w-7 h-7" />
-            </div>
-
-            <h3 className="text-lg font-black text-slate-900 tracking-tight">
-              Confirm Room Shift & Details
-            </h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Please verify the shift details for <strong className="text-slate-800">{booking.guestName || 'Guest'}</strong>:
-            </p>
-
-            <div className="bg-slate-50 rounded-2xl p-4 my-4 border border-slate-200/90 text-xs text-left space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500 font-medium">Room Shift:</span>
-                <span className="font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100">
-                  Room {booking.roomNo} → Room {targetRoomNo}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500 font-medium">Stay Period:</span>
-                <span className="font-bold text-slate-800">{targetCheckIn} to {targetCheckOut} ({newNights} nights)</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500 font-medium">Tariff / Night:</span>
-                <span className="font-bold text-slate-800">₹{fmtMoney(customRate)}</span>
-              </div>
-              <div className="flex items-center justify-between pt-1.5 border-t border-slate-200">
-                <span className="text-slate-700 font-bold">New Stay Total:</span>
-                <span className="font-black text-slate-900 text-sm">₹{fmtMoney(newTotal)}</span>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-500 mb-5">
-              Are you sure you want to proceed with this modification?
-            </p>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setShowConfirmModal(false)}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
-              >
-                Go Back
-              </button>
-              <button
-                type="button"
-                onClick={handleFinalConfirm}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                Yes, Shift Room
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

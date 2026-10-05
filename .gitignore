@@ -23,3 +23,4 @@ dist-ssr
 .env
 server/data/
 scratch/
+.vercel

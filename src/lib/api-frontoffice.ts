@@ -571,6 +571,7 @@ export const shiftRoom = async (params: {
     .select('id')
     .eq('hotel_id', hotelId)
     .eq('room_no', params.toRoom)
+    .neq('id', params.entryId)
     .is('checked_out_at', null)
     .maybeSingle();
   if (existing) {

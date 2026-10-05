@@ -971,7 +971,10 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       const isPhysical = targetRoomNo && targetRoomNo.trim().toLowerCase() !== 'unassigned' && targetRoomNo.trim().toLowerCase() !== 'tbd';
 
       if (isPhysical) {
-        const isAvail = await checkRoomAvailability(targetRoomNo, targetCheckIn, targetCheckOut, booking.id);
+        const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
+        const rawEntry = booking.rawEntry || (booking.type === 'entry' ? booking.raw as RoomChartEntry : null);
+        const excludeIds = [booking.id, rawRes?.id, rawRes?.room_chart_entry_id, rawEntry?.id, rawEntry?.reservation_id].filter(Boolean) as string[];
+        const isAvail = await checkRoomAvailability(targetRoomNo, targetCheckIn, targetCheckOut, excludeIds);
         if (!isAvail) {
           throw new Error(`Room ${targetRoomNo} is already occupied or reserved between ${targetCheckIn} and ${targetCheckOut}.`);
         }

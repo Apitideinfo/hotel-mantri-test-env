@@ -535,7 +535,7 @@ export const checkRoomAvailability = async (
   roomNo: string,
   checkIn: string,
   checkOut: string,
-  excludeId?: string,
+  excludeId?: string | string[],
 ): Promise<boolean> => {
   const roomKey = (roomNo || '').trim().toLowerCase();
   // Unassigned rooms do not block physical rooms
@@ -550,30 +550,51 @@ export const checkRoomAvailability = async (
   try {
     const hotelId = getCurrentHotelId();
 
+    // Resolve any linked IDs between reservations and room_chart_entries
+    const excludedResIds = new Set<string>();
+    const excludedEntryIds = new Set<string>();
+
+    const rawExcludeList = Array.isArray(excludeId) ? excludeId : excludeId ? [excludeId] : [];
+    for (const rawId of rawExcludeList) {
+      if (!rawId) continue;
+      excludedResIds.add(rawId);
+      excludedEntryIds.add(rawId);
+
+      // Query reservations by id or room_chart_entry_id
+      const { data: exResList } = await supabase
+        .from('reservations')
+        .select('id, room_chart_entry_id')
+        .or(`id.eq.${rawId},room_chart_entry_id.eq.${rawId}`);
+      if (exResList) {
+        for (const r of exResList) {
+          excludedResIds.add(r.id);
+          if (r.room_chart_entry_id) excludedEntryIds.add(r.room_chart_entry_id);
+        }
+      }
+
+      // Query room_chart_entries by id or reservation_id
+      const { data: exEntryList } = await supabase
+        .from('room_chart_entries')
+        .select('id, reservation_id')
+        .or(`id.eq.${rawId},reservation_id.eq.${rawId}`);
+      if (exEntryList) {
+        for (const e of exEntryList) {
+          excludedEntryIds.add(e.id);
+          if (e.reservation_id) excludedResIds.add(e.reservation_id);
+        }
+      }
+    }
+
     // 1. Check active reservations for overlap
-    let resQ = supabase
+    const { data: resData } = await supabase
       .from('reservations')
       .select('id, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
       .eq('hotel_id', hotelId)
       .in('status', ['confirmed', 'checked_in']);
-    if (excludeId) resQ = resQ.neq('id', excludeId);
-
-    const { data: resData } = await resQ;
-
-    // Find if excludeId has an associated room_chart_entry_id
-    let excludeEntryId: string | null = null;
-    if (excludeId) {
-      const { data: exRes } = await supabase
-        .from('reservations')
-        .select('room_chart_entry_id')
-        .eq('id', excludeId)
-        .maybeSingle();
-      if (exRes?.room_chart_entry_id) {
-        excludeEntryId = exRes.room_chart_entry_id;
-      }
-    }
 
     const resOverlap = (resData ?? []).some((r) => {
+      if (excludedResIds.has(r.id)) return false;
+      if (r.room_chart_entry_id && excludedEntryIds.has(r.room_chart_entry_id)) return false;
       if ((r.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
       const rCi = (r.check_in_date ?? '').slice(0, 10);
       const rCo = (r.check_out_date ?? '').slice(0, 10);
@@ -583,18 +604,17 @@ export const checkRoomAvailability = async (
 
     if (resOverlap) return false;
 
-    // 2. Check room_chart entries for overlap (excluding this reservation's own entry)
+    // 2. Check room_chart entries for overlap
     const { data: entryData } = await supabase
       .from('room_chart_entries')
-      .select('id, room_no, arrival, departure, reservation_id')
+      .select('id, room_no, arrival, departure, report_date, reservation_id')
       .eq('hotel_id', hotelId)
       .is('checked_out_at', null);
 
     const entryOverlap = (entryData ?? []).some((e: { id?: string; room_no?: string; arrival?: string; departure?: string; report_date?: string; reservation_id?: string }) => {
+      if (e.id && excludedEntryIds.has(e.id)) return false;
+      if (e.reservation_id && excludedResIds.has(e.reservation_id)) return false;
       if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
-      // Exclude if entry belongs to the reservation being extended/moved
-      if (excludeId && e.reservation_id === excludeId) return false;
-      if (excludeEntryId && e.id === excludeEntryId) return false;
 
       const a = (e.arrival ?? e.report_date ?? '').slice(0, 10);
       const d = (e.departure ?? e.report_date ?? '').slice(0, 10);
