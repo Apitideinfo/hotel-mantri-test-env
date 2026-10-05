@@ -168,7 +168,9 @@ export const NewBookingModal = ({
       const rPayCard = idx === 0 ? toNum(payCard) : 0;
       const rPayBank = idx === 0 ? toNum(payBank) : 0;
       
-      const individualRate = roomRates[no] !== undefined ? toNum(roomRates[no]) : toNum(rate);
+      const roomCat = categories.find(c => c.id === room?.category_id);
+      const fallbackTariff = toNum(rate) > 0 ? toNum(rate) : (roomCat?.default_tariff ?? room?.default_tariff ?? 0);
+      const individualRate = (roomRates[no] !== undefined && toNum(roomRates[no]) > 0) ? toNum(roomRates[no]) : fallbackTariff;
       const roomSubtotal = individualRate * nights;
       const roomDiscount = toNum(discount) / (roomNos.length || 1);
       const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
@@ -645,6 +647,16 @@ export const NewBookingModal = ({
                       onChange={(e) => {
                         const val = e.target.value === '' ? '' : Number(e.target.value);
                         setRate(val);
+                        if (val !== '') {
+                          const num = Number(val);
+                          setRoomRates((prev) => {
+                            const next = { ...prev };
+                            for (const no of roomNos) {
+                              next[no] = num;
+                            }
+                            return next;
+                          });
+                        }
                       }}
                       placeholder="Enter rate per night"
                       className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-black"

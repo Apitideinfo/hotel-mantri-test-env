@@ -329,37 +329,37 @@ export const BookingBar: React.FC<BookingBarProps> = ({
           </div>
         ) : !isStart && !isEnd ? (
           /* ── CASE B: Intermediate Day Continuation Bridge ── */
-          <div className="flex flex-col justify-between h-full gap-1 px-1">
-            <div className="flex items-center justify-between gap-1">
-              <span className={`font-bold text-[10.5px] truncate ${statusCfg.text} opacity-80`}>
-                {booking.guestName || 'Guest'}
+          <div className="flex flex-col justify-between h-full gap-1 px-1.5">
+            <div className="flex items-center justify-between gap-1 pt-0.5">
+              <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider">
+                Stay Active
               </span>
               <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 shrink-0">
                 In-House
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400">
+            <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400 pb-0.5">
               <div className="h-px flex-1 bg-slate-200/80" />
-              <span>Stay Continues</span>
+              <span className="text-[9px] tracking-widest text-slate-400">••••</span>
               <div className="h-px flex-1 bg-slate-200/80" />
             </div>
           </div>
         ) : (
           /* ── CASE C: Multi-Day End / Departure Cap ── */
           <div className="flex flex-col justify-between h-full gap-1 px-1 pr-3">
-            <div className="flex items-center justify-between gap-1">
-              <span className={`font-bold text-[10.5px] truncate ${statusCfg.text} opacity-85`}>
-                {booking.guestName || 'Guest'}
+            <div className="flex items-center justify-between gap-1 pt-0.5">
+              <span className="text-[8.5px] font-black text-slate-500 uppercase tracking-wider">
+                Departure
               </span>
-              <span className="text-[7.5px] font-black text-amber-800 bg-amber-100/90 px-1.5 py-0.2 rounded border border-amber-300 shrink-0 flex items-center gap-0.5" title="Check-Out Day">
-                <ArrowUpRight className="w-2 h-2" /> Out
+              <span className="text-[8px] font-black text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-300 shrink-0 flex items-center gap-0.5 shadow-2xs" title="Check-Out Day">
+                <ArrowUpRight className="w-2.5 h-2.5" /> Out
               </span>
             </div>
-            <div className="flex items-center justify-between gap-1 text-[9px] font-bold text-slate-500">
+            <div className="flex items-center justify-between gap-1 text-[9px] font-bold text-slate-500 pb-0.5">
               <span className="text-slate-700 font-extrabold text-[9.5px]">
                 {booking.nights}N Total
               </span>
-              <span className="text-slate-800 font-black text-[10px]">
+              <span className="text-slate-900 font-black text-[10.5px]">
                 ₹{fmtInt(total)}
               </span>
             </div>

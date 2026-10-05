@@ -12,6 +12,7 @@ import type {
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, MealPlan, GstType, GstSlab,
   FrontOfficeRole,
 } from '@/lib/types';
+import { supabase } from '@/lib/supabase';
 import { GST_TYPES, GST_SLABS, MEAL_PLANS, SOURCE_CATEGORIES, canCheckoutAnyway, canRoomShift, canDeleteBooking, normalizePayMode } from '@/lib/types';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
 import { fmtMoney, fmtInt, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
@@ -106,6 +107,31 @@ export const BookingDetailPanel = ({
 }: BookingDetailPanelProps) => {
   const [editMode, setEditMode] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [groupReservations, setGroupReservations] = useState<Reservation[]>([]);
+  const [loadingGroup, setLoadingGroup] = useState(false);
+
+  useEffect(() => {
+    const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
+    const groupId = rawRes?.group_id;
+    if (groupId && groupId.trim() !== '') {
+      setLoadingGroup(true);
+      supabase
+        .from('reservations')
+        .select('*')
+        .eq('group_id', groupId)
+        .then(({ data }) => {
+          if (data && data.length > 1) {
+            setGroupReservations(data as Reservation[]);
+          } else {
+            setGroupReservations([]);
+          }
+        })
+        .catch(() => setGroupReservations([]))
+        .finally(() => setLoadingGroup(false));
+    } else {
+      setGroupReservations([]);
+    }
+  }, [booking]);
 
   // Background body scroll lock while modal is open
   useEffect(() => {
@@ -424,6 +450,9 @@ export const BookingDetailPanel = ({
                 booking={booking} 
                 settings={settings} 
                 category={category} 
+                rooms={rooms}
+                categories={categories}
+                groupReservations={groupReservations}
                 onWhatsApp={handleDocWhatsApp}
               />
             )}
@@ -609,16 +638,50 @@ export const BookingDetailPanel = ({
 // ── View Fields Component (Rendered ONCE inside scrollable body) ──
 
 const ViewFields = ({
-  booking, settings, category, onWhatsApp,
+  booking, settings, category, rooms = [], categories = [], groupReservations = [], onWhatsApp,
 }: { 
   booking: BoardBooking; 
   settings: HotelSettings | null; 
   category?: RoomCategory;
+  rooms?: Room[];
+  categories?: RoomCategory[];
+  groupReservations?: Reservation[];
   onWhatsApp: () => void;
 }) => {
-  const total = booking.rate * booking.nights;
   const entry = booking.type === 'entry' ? booking.raw as RoomChartEntry : null;
   const reservation = booking.type === 'reservation' ? booking.raw as Reservation : null;
+
+  // Auto-resolve rate if 0 from group siblings or category default
+  const effectiveRate = booking.rate > 0 
+    ? booking.rate 
+    : (toNum(reservation?.rate) > 0 
+      ? toNum(reservation?.rate) 
+      : (groupReservations.find(r => r.id === (reservation?.id || booking.id))?.rate 
+        ? toNum(groupReservations.find(r => r.id === (reservation?.id || booking.id))!.rate) 
+        : (groupReservations[0]?.rate 
+          ? toNum(groupReservations[0].rate) 
+          : (category?.default_tariff ?? 0))));
+
+  const total = effectiveRate * booking.nights;
+  
+  // Group calculations
+  const isGroup = groupReservations.length > 1;
+  const groupTotalTariff = isGroup 
+    ? groupReservations.reduce((sum, r) => {
+        const rRate = toNum(r.rate) > 0 ? toNum(r.rate) : effectiveRate;
+        const rNights = toNum(r.nights) || booking.nights;
+        return sum + (rRate * rNights);
+      }, 0)
+    : total;
+
+  const groupTotalAdvance = isGroup
+    ? groupReservations.reduce((sum, r) => sum + toNum(r.advance_paid), 0)
+    : (entry
+      ? toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
+      : reservation ? toNum(reservation.advance_paid) : 0);
+
+  const groupTotalBalance = Math.max(0, groupTotalTariff - groupTotalAdvance);
+
   const advance = entry
     ? toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
     : reservation ? toNum(reservation.advance_paid) : 0;
@@ -632,6 +695,80 @@ const ViewFields = ({
 
   return (
     <div className="space-y-4">
+      {/* ── Multi-Room Group Booking Card ── */}
+      {isGroup && (
+        <div className="bg-gradient-to-br from-indigo-50/90 via-white to-blue-50/60 rounded-2xl p-4 border border-indigo-200/90 shadow-2xs space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-indigo-100">
+            <div className="flex items-center gap-2">
+              <BedDouble className="w-4 h-4 text-indigo-600" />
+              <span className="text-xs font-black uppercase text-indigo-950 tracking-wider">
+                Multi-Room Group Booking ({groupReservations.length} Rooms)
+              </span>
+            </div>
+            <span className="text-[10px] font-black bg-indigo-600 text-white px-2.5 py-0.5 rounded-full shadow-2xs">
+              {groupReservations.length} Rooms Linked
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {groupReservations.map((r) => {
+              const isCurrent = r.id === (reservation?.id || booking.id);
+              const rRoom = rooms.find(rm => rm.room_no === r.room_no);
+              const rCat = categories.find(c => c.id === rRoom?.category_id);
+              const rNights = toNum(r.nights) || booking.nights;
+              const rRate = toNum(r.rate) > 0 ? toNum(r.rate) : effectiveRate;
+              const rSubtotal = rRate * rNights;
+
+              return (
+                <div
+                  key={r.id}
+                  className={`p-2.5 rounded-xl border transition ${
+                    isCurrent
+                      ? 'bg-white border-indigo-500 shadow-xs ring-2 ring-indigo-500/20'
+                      : 'bg-slate-50/80 border-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-black text-xs text-slate-900">Room {r.room_no || 'Unassigned'}</span>
+                      {isCurrent && (
+                        <span className="text-[8px] font-black bg-indigo-100 text-indigo-800 px-1.5 py-0.2 rounded border border-indigo-200">
+                          Active Selection
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-500 capitalize">
+                      {r.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1 font-semibold">
+                    <span>{rCat?.name || 'Category'}</span>
+                    <span className="font-extrabold text-slate-900">₹{fmtInt(rRate)}/nt · ₹{fmtInt(rSubtotal)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Group Financial Summary Header */}
+          <div className="bg-white rounded-xl p-3 border border-indigo-100 grid grid-cols-3 gap-2 text-center text-xs">
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block">Total Group Stay</span>
+              <span className="font-black text-slate-900 text-xs sm:text-sm">₹{fmtInt(groupTotalTariff)}</span>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block">Total Advance Paid</span>
+              <span className="font-black text-emerald-700 text-xs sm:text-sm">₹{fmtInt(groupTotalAdvance)}</span>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 block">Group Balance Due</span>
+              <span className={`font-black text-xs sm:text-sm ${groupTotalBalance > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                ₹{fmtInt(groupTotalBalance)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 1. Guest & Contact Card */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200/90 shadow-2xs space-y-3">
         <div className="flex items-center justify-between pb-2 border-b border-slate-100">
