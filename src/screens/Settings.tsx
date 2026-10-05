@@ -445,13 +445,13 @@ export const Settings = ({ onBack }: SettingsProps) => {
   return (
     <div className="min-h-screen bg-slate-50 pb-28">
       {/* header */}
-      <header className="sticky top-0 z-10 bg-sky-800 text-white px-4 py-3 flex items-center gap-3 shadow-md">
-        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-sky-700 rounded-lg transition">
-          <ArrowLeft className="w-5 h-5" />
+      <header className="sticky top-0 z-10 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white px-4 py-3.5 flex items-center gap-3 shadow-md border-b border-slate-800">
+        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-white/10 rounded-xl transition cursor-pointer">
+          <ArrowLeft className="w-5 h-5 text-slate-300 hover:text-white" />
         </button>
         <div className="flex-1">
-          <h1 className="text-base font-bold leading-tight">Hotel Configuration</h1>
-          <p className="text-sky-300 text-xs">Settings · Reports · Branding</p>
+          <h1 className="text-base font-black leading-tight tracking-tight">Hotel Configuration</h1>
+          <p className="text-blue-300 text-xs font-semibold">Settings · Reports · Branding</p>
         </div>
       </header>
 

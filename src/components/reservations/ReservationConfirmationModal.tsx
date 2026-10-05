@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   X, FileText, Download, Eye, Mail, MessageCircle, RefreshCw,
   CheckCircle2, AlertCircle, Clock, Loader2, Send,
-  ShieldAlert, Printer, User, Building2, AlertTriangle
+  ShieldAlert, Printer, User, Building2, AlertTriangle, BedDouble,
 } from 'lucide-react';
 import type { Reservation } from '@/lib/types-reservations';
 import type { HotelSettings } from '@/lib/types';
@@ -13,6 +13,7 @@ import {
 
 interface Props {
   reservation: Reservation;
+  groupReservations?: Reservation[];
   settings?: HotelSettings | null;
   onClose: () => void;
   onUpdated?: () => void;
@@ -65,6 +66,7 @@ interface ConfirmationResponse {
 
 export const ReservationConfirmationModal: React.FC<Props> = ({
   reservation,
+  groupReservations,
   settings,
   onClose,
   onUpdated,
@@ -75,6 +77,15 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
   const [acting, setActing] = useState(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  const isMulti = Boolean(groupReservations && groupReservations.length > 1);
+  const allRooms = isMulti ? groupReservations! : [reservation];
+  const totalStayAmount = allRooms.reduce(
+    (sum, r) => sum + (r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1))),
+    0
+  );
+  const totalAdvancePaid = allRooms.reduce((sum, r) => sum + (r.advance_paid || 0), 0);
+  const totalBalanceDue = Math.max(0, totalStayAmount - totalAdvancePaid);
 
   // Email recipient — seeded immediately from the reservation's saved guest email
   const [showEmailInput, setShowEmailInput] = useState(false);
@@ -435,9 +446,16 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
           </div>
 
           {/* Quick Stay Card */}
-          <div className="p-4 rounded-xl border border-slate-200/90 bg-white shadow-2xs space-y-2.5">
+          <div className="p-4 rounded-xl border border-slate-200/90 bg-white shadow-2xs space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <div className="font-bold text-slate-900 text-sm">{reservation.guest_name}</div>
+              <div className="flex items-center gap-2">
+                <div className="font-bold text-slate-900 text-sm">{reservation.guest_name}</div>
+                {isMulti && (
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                    {allRooms.length} Rooms Multi-Booking
+                  </span>
+                )}
+              </div>
               <div className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-brand-50 text-brand-700 border border-brand-200">
                 {reservation.source_name || reservation.source_category || 'Direct'}
               </div>
@@ -453,18 +471,57 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
                 <span className="font-semibold text-slate-800">{reservation.check_out_date}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Room / Cat</span>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">Room Allocation</span>
                 <span className="font-semibold text-slate-800">
-                  {reservation.room_no && reservation.room_no !== 'unassigned' ? `Room ${reservation.room_no}` : 'Not Assigned'}
+                  {isMulti ? (
+                    `${allRooms.length} Rooms (${allRooms.map((r) => r.room_no || 'Unassigned').join(', ')})`
+                  ) : reservation.room_no && reservation.room_no !== 'unassigned' ? (
+                    `Room ${reservation.room_no}`
+                  ) : (
+                    'Not Assigned'
+                  )}
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase font-bold">Total / Due</span>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">Total / Balance</span>
                 <span className="font-semibold text-brand-700">
-                  ₹{Math.round(reservation.invoice_total || reservation.rate || 0).toLocaleString('en-IN')}
+                  ₹{Math.round(totalStayAmount).toLocaleString('en-IN')}
+                  {totalBalanceDue > 0 && (
+                    <span className="text-xs text-amber-600 font-bold block">Due: ₹{Math.round(totalBalanceDue).toLocaleString('en-IN')}</span>
+                  )}
                 </span>
               </div>
             </div>
+
+            {/* Room Breakdown for Multi-Room Bookings */}
+            {isMulti && (
+              <div className="pt-2.5 border-t border-slate-100 space-y-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Allocated Rooms & Tariff Breakdown ({allRooms.length} Rooms)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {allRooms.map((r, idx) => (
+                    <div key={r.id || idx} className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                          <BedDouble className="w-3.5 h-3.5" />
+                        </div>
+                        <div>
+                          <span className="font-bold text-slate-800 block">Room {r.room_no || 'Unassigned'}</span>
+                          {r.rate_plan && <span className="text-[10px] text-slate-400">{r.rate_plan}</span>}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="font-extrabold text-slate-900 block">
+                          ₹{Math.round(r.invoice_total || (r.rate * (r.nights || 1))).toLocaleString('en-IN')}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-medium">₹{Math.round(r.rate)}/nt</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Email input field (when manual send/edit is requested or if email missing) */}

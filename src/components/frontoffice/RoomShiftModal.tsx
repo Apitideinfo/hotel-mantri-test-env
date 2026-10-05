@@ -28,6 +28,7 @@ export const RoomShiftModal = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   useEffect(() => {
     const orig = document.body.style.overflow;
@@ -58,10 +59,15 @@ export const RoomShiftModal = ({
     return groupRoomsByCategory(sorted, categories);
   }, [vacantRooms, categories]);
 
-  const handleShift = async () => {
+  const handleInitialClick = () => {
     setError(null);
     if (!targetRoom) { setError('Please select a target room.'); return; }
     if (!canRoomShift(role)) { setError('You do not have permission to shift rooms. Manager or Admin required.'); return; }
+    setShowConfirm(true);
+  };
+
+  const handleFinalShift = async () => {
+    setShowConfirm(false);
     setSaving(true);
     try {
       await shiftRoom({ entryId, fromRoom, toRoom: targetRoom, reason });
@@ -182,14 +188,47 @@ export const RoomShiftModal = ({
           </div>
 
           <div className="px-5 py-3 border-t border-slate-200 bg-slate-50">
-            <button onClick={handleShift} disabled={saving || !targetRoom}
-              className="w-full flex items-center justify-center gap-1.5 px-4 py-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition shadow-soft-blue">
+            <button onClick={handleInitialClick} disabled={saving || !targetRoom}
+              className="w-full flex items-center justify-center gap-1.5 px-4 py-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition shadow-soft-blue cursor-pointer">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
               Shift to {targetRoom || '…'}
             </button>
           </div>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-sm p-6 text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <BedDouble className="w-7 h-7" />
+            </div>
+            <h4 className="text-base font-black text-slate-900 tracking-tight">
+              Confirm Room Shift?
+            </h4>
+            <p className="text-xs text-slate-500 mt-1">
+              Are you sure you want to shift guest from <strong className="text-slate-800">Room {fromRoom}</strong> to <strong className="text-indigo-600">Room {targetRoom}</strong>?
+            </p>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirm(false)}
+                className="px-3 py-2 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleFinalShift}
+                className="px-3 py-2 text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-md transition cursor-pointer"
+              >
+                Yes, Shift Room
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

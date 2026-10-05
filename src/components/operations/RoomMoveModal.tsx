@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   X, ArrowRight, BedDouble, Calendar, Users, DollarSign,
-  AlertCircle, CheckCircle2, Loader2, Sparkles, ShieldAlert,
+  AlertCircle, AlertTriangle, CheckCircle2, Loader2, Sparkles, ShieldAlert,
   ArrowRightLeft, Clock, Phone, Mail, Tag,
 } from 'lucide-react';
 import type { Room, RoomCategory, FrontOfficeRole } from '@/lib/types';
@@ -55,6 +55,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
   const [customRate, setCustomRate] = useState<number>(booking.rate);
   const [reason, setReason] = useState(payload.reason || 'Guest requested room / date shift');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
 
   const activeRooms = useMemo(() => rooms.filter((r) => r.is_active), [rooms]);
 
@@ -96,7 +97,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
     return groupRoomsByCategory(sorted, categories);
   }, [activeRooms, categories]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
 
@@ -113,6 +114,14 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
       return;
     }
 
+    setShowConfirmModal(true);
+  };
+  const handleInitialClick = handleSubmit;
+
+  const handleFinalConfirm = async () => {
+    setShowConfirmModal(false);
+    setLocalError(null);
+
     try {
       await onConfirm({
         booking,
@@ -127,42 +136,63 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
     }
   };
 
+  const statusBadge = useMemo(() => {
+    const s = (booking.status || '').toLowerCase();
+    const isCheckedIn = s === 'checked_in' || booking.type === 'stay';
+    if (isCheckedIn) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          Checked-In
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 shadow-xs">
+        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+        Confirmed
+      </span>
+    );
+  }, [booking.status, booking.type]);
+
   const errorMessage = localError || parentError;
 
   return (
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 transition-opacity animate-fade-in"
+        className="fixed inset-0 bg-slate-950/75 backdrop-blur-md z-50 transition-opacity animate-fade-in"
         onClick={onClose}
       />
 
       {/* Modal Dialog */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 pointer-events-none overflow-y-auto">
-        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[92vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in">
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 pointer-events-none overflow-y-auto">
+        <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/90 w-full max-w-2xl max-h-[90vh] flex flex-col pointer-events-auto overflow-hidden animate-scale-in my-auto">
           {/* Header */}
-          <div className="px-6 py-4.5 bg-slate-900 text-white flex items-center justify-between relative overflow-hidden">
-            <div className="absolute right-0 top-0 bottom-0 w-64 bg-gradient-to-l from-brand-600/20 to-transparent pointer-events-none" />
-            <div className="flex items-center gap-3 z-10">
-              <div className="w-10 h-10 rounded-xl bg-brand-500/20 text-brand-400 border border-brand-500/30 flex items-center justify-center shrink-0">
-                <ArrowRightLeft className="w-5 h-5 text-brand-400" />
+          <div className="px-6 py-4.5 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white flex items-center justify-between relative overflow-hidden shrink-0 shadow-xs border-b border-slate-800">
+            <div className="flex items-center gap-3.5 z-10 min-w-0">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center justify-center shrink-0 shadow-inner">
+                <ArrowRightLeft className="w-5 h-5 text-indigo-400" />
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-base font-extrabold text-white">Move / Edit Reservation</h2>
-                  <span className="text-[10px] uppercase tracking-wider font-extrabold px-2 py-0.5 rounded-full bg-brand-900 text-brand-300 border border-brand-700">
-                    {booking.status.replace('_', ' ')}
-                  </span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-base font-black text-white tracking-tight leading-tight">
+                    {booking.type === 'stay' || booking.status === 'checked_in'
+                      ? 'Shift Room & Stay Adjustment'
+                      : 'Move / Shift Reservation'}
+                  </h2>
+                  {statusBadge}
                 </div>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Ref #{booking.id.slice(0, 8)} · {booking.guestName || 'Guest'}
+                <p className="text-xs text-slate-300 font-medium mt-0.5 truncate">
+                  Guest: <strong className="text-white">{booking.guestName || 'Guest'}</strong> · Room {booking.roomNo} · Ref #{booking.id.slice(0, 8).toUpperCase()}
                 </p>
               </div>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition z-10"
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition z-10 cursor-pointer shrink-0 ml-2"
+              title="Close modal"
             >
               <X className="w-5 h-5" />
             </button>
@@ -361,7 +391,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleSubmit}
+              onClick={handleInitialClick}
               disabled={saving || !targetRoomNo}
               className="flex items-center gap-2 px-5 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-xs sm:text-sm font-extrabold rounded-xl shadow-md shadow-brand-500/20 transition disabled:opacity-60 cursor-pointer"
             >
@@ -380,6 +410,67 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ── Room Shift / Modification Confirmation Popup ── */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-md p-6 text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <h3 className="text-lg font-black text-slate-900 tracking-tight">
+              Confirm Room Shift & Details
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Please verify the shift details for <strong className="text-slate-800">{booking.guestName || 'Guest'}</strong>:
+            </p>
+
+            <div className="bg-slate-50 rounded-2xl p-4 my-4 border border-slate-200/90 text-xs text-left space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Room Shift:</span>
+                <span className="font-extrabold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-lg border border-indigo-100">
+                  Room {booking.roomNo} → Room {targetRoomNo}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Stay Period:</span>
+                <span className="font-bold text-slate-800">{targetCheckIn} to {targetCheckOut} ({newNights} nights)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Tariff / Night:</span>
+                <span className="font-bold text-slate-800">₹{fmtMoney(customRate)}</span>
+              </div>
+              <div className="flex items-center justify-between pt-1.5 border-t border-slate-200">
+                <span className="text-slate-700 font-bold">New Stay Total:</span>
+                <span className="font-black text-slate-900 text-sm">₹{fmtMoney(newTotal)}</span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500 mb-5">
+              Are you sure you want to proceed with this modification?
+            </p>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+              >
+                Go Back
+              </button>
+              <button
+                type="button"
+                onClick={handleFinalConfirm}
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Yes, Shift Room
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

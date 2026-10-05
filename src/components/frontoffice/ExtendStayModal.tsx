@@ -27,6 +27,7 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   useEffect(() => {
     const orig = document.body.style.overflow;
@@ -49,10 +50,15 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
   const extraNights = newNights - currentNights;
   const extraCost = Math.max(0, invoiceTotal - toNum(entry.invoice_total));
 
-  const handleExtend = async () => {
+  const handleInitialClick = () => {
     setError(null);
     const validationError = validateExtendStay(currentCheckIn, newCheckOut);
     if (validationError) { setError(validationError); return; }
+    setShowConfirm(true);
+  };
+
+  const handleFinalExtend = async () => {
+    setShowConfirm(false);
     setSaving(true);
     try {
       await extendStay({ entryId: entry.id, newCheckOut });
@@ -182,14 +188,65 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
           </div>
 
           <div className="px-5 py-3 border-t border-slate-200 bg-slate-50">
-            <button onClick={handleExtend} disabled={saving}
-              className="w-full flex items-center justify-center gap-1.5 px-4 py-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition shadow-soft-blue">
+            <button onClick={handleInitialClick} disabled={saving}
+              className="w-full flex items-center justify-center gap-1.5 px-4 py-3 bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold rounded-lg disabled:opacity-60 transition shadow-soft-blue cursor-pointer">
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <CalendarPlus className="w-4 h-4" />}
               Extend Stay to {newCheckOut}
             </button>
           </div>
         </div>
       </div>
+
+      {/* Confirmation Modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-sm p-6 text-center animate-in zoom-in-95 duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <CalendarPlus className="w-7 h-7" />
+            </div>
+            <h4 className="text-base font-black text-slate-900 tracking-tight">
+              Confirm Stay Extension?
+            </h4>
+            <p className="text-xs text-slate-500 mt-1">
+              Extend stay for <strong className="text-slate-800">{entry.guest_name}</strong> (Room {entry.room_no}) until <strong className="text-indigo-600">{newCheckOut}</strong>?
+            </p>
+
+            <div className="bg-slate-50 rounded-2xl p-3 my-4 border border-slate-200/90 text-xs text-left space-y-1.5">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total Nights:</span>
+                <span className="font-bold text-slate-800">{newNights} nights ({extraNights > 0 ? `+${extraNights} extra` : '0 extra'})</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">New Stay Total:</span>
+                <span className="font-bold text-slate-900">₹{fmtMoney(invoiceTotal)}</span>
+              </div>
+              {extraCost > 0 && (
+                <div className="flex justify-between text-amber-700 font-bold">
+                  <span>Additional Due:</span>
+                  <span>+₹{fmtMoney(extraCost)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirm(false)}
+                className="px-3 py-2 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleFinalExtend}
+                className="px-3 py-2 text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-md transition cursor-pointer"
+              >
+                Yes, Extend Stay
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

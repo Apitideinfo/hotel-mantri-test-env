@@ -6,6 +6,7 @@ import {
   CheckCircle2, MessageCircle, Mail as MailIcon, PlusCircle, Lock, RefreshCw,
   Sparkles, ShieldCheck, Tag, ArrowRight, IndianRupee,
 } from 'lucide-react';
+import { CelebrationBurst } from './ui/CelebrationBurst';
 import type {
   HotelSettings, CompanySource, RoomCategory, Room, SourceCategory,
   MealPlan, GstType, GstSlab,
@@ -260,32 +261,59 @@ export const NewBookingModal = ({
     }
   };
 
-  // ── Success Modal View ──
+  // ── Success Modal View (Celebratory Congratulations Popup) ──
   if (success) {
-    const shortId = savedReservationId ? savedReservationId.slice(0, 8).toUpperCase() : '';
+    const bookingIdentifier = savedReservationId || success[0].group_id || '';
+    const shortId = bookingIdentifier ? bookingIdentifier.slice(0, 8).toUpperCase() : '';
     const confirmNo = shortId ? `HM-RES-${shortId}` : '';
     const recipientEmail = emailDelivery?.recipientEmail || email.trim();
+    const isMultiRoom = success.length > 1;
 
     return (
       <>
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs z-50 transition-opacity" onClick={onClose} />
+        {/* Celebration Particle Fountains (Phuljhadiyan Effect) */}
+        <CelebrationBurst active={true} durationMs={5000} />
+
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm z-50 transition-opacity animate-in fade-in duration-200" onClick={onClose} />
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md pointer-events-auto overflow-hidden border border-slate-200 animate-scale-in">
-            <div className="px-6 py-6 text-center">
-              <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3 shadow-inner">
-                <CheckCircle2 className="w-9 h-9" />
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg pointer-events-auto overflow-hidden border border-slate-200/80 animate-in zoom-in-95 duration-200">
+            {/* Top decorative gradient banner (Deep Navy + Blue Sapphire) */}
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 px-6 pt-7 pb-6 text-white text-center relative overflow-hidden">
+              <div className="absolute top-0 right-0 -mr-6 -mt-6 w-32 h-32 rounded-full bg-blue-500/20 blur-2xl pointer-events-none" />
+              <div className="absolute bottom-0 left-0 -ml-6 -mb-6 w-32 h-32 rounded-full bg-indigo-500/20 blur-2xl pointer-events-none" />
+              
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 border border-white/20 text-white flex items-center justify-center mx-auto mb-3 shadow-xl ring-4 ring-white/10 animate-bounce">
+                <Sparkles className="w-8 h-8 text-amber-300 drop-shadow-md" />
               </div>
-              <h2 className="text-xl font-black text-slate-900 tracking-tight">Booking Created Successfully!</h2>
-              {confirmNo && (
-                <p className="text-xs font-mono text-indigo-600 mt-1 font-bold bg-indigo-50 px-2.5 py-0.5 rounded-full inline-block">{confirmNo}</p>
-              )}
-              <p className="text-xs text-slate-500 mt-2">
-                Reservation for <span className="font-extrabold text-slate-800">{success[0].guest_name}</span> · Room {success.map(s => s.room_no).join(', ')}
+              
+              <span className="px-3.5 py-1 rounded-full text-[11px] font-extrabold uppercase tracking-widest bg-blue-500/20 border border-blue-400/30 text-blue-200 inline-block mb-1.5 shadow-xs">
+                {isMultiRoom ? `Multi-Room Group Booking (${success.length} Rooms)` : 'Confirmed Reservation'}
+              </span>
+              <h2 className="text-2xl font-black text-white tracking-tight">
+                🎉 Congratulations!
+              </h2>
+              <p className="text-xs text-blue-100/90 font-medium mt-0.5">
+                Reservation created and registered successfully in hotel records
               </p>
+            </div>
+
+            <div className="px-6 py-5 text-center">
+              {confirmNo && (
+                <div className="flex items-center justify-center gap-2 mb-3.5">
+                  <span className="text-xs font-mono text-blue-700 font-extrabold bg-blue-50 border border-blue-200/80 px-3.5 py-1 rounded-xl shadow-xs">
+                    Booking ID: {confirmNo}
+                  </span>
+                  {isMultiRoom && (
+                    <span className="text-[11px] font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2.5 py-1 rounded-xl">
+                      {success.length} Rooms
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Email delivery status badge */}
               {emailStatus && (
-                <div className={`mt-3 mx-auto max-w-sm rounded-xl px-4 py-2.5 text-xs font-bold flex items-center gap-2 ${
+                <div className={`mb-4 mx-auto max-w-sm rounded-xl px-3.5 py-2 text-xs font-bold flex items-center gap-2 text-left ${
                   emailStatus === 'EMAIL_SENT'
                     ? 'bg-emerald-50 border border-emerald-300 text-emerald-800'
                     : emailStatus === 'EMAIL_NOT_CONFIGURED'
@@ -293,41 +321,42 @@ export const NewBookingModal = ({
                     : 'bg-rose-50 border border-rose-300 text-rose-800'
                 }`}>
                   {emailStatus === 'EMAIL_SENT' ? (
-                    <><CheckCircle2 className="w-4 h-4 shrink-0" /><span>Confirmation email sent to {recipientEmail}</span></>
+                    <><CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /><span>Confirmation email sent to {recipientEmail}</span></>
                   ) : emailStatus === 'EMAIL_NOT_CONFIGURED' ? (
-                    <><AlertCircle className="w-4 h-4 shrink-0" /><span>Email not configured — PDF ready to download</span></>
+                    <><AlertCircle className="w-4 h-4 shrink-0 text-amber-600" /><span>Email not configured — PDF voucher ready to download</span></>
                   ) : (
-                    <><AlertCircle className="w-4 h-4 shrink-0" /><span>Confirmation email could not be sent to {recipientEmail}</span></>
+                    <><AlertCircle className="w-4 h-4 shrink-0 text-rose-600" /><span>Confirmation email could not be sent to {recipientEmail}</span></>
                   )}
                 </div>
               )}
 
-              <div className="mt-4 bg-slate-50 rounded-2xl p-4 text-left space-y-2 border border-slate-200/90 text-xs">
-                <SuccessRow label="Check-in" value={success[0].check_in_date} />
-                <SuccessRow label="Check-out" value={success[0].check_out_date} />
-                <SuccessRow label="Nights" value={String(nights)} />
-                <SuccessRow label="Rate (per room)" value={`₹${fmtInt(toNum(rate))}/night`} />
+              <div className="bg-slate-50/80 rounded-2xl p-4 text-left space-y-2.5 border border-slate-200 text-xs shadow-inner">
+                <SuccessRow label="Guest Name" value={success[0].guest_name} bold />
+                <SuccessRow label="Allocated Rooms" value={success.map(s => `Room ${s.room_no}`).join(', ')} bold color="blue" />
+                <SuccessRow label="Check-In" value={success[0].check_in_date} />
+                <SuccessRow label="Check-Out" value={success[0].check_out_date} />
+                <SuccessRow label="Stay Duration" value={`${nights} ${nights === 1 ? 'Night' : 'Nights'}`} />
                 <SuccessRow label="Total Amount" value={`₹${fmtInt(invoiceTotal)}`} bold />
                 <SuccessRow label="Advance Received" value={`₹${fmtInt(totalReceived)}`} color="emerald" />
-                <SuccessRow label="Balance Due" value={`₹${fmtInt(balance)}`} color={balance > 0 ? 'amber' : 'slate'} />
+                <SuccessRow label="Balance Due" value={`₹${fmtInt(balance)}`} color={balance > 0 ? 'amber' : 'slate'} bold />
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-2">
+              <div className="mt-5 grid grid-cols-2 gap-2.5">
                 {savedReservationId && (
                   <a
                     href={`/api/reservations/${savedReservationId}/confirmation/pdf`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 border border-slate-200 rounded-xl hover:bg-slate-50 transition shadow-2xs"
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition shadow-xs active:scale-95"
                   >
-                    <FileText className="w-4 h-4 text-slate-500" /> Download PDF
+                    <FileText className="w-4 h-4 text-blue-600" /> Download Voucher
                   </a>
                 )}
                 {(emailStatus === 'EMAIL_FAILED' || emailStatus === 'EMAIL_NOT_CONFIGURED') && savedReservationId && (
                   <button
                     onClick={handleRetryEmail}
                     disabled={retryingEmail}
-                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-rose-700 border border-rose-200 rounded-xl hover:bg-rose-50 transition disabled:opacity-60 shadow-2xs cursor-pointer"
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-rose-700 border border-rose-200 rounded-xl hover:bg-rose-50 transition disabled:opacity-60 shadow-xs cursor-pointer active:scale-95"
                   >
                     {retryingEmail ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                     {emailStatus === 'EMAIL_NOT_CONFIGURED' ? 'Configure Email' : 'Retry Email'}
@@ -335,9 +364,9 @@ export const NewBookingModal = ({
                 )}
                 <button 
                   onClick={onClose}
-                  className="col-span-full flex items-center justify-center gap-1.5 px-4 py-3 text-xs font-black text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-md transition active:scale-95 cursor-pointer"
+                  className={`${savedReservationId ? '' : 'col-span-2'} flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-black text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md transition active:scale-95 cursor-pointer`}
                 >
-                  <BedDouble className="w-4 h-4" /> Go to Operations Board
+                  <Check className="w-4 h-4" /> Done & View Board
                 </button>
               </div>
             </div>

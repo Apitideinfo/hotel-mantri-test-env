@@ -14,6 +14,7 @@ interface OperationsHeaderProps {
   businessDate: string;
   loading: boolean;
   onShiftTimeline: (delta: number) => void;
+  onDateSelect: (date: string) => void;
   onGoToToday: () => void;
   onRefresh: () => void;
   onBack: () => void;
@@ -34,6 +35,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
   businessDate,
   loading,
   onShiftTimeline,
+  onDateSelect,
   onGoToToday,
   onRefresh,
   onBack,
@@ -55,17 +57,15 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             </button>
 
             {/* Brand Logo Icon */}
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700/80 flex items-center justify-center p-1.5 shadow-sm shrink-0">
-              <BrandIcon size={24} />
-            </div>
+            <BrandIcon size={38} className="shrink-0 shadow-xs" />
 
             {/* Title & Live Status */}
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight leading-tight">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-sm sm:text-base font-black text-slate-900 tracking-tight leading-tight truncate max-w-[160px] sm:max-w-[260px] md:max-w-xs xl:max-w-md" title={hotelName}>
                   {hotelName}
                 </h1>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200/80 shadow-2xs shrink-0">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                   <span>Live Operations</span>
                 </span>
@@ -125,7 +125,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             </button>
           </div>
 
-          {/* Timeline Date Range Picker Bar */}
+          {/* Timeline Date Range Picker Bar with Interactive Calendar Selection */}
           <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-1 shadow-2xs hover:border-slate-300 transition">
             <button
               type="button"
@@ -136,16 +136,31 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
               <ChevronLeft className="w-4 h-4 stroke-[2.2]" />
             </button>
             
-            <div className="px-3 py-0.5 text-center min-w-[140px] sm:min-w-[180px]">
-              <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight block">
-                {fmtDateFull(timelineDates[0])}
-                {viewMode === 'week' && timelineDates.length > 1 && (
-                  <>
-                    <span className="text-slate-400 font-normal mx-1">–</span>
-                    {fmtDateFull(timelineDates[timelineDates.length - 1])}
-                  </>
-                )}
-              </span>
+            <div className="relative flex items-center">
+              <input
+                type="date"
+                id="ops-timeline-date-picker"
+                value={timelineDates[0] || businessDate}
+                onChange={(e) => {
+                  if (e.target.value) {
+                    onDateSelect(e.target.value);
+                  }
+                }}
+                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                title="Click to choose any past, present, or future date"
+              />
+              <div className="flex items-center gap-1.5 px-3 py-0.5 text-center min-w-[140px] sm:min-w-[190px] rounded-lg group hover:bg-slate-50 transition cursor-pointer">
+                <Calendar className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
+                <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors block">
+                  {fmtDateFull(timelineDates[0])}
+                  {viewMode === 'week' && timelineDates.length > 1 && (
+                    <>
+                      <span className="text-slate-400 font-normal mx-1">–</span>
+                      {fmtDateFull(timelineDates[timelineDates.length - 1])}
+                    </>
+                  )}
+                </span>
+              </div>
             </div>
 
             <button
