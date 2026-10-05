@@ -1342,14 +1342,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         onViewDetails={(b) => setSelectedBooking(b)}
       />
 
-      {/* 3. Operational KPI Strip (2 Logical Groups) */}
-      <OperationsKpiStrip
-        stats={todayStats}
-        totalActiveRooms={activeRooms.length}
-        rooms={activeRooms}
-      />
-
-      {/* 4. Filters & Search Toolbar */}
+      {/* 3. Filters & Search Toolbar */}
       <OperationsFilterBar
         search={search}
         onSearchChange={setSearch}
@@ -1813,6 +1806,13 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
           </div>
         )}
       </div>
+
+      {/* ── Housekeeping Status Bar (Positioned Below Board) ── */}
+      <OperationsKpiStrip
+        stats={todayStats}
+        totalActiveRooms={activeRooms.length}
+        rooms={activeRooms}
+      />
 
       {/* Floating Drag-to-Move HUD Banner */}
       {movingBooking && moveTargetRoom && moveTargetCheckIn && (
