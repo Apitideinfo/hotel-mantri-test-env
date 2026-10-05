@@ -120,26 +120,26 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
 
   return (
     <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/90 sticky top-0 z-30 shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
-      <div className="max-w-[1920px] mx-auto px-4 sm:px-6 py-2.5 space-y-2.5">
+      <div className="w-full px-3 sm:px-6 py-2.5 space-y-2.5">
         
-        {/* ── TIER 1: Unified Navigation & Primary Actions ── */}
-        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+        {/* ── TIER 1: Property Identity & Primary Operational Actions (Left & Right Balanced) ── */}
+        <div className="flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
           
           {/* Left: Back Arrow + Property Identity */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 min-w-0">
             <button
               onClick={onBack}
-              className="p-2 hover:bg-slate-100 rounded-xl text-slate-500 hover:text-slate-900 transition-all active:scale-95 cursor-pointer border border-transparent hover:border-slate-200"
+              className="p-1.5 sm:p-2 hover:bg-slate-100 rounded-xl text-slate-500 hover:text-slate-900 transition-all active:scale-95 cursor-pointer border border-transparent hover:border-slate-200 shrink-0"
               title="Back to Dashboard"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4 sm:w-5 h-5" />
             </button>
 
-            <BrandIcon size={36} className="shrink-0 shadow-2xs" />
+            <BrandIcon size={34} className="shrink-0 shadow-2xs" />
 
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-sm sm:text-base font-black text-slate-900 tracking-tight leading-tight truncate max-w-[180px] sm:max-w-xs" title={hotelName}>
+                <h1 className="text-sm sm:text-base font-black text-slate-900 tracking-tight leading-tight truncate max-w-[160px] sm:max-w-xs" title={hotelName}>
                   {hotelName}
                 </h1>
                 <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs shrink-0">
@@ -147,7 +147,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
                   <span>Live Operations</span>
                 </span>
               </div>
-              <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mt-0.5">
+              <div className="text-[10px] sm:text-[11px] font-semibold text-slate-500 flex items-center gap-1.5 mt-0.5">
                 <span className="text-indigo-600 font-bold flex items-center gap-1">
                   <Activity className="w-3 h-3" />
                   Command Center
@@ -158,114 +158,13 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             </div>
           </div>
 
-          {/* Center: View Switcher & Timeline Date Navigator */}
-          <div className="flex items-center flex-wrap sm:flex-nowrap gap-2 sm:gap-2.5 self-start xl:self-center">
-            {/* Day / Week Switcher */}
-            <div className="flex items-center bg-slate-100/90 p-1 rounded-xl border border-slate-200/80 shadow-2xs">
-              <button
-                type="button"
-                onClick={() => onViewModeChange('day')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
-                  viewMode === 'day'
-                    ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-                <span>Day</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onViewModeChange('week')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
-                  viewMode === 'week'
-                    ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <CalendarDays className="w-3.5 h-3.5" />
-                <span>Week</span>
-              </button>
-            </div>
-
-            {/* Timeline Date Picker Bar */}
-            <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-1 shadow-2xs hover:border-slate-300 transition">
-              <button
-                type="button"
-                onClick={() => onShiftTimeline(viewMode === 'day' ? -1 : -7)}
-                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
-                title="Previous Period"
-              >
-                <ChevronLeft className="w-4 h-4 stroke-[2.2]" />
-              </button>
-              
-              <div className="relative flex items-center">
-                <input
-                  type="date"
-                  id="ops-timeline-date-picker"
-                  value={timelineDates[0] || businessDate}
-                  onChange={(e) => {
-                    if (e.target.value) {
-                      onDateSelect(e.target.value);
-                    }
-                  }}
-                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                  title="Click to choose date"
-                />
-                <div className="flex items-center gap-1.5 px-3 py-0.5 text-center min-w-[140px] sm:min-w-[190px] rounded-lg group hover:bg-slate-50 transition cursor-pointer">
-                  <Calendar className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
-                  <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors block">
-                    {fmtDateFull(timelineDates[0])}
-                    {viewMode === 'week' && timelineDates.length > 1 && (
-                      <>
-                        <span className="text-slate-400 font-normal mx-1">–</span>
-                        {fmtDateFull(timelineDates[timelineDates.length - 1])}
-                      </>
-                    )}
-                  </span>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => onShiftTimeline(viewMode === 'day' ? 1 : 7)}
-                className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
-                title="Next Period"
-              >
-                <ChevronRight className="w-4 h-4 stroke-[2.2]" />
-              </button>
-            </div>
-
-            {/* Jump to Today Button */}
-            <button
-              type="button"
-              onClick={onGoToToday}
-              className="px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/90 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer flex items-center gap-1.5"
-              title="Jump to Today's Date"
-            >
-              <Calendar className="w-3.5 h-3.5 text-indigo-600 stroke-[2.2]" />
-              <span>Today</span>
-            </button>
-
-            {/* Refresh Button */}
-            <button
-              type="button"
-              onClick={onRefresh}
-              disabled={loading}
-              className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-600 hover:text-slate-900 border border-slate-200/80 transition-all active:rotate-180 duration-300 disabled:opacity-50 cursor-pointer shadow-2xs"
-              title="Refresh Matrix"
-            >
-              <RefreshCw className={`w-4 h-4 stroke-[2.2] ${loading ? 'animate-spin text-indigo-600' : ''}`} />
-            </button>
-          </div>
-
-          {/* Right: Primary Action Buttons Strip */}
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
+          {/* Right: Primary Action Buttons (Series CTAs - Never Cut Off) */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 flex-wrap justify-end">
             {/* New Reservation CTA */}
             <button
               type="button"
               onClick={onNewReservation}
-              className="flex items-center gap-1.5 h-9 px-3.5 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-black rounded-xl shadow-xs shadow-indigo-200 transition-all active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 h-8.5 sm:h-9 px-3 sm:px-4 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-500 hover:to-indigo-600 text-white text-xs font-black rounded-xl shadow-xs shadow-indigo-200 transition-all active:scale-95 cursor-pointer shrink-0"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>New Reservation</span>
@@ -275,7 +174,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             <button
               type="button"
               onClick={onWalkIn}
-              className="flex items-center gap-1.5 h-9 px-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-2xs transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 h-8.5 sm:h-9 px-2.5 sm:px-3.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-2xs transition active:scale-95 cursor-pointer shrink-0"
             >
               <LogIn className="w-3.5 h-3.5 stroke-[2.2]" />
               <span>Walk-In</span>
@@ -285,29 +184,29 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             <button
               type="button"
               onClick={onAdjustAvailability}
-              className="flex items-center gap-1.5 h-9 px-3 bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-xl shadow-2xs transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 h-8.5 sm:h-9 px-2.5 sm:px-3 bg-indigo-50/90 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-bold rounded-xl shadow-2xs transition active:scale-95 cursor-pointer shrink-0"
               title="Adjust sellable inventory & channel restrictions"
             >
               <Sliders className="w-3.5 h-3.5 text-indigo-600 stroke-[2.2]" />
-              <span className="hidden sm:inline">Adjust Availability</span>
-              <span className="sm:hidden">Adjust</span>
+              <span className="hidden md:inline">Adjust Availability</span>
+              <span className="md:hidden">Adjust</span>
             </button>
 
             {/* Daily Entry */}
             <button
               type="button"
               onClick={onDailyEntry}
-              className="flex items-center gap-1.5 h-9 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200/80 shadow-2xs transition active:scale-95 cursor-pointer"
+              className="flex items-center gap-1.5 h-8.5 sm:h-9 px-2.5 sm:px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200/80 shadow-2xs transition active:scale-95 cursor-pointer shrink-0"
               title="Open Daily Room Chart Entry"
             >
               <FileText className="w-3.5 h-3.5 text-slate-500 stroke-[2.2]" />
-              <span className="hidden md:inline">Daily Entry</span>
+              <span className="hidden lg:inline">Daily Entry</span>
             </button>
           </div>
 
         </div>
 
-        {/* ── TIER 2: Contextual Selection Dock OR Integrated Filter Toolbar ── */}
+        {/* ── TIER 2: Contextual Selection Dock OR Series Timeline & Filter Toolbar ── */}
         {selectedBooking ? (
           /* Contextual Selected Booking Action Dock */
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 text-white p-3 sm:px-4 sm:py-2.5 rounded-2xl shadow-xl border border-slate-800 animate-slide-up">
@@ -422,31 +321,133 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
             </div>
           </div>
         ) : (
-          /* Integrated Filter & Search Toolbar */
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pt-1 border-t border-slate-100">
-            {/* Search Input */}
-            <div className="relative flex-1 min-w-[220px] max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search guest, room #, phone, OTA source…"
-                value={search}
-                onChange={(e) => onSearchChange(e.target.value)}
-                className="w-full pl-9 pr-8 py-1.5 bg-slate-50 border border-slate-200/90 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-2xs"
-              />
-              {search && (
+          /* Series Timeline Navigator & Integrated Filter Toolbar */
+          <div className="flex flex-col 2xl:flex-row 2xl:items-center justify-between gap-2.5 pt-2 border-t border-slate-100">
+            
+            {/* Left: View Switcher & Timeline Date Navigator (Series Flow) */}
+            <div className="flex items-center flex-wrap sm:flex-nowrap gap-2 shrink-0">
+              {/* Day / Week Switcher */}
+              <div className="flex items-center bg-slate-100/90 p-0.5 sm:p-1 rounded-xl border border-slate-200/80 shadow-2xs shrink-0">
                 <button
-                  onClick={() => onSearchChange('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200/70 transition cursor-pointer"
-                  title="Clear search"
+                  type="button"
+                  onClick={() => onViewModeChange('day')}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
+                    viewMode === 'day'
+                      ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
                 >
-                  <X className="w-3 h-3" />
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>Day</span>
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => onViewModeChange('week')}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs rounded-lg font-bold transition-all cursor-pointer ${
+                    viewMode === 'week'
+                      ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <CalendarDays className="w-3.5 h-3.5" />
+                  <span>Week</span>
+                </button>
+              </div>
+
+              {/* Timeline Date Picker Bar */}
+              <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-0.5 sm:p-1 shadow-2xs hover:border-slate-300 transition shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onShiftTimeline(viewMode === 'day' ? -1 : -7)}
+                  className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
+                  title="Previous Period"
+                >
+                  <ChevronLeft className="w-4 h-4 stroke-[2.2]" />
+                </button>
+                
+                <div className="relative flex items-center">
+                  <input
+                    type="date"
+                    id="ops-timeline-date-picker"
+                    value={timelineDates[0] || businessDate}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        onDateSelect(e.target.value);
+                      }
+                    }}
+                    className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                    title="Click to choose date"
+                  />
+                  <div className="flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 text-center min-w-[130px] sm:min-w-[180px] rounded-lg group hover:bg-slate-50 transition cursor-pointer">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
+                    <span className="text-xs sm:text-sm font-black text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors block">
+                      {fmtDateFull(timelineDates[0])}
+                      {viewMode === 'week' && timelineDates.length > 1 && (
+                        <>
+                          <span className="text-slate-400 font-normal mx-1">–</span>
+                          {fmtDateFull(timelineDates[timelineDates.length - 1])}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onShiftTimeline(viewMode === 'day' ? 1 : 7)}
+                  className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 hover:text-slate-900 transition active:scale-95 cursor-pointer"
+                  title="Next Period"
+                >
+                  <ChevronRight className="w-4 h-4 stroke-[2.2]" />
+                </button>
+              </div>
+
+              {/* Jump to Today Button */}
+              <button
+                type="button"
+                onClick={onGoToToday}
+                className="px-2.5 sm:px-3 py-1 sm:py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/90 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer flex items-center gap-1.5 shrink-0"
+                title="Jump to Today's Date"
+              >
+                <Calendar className="w-3.5 h-3.5 text-indigo-600 stroke-[2.2]" />
+                <span>Today</span>
+              </button>
+
+              {/* Refresh Button */}
+              <button
+                type="button"
+                onClick={onRefresh}
+                disabled={loading}
+                className="p-1 sm:p-1.5 hover:bg-slate-100 rounded-xl text-slate-600 hover:text-slate-900 border border-slate-200/80 transition-all active:rotate-180 duration-300 disabled:opacity-50 cursor-pointer shadow-2xs shrink-0"
+                title="Refresh Matrix"
+              >
+                <RefreshCw className={`w-4 h-4 stroke-[2.2] ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+              </button>
             </div>
 
-            {/* Filter Dropdowns Strip */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 lg:pb-0 flex-wrap sm:flex-nowrap">
+            {/* Right: Search & Filter Dropdowns Strip */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 2xl:pb-0 flex-wrap sm:flex-nowrap flex-1 justify-start 2xl:justify-end">
+              {/* Search Input */}
+              <div className="relative min-w-[180px] max-w-xs flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search guest, room #, phone…"
+                  value={search}
+                  onChange={(e) => onSearchChange(e.target.value)}
+                  className="w-full pl-8.5 pr-7 py-1.5 bg-slate-50 border border-slate-200/90 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-2xs"
+                />
+                {search && (
+                  <button
+                    onClick={() => onSearchChange('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 rounded hover:bg-slate-200/70 transition cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
               {/* Room Category */}
               <div className="relative shrink-0">
                 <select
