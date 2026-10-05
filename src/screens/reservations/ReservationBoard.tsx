@@ -6,7 +6,7 @@ import {
   Search, SlidersHorizontal, Tag, MoreHorizontal, ChevronDown, Check,
   FileText, Sparkles, Building2, Moon, IndianRupee, ShieldCheck,
   CheckCheck, UserCheck, UserX, CalendarClock, Plane, HelpCircle,
-  Download, Printer, MessageCircle, ExternalLink
+  Download, Printer, MessageCircle, ExternalLink, Trash2
 } from 'lucide-react';
 import type { RoomChartEntry, Room, RoomCategory, CompanySource, HotelSettings } from '@/lib/types';
 import type { Reservation, ReservationStatus, ReservationAlert } from '@/lib/types-reservations';
@@ -16,6 +16,7 @@ import {
   getRoomAvailabilityForDate, type RoomAvailability,
   getReservationsPaginated, getReservationConflicts,
   updateReservationStatus, checkInReservation, saveReservation, saveReservations,
+  deleteAllReservations, bulkDeleteReservations,
 } from '@/lib/api-reservations';
 import { getRooms, getRoomCategories, getCompanySources, getSettings } from '@/lib/api';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
@@ -131,6 +132,8 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   const endDate = useMemo(() => addDays(startDate, days - 1), [startDate, days]);
 
@@ -557,6 +560,40 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   };
 
+  const handleBulkDeleteAction = async () => {
+    if (!selected.size) return;
+    if (!window.confirm(`Are you sure you want to permanently delete the ${selected.size} selected reservation(s)?`)) return;
+    setBusy(true);
+    try {
+      const count = await bulkDeleteReservations([...selected]);
+      setSelected(new Set());
+      setShowBulkBar(false);
+      setSuccessMsg(`Successfully deleted ${count} selected reservation(s).`);
+      refreshAll();
+    } catch (e: any) {
+      setError(e?.message || 'Bulk delete failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteAllAction = async () => {
+    setDeletingAll(true);
+    setError(null);
+    try {
+      const deletedCount = await deleteAllReservations();
+      setShowDeleteAllModal(false);
+      setSelected(new Set());
+      setShowBulkBar(false);
+      setSuccessMsg(`All ${deletedCount} reservation entries have been deleted successfully.`);
+      refreshAll();
+    } catch (e: any) {
+      setError(e?.message || 'Failed to delete all reservations.');
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   // Channel Brand Helper
   const getSourceBadge = (source?: string, cat?: string) => {
     const s = (source || cat || 'Direct').toLowerCase();
@@ -673,6 +710,15 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               <span className="underline ml-0.5">Resolve</span>
             </button>
           )}
+
+          <button
+            onClick={() => setShowDeleteAllModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/90 rounded-2xl transition active:scale-95 cursor-pointer shadow-2xs"
+            title="Delete all reservation entries"
+          >
+            <Trash2 className="w-4 h-4 text-rose-600" />
+            <span>Delete All Entries</span>
+          </button>
 
           <button
             onClick={() => setShowNewBookingModal(true)}
@@ -1023,9 +1069,17 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
             <button
               onClick={handleBulkCancelAction}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-full shadow-xs disabled:opacity-50 transition cursor-pointer shrink-0"
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white rounded-full shadow-xs disabled:opacity-50 transition cursor-pointer shrink-0"
             >
               <Ban className="w-3.5 h-3.5" /> Cancel
+            </button>
+            <button
+              onClick={handleBulkDeleteAction}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white rounded-full shadow-xs disabled:opacity-50 transition cursor-pointer shrink-0"
+              title="Delete selected reservations"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete Selected ({selected.size})
             </button>
           </div>
 
@@ -1863,6 +1917,65 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ── Delete All Entries Confirmation Modal ── */}
+      {showDeleteAllModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in">
+          <div className="bg-white rounded-3xl border border-rose-100 p-6 sm:p-7 max-w-md w-full shadow-2xl space-y-5 animate-in zoom-in-95">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 shadow-inner">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1 flex-1">
+                <h3 className="text-lg font-black text-slate-900 tracking-tight">
+                  Delete All Reservation Entries?
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  This action will permanently delete <span className="font-bold text-rose-600">all {kpiStats.total} reservation records</span>, unbind room occupancy links, and clear linked alerts from your database.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/80 border border-rose-200/80 rounded-2xl p-4 text-xs space-y-1.5 text-rose-900">
+              <div className="flex items-center gap-2 font-bold text-rose-700">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span>Permanent & Irreversible</span>
+              </div>
+              <p className="text-[11px] text-rose-800 leading-normal">
+                All confirmed, active, and checked-out bookings for this hotel will be completely removed. Please make sure you have backed up any necessary reports before proceeding.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteAllModal(false)}
+                disabled={deletingAll}
+                className="px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-xl transition cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteAllAction}
+                disabled={deletingAll}
+                className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-lg shadow-rose-500/25 transition cursor-pointer disabled:opacity-60 active:scale-95"
+              >
+                {deletingAll ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Deleting Entries…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Yes, Delete All Entries</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

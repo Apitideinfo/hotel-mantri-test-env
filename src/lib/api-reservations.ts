@@ -531,6 +531,78 @@ export const deleteReservation = async (id: string): Promise<void> => {
   }
 };
 
+export const deleteAllReservations = async (): Promise<number> => {
+  const hotelId = getCurrentHotelId();
+
+  // 1. Fetch count and list of active reservations
+  const { data: list } = await supabase
+    .from('reservations')
+    .select('id, check_in_date, check_out_date, room_no')
+    .eq('hotel_id', hotelId);
+
+  const count = list?.length || 0;
+  if (count === 0) return 0;
+
+  // 2. Unlink any room chart entries pointing to reservations
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('hotel_id', hotelId);
+
+  // 3. Delete linked alerts and groups
+  await supabase.from('reservation_alerts').delete().eq('hotel_id', hotelId);
+  await supabase.from('reservation_groups').delete().eq('hotel_id', hotelId);
+
+  // 4. Delete all reservations for this hotel
+  const { error } = await supabase
+    .from('reservations')
+    .delete()
+    .eq('hotel_id', hotelId);
+  if (error) throw error;
+
+  // 5. Notify channels & dispatch local sync events
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return count;
+};
+
+export const bulkDeleteReservations = async (ids: string[]): Promise<number> => {
+  if (!ids.length) return 0;
+  const hotelId = getCurrentHotelId();
+
+  // 1. Unlink any room chart entries pointing to these reservations
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('hotel_id', hotelId)
+    .in('reservation_id', ids);
+
+  // 2. Delete linked alerts
+  await supabase
+    .from('reservation_alerts')
+    .delete()
+    .eq('hotel_id', hotelId)
+    .in('reservation_id', ids);
+
+  // 3. Delete reservations
+  const { error } = await supabase
+    .from('reservations')
+    .delete()
+    .eq('hotel_id', hotelId)
+    .in('id', ids);
+  if (error) throw error;
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return ids.length;
+};
+
 export const checkRoomAvailability = async (
   roomNo: string,
   checkIn: string,
