@@ -212,12 +212,12 @@ export const BookingBar: React.FC<BookingBarProps> = ({
 
   // Determine seamless multi-day spanning styles
   const cardShapeClasses = isSingleDay
-    ? 'rounded-xl p-2'
+    ? 'rounded-xl p-1.5'
     : isStart && !isEnd
-    ? 'rounded-l-xl rounded-r-none border-r-0 -mr-[9px] z-[2] p-2 pr-3'
+    ? 'rounded-l-xl rounded-r-none border-r-0 -mr-[9px] z-[2] p-1.5 pr-2'
     : !isStart && !isEnd
-    ? 'rounded-none border-x-0 -mx-[9px] z-[2] p-2 px-3'
-    : 'rounded-r-xl rounded-l-none border-l-0 -ml-[9px] z-[2] p-2 pl-3';
+    ? 'rounded-none border-x-0 -mx-[9px] z-[2] p-1.5 px-2'
+    : 'rounded-r-xl rounded-l-none border-l-0 -ml-[9px] z-[2] p-1.5 pl-2';
 
   return (
     <div
@@ -237,131 +237,167 @@ export const BookingBar: React.FC<BookingBarProps> = ({
           }
         }}
         title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ${booking.nights} Night${booking.nights > 1 ? 's' : ''} (₹${fmtInt(total)}) · ${statusCfg.statusLabel}${balance >= 1.0 ? ` · Due ₹${fmtInt(balance)}` : ' · Fully Settled'}\n(Drag card to move room/dates, drag right edge to extend stay)`}
-        className={`w-full min-h-[58px] flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
+        className={`w-full min-h-[56px] flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
       >
         {/* Source / Status Left Ribbon (Only on Start or Single Day) */}
         {(isStart || isSingleDay) && (
-          <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl ${sourceBadge.railColor}`} />
+          <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl ${sourceBadge.railColor}`} />
         )}
 
-        {/* ── CASE A: Start Day or Single Day Card ── */}
-        {(isStart || isSingleDay) ? (
+        {/* ── CASE A: Single Day Card ── */}
+        {isSingleDay ? (
           <div className="pl-1 pr-0.5 flex flex-col justify-between h-full gap-1">
-            {/* Top Row: Avatar Initial + Guest Name + VIP/Continuity tag + Menu */}
+            {/* Top Row: Avatar Initial + Guest Name + VIP + Menu */}
             <div className="flex items-center gap-1.5 min-w-0">
-              {/* Guest Initial Avatar */}
-              <div className={`w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
+              <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
                 {initials}
               </div>
 
-              {/* Guest Name */}
-              <span className={`font-black text-[11px] sm:text-[11.5px] truncate tracking-tight group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
+              <span className={`font-black text-[11px] truncate tracking-tight flex-1 min-w-0 group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
                 {booking.guestName || 'Guest'}
               </span>
 
-              {/* VIP Badge */}
               {booking.vipType && (
-                <span className={`ml-auto inline-flex items-center gap-0.5 text-[7.5px] px-1 py-0.2 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-amber-100 text-amber-900 border-amber-300'}`}>
+                <span className={`inline-flex items-center gap-0.5 text-[7.5px] px-1 py-0.2 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-amber-100 text-amber-900 border-amber-300'}`}>
                   <Star className="w-2 h-2 text-amber-500 fill-amber-500" />
                   <span>{booking.vipType}</span>
                 </span>
               )}
 
-              {/* Multi-Day Inbound Indicator */}
-              {isMultiDay && isStart && (
-                <span className="ml-auto text-[7.5px] font-black text-indigo-700 bg-indigo-100/90 px-1 py-0.2 rounded border border-indigo-200 shrink-0 flex items-center gap-0.5" title="Check-In Day">
-                  <ArrowDownLeft className="w-2 h-2" /> In
-                </span>
-              )}
-
-              {/* Quick 3-Dots Action Menu Trigger */}
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowMenu((prev) => !prev);
                 }}
-                className="action-menu-btn ml-auto p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-40 group-hover/bar:opacity-100 shrink-0"
+                className="action-menu-btn p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-0 group-hover/bar:opacity-100 shrink-0"
                 title="Quick Actions"
               >
                 <MoreVertical className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            {/* Bottom Row: Source Pill + Rate + Due Warning Pill */}
-            <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-semibold flex-wrap">
-              {/* Source Brand Pill */}
-              <span className={`px-1.5 py-0.2 rounded-md font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
+            {/* Bottom Row: Source Pill + Rate / Due Status */}
+            <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-semibold min-w-0">
+              <span className={`px-1.5 py-0.2 rounded font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
                 {sourceBadge.label}
               </span>
 
-              {/* Rate & Payment Pill */}
-              <div className="flex items-center gap-1 shrink-0 ml-auto">
-                {payInfo && booking.hasPayment && (
-                  <span className={`flex items-center ${payInfo.color}`} title={`Payment mode: ${payInfo.label}`}>
-                    <payInfo.icon className="w-2.5 h-2.5" />
+              <div className="flex items-center gap-1 shrink-0 ml-auto min-w-0">
+                {booking.isComplimentary ? (
+                  <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded border border-purple-300 text-[8.5px] shadow-2xs">
+                    COMP
+                  </span>
+                ) : balance >= 1.0 ? (
+                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                    Due ₹{fmtInt(balance)}
+                  </span>
+                ) : (
+                  <span className="text-slate-900 font-black text-[10.5px] tracking-tight whitespace-nowrap">
+                    ₹{fmtInt(booking.rate)}
                   </span>
                 )}
+              </div>
+            </div>
+          </div>
+        ) : isStart && !isEnd ? (
+          /* ── CASE B: Multi-Day Start Day (Spacious & Clean) ── */
+          <div className="pl-1 pr-1.5 flex flex-col justify-between h-full gap-1">
+            {/* Top Row: Avatar Initial + Full Guest Name + Stay Length Badge */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
+                {initials}
+              </div>
 
+              <span className={`font-black text-[11.5px] truncate tracking-tight flex-1 min-w-0 group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
+                {booking.guestName || 'Guest'}
+              </span>
+
+              <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded shrink-0 shadow-2xs" title={`${booking.nights} Nights Stay`}>
+                {booking.nights}N
+              </span>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMenu((prev) => !prev);
+                }}
+                className="action-menu-btn p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-0 group-hover/bar:opacity-100 shrink-0"
+                title="Quick Actions"
+              >
+                <MoreVertical className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Bottom Row: Source Badge + Nightly Tariff */}
+            <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-semibold min-w-0">
+              <span className={`px-1.5 py-0.2 rounded font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
+                {sourceBadge.label}
+              </span>
+
+              <div className="flex items-center gap-1 shrink-0 ml-auto">
                 {booking.isComplimentary ? (
-                  <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded-md border border-purple-300 text-[8.5px] shadow-2xs">
+                  <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded border border-purple-300 text-[8.5px] shadow-2xs">
                     COMP
                   </span>
                 ) : (
-                  <span className="text-slate-900 font-black text-[10.5px] tracking-tight">
-                    ₹{fmtInt(booking.rate)}{isMultiDay ? '/nt' : ''}
+                  <span className="text-slate-900 font-black text-[10px] tracking-tight whitespace-nowrap">
+                    ₹{fmtInt(booking.rate)}/nt
                   </span>
                 )}
-
-                {/* Balance Due Alert Pill (Shown once on Start Card) */}
-                {balance >= 1.0 && !booking.isComplimentary ? (
-                  <span className="text-rose-700 font-black bg-rose-100/90 border border-rose-300 px-1.5 py-0.2 rounded-md text-[8.5px] tracking-tight shadow-2xs flex items-center gap-0.5">
-                    <span className="w-1 h-1 rounded-full bg-rose-600 animate-ping" />
-                    Due ₹{fmtInt(balance)}
-                  </span>
-                ) : !booking.isComplimentary && booking.hasPayment ? (
-                  <span className="text-emerald-700 font-black bg-emerald-100/80 border border-emerald-300 px-1 py-0.2 rounded text-[8px] flex items-center gap-0.5">
-                    <CheckCircle2 className="w-2 h-2" /> Paid
-                  </span>
-                ) : null}
               </div>
             </div>
           </div>
         ) : !isStart && !isEnd ? (
-          /* ── CASE B: Intermediate Day Continuation Bridge ── */
+          /* ── CASE C: Multi-Day Intermediate Bridge ── */
           <div className="flex flex-col justify-between h-full gap-1 px-1.5">
             <div className="flex items-center justify-between gap-1 pt-0.5">
               <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider">
                 Stay Active
               </span>
-              <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 shrink-0">
+              <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/80 shrink-0 shadow-2xs">
                 In-House
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400 pb-0.5">
-              <div className="h-px flex-1 bg-slate-200/80" />
-              <span className="text-[9px] tracking-widest text-slate-400">••••</span>
-              <div className="h-px flex-1 bg-slate-200/80" />
+              <div className="h-px flex-1 bg-slate-300/70" />
+              <span className="text-[8.5px] tracking-widest text-slate-400 font-black">••••</span>
+              <div className="h-px flex-1 bg-slate-300/70" />
             </div>
           </div>
         ) : (
-          /* ── CASE C: Multi-Day End / Departure Cap ── */
-          <div className="flex flex-col justify-between h-full gap-1 px-1 pr-3">
+          /* ── CASE D: Multi-Day End / Departure Cap ── */
+          <div className="flex flex-col justify-between h-full gap-1 pl-1.5 pr-2">
+            {/* Top Row: Departure Label + Out Badge */}
             <div className="flex items-center justify-between gap-1 pt-0.5">
               <span className="text-[8.5px] font-black text-slate-500 uppercase tracking-wider">
                 Departure
               </span>
-              <span className="text-[8px] font-black text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-300 shrink-0 flex items-center gap-0.5 shadow-2xs" title="Check-Out Day">
+              <span className="text-[8px] font-black text-amber-800 bg-amber-100/90 px-1.5 py-0.2 rounded border border-amber-300 shrink-0 flex items-center gap-0.5 shadow-2xs" title="Check-Out Day">
                 <ArrowUpRight className="w-2.5 h-2.5" /> Out
               </span>
             </div>
-            <div className="flex items-center justify-between gap-1 text-[9px] font-bold text-slate-500 pb-0.5">
-              <span className="text-slate-700 font-extrabold text-[9.5px]">
-                {booking.nights}N Total
-              </span>
-              <span className="text-slate-900 font-black text-[10.5px]">
+
+            {/* Bottom Row: Total Tariff + Payment Due / Paid */}
+            <div className="flex items-center justify-between gap-1 text-[9.5px] font-bold pb-0.5 min-w-0">
+              <span className="text-slate-700 font-extrabold text-[9.5px] truncate">
                 ₹{fmtInt(total)}
               </span>
+
+              {booking.isComplimentary ? (
+                <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded border border-purple-300 text-[8px] shadow-2xs">
+                  COMP
+                </span>
+              ) : balance >= 1.0 ? (
+                <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                  Due ₹{fmtInt(balance)}
+                </span>
+              ) : (
+                <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                  <CheckCircle2 className="w-2 h-2" /> Paid
+                </span>
+              )}
             </div>
           </div>
         )}
@@ -485,7 +521,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
             e.stopPropagation();
             onMouseDownStretchRight(e);
           }}
-          className="absolute right-0 top-0 bottom-1 w-4.5 cursor-ew-resize flex items-center justify-center bg-slate-100/95 hover:bg-emerald-600 text-slate-400 hover:text-white rounded-r-xl z-30 transition-all group/handle shadow-2xs border-l border-slate-200 hover:border-emerald-600"
+          className="absolute right-0 top-0 bottom-1 w-4 cursor-ew-resize flex items-center justify-center bg-slate-100/95 hover:bg-emerald-600 text-slate-400 hover:text-white rounded-r-xl z-30 transition-all group/handle shadow-2xs border-l border-slate-200 hover:border-emerald-600 opacity-0 group-hover/bar:opacity-100"
           title="Drag right/left to resize stay duration"
         >
           <div className="flex flex-col gap-0.5 items-center justify-center pointer-events-none">
