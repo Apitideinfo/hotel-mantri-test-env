@@ -49,9 +49,7 @@ import { useHotel } from '@/lib/hotel-context';
 // Modular Subcomponents
 import type { BoardBooking, ViewMode, TodayStats } from './operations/types';
 import { OperationsHeader } from './operations/OperationsHeader';
-import { OperationsActions } from './operations/OperationsActions';
 import { OperationsKpiStrip } from './operations/OperationsKpiStrip';
-import { OperationsFilterBar } from './operations/OperationsFilterBar';
 import { BookingBar } from './operations/BookingBar';
 import { UnassignedBookingsBanner } from './operations/UnassignedBookingsBanner';
 import { AdjustAvailabilityModal } from './operations/AdjustAvailabilityModal';
@@ -1272,7 +1270,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
-      {/* 1. Operations Header */}
+      {/* Unified Executive Operations Header (Series Controls: Brand & Navigation + Dates + Actions + Integrated Filters) */}
       <OperationsHeader
         hotelName={displayHotelName}
         viewMode={viewMode}
@@ -1285,34 +1283,6 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         onGoToToday={() => setCenterDate(getTodayLocal())}
         onRefresh={load}
         onBack={onBack}
-      />
-
-      {/* Action Toast Notification */}
-      {actionToast && (
-        <div className={`px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs font-bold transition-all border-b shadow-2xs ${
-          actionToast.type === 'success'
-            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-            : actionToast.type === 'error'
-            ? 'bg-rose-50 border-rose-200 text-rose-800'
-            : 'bg-blue-50 border-blue-200 text-blue-800'
-        }`}>
-          <div className="flex items-center gap-2">
-            {actionToast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
-            {actionToast.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
-            {actionToast.type === 'info' && <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />}
-            <span>{actionToast.message}</span>
-          </div>
-          <button
-            onClick={() => setActionToast(null)}
-            className="p-1 hover:bg-black/5 rounded text-current opacity-70 hover:opacity-100 transition"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* 2. Quick Actions Toolbar / Selected Booking Dock */}
-      <OperationsActions
         selectedBooking={selectedBooking}
         onClearSelection={() => setSelectedBooking(null)}
         onNewReservation={() => setShowNewBooking(true)}
@@ -1340,10 +1310,6 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         onRoomShift={handleRoomShift}
         onExtendStay={handleExtendStay}
         onViewDetails={(b) => setSelectedBooking(b)}
-      />
-
-      {/* 3. Filters & Search Toolbar */}
-      <OperationsFilterBar
         search={search}
         onSearchChange={setSearch}
         categories={categories}
@@ -1363,6 +1329,30 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         totalFilteredCount={filteredBookings.length}
         totalBookingsCount={allBookings.length}
       />
+
+      {/* Action Toast Notification */}
+      {actionToast && (
+        <div className={`px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs font-bold transition-all border-b shadow-2xs ${
+          actionToast.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : actionToast.type === 'error'
+            ? 'bg-rose-50 border-rose-200 text-rose-800'
+            : 'bg-blue-50 border-blue-200 text-blue-800'
+        }`}>
+          <div className="flex items-center gap-2">
+            {actionToast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+            {actionToast.type === 'error' && <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />}
+            {actionToast.type === 'info' && <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />}
+            <span>{actionToast.message}</span>
+          </div>
+          <button
+            onClick={() => setActionToast(null)}
+            className="p-1 hover:bg-black/5 rounded text-current opacity-70 hover:opacity-100 transition"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Global Error Banner */}
       {error && (
