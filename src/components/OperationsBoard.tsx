@@ -167,7 +167,9 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const movingBookingRef = useRef<BoardBooking | null>(null);
   const moveTargetRoomRef = useRef<string | null>(null);
   const moveTargetCheckInRef = useRef<string | null>(null);
-  const dragCandidateRef = useRef<{ booking: BoardBooking; startX: number; startY: number } | null>(null);
+  const dragCandidateRef = useRef<{ booking: BoardBooking; grabDate: string; startX: number; startY: number } | null>(null);
+  const dragCandidateStartXRef = useRef<number | null>(null);
+  const dragCandidateGrabDateRef = useRef<string | null>(null);
 
   // Drag-to-resize stay extension (Check-out)
   const [stretchingBooking, setStretchingBooking] = useState<BoardBooking | null>(null);
@@ -365,7 +367,8 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       const hasPay = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance) > 0;
       const res = reservations.find((r) => 
         (e.reservation_id && r.id === e.reservation_id) || 
-        (r.room_chart_entry_id && r.room_chart_entry_id === e.id)
+        (r.room_chart_entry_id && r.room_chart_entry_id === e.id) ||
+        (r.guest_name && e.guest_name && r.guest_name.trim().toLowerCase() === e.guest_name.trim().toLowerCase() && (r.room_no || '').trim().toLowerCase() === (e.room_no || '').trim().toLowerCase() && (r.check_in_date || '').slice(0, 10) === (e.arrival || e.report_date || '').slice(0, 10))
       );
       if (res) matchedReservationIds.add(res.id);
       matchedEntryIds.add(e.id);
@@ -1066,13 +1069,16 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     }
   };
 
-  const handleMouseDownBooking = (b: BoardBooking, e: React.MouseEvent) => {
+  const handleMouseDownBooking = (b: BoardBooking, date: string, e: React.MouseEvent) => {
     if (e.button !== 0) return;
     dragCandidateRef.current = {
       booking: b,
+      grabDate: date,
       startX: e.clientX,
       startY: e.clientY,
     };
+    dragCandidateStartXRef.current = e.clientX;
+    dragCandidateGrabDateRef.current = date;
   };
 
   const handleMouseDownStretchRight = (b: BoardBooking, targetDate: string, e: React.MouseEvent) => {
@@ -1110,7 +1116,6 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
           setMovingBooking(b);
           setMoveTargetRoom(b.roomNo);
           setMoveTargetCheckIn(b.checkIn);
-          dragCandidateRef.current = null;
         }
       }
 
@@ -1125,11 +1130,25 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       const cellDate = cellEl?.dataset.timelineDate;
       const cellRoom = cellEl?.dataset.roomNo;
 
-      if (activeMoving && cellDate && cellRoom) {
+      if (activeMoving && cellRoom) {
         moveTargetRoomRef.current = cellRoom;
-        moveTargetCheckInRef.current = cellDate;
         setMoveTargetRoom(cellRoom);
-        setMoveTargetCheckIn(cellDate);
+
+        const startX = dragCandidateStartXRef.current ?? e.clientX;
+        const totalDx = Math.abs(e.clientX - startX);
+        const grabDate = dragCandidateGrabDateRef.current || activeMoving.checkIn;
+        const grabOffset = Math.max(0, calcStayNights(activeMoving.checkIn, grabDate));
+
+        // When user shifts room vertically (changing room row), lock check-in to original booking dates
+        if (totalDx < 35 || !cellDate) {
+          moveTargetCheckInRef.current = activeMoving.checkIn;
+          setMoveTargetCheckIn(activeMoving.checkIn);
+        } else {
+          // Horizontal shift across dates
+          const computedCheckIn = addDays(cellDate, -grabOffset);
+          moveTargetCheckInRef.current = computedCheckIn;
+          setMoveTargetCheckIn(computedCheckIn);
+        }
       } else if (activeStretching && cellDate && cellRoom && cellRoom.trim().toLowerCase() === activeStretching.roomNo.trim().toLowerCase()) {
         if (cellDate >= activeStretching.checkIn) {
           stretchTargetDateRef.current = cellDate;
@@ -1145,6 +1164,8 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
     const handleGlobalMouseUp = () => {
       dragCandidateRef.current = null;
+      dragCandidateStartXRef.current = null;
+      dragCandidateGrabDateRef.current = null;
 
       const mBooking = movingBookingRef.current;
       const mRoom = moveTargetRoomRef.current;
@@ -1178,11 +1199,13 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         const isRoomChanged = mRoom.trim().toLowerCase() !== mBooking.roomNo.trim().toLowerCase();
         const isDateChanged = mDate !== mBooking.checkIn;
         if (isRoomChanged || isDateChanged) {
-          const targetCheckOut = addDays(mDate, mBooking.nights);
+          // If room was shifted and dates were not intentionally shifted horizontally, preserve original checkIn
+          const finalCheckIn = isRoomChanged && !isDateChanged ? mBooking.checkIn : mDate;
+          const targetCheckOut = addDays(finalCheckIn, mBooking.nights);
           setRoomMovePayload({
             booking: mBooking,
             targetRoomNo: mRoom,
-            targetCheckIn: mDate,
+            targetCheckIn: finalCheckIn,
             targetCheckOut,
             newRate: mBooking.rate,
           });
@@ -1503,7 +1526,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                             isStart={b.checkIn === d}
                             isEnd={addDays(b.checkOut, -1) === d}
                             isMoving={movingBooking?.id === b.id}
-                            onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
+                            onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
                             onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
                             onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
                             onQuickAction={handleBookingQuickAction}
@@ -1770,7 +1793,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                       isEnd={isEnd}
                                       isStretching={isStretching}
                                       isMoving={isMoving}
-                                      onMouseDownMove={(e) => handleMouseDownBooking(b, e)}
+                                      onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
                                       onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
                                       onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
                                       onQuickAction={handleBookingQuickAction}
