@@ -206,9 +206,18 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   const canEdit = booking.status !== 'cancelled' && booking.status !== 'no_show';
   const canExtend = canEdit && booking.status !== 'checked_out';
 
-  const isMultiDay = booking.nights > 1;
-  const isSingleDay = !isMultiDay;
+  const isSingleDay = Boolean(isStart && isEnd);
+  const isMultiDay = !isSingleDay;
   const initials = getInitials(booking.guestName);
+
+  // Determine seamless multi-day spanning styles
+  const cardShapeClasses = isSingleDay
+    ? 'rounded-xl p-2'
+    : isStart && !isEnd
+    ? 'rounded-l-xl rounded-r-none border-r-0 -mr-[9px] z-[2] p-2 pr-3'
+    : !isStart && !isEnd
+    ? 'rounded-none border-x-0 -mx-[9px] z-[2] p-2 px-3'
+    : 'rounded-r-xl rounded-l-none border-l-0 -ml-[9px] z-[2] p-2 pl-3';
 
   return (
     <div
@@ -227,110 +236,135 @@ export const BookingBar: React.FC<BookingBarProps> = ({
             onMouseDownMove(e);
           }
         }}
-        title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ₹${fmtInt(booking.rate)}/night · ${statusCfg.statusLabel}${balance >= 1.0 ? ` · Due ₹${fmtInt(balance)}` : ' · Fully Settled'}\n(Drag card to move room/dates, drag right edge to extend stay)`}
-        className={`w-full text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${
-          isSingleDay
-            ? 'rounded-xl p-2'
-            : isStart
-            ? 'rounded-l-xl rounded-r-sm p-2 border-r-dashed'
-            : isEnd
-            ? 'rounded-r-xl rounded-l-sm p-2 border-l-dashed'
-            : 'rounded-sm p-2 border-x-dashed'
-        }`}
+        title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ${booking.nights} Night${booking.nights > 1 ? 's' : ''} (₹${fmtInt(total)}) · ${statusCfg.statusLabel}${balance >= 1.0 ? ` · Due ₹${fmtInt(balance)}` : ' · Fully Settled'}\n(Drag card to move room/dates, drag right edge to extend stay)`}
+        className={`w-full min-h-[58px] flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
       >
-        {/* Source / Status Left Ribbon */}
-        {isStart || isSingleDay ? (
+        {/* Source / Status Left Ribbon (Only on Start or Single Day) */}
+        {(isStart || isSingleDay) && (
           <div className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-xl ${sourceBadge.railColor}`} />
-        ) : (
-          <div className={`absolute left-0 top-0 bottom-0 w-1 ${sourceBadge.railColor} opacity-70`} />
         )}
 
-        <div className="pl-1 pr-0.5">
-          {/* Top Row: Avatar Initial + Status Beacon + Guest Name + VIP/Arrival tag + Menu */}
-          <div className="flex items-center gap-1.5 min-w-0">
-            {/* Guest Initial Avatar */}
-            <div className={`w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
-              {initials}
+        {/* ── CASE A: Start Day or Single Day Card ── */}
+        {(isStart || isSingleDay) ? (
+          <div className="pl-1 pr-0.5 flex flex-col justify-between h-full gap-1">
+            {/* Top Row: Avatar Initial + Guest Name + VIP/Continuity tag + Menu */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              {/* Guest Initial Avatar */}
+              <div className={`w-4 h-4 sm:w-4.5 sm:h-4.5 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
+                {initials}
+              </div>
+
+              {/* Guest Name */}
+              <span className={`font-black text-[11px] sm:text-[11.5px] truncate tracking-tight group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
+                {booking.guestName || 'Guest'}
+              </span>
+
+              {/* VIP Badge */}
+              {booking.vipType && (
+                <span className={`ml-auto inline-flex items-center gap-0.5 text-[7.5px] px-1 py-0.2 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-amber-100 text-amber-900 border-amber-300'}`}>
+                  <Star className="w-2 h-2 text-amber-500 fill-amber-500" />
+                  <span>{booking.vipType}</span>
+                </span>
+              )}
+
+              {/* Multi-Day Inbound Indicator */}
+              {isMultiDay && isStart && (
+                <span className="ml-auto text-[7.5px] font-black text-indigo-700 bg-indigo-100/90 px-1 py-0.2 rounded border border-indigo-200 shrink-0 flex items-center gap-0.5" title="Check-In Day">
+                  <ArrowDownLeft className="w-2 h-2" /> In
+                </span>
+              )}
+
+              {/* Quick 3-Dots Action Menu Trigger */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowMenu((prev) => !prev);
+                }}
+                className="action-menu-btn ml-auto p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-40 group-hover/bar:opacity-100 shrink-0"
+                title="Quick Actions"
+              >
+                <MoreVertical className="w-3.5 h-3.5" />
+              </button>
             </div>
 
-            {/* Guest Name */}
-            <span className={`font-black text-[11px] sm:text-[11.5px] truncate tracking-tight group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
-              {booking.guestName || 'Guest'}
-            </span>
-
-            {/* VIP Badge */}
-            {booking.vipType && (
-              <span className={`ml-auto inline-flex items-center gap-0.5 text-[7.5px] px-1 py-0.2 rounded font-black border shrink-0 ${VIP_BADGE_COLORS[booking.vipType] ?? 'bg-amber-100 text-amber-900 border-amber-300'}`}>
-                <Star className="w-2 h-2 text-amber-500 fill-amber-500" />
-                <span>{booking.vipType}</span>
+            {/* Bottom Row: Source Pill + Rate + Due Warning Pill */}
+            <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-semibold flex-wrap">
+              {/* Source Brand Pill */}
+              <span className={`px-1.5 py-0.2 rounded-md font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
+                {sourceBadge.label}
               </span>
-            )}
 
-            {/* Stay Continuity Flags (In / Out) */}
-            {isMultiDay && isStart && (
-              <span className="ml-auto text-[7.5px] font-black text-indigo-700 bg-indigo-100/90 px-1 py-0.2 rounded border border-indigo-200 shrink-0 flex items-center gap-0.5" title="Check-In Day">
-                <ArrowDownLeft className="w-2 h-2" /> In
+              {/* Rate & Payment Pill */}
+              <div className="flex items-center gap-1 shrink-0 ml-auto">
+                {payInfo && booking.hasPayment && (
+                  <span className={`flex items-center ${payInfo.color}`} title={`Payment mode: ${payInfo.label}`}>
+                    <payInfo.icon className="w-2.5 h-2.5" />
+                  </span>
+                )}
+
+                {booking.isComplimentary ? (
+                  <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded-md border border-purple-300 text-[8.5px] shadow-2xs">
+                    COMP
+                  </span>
+                ) : (
+                  <span className="text-slate-900 font-black text-[10.5px] tracking-tight">
+                    ₹{fmtInt(booking.rate)}{isMultiDay ? '/nt' : ''}
+                  </span>
+                )}
+
+                {/* Balance Due Alert Pill (Shown once on Start Card) */}
+                {balance >= 1.0 && !booking.isComplimentary ? (
+                  <span className="text-rose-700 font-black bg-rose-100/90 border border-rose-300 px-1.5 py-0.2 rounded-md text-[8.5px] tracking-tight shadow-2xs flex items-center gap-0.5">
+                    <span className="w-1 h-1 rounded-full bg-rose-600 animate-ping" />
+                    Due ₹{fmtInt(balance)}
+                  </span>
+                ) : !booking.isComplimentary && booking.hasPayment ? (
+                  <span className="text-emerald-700 font-black bg-emerald-100/80 border border-emerald-300 px-1 py-0.2 rounded text-[8px] flex items-center gap-0.5">
+                    <CheckCircle2 className="w-2 h-2" /> Paid
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : !isStart && !isEnd ? (
+          /* ── CASE B: Intermediate Day Continuation Bridge ── */
+          <div className="flex flex-col justify-between h-full gap-1 px-1">
+            <div className="flex items-center justify-between gap-1">
+              <span className={`font-bold text-[10.5px] truncate ${statusCfg.text} opacity-80`}>
+                {booking.guestName || 'Guest'}
               </span>
-            )}
-            {isMultiDay && isEnd && (
-              <span className="ml-auto text-[7.5px] font-black text-amber-800 bg-amber-100/90 px-1 py-0.2 rounded border border-amber-300 shrink-0 flex items-center gap-0.5" title="Check-Out Day">
+              <span className="text-[8px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200 shrink-0">
+                In-House
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400">
+              <div className="h-px flex-1 bg-slate-200/80" />
+              <span>Stay Continues</span>
+              <div className="h-px flex-1 bg-slate-200/80" />
+            </div>
+          </div>
+        ) : (
+          /* ── CASE C: Multi-Day End / Departure Cap ── */
+          <div className="flex flex-col justify-between h-full gap-1 px-1 pr-3">
+            <div className="flex items-center justify-between gap-1">
+              <span className={`font-bold text-[10.5px] truncate ${statusCfg.text} opacity-85`}>
+                {booking.guestName || 'Guest'}
+              </span>
+              <span className="text-[7.5px] font-black text-amber-800 bg-amber-100/90 px-1.5 py-0.2 rounded border border-amber-300 shrink-0 flex items-center gap-0.5" title="Check-Out Day">
                 <ArrowUpRight className="w-2 h-2" /> Out
               </span>
-            )}
-
-            {/* Quick 3-Dots Action Menu Trigger */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu((prev) => !prev);
-              }}
-              className="action-menu-btn ml-auto p-0.5 text-slate-400 hover:text-slate-800 rounded hover:bg-slate-200/60 transition cursor-pointer opacity-40 group-hover/bar:opacity-100 shrink-0"
-              title="Quick Actions"
-            >
-              <MoreVertical className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Bottom Row: Source Pill + Rate + Due Warning Pill */}
-          <div className="flex items-center justify-between gap-1 mt-1.5 text-[10px] text-slate-500 font-semibold flex-wrap">
-            {/* Source Brand Pill */}
-            <span className={`px-1.5 py-0.2 rounded-md font-extrabold text-[8.5px] border shadow-2xs tracking-wide shrink-0 ${sourceBadge.badgeBg} ${sourceBadge.badgeText} ${sourceBadge.badgeBorder}`}>
-              {sourceBadge.label}
-            </span>
-
-            {/* Rate & Payment Pill */}
-            <div className="flex items-center gap-1 shrink-0 ml-auto">
-              {payInfo && booking.hasPayment && (
-                <span className={`flex items-center ${payInfo.color}`} title={`Payment mode: ${payInfo.label}`}>
-                  <payInfo.icon className="w-2.5 h-2.5" />
-                </span>
-              )}
-
-              {booking.isComplimentary ? (
-                <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded-md border border-purple-300 text-[8.5px] shadow-2xs">
-                  COMP
-                </span>
-              ) : (
-                <span className="text-slate-900 font-black text-[10.5px] tracking-tight">
-                  ₹{fmtInt(booking.rate)}
-                </span>
-              )}
-
-              {/* Balance Due Alert Pill */}
-              {balance >= 1.0 && !booking.isComplimentary ? (
-                <span className="text-rose-700 font-black bg-rose-100/90 border border-rose-300 px-1.5 py-0.2 rounded-md text-[8.5px] tracking-tight shadow-2xs flex items-center gap-0.5">
-                  <span className="w-1 h-1 rounded-full bg-rose-600 animate-ping" />
-                  Due ₹{fmtInt(balance)}
-                </span>
-              ) : !booking.isComplimentary && booking.hasPayment ? (
-                <span className="text-emerald-700 font-black bg-emerald-100/80 border border-emerald-300 px-1 py-0.2 rounded text-[8px] flex items-center gap-0.5">
-                  <CheckCircle2 className="w-2 h-2" /> Paid
-                </span>
-              ) : null}
+            </div>
+            <div className="flex items-center justify-between gap-1 text-[9px] font-bold text-slate-500">
+              <span className="text-slate-700 font-extrabold text-[9.5px]">
+                {booking.nights}N Total
+              </span>
+              <span className="text-slate-800 font-black text-[10px]">
+                ₹{fmtInt(total)}
+              </span>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Quick Action Dropdown Popover */}
