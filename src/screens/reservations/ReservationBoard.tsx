@@ -15,7 +15,7 @@ import {
   getReservationAlerts, bulkCheckIn, bulkCheckOut, bulkCancel,
   getRoomAvailabilityForDate, type RoomAvailability,
   getReservationsPaginated, getReservationConflicts,
-  updateReservationStatus, checkInReservation, saveReservation,
+  updateReservationStatus, checkInReservation, saveReservation, saveReservations,
 } from '@/lib/api-reservations';
 import { getRooms, getRoomCategories, getCompanySources, getSettings } from '@/lib/api';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
@@ -54,11 +54,33 @@ const fmtDayShort = (d?: string | null): string => {
 
 const fmtMoney = (n: number): string => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
+const getInitials = (name?: string): string => {
+  if (!name) return 'G';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
+
 const addDays = (date: string, n: number): string => {
   const d = new Date(date + 'T00:00:00');
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
 };
+
+export interface GroupedReservation {
+  bookingKey: string;
+  primaryReservation: Reservation;
+  reservations: Reservation[];
+  isMultiRoom: boolean;
+  roomNos: string[];
+  totalTariff: number;
+  totalAdvance: number;
+  totalBalance: number;
+  status: ReservationStatus;
+  nights: number;
+  checkInDate: string;
+  checkOutDate: string;
+}
 
 export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; initialView?: ViewMode }) => {
   const [view, setView] = useState<ViewMode>(initialView ?? 'list');
@@ -103,6 +125,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selectedForAssign, setSelectedForAssign] = useState<Reservation | null>(null);
   const [selectedForExtend, setSelectedForExtend] = useState<Reservation | null>(null);
   const [selectedForConfirmation, setSelectedForConfirmation] = useState<Reservation | null>(null);
+  const [selectedForConfirmationGroup, setSelectedForConfirmationGroup] = useState<Reservation[] | null>(null);
   const [showNewBookingModal, setShowNewBookingModal] = useState(false);
   const [showQuickRes, setShowQuickRes] = useState<{ roomNo: string; date: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -254,6 +277,74 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     );
   };
 
+  const activeFiltersCount = useMemo(() => {
+    let count = 0;
+    if (filterStatus !== 'all') count++;
+    if (filterSource !== 'all') count++;
+    if (filterAssigned !== 'all') count++;
+    if (filterRoomNo !== 'all') count++;
+    if (filterFromDate) count++;
+    if (filterToDate) count++;
+    if (search.trim()) count++;
+    return count;
+  }, [filterStatus, filterSource, filterAssigned, filterRoomNo, filterFromDate, filterToDate, search]);
+
+  // Group reservations by group_id (or id if single)
+  const groupedReservations = useMemo<GroupedReservation[]>(() => {
+    const groupsMap = new Map<string, Reservation[]>();
+    const order: string[] = [];
+
+    for (const r of paginatedData.reservations) {
+      const key = (r.group_id && r.group_id.trim() !== '') ? r.group_id : r.id;
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, []);
+        order.push(key);
+      }
+      groupsMap.get(key)!.push(r);
+    }
+
+    return order.map((key) => {
+      const resList = groupsMap.get(key)!;
+      const primary = resList[0];
+      const isMultiRoom = resList.length > 1;
+      const roomNos = resList.map((r) => r.room_no || 'Unassigned');
+
+      const totalTariff = resList.reduce((sum, r) => {
+        const val = r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1));
+        return sum + val;
+      }, 0);
+
+      const totalAdvance = resList.reduce((sum, r) => sum + (r.advance_paid || 0), 0);
+      const totalBalance = Math.max(0, totalTariff - totalAdvance);
+
+      let compositeStatus: ReservationStatus = primary.status;
+      if (resList.some((r) => r.status === 'checked_in')) {
+        compositeStatus = 'checked_in';
+      } else if (resList.every((r) => r.status === 'cancelled')) {
+        compositeStatus = 'cancelled';
+      } else if (resList.every((r) => r.status === 'checked_out')) {
+        compositeStatus = 'checked_out';
+      } else {
+        compositeStatus = primary.status;
+      }
+
+      return {
+        bookingKey: key,
+        primaryReservation: primary,
+        reservations: resList,
+        isMultiRoom,
+        roomNos,
+        totalTariff,
+        totalAdvance,
+        totalBalance,
+        status: compositeStatus,
+        nights: primary.nights || 1,
+        checkInDate: primary.check_in_date,
+        checkOutDate: primary.check_out_date,
+      };
+    });
+  }, [paginatedData.reservations]);
+
   // KPI calculations
   const kpiStats = useMemo(() => {
     const total = paginatedData.totalCount || paginatedData.reservations.length;
@@ -291,12 +382,59 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   };
 
+  const handleGroupCheckIn = async (group: GroupedReservation) => {
+    const unassignedRoom = group.reservations.find(
+      (r) => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd'
+    );
+    if (unassignedRoom) {
+      setSelectedForAssign(unassignedRoom);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await Promise.all(
+        group.reservations
+          .filter((r) => r.status === 'confirmed')
+          .map((r) => checkInReservation(r.id))
+      );
+      setSuccessMsg(
+        group.isMultiRoom
+          ? `Guest ${group.primaryReservation.guest_name} checked into ${group.reservations.length} rooms (${group.roomNos.join(', ')}) successfully.`
+          : `Guest ${group.primaryReservation.guest_name} checked into Room ${group.primaryReservation.room_no} successfully.`
+      );
+      refreshAll();
+    } catch (e: any) {
+      setError(e?.message || 'Check-in failed due to room conflict.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCheckOut = async (res: Reservation) => {
     setBusy(true);
     setError(null);
     try {
       await updateReservationStatus(res.id, 'checked_out');
       setSuccessMsg(`Guest ${res.guest_name} checked out successfully.`);
+      refreshAll();
+    } catch (e: any) {
+      setError(e?.message || 'Check-out failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleGroupCheckOut = async (group: GroupedReservation) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await Promise.all(
+        group.reservations
+          .filter((r) => r.status === 'checked_in')
+          .map((r) => updateReservationStatus(r.id, 'checked_out'))
+      );
+      setSuccessMsg(`Guest ${group.primaryReservation.guest_name} checked out successfully.`);
       refreshAll();
     } catch (e: any) {
       setError(e?.message || 'Check-out failed.');
@@ -320,6 +458,28 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   };
 
+  const handleGroupCancel = async (group: GroupedReservation) => {
+    const desc = group.isMultiRoom
+      ? `all ${group.reservations.length} rooms (${group.roomNos.join(', ')}) for ${group.primaryReservation.guest_name}`
+      : `Room ${group.primaryReservation.room_no || 'Unassigned'} for ${group.primaryReservation.guest_name}`;
+    if (!window.confirm(`Are you sure you want to cancel the reservation for ${desc}?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await Promise.all(
+        group.reservations
+          .filter((r) => r.status === 'confirmed')
+          .map((r) => updateReservationStatus(r.id, 'cancelled'))
+      );
+      setSuccessMsg(`Reservation cancelled successfully.`);
+      refreshAll();
+    } catch (e: any) {
+      setError(e?.message || 'Cancellation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -330,8 +490,22 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     });
   };
 
+  const toggleSelectGroup = (group: GroupedReservation) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const allSelected = group.reservations.every((r) => next.has(r.id));
+      if (allSelected) {
+        group.reservations.forEach((r) => next.delete(r.id));
+      } else {
+        group.reservations.forEach((r) => next.add(r.id));
+      }
+      setShowBulkBar(next.size > 0);
+      return next;
+    });
+  };
+
   const toggleSelectAll = () => {
-    if (selected.size === paginatedData.reservations.length) {
+    if (selected.size === paginatedData.reservations.length && paginatedData.reservations.length > 0) {
       setSelected(new Set());
       setShowBulkBar(false);
     } else {
@@ -455,27 +629,6 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         );
     }
   };
-
-  const getInitials = (name?: string) => {
-    if (!name) return 'G';
-    const parts = name.trim().split(' ').filter(Boolean);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return name.slice(0, 2).toUpperCase();
-  };
-
-  const activeFiltersCount = useMemo(() => {
-    let count = 0;
-    if (filterStatus !== 'all') count++;
-    if (filterSource !== 'all') count++;
-    if (filterAssigned !== 'all') count++;
-    if (filterRoomNo !== 'all') count++;
-    if (filterFromDate) count++;
-    if (filterToDate) count++;
-    if (search) count++;
-    return count;
-  }, [filterStatus, filterSource, filterAssigned, filterRoomNo, filterFromDate, filterToDate, search]);
 
   return (
     <div className="space-y-5 select-none pb-12">
@@ -932,17 +1085,20 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                     <th className="w-10 px-4 py-3.5 text-center">
                       <input
                         type="checkbox"
-                        checked={selected.size === paginatedData.reservations.length && paginatedData.reservations.length > 0}
+                        checked={
+                          groupedReservations.length > 0 &&
+                          groupedReservations.every((g) => g.reservations.every((r) => selected.has(r.id)))
+                        }
                         onChange={toggleSelectAll}
                         className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                       />
                     </th>
-                    <th className="px-3 py-3.5 min-w-[100px]">Booking Ref</th>
+                    <th className="px-3 py-3.5 min-w-[110px]">Booking Ref</th>
                     <th className="px-3 py-3.5 min-w-[110px]">Channel</th>
                     <th className="px-4 py-3.5 min-w-[160px]">Guest Name</th>
                     <th className="px-3 py-3.5 min-w-[120px]">Contact</th>
                     <th className="px-3 py-3.5 min-w-[130px]">Stay Period</th>
-                    <th className="px-3 py-3.5 min-w-[110px]">Room Allocation</th>
+                    <th className="px-3 py-3.5 min-w-[140px]">Room Allocation</th>
                     <th className="px-3 py-3.5 min-w-[100px] text-right">Tariff (₹)</th>
                     <th className="px-3 py-3.5 min-w-[95px] text-center">Payment</th>
                     <th className="px-3 py-3.5 min-w-[110px] text-center">Status</th>
@@ -950,18 +1106,19 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                  {paginatedData.reservations.map((r) => {
-                    const isUnassigned = !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd';
-                    const nights = r.nights || 1;
-                    const totalVal = r.invoice_total > 0 ? r.invoice_total : (r.rate * nights);
-                    const advancePaid = r.advance_paid || 0;
-                    const isPaid = advancePaid >= totalVal && totalVal > 0;
-                    const isPartial = advancePaid > 0 && advancePaid < totalVal;
-                    const isSelected = selected.has(r.id);
+                  {groupedReservations.map((group) => {
+                    const primary = group.primaryReservation;
+                    const isAnyUnassigned = group.reservations.some(
+                      (r) => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd'
+                    );
+                    const isPaid = group.totalAdvance >= group.totalTariff && group.totalTariff > 0;
+                    const isPartial = group.totalAdvance > 0 && group.totalAdvance < group.totalTariff;
+                    const isSelected = group.reservations.every((r) => selected.has(r.id));
+                    const isPartiallySelected = !isSelected && group.reservations.some((r) => selected.has(r.id));
 
                     return (
                       <tr
-                        key={r.id}
+                        key={group.bookingKey}
                         className={`transition hover:bg-slate-50/80 ${
                           isSelected ? 'bg-indigo-50/40' : ''
                         }`}
@@ -971,33 +1128,43 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            onChange={() => toggleSelect(r.id)}
+                            ref={(el) => {
+                              if (el) el.indeterminate = isPartiallySelected;
+                            }}
+                            onChange={() => toggleSelectGroup(group)}
                             className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                           />
                         </td>
 
                         {/* Booking ID */}
                         <td className="px-3 py-3 font-mono font-bold text-slate-900">
-                          #{r.id.slice(0, 8)}
-                          <span className="text-[10px] text-slate-400 block font-normal">{fmtDayShort(r.created_at)}</span>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>#{group.bookingKey.slice(0, 8)}</span>
+                            {group.isMultiRoom && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-extrabold border border-indigo-300">
+                                {group.reservations.length} Rooms
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-400 block font-normal">{fmtDayShort(primary.created_at)}</span>
                         </td>
 
                         {/* Channel / Source */}
                         <td className="px-3 py-3 whitespace-nowrap">
-                          {getSourceBadge(r.source_name, r.source_category)}
+                          {getSourceBadge(primary.source_name, primary.source_category)}
                         </td>
 
                         {/* Guest Profile */}
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
                             <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-xs flex items-center justify-center shrink-0">
-                              {getInitials(r.guest_name)}
+                              {getInitials(primary.guest_name)}
                             </div>
                             <div className="min-w-0">
-                              <p className="font-bold text-slate-900 truncate max-w-[150px]" title={r.guest_name}>
-                                {r.guest_name}
+                              <p className="font-bold text-slate-900 truncate max-w-[150px]" title={primary.guest_name}>
+                                {primary.guest_name}
                               </p>
-                              {r.source_category === 'Corporate' && (
+                              {primary.source_category === 'Corporate' && (
                                 <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-0.5">
                                   <Building2 className="w-3 h-3" /> Corp
                                 </span>
@@ -1008,10 +1175,10 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
                         {/* Guest Mobile */}
                         <td className="px-3 py-3 whitespace-nowrap font-mono text-[11px] text-slate-600">
-                          {r.guest_phone || '—'}
-                          {r.guest_email && (
-                            <span className="text-[10px] text-slate-400 block truncate max-w-[120px]" title={r.guest_email}>
-                              {r.guest_email}
+                          {primary.guest_phone || '—'}
+                          {primary.guest_email && (
+                            <span className="text-[10px] text-slate-400 block truncate max-w-[120px]" title={primary.guest_email}>
+                              {primary.guest_email}
                             </span>
                           )}
                         </td>
@@ -1019,33 +1186,47 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                         {/* Stay Period */}
                         <td className="px-3 py-3 whitespace-nowrap">
                           <div className="flex items-center gap-1.5 font-bold text-slate-900">
-                            <span>{fmtDayShort(r.check_in_date)}</span>
+                            <span>{fmtDayShort(group.checkInDate)}</span>
                             <span className="text-slate-400">→</span>
-                            <span>{fmtDayShort(r.check_out_date)}</span>
+                            <span>{fmtDayShort(group.checkOutDate)}</span>
                           </div>
                           <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500">
                             <Moon className="w-3 h-3 text-indigo-500" />
-                            {nights} {nights === 1 ? 'Night' : 'Nights'}
+                            {group.nights} {group.nights === 1 ? 'Night' : 'Nights'}
                           </span>
                         </td>
 
                         {/* Room Allocation */}
                         <td className="px-3 py-3 whitespace-nowrap">
-                          {isUnassigned ? (
+                          {group.isMultiRoom ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 text-indigo-900 border border-indigo-200/90 rounded-xl text-xs font-bold w-fit">
+                                <BedDouble className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                                {group.reservations.length} Rooms ({group.roomNos.join(', ')})
+                              </span>
+                              {isAnyUnassigned && (
+                                <span className="text-[10px] text-amber-600 font-bold">Has unassigned rooms</span>
+                              )}
+                            </div>
+                          ) : isAnyUnassigned ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-xl text-[10px] font-black">
                               <AlertTriangle className="w-3 h-3 text-amber-600" /> Unassigned
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-900 border border-slate-200/90 rounded-xl text-xs font-bold">
-                              <BedDouble className="w-3.5 h-3.5 text-indigo-600" /> Room {r.room_no}
+                              <BedDouble className="w-3.5 h-3.5 text-indigo-600" /> Room {primary.room_no}
                             </span>
                           )}
                         </td>
 
                         {/* Total Tariff */}
                         <td className="px-3 py-3 text-right whitespace-nowrap">
-                          <span className="font-black text-slate-900 text-sm">{fmtMoney(totalVal)}</span>
-                          <span className="text-[10px] text-slate-400 block">₹{fmtMoney(r.rate)}/nt</span>
+                          <span className="font-black text-slate-900 text-sm">{fmtMoney(group.totalTariff)}</span>
+                          {group.isMultiRoom ? (
+                            <span className="text-[10px] text-indigo-600 font-bold block">{group.reservations.length} Rooms Total</span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 block">₹{fmtMoney(primary.rate)}/nt</span>
+                          )}
                         </td>
 
                         {/* Payment Status */}
@@ -1059,39 +1240,47 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                                 : 'bg-rose-50 text-rose-800 border border-rose-200'
                             }`}
                           >
-                            {isPaid ? 'Paid' : isPartial ? `Due ₹${fmtMoney(totalVal - advancePaid)}` : 'Due Full'}
+                            {isPaid ? 'Paid' : isPartial ? `Due ₹${fmtMoney(group.totalBalance)}` : 'Due Full'}
                           </span>
                         </td>
 
                         {/* Booking Status */}
                         <td className="px-3 py-3 text-center whitespace-nowrap">
-                          {getStatusBadge(r.status)}
+                          {getStatusBadge(group.status)}
                         </td>
 
-                        {/* Actions (Perfect Grid Aligned) */}
+                        {/* Actions */}
                         <td className="px-4 py-3 text-center whitespace-nowrap">
                           <div className="inline-flex items-center justify-center gap-1.5">
-                            {/* Confirmation PDF / Share */}
+                            {/* Confirmation PDF / View Multi-Room Details */}
                             <button
-                              onClick={() => setSelectedForConfirmation(r)}
+                              onClick={() => {
+                                setSelectedForConfirmation(group.primaryReservation);
+                                setSelectedForConfirmationGroup(group.reservations);
+                              }}
                               className="w-7 h-7 flex items-center justify-center rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/90 transition cursor-pointer"
-                              title="Reservation Confirmation Voucher / PDF"
+                              title="View Booking Details & Confirmation Voucher"
                             >
                               <FileText className="w-3.5 h-3.5 text-amber-600" />
                             </button>
 
                             {/* Assign / Change Room */}
                             <button
-                              onClick={() => setSelectedForAssign(r)}
+                              onClick={() => {
+                                const unassigned = group.reservations.find(
+                                  (r) => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd'
+                                );
+                                setSelectedForAssign(unassigned || group.primaryReservation);
+                              }}
                               className="w-12 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] transition cursor-pointer text-center"
                               title="Assign or Reallocate Physical Room"
                             >
-                              {isUnassigned ? 'Assign' : 'Shift'}
+                              {isAnyUnassigned ? 'Assign' : 'Shift'}
                             </button>
 
                             {/* Extend Stay */}
                             <button
-                              onClick={() => setSelectedForExtend(r)}
+                              onClick={() => setSelectedForExtend(group.primaryReservation)}
                               className="w-14 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] transition cursor-pointer text-center"
                               title="Extend Stay Duration"
                             >
@@ -1099,29 +1288,29 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                             </button>
 
                             {/* Primary Action Button (Uniform 78px Slot) */}
-                            {r.status === 'confirmed' ? (
+                            {group.status === 'confirmed' ? (
                               <button
-                                onClick={() => handleCheckIn(r)}
+                                onClick={() => handleGroupCheckIn(group)}
                                 disabled={busy}
                                 className="w-[78px] py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-[11px] transition shadow-2xs disabled:opacity-50 cursor-pointer text-center"
-                                title="Check In Guest"
+                                title={group.isMultiRoom ? `Check In All ${group.reservations.length} Rooms` : 'Check In Guest'}
                               >
                                 Check-In
                               </button>
-                            ) : r.status === 'checked_in' ? (
+                            ) : group.status === 'checked_in' ? (
                               <button
-                                onClick={() => handleCheckOut(r)}
+                                onClick={() => handleGroupCheckOut(group)}
                                 disabled={busy}
                                 className="w-[78px] py-1 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-lg text-[11px] transition shadow-2xs disabled:opacity-50 cursor-pointer text-center"
-                                title="Check Out Guest"
+                                title={group.isMultiRoom ? `Check Out All ${group.reservations.length} Rooms` : 'Check Out Guest'}
                               >
                                 Check-Out
                               </button>
-                            ) : r.status === 'checked_out' ? (
+                            ) : group.status === 'checked_out' ? (
                               <span className="w-[78px] py-1 bg-slate-100 text-slate-400 font-bold rounded-lg text-[10px] text-center inline-block">
                                 Closed
                               </span>
-                            ) : r.status === 'cancelled' ? (
+                            ) : group.status === 'cancelled' ? (
                               <span className="w-[78px] py-1 bg-rose-50 text-rose-400 font-bold rounded-lg text-[10px] text-center inline-block">
                                 Cancelled
                               </span>
@@ -1130,12 +1319,12 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                             )}
 
                             {/* Cancel Action Slot (Uniform 28px Slot) */}
-                            {r.status === 'confirmed' ? (
+                            {group.status === 'confirmed' ? (
                               <button
-                                onClick={() => handleCancel(r)}
+                                onClick={() => handleGroupCancel(group)}
                                 disabled={busy}
                                 className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition cursor-pointer"
-                                title="Cancel Reservation"
+                                title={group.isMultiRoom ? `Cancel all ${group.reservations.length} rooms` : 'Cancel Reservation'}
                               >
                                 <Ban className="w-3.5 h-3.5" />
                               </button>
@@ -1505,11 +1694,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onClose={() => setShowNewBookingModal(false)}
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
-            const created = [];
-            for (const item of list) {
-              const res = await saveReservation(item);
-              created.push(res);
-            }
+            const created = await saveReservations(list);
             refreshAll();
             return created;
           }}
@@ -1545,8 +1730,12 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
       {selectedForConfirmation && (
         <ReservationConfirmationModal
           reservation={selectedForConfirmation}
+          groupReservations={selectedForConfirmationGroup || undefined}
           settings={settings}
-          onClose={() => setSelectedForConfirmation(null)}
+          onClose={() => {
+            setSelectedForConfirmation(null);
+            setSelectedForConfirmationGroup(null);
+          }}
           onUpdated={() => {
             setSuccessMsg('Reservation confirmation updated.');
             refreshAll();

@@ -27,7 +27,7 @@ import {
   getCompanySources, classifyCompany, getRoomCategories, getRooms,
 } from '@/lib/api';
 import {
-  getReservationsForDateRange, getFutureReservationsCount, saveReservation, deleteReservation,
+  getReservationsForDateRange, getFutureReservationsCount, saveReservation, saveReservations, deleteReservation,
   updateReservationStatus, checkRoomAvailability, extendReservation,
   extractUnassignedReason,
 } from '@/lib/api-reservations';
@@ -202,7 +202,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const displayHotelName = hotel?.hotel_name || settings?.hotel_name || 'Hotel Mantri';
 
   const daysToShow = viewMode === 'day' ? 1 : 7;
-  const timelineStart = viewMode === 'day' ? centerDate : addDays(centerDate, -3);
+  const timelineStart = centerDate;
   const timelineDates = useMemo(
     () => Array.from({ length: daysToShow }, (_, i) => addDays(timelineStart, i)),
     [timelineStart, daysToShow],
@@ -358,14 +358,14 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     const matchedReservationIds = new Set<string>();
     const matchedEntryIds = new Set<string>();
 
+    const rangeStart = timelineDates[0] || centerDate;
+
     // 1. Process entries (checked-in / in-house stays and walk-ins)
     for (const e of entries) {
       const hasPay = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance) > 0;
       const res = reservations.find((r) => 
         (e.reservation_id && r.id === e.reservation_id) || 
-        (r.room_chart_entry_id && r.room_chart_entry_id === e.id) || 
-        (r.room_no.trim().toLowerCase() === e.room_no.trim().toLowerCase() && 
-         (r.check_in_date ?? '').slice(0, 10) === (e.arrival ?? e.report_date).slice(0, 10))
+        (r.room_chart_entry_id && r.room_chart_entry_id === e.id)
       );
       if (res) matchedReservationIds.add(res.id);
       matchedEntryIds.add(e.id);
@@ -378,6 +378,9 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       const checkIn = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
       const checkOut = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
       const isCheckedOut = Boolean(e.checked_out_at);
+
+      // Exclude past bookings: if checkout is strictly before the visible timeline start date
+      if (checkOut < rangeStart || (isCheckedOut && checkOut <= rangeStart)) continue;
 
       result.push({
         id: e.id,
@@ -410,12 +413,16 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       if (matchedReservationIds.has(r.id)) continue;
       if (r.room_chart_entry_id && matchedEntryIds.has(r.room_chart_entry_id)) continue;
 
+      const checkIn = (r.check_in_date ?? '').slice(0, 10);
+      const checkOut = (r.check_out_date ?? '').slice(0, 10);
+
+      // Exclude past reservations ending before rangeStart or checked out on/before rangeStart
+      if (checkOut < rangeStart || (r.status === 'checked_out' && checkOut <= rangeStart)) continue;
+
       const guest = guests.find((g) => g.id === r.guest_id || (r.guest_phone && g.mobile === r.guest_phone));
       const phone = r.guest_phone || guest?.mobile || '';
       const email = r.guest_email || guest?.email || '';
       const vipType = vipGuests.find((g) => g.mobile && g.mobile === phone)?.vip_type ?? guest?.vip_type ?? '';
-      const checkIn = (r.check_in_date ?? '').slice(0, 10);
-      const checkOut = (r.check_out_date ?? '').slice(0, 10);
 
       result.push({
         id: r.id,
@@ -442,7 +449,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       });
     }
     return result;
-  }, [entries, reservations, guests, vipGuests]);
+  }, [entries, reservations, guests, vipGuests, timelineDates, centerDate]);
 
   const filteredBookings = useMemo(() => {
     let result = allBookings;
@@ -605,10 +612,22 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         }
       }
       
-      const created = [];
-      for (const i of inputs) {
-        const res = await saveReservation(i, id);
-        created.push(res);
+      let created = [];
+      if (id && id.trim() !== '') {
+        const single = await saveReservation(inputs[0], id);
+        created = [single];
+      } else {
+        created = await saveReservations(inputs);
+      }
+
+      // If the newly created booking check-in date is not in current view, align centerDate to it
+      const firstCheckIn = inputs[0]?.check_in_date?.slice(0, 10);
+      if (firstCheckIn) {
+        const visibleStart = timelineDates[0];
+        const visibleEnd = timelineDates[timelineDates.length - 1];
+        if (firstCheckIn < visibleStart || firstCheckIn > visibleEnd) {
+          setCenterDate(firstCheckIn);
+        }
       }
       
       await load();
@@ -1236,6 +1255,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         businessDate={date}
         loading={loading}
         onShiftTimeline={shiftTimeline}
+        onDateSelect={(newDate) => setCenterDate(newDate)}
         onGoToToday={() => setCenterDate(getTodayLocal())}
         onRefresh={load}
         onBack={onBack}
@@ -2024,7 +2044,13 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
           preselectRoom={preselectRoom}
           preselectCheckIn={preselectCheckIn}
           preselectCheckOut={preselectCheckOut}
-          onClose={() => { setShowNewBooking(false); setPreselectRoom(undefined); setPreselectCheckIn(undefined); setPreselectCheckOut(undefined); }}
+          onClose={() => {
+            setShowNewBooking(false);
+            setPreselectRoom(undefined);
+            setPreselectCheckIn(undefined);
+            setPreselectCheckOut(undefined);
+            load();
+          }}
           onSave={handleSaveReservation}
         />
       )}

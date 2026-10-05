@@ -159,6 +159,9 @@ export const saveReservation = async (
           room_no: res.reservation.room_no,
           room_id: res.reservation.room_id,
         }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+        }
         return {
           ...res.reservation,
           _emailDelivery: res.emailDelivery,
@@ -177,6 +180,9 @@ export const saveReservation = async (
           room_no: res.reservation.room_no,
           room_id: res.reservation.room_id,
         }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+        }
         return {
           ...res.reservation,
           _emailDelivery: res.emailDelivery,
@@ -192,6 +198,7 @@ export const saveReservation = async (
       err?.code === 'RESERVATION_DUPLICATE' ||
       err?.code === 'GUEST_EMAIL_REQUIRED' ||
       err?.code === 'INVALID_GUEST_EMAIL' ||
+      err?.status === 409 ||
       err?.status === 422
     ) {
       throw new Error(err.message || 'Validation error');
@@ -336,6 +343,9 @@ export const saveReservation = async (
     room_no: res.room_no,
     room_id: res.room_id,
   }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+  }
 
   if (toNum(res.advance_paid) > 0) {
     const todayStr = (new Date()).toISOString().slice(0, 10);
@@ -359,6 +369,120 @@ export const saveReservation = async (
   }
 
   return res;
+};
+
+export const saveReservations = async (
+  inputs: ReservationInput[],
+): Promise<Reservation[]> => {
+  if (!inputs || inputs.length === 0) return [];
+  if (inputs.length === 1) {
+    const single = await saveReservation(inputs[0]);
+    return [single];
+  }
+
+  const hotelId = getCurrentHotelId();
+
+  // Validate dates & emails for all items in batch
+  for (const input of inputs) {
+    const ci = (input.check_in_date || '').slice(0, 10);
+    const co = (input.check_out_date || '').slice(0, 10);
+    if (!ci || !co) throw new Error('Please select check-in and check-out dates.');
+    if (ci >= co) throw new Error('Check-out date must be strictly after check-in date.');
+
+    const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+    const cleanEmail = (input.guest_email ?? '').trim();
+    if (!isOta) {
+      if (!cleanEmail) throw new Error('Guest email is required.');
+      if (!isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
+    }
+  }
+
+  // Ensure all share the exact same group_id
+  const sharedGroupId = inputs[0].group_id || (inputs.length > 1 ? crypto.randomUUID() : undefined);
+  const normalizedInputs = inputs.map((i) => ({
+    ...i,
+    group_id: sharedGroupId,
+  }));
+
+  // Try authoritative batch backend endpoint
+  try {
+    const res = await apiFetch('/api/reservations', {
+      method: 'POST',
+      body: JSON.stringify(normalizedInputs),
+    });
+    if (res?.reservations && Array.isArray(res.reservations) && res.reservations.length > 0) {
+      for (const r of res.reservations) {
+        dispatchChannelEvent('RESERVATION_CREATED', {
+          startDate: r.check_in_date,
+          endDate: r.check_out_date,
+          room_no: r.room_no,
+          room_id: r.room_id,
+        }).catch((e) => console.warn('[saveReservations] Auto-sync warning:', e));
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+      }
+      return res.reservations.map((r: any, idx: number) => ({
+        ...r,
+        _emailDelivery: idx === 0 ? res.emailDelivery : undefined,
+        _emailStatus: idx === 0 ? res.emailStatus : undefined,
+      }));
+    }
+  } catch (err: any) {
+    if (
+      err?.code === 'ROOM_ALREADY_BOOKED' ||
+      err?.code === 'ROOM_ASSIGNMENT_CONFLICT' ||
+      err?.code === 'INVALID_STAY_DATES' ||
+      err?.code === 'RESERVATION_DUPLICATE' ||
+      err?.code === 'GUEST_EMAIL_REQUIRED' ||
+      err?.code === 'INVALID_GUEST_EMAIL' ||
+      err?.code === 'DUPLICATE_ROOM_IN_BOOKING' ||
+      err?.status === 409 ||
+      err?.status === 422
+    ) {
+      throw new Error(err.message || 'Validation error');
+    }
+    console.warn('[saveReservations] Backend call deferred to direct database update:', err?.message || err);
+  }
+
+  // Fallback: Direct batch Supabase insert
+  const rawPayloads = normalizedInputs.map((input) => {
+    const p = { ...input, hotel_id: hotelId };
+    delete (p as { id?: string }).id;
+    delete (p as { nights?: number }).nights;
+    return p;
+  });
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .insert(rawPayloads)
+    .select('*');
+
+  if (error) {
+    if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+      throw new Error('Check-out date must be after check-in date.');
+    }
+    if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      throw new Error('One or more selected rooms are already booked for these dates.');
+    }
+    throw error;
+  }
+
+  const created = (data as Reservation[]) ?? [];
+  for (const r of created) {
+    dispatchChannelEvent('RESERVATION_CREATED', {
+      startDate: r.check_in_date,
+      endDate: r.check_out_date,
+      room_no: r.room_no,
+      room_id: r.room_id,
+    }).catch((e) => console.warn('[saveReservations] Auto-sync warning:', e));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+  }
+
+  return created;
 };
 
 export const updateReservationStatus = async (

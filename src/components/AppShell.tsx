@@ -132,28 +132,26 @@ const SidebarContent = ({
 }: SidebarContentProps) => {
   return (
     <>
-      {/* Header */}
-      <div className="px-5 py-4 flex items-center justify-between shrink-0 border-b border-amber-200/70 bg-gradient-to-r from-amber-100/70 via-amber-50/50 to-white">
+      {/* Header — Deep Luxury Navy Gradient */}
+      <div className="px-4 py-3.5 flex items-center justify-between shrink-0 border-b border-slate-800/80 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="p-1.5 rounded-xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 text-white shadow-gold-glow">
-            <BrandIcon className="w-6 h-6 shrink-0" />
-          </div>
+          <BrandIcon size={38} onDark={true} className="shrink-0" />
           {!isMobile ? (
-            <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-3 translate-x-0'}`}>
+            <div className={`overflow-hidden whitespace-nowrap transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-w-0 opacity-0 ml-0 -translate-x-1.5' : 'duration-500 ease-out delay-150 max-w-[200px] opacity-100 ml-1 translate-x-0'}`}>
               <div>
-                <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
-                <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
+                <p className="text-sm font-black text-white truncate leading-tight tracking-tight">{hotelName ?? 'Hotel Mantri'}</p>
+                <p className="text-[10px] font-extrabold text-blue-300 uppercase tracking-widest mt-0.5">Management System</p>
               </div>
             </div>
           ) : (
-            <div className="min-w-0 flex-1 overflow-hidden ml-3">
-              <p className="text-base font-extrabold text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</p>
-              <p className="text-[10px] font-extrabold text-amber-700 uppercase tracking-widest mt-0.5">Management System</p>
+            <div className="min-w-0 flex-1 overflow-hidden ml-1">
+              <p className="text-sm font-black text-white truncate leading-tight tracking-tight">{hotelName ?? 'Hotel Mantri'}</p>
+              <p className="text-[10px] font-extrabold text-blue-300 uppercase tracking-widest mt-0.5">Management System</p>
             </div>
           )}
         </div>
         {isMobile && (
-          <button onClick={() => setSidebarOpen(false)} className="text-amber-800 hover:text-slate-900 p-1 shrink-0">
+          <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white p-1 shrink-0 rounded-lg hover:bg-white/10 transition">
             <X className="w-5 h-5" />
           </button>
         )}
@@ -162,34 +160,34 @@ const SidebarContent = ({
       {/* Search menu */}
       {!isMobile ? (
         <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 py-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[60px] opacity-100 py-3 mb-1 px-3.5'}`}>
-          <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
-            <Search className="w-4 h-4 text-amber-600 shrink-0" />
+          <div className="flex items-center gap-2 bg-slate-100/90 rounded-xl px-3 py-2 border border-slate-200/90 focus-within:border-blue-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-inner">
+            <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search menu…"
-              className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
+              className="bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none w-full font-medium"
             />
           </div>
         </div>
       ) : (
         <div className="px-3.5 pb-1 pt-3.5">
-          <div className="flex items-center gap-2 bg-amber-50/60 rounded-xl px-3 py-2 border border-amber-200/80 focus-within:border-amber-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-amber-200 transition-all shadow-inner">
-            <Search className="w-4 h-4 text-amber-600 shrink-0" />
+          <div className="flex items-center gap-2 bg-slate-100/90 rounded-xl px-3 py-2 border border-slate-200/90 focus-within:border-blue-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all shadow-inner">
+            <Search className="w-4 h-4 text-slate-400 shrink-0" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search menu…"
-              className="bg-transparent text-xs text-slate-900 placeholder:text-amber-700/60 focus:outline-none w-full"
+              className="bg-transparent text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none w-full font-medium"
             />
           </div>
         </div>
       )}
 
       {/* Navigation list */}
-      <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-3.5 sidebar-scroll">
+      <nav className="flex-1 overflow-y-auto px-3 py-2.5 space-y-3.5 sidebar-scroll">
         {filteredGroups.map((group) => {
           const isGroupOpen = searchQuery.trim() ? true : expandedGroups.has(group.label);
           const isGroupCollapsed = !isGroupOpen;
@@ -199,7 +197,7 @@ const SidebarContent = ({
                 <div className={`overflow-hidden transition-all ${collapsed ? 'duration-300 ease-in-out delay-0 max-h-0 opacity-0 mt-0 mb-0' : 'duration-500 ease-out delay-150 max-h-[30px] opacity-100 mt-2 mb-1.5 px-3'}`}>
                   <button
                     onClick={() => toggleGroup(group.label)}
-                    className="w-full flex items-center justify-between text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950"
+                    className="w-full flex items-center justify-between text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hover:text-slate-800 transition"
                   >
                     <span className="whitespace-nowrap">{group.label}</span>
                     <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
@@ -208,7 +206,7 @@ const SidebarContent = ({
               ) : (
                 <button
                   onClick={() => toggleGroup(group.label)}
-                  className="w-full flex items-center justify-between px-3 text-[10px] font-extrabold text-amber-800 uppercase tracking-widest hover:text-amber-950 mb-1.5 mt-2"
+                  className="w-full flex items-center justify-between px-3 text-[10px] font-extrabold text-slate-400 uppercase tracking-widest hover:text-slate-800 mb-1.5 mt-2 transition"
                 >
                   <span className="whitespace-nowrap">{group.label}</span>
                   <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isGroupCollapsed ? '-rotate-90' : ''}`} />
@@ -230,11 +228,11 @@ const SidebarContent = ({
                       title={collapsed && !isMobile ? item.label : undefined}
                       className={`group relative w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm transition-all duration-150 overflow-hidden ${
                         active
-                          ? 'bg-gradient-to-r from-amber-100/90 via-amber-50/90 to-amber-100/50 text-amber-950 font-extrabold border-l-4 border-amber-500 shadow-sm shadow-amber-500/10'
-                          : 'text-slate-700 hover:text-amber-900 hover:bg-amber-50/60 font-semibold'
+                          ? 'bg-gradient-to-r from-blue-50 via-slate-50 to-white text-blue-900 font-black border-l-4 border-blue-600 shadow-sm shadow-blue-500/10'
+                          : 'text-slate-600 hover:text-blue-950 hover:bg-slate-100/80 font-semibold'
                       }`}
                     >
-                      <span className={`shrink-0 transition-transform duration-150 group-hover:translate-x-0.5 flex items-center justify-center w-5 ${active ? 'text-amber-600 font-bold' : 'text-slate-400 group-hover:text-amber-600'}`}>
+                      <span className={`shrink-0 transition-transform duration-150 group-hover:translate-x-0.5 flex items-center justify-center w-5 ${active ? 'text-blue-600 font-bold' : 'text-slate-400 group-hover:text-blue-600'}`}>
                         {item.icon}
                       </span>
                       {!isMobile ? (
@@ -254,11 +252,11 @@ const SidebarContent = ({
       </nav>
 
       {/* Sign out */}
-      <div className="px-3.5 py-3.5 border-t border-amber-200/70 bg-amber-50/40">
+      <div className="px-3.5 py-3 border-t border-slate-200/80 bg-slate-50/60">
         <button
           onClick={onSignOut}
           title={collapsed && !isMobile ? 'Sign Out' : undefined}
-          className="w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-700 hover:text-rose-700 hover:bg-rose-50 transition-colors duration-200 overflow-hidden"
+          className="w-full flex items-center px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold text-slate-700 hover:text-rose-700 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-colors duration-200 overflow-hidden"
         >
           <span className="flex items-center justify-center shrink-0 w-5"><LogOut className="w-4 h-4 text-rose-500" /></span>
           {!isMobile ? (
@@ -517,24 +515,24 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
 
       {/* Main content */}
       <div className={`flex-1 ${collapsed ? 'lg:ml-[72px]' : 'lg:ml-[280px]'} min-w-0 flex flex-col main-content transition-all ${collapsed ? 'duration-500 ease-in-out delay-300' : 'duration-700 ease-out delay-0'}`}>
-        {/* Top header — premium light theme */}
+        {/* Top header — modern Navy & Crisp White theme */}
         <header
-          className="sticky top-0 z-20 bg-white/90 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
+          className="sticky top-0 z-20 bg-white/95 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
           style={{ height: layout.headerHeight }}
         >
           <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-1.5 text-slate-600 hover:text-sky-700 hover:bg-slate-100 rounded-xl transition"
+              className="lg:hidden p-1.5 text-slate-600 hover:text-blue-700 hover:bg-slate-100 rounded-xl transition"
             >
               <Menu className="w-5 h-5" />
             </button>
             <div className="min-w-0">
-              <h1 className="text-sm font-extrabold text-slate-900 truncate leading-tight flex items-center gap-2">
+              <h1 className="text-sm font-black text-slate-900 truncate leading-tight flex items-center gap-2">
                 <span>{greeting}, {hotelName ?? 'Hotel Mantri'}</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-600 text-white shadow-xs hidden xl:inline-block">LIVE</span>
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-xs hidden xl:inline-block tracking-wider">LIVE</span>
               </h1>
-              <p className="text-[11px] font-semibold text-sky-600 hidden sm:block">
+              <p className="text-[11px] font-bold text-blue-600 hidden sm:block">
                 {findLabel(currentScreen) || 'Dashboard'}
               </p>
             </div>
@@ -543,7 +541,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
           {/* Right cluster */}
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Search (desktop) */}
-            <div className="hidden md:flex items-center gap-2 bg-slate-100/80 border border-slate-200/80 rounded-xl px-3 py-1.5 w-48 lg:w-56 focus-within:ring-2 focus-within:ring-sky-500/30 focus-within:bg-white transition-all shadow-inner">
+            <div className="hidden md:flex items-center gap-2 bg-slate-100/90 border border-slate-200/90 rounded-xl px-3 py-1.5 w-48 lg:w-56 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-600 focus-within:bg-white transition-all shadow-inner">
               <Search className="w-4 h-4 text-slate-400" />
               <input
                 type="text"
@@ -561,14 +559,14 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
                     }
                   }
                 }}
-                className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full"
+                className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full font-medium"
               />
             </div>
 
             {/* Business date */}
-            <div className="hidden sm:flex flex-col items-end leading-tight px-2 py-1 rounded-xl bg-amber-50/60 border border-amber-200/60">
-              <span className="text-[9px] text-amber-700 uppercase tracking-wider font-extrabold">Business Date</span>
-              <span className="text-xs font-bold text-slate-900">{todayDisplay}</span>
+            <div className="hidden sm:flex flex-col items-end leading-tight px-2.5 py-1 rounded-xl bg-slate-100/90 border border-slate-200/90 shadow-2xs">
+              <span className="text-[9px] text-slate-500 uppercase tracking-wider font-extrabold">Business Date</span>
+              <span className="text-xs font-black text-slate-900">{todayDisplay}</span>
             </div>
 
             {/* OTA Live Sync Badge */}
@@ -577,9 +575,9 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
               onClick={() => syncStatus.syncNow()}
               disabled={syncStatus.isSyncing}
               title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
-              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold transition shadow-xs cursor-pointer ${
+              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${
                 syncStatus.status === 'SYNCING'
-                  ? 'bg-sky-50 border-sky-200 text-sky-700'
+                  ? 'bg-blue-50 border-blue-200 text-blue-700'
                   : syncStatus.status === 'SUCCESS'
                   ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
                   : syncStatus.status === 'PARTIAL_SUCCESS'
@@ -594,7 +592,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
               }`}
             >
               {syncStatus.isSyncing ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
               ) : syncStatus.status === 'SUCCESS' ? (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
               ) : syncStatus.status === 'PARTIAL_SUCCESS' || syncStatus.status === 'FAILED' || syncStatus.status === 'NOT_AUTHORIZED' ? (
@@ -620,9 +618,9 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
             </button>
 
             {/* Notifications */}
-            <button className="relative p-2 text-slate-600 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition">
+            <button className="relative p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer">
               <Bell className="w-4.5 h-4.5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500 shadow-gold-glow animate-pulse" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600 shadow-soft-blue animate-pulse" />
             </button>
 
             {/* User profile menu */}
@@ -632,10 +630,10 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
                 onClick={() => setProfileOpen((open) => !open)}
                 aria-label="Open profile menu"
                 aria-expanded={profileOpen}
-                className="flex items-center gap-2 rounded-xl p-1 hover:bg-sky-50 transition-colors focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+                className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
               >
                 <span
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-extrabold shrink-0 bg-gradient-to-tr from-sky-600 via-indigo-600 to-amber-500 shadow-md"
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-slate-900 via-blue-900 to-blue-600 shadow-md ring-2 ring-white"
                 >
                   {userName.charAt(0).toUpperCase()}
                 </span>
@@ -643,18 +641,18 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
               </button>
 
               {profileOpen && (
-                <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_16px_40px_rgba(15,28,48,0.16)] animate-fade-in">
-                  <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
-                    <p className="truncate text-sm font-bold text-brand-navy-800">{hotelName ?? 'Hotel Mantri'}</p>
-                    <p className="truncate text-xs font-medium text-slate-600">{userName}</p>
-                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2 py-1 text-[10px] font-bold text-brand-700">
+                <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                  <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 px-4 py-3 text-white">
+                    <p className="truncate text-sm font-black text-white">{hotelName ?? 'Hotel Mantri'}</p>
+                    <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
+                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-400/30 px-2 py-0.5 text-[10px] font-extrabold text-blue-200">
                       <ShieldCheck className="h-3 w-3" /> {roleLabel}
                     </span>
                   </div>
                   <div className="p-2">
                     {role === 'super_admin' && (
                       <ProfileMenuButton
-                        icon={<ShieldCheck className="text-sky-600" />}
+                        icon={<ShieldCheck className="text-blue-600" />}
                         label="Super Admin Panel"
                         onClick={() => {
                           setProfileOpen(false);

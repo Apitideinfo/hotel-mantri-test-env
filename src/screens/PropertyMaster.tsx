@@ -55,15 +55,17 @@ export const PropertyMaster = ({ onBack }: PropertyMasterProps) => {
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
-      <header className="sticky top-0 z-20 bg-sky-800 text-white px-4 py-3 flex items-center gap-3 shadow-lg">
-        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-sky-700 rounded-lg transition">
-          <ArrowLeft className="w-5 h-5" />
+      <header className="sticky top-0 z-20 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white px-4 py-3.5 flex items-center gap-3 shadow-md border-b border-slate-800">
+        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-white/10 rounded-xl transition cursor-pointer">
+          <ArrowLeft className="w-5 h-5 text-slate-300 hover:text-white" />
         </button>
         <div className="flex-1">
-          <h1 className="text-base font-semibold leading-tight">Property Master</h1>
-          <p className="text-sky-200 text-xs">Room Categories & Inventory</p>
+          <h1 className="text-base font-black leading-tight tracking-tight">Property Master</h1>
+          <p className="text-blue-300 text-xs font-semibold">Room Categories & Inventory Control</p>
         </div>
-        <Building2 className="w-5 h-5 text-sky-300" />
+        <div className="p-2 bg-blue-500/20 rounded-xl border border-blue-400/30 text-blue-300 shadow-xs">
+          <Building2 className="w-5 h-5" />
+        </div>
       </header>
 
       <div className="px-4 pt-4 w-full">
