@@ -44,7 +44,12 @@ export const NewBookingModal = ({
     };
   }, []);
 
-  const [roomNos, setRoomNos] = useState<string[]>(preselectRoom ? [preselectRoom] : []);
+  const initialRoomNos = useMemo<string[]>(() => {
+    if (!preselectRoom || !preselectRoom.trim()) return [];
+    return [preselectRoom.trim()];
+  }, [preselectRoom]);
+
+  const [roomNos, setRoomNos] = useState<string[]>(initialRoomNos);
   const [guestName, setGuestName] = useState('');
   const [phone, setPhone] = useState('');
   const [countryCode, setCountryCode] = useState('+91');
@@ -84,7 +89,7 @@ export const NewBookingModal = ({
   const [emailDelivery, setEmailDelivery] = useState<{ recipientEmail?: string; error?: string } | null>(null);
 
   const selectedRooms = useMemo(
-    () => rooms.filter((r) => roomNos.includes(r.room_no.trim())),
+    () => rooms.filter((r) => roomNos.some(n => n.trim().toLowerCase() === r.room_no.trim().toLowerCase())),
     [rooms, roomNos],
   );
 
@@ -93,7 +98,8 @@ export const NewBookingModal = ({
   }, [checkIn, checkOut]);
 
   const subtotal = roomNos.reduce((sum, no) => {
-    const rRate = roomRates[no] !== undefined ? roomRates[no] : toNum(rate);
+    const cleanNo = (no || '').trim();
+    const rRate = roomRates[cleanNo] !== undefined ? roomRates[cleanNo] : toNum(rate);
     return sum + rRate * nights;
   }, 0);
   const afterDiscount = Math.max(0, subtotal - toNum(discount));
@@ -101,18 +107,28 @@ export const NewBookingModal = ({
   const totalReceived = toNum(payCash) + toNum(payUpi) + toNum(payCard) + toNum(payBank);
   const balance = Math.max(0, invoiceTotal - totalReceived);
 
-  const toggleRoom = (no: string) => {
+  const toggleRoom = (rawNo: string) => {
+    const no = (rawNo || '').trim();
+    if (!no) return;
+
     setRoomNos(prev => {
-      const isRemoving = prev.includes(no);
-      const newNos = isRemoving ? prev.filter(n => n !== no) : [...prev, no];
+      const cleanPrev = Array.from(new Set(prev.map(n => (n || '').trim()).filter(Boolean)));
+      const isRemoving = cleanPrev.some(n => n.toLowerCase() === no.toLowerCase());
+      const newNos = isRemoving
+        ? cleanPrev.filter(n => n.toLowerCase() !== no.toLowerCase())
+        : [...cleanPrev, no];
+
       if (isRemoving) {
         setRoomRates(rates => {
           const next = { ...rates };
           delete next[no];
+          Object.keys(next).forEach(k => {
+            if (k.toLowerCase() === no.toLowerCase()) delete next[k];
+          });
           return next;
         });
       } else {
-        const r = rooms.find((rm) => rm.room_no === no);
+        const r = rooms.find((rm) => (rm.room_no || '').trim().toLowerCase() === no.toLowerCase());
         const cat = categories.find((c) => c.id === r?.category_id);
         const rTariff = toNum(rate) > 0 ? toNum(rate) : (cat?.default_tariff ?? r?.default_tariff ?? 0);
         if (newNos.length === 1 && rate === '') {
@@ -157,11 +173,15 @@ export const NewBookingModal = ({
   };
 
   const buildInputs = (): ReservationInput[] => {
-    const groupId = roomNos.length > 1 ? crypto.randomUUID() : undefined;
+    // Strictly deduplicate room numbers
+    const cleanRoomNos = Array.from(
+      new Set(roomNos.map((no) => (no || '').trim()).filter(Boolean))
+    );
+    const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
     const fullPhone = phone.trim() ? `${countryCode} ${phone.trim()}` : '';
     
-    return roomNos.map((no, idx) => {
-      const room = rooms.find(r => r.room_no === no);
+    return cleanRoomNos.map((no, idx) => {
+      const room = rooms.find(r => (r.room_no || '').trim().toLowerCase() === no.toLowerCase());
       const advancePaid = idx === 0 ? totalReceived : 0;
       const rPayCash = idx === 0 ? toNum(payCash) : 0;
       const rPayUpi = idx === 0 ? toNum(payUpi) : 0;
@@ -172,13 +192,13 @@ export const NewBookingModal = ({
       const fallbackTariff = toNum(rate) > 0 ? toNum(rate) : (roomCat?.default_tariff ?? room?.default_tariff ?? 0);
       const individualRate = (roomRates[no] !== undefined && toNum(roomRates[no]) > 0) ? toNum(roomRates[no]) : fallbackTariff;
       const roomSubtotal = individualRate * nights;
-      const roomDiscount = toNum(discount) / (roomNos.length || 1);
+      const roomDiscount = toNum(discount) / (cleanRoomNos.length || 1);
       const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
       const { taxable: rTaxable, gst: rGst, invoiceTotal: rInvoiceTotal } = calcGstFull(roomAfterDiscount, gstType, gstSlab);
       
       return {
         room_id: room?.id ?? null,
-        room_no: no,
+        room_no: room?.room_no?.trim() || no,
         guest_name: guestName.trim(),
         guest_phone: fullPhone,
         guest_email: email.trim(),
@@ -577,7 +597,7 @@ export const NewBookingModal = ({
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           {group.rooms.map((r) => {
-                            const isSelected = roomNos.includes(r.room_no);
+                            const isSelected = roomNos.some(n => (n || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase());
                             return (
                               <button
                                 key={r.id}

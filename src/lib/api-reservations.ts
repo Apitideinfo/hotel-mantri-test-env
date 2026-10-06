@@ -380,10 +380,33 @@ export const saveReservations = async (
     return [single];
   }
 
+  // Deduplicate physical rooms in batch inputs
+  const seenPhysicalRooms = new Set<string>();
+  const sanitizedInputs: ReservationInput[] = [];
+  for (const input of inputs) {
+    const norm = (input.room_no || '').trim().toLowerCase();
+    if (norm && norm !== 'unassigned' && norm !== 'tbd') {
+      if (seenPhysicalRooms.has(norm)) {
+        console.warn(`[saveReservations] Dropping duplicate room entry for Room ${input.room_no} in multi-room batch`);
+        continue;
+      }
+      seenPhysicalRooms.add(norm);
+    }
+    sanitizedInputs.push({
+      ...input,
+      room_no: (input.room_no || '').trim() || 'Unassigned',
+    });
+  }
+
+  if (sanitizedInputs.length === 1) {
+    const single = await saveReservation(sanitizedInputs[0]);
+    return [single];
+  }
+
   const hotelId = getCurrentHotelId();
 
   // Validate dates & emails for all items in batch
-  for (const input of inputs) {
+  for (const input of sanitizedInputs) {
     const ci = (input.check_in_date || '').slice(0, 10);
     const co = (input.check_out_date || '').slice(0, 10);
     if (!ci || !co) throw new Error('Please select check-in and check-out dates.');
@@ -398,8 +421,8 @@ export const saveReservations = async (
   }
 
   // Ensure all share the exact same group_id
-  const sharedGroupId = inputs[0].group_id || (inputs.length > 1 ? crypto.randomUUID() : undefined);
-  const normalizedInputs = inputs.map((i) => ({
+  const sharedGroupId = sanitizedInputs[0].group_id || (sanitizedInputs.length > 1 ? crypto.randomUUID() : undefined);
+  const normalizedInputs = sanitizedInputs.map((i) => ({
     ...i,
     group_id: sharedGroupId,
   }));

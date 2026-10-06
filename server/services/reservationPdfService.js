@@ -307,7 +307,7 @@ export const resolveRoomCategoryName = async ({ reservation, hotelId }) => {
 
 export const resolveBookingRooms = async ({ reservation, hotelId, multiRooms = [] }) => {
   if (multiRooms && multiRooms.length > 0) {
-    return multiRooms;
+    return multiRooms.filter((r, idx, arr) => arr.findIndex(x => (x.id && x.id === r.id) || ((x.room_no || '').trim() && (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase())) === idx);
   }
 
   if (reservation.group_id) {
@@ -320,7 +320,7 @@ export const resolveBookingRooms = async ({ reservation, hotelId, multiRooms = [
         .order('room_no', { ascending: true });
 
       if (siblings && siblings.length > 0) {
-        return siblings;
+        return siblings.filter((r, idx, arr) => arr.findIndex(x => x.id === r.id) === idx);
       }
     } catch (e) {
       // Non-fatal

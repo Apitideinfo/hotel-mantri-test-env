@@ -121,7 +121,10 @@ export const BookingDetailPanel = ({
         .eq('group_id', groupId)
         .then(({ data }) => {
           if (data && data.length > 1) {
-            setGroupReservations(data as Reservation[]);
+            const unique = (data as Reservation[]).filter(
+              (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
+            );
+            setGroupReservations(unique);
           } else {
             setGroupReservations([]);
           }

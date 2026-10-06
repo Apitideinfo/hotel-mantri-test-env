@@ -1285,7 +1285,12 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         onBack={onBack}
         selectedBooking={selectedBooking}
         onClearSelection={() => setSelectedBooking(null)}
-        onNewReservation={() => setShowNewBooking(true)}
+        onNewReservation={() => {
+          setPreselectRoom(undefined);
+          setPreselectCheckIn(undefined);
+          setPreselectCheckOut(undefined);
+          setShowNewBooking(true);
+        }}
         onWalkIn={() => setShowWalkIn(true)}
         onAdjustAvailability={() => {
           if (categories.length > 0) {

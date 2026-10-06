@@ -297,7 +297,12 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     const groupsMap = new Map<string, Reservation[]>();
     const order: string[] = [];
 
-    for (const r of paginatedData.reservations) {
+    // Deduplicate paginated reservations by id
+    const uniqueReservations = paginatedData.reservations.filter(
+      (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
+    );
+
+    for (const r of uniqueReservations) {
       const key = (r.group_id && r.group_id.trim() !== '') ? r.group_id : r.id;
       if (!groupsMap.has(key)) {
         groupsMap.set(key, []);
@@ -307,10 +312,14 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
 
     return order.map((key) => {
-      const resList = groupsMap.get(key)!;
+      const rawList = groupsMap.get(key)!;
+      // Deduplicate within the group list
+      const resList = rawList.filter(
+        (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
+      );
       const primary = resList[0];
       const isMultiRoom = resList.length > 1;
-      const roomNos = resList.map((r) => r.room_no || 'Unassigned');
+      const roomNos = resList.map((r) => (r.room_no || 'Unassigned').trim());
 
       const totalTariff = resList.reduce((sum, r) => {
         const val = r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1));

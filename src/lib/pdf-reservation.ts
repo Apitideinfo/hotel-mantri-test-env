@@ -283,10 +283,14 @@ export interface ReservationPdfOptions {
 export function buildReservationConfirmationPdf(options: ReservationPdfOptions): jsPDF {
   const {
     reservation,
-    multiRooms = [],
+    multiRooms: rawMultiRooms = [],
     settings = null,
     version = 1,
   } = options;
+
+  const multiRooms = rawMultiRooms.filter(
+    (rm, idx, arr) => arr.findIndex(x => (x.id && x.id === rm.id) || ((x.room_no || '').trim() && (x.room_no || '').trim().toLowerCase() === (rm.room_no || '').trim().toLowerCase())) === idx
+  );
 
   const doc = new jsPDF({
     orientation: 'portrait',

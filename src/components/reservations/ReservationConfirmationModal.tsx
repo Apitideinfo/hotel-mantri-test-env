@@ -79,7 +79,9 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const isMulti = Boolean(groupReservations && groupReservations.length > 1);
-  const allRooms = isMulti ? groupReservations! : [reservation];
+  const allRooms = isMulti
+    ? groupReservations!.filter((r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx)
+    : [reservation];
   const totalStayAmount = allRooms.reduce(
     (sum, r) => sum + (r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1))),
     0
