@@ -963,13 +963,13 @@ const SplitPayInput = ({ icon: Icon, label, value, onChange }: {
   </div>
 );
 
-const SuccessRow = ({ label, value, bold, color }: { label: string; value: string; bold?: boolean; color?: 'emerald' | 'amber' | 'slate' }) => (
+const SuccessRow = ({ label, value, bold, color }: { label: string; value: string; bold?: boolean; color?: 'emerald' | 'amber' | 'slate' | 'blue' | 'indigo' }) => (
   <div className="flex items-center justify-between text-xs">
     <span className="text-slate-500 font-medium">{label}</span>
     <span className={`font-semibold ${
       bold ? 'font-black text-slate-900' : ''
     } ${
-      color === 'emerald' ? 'text-emerald-700 font-black' : color === 'amber' ? 'text-amber-700 font-black' : 'text-slate-800'
+      color === 'emerald' ? 'text-emerald-700 font-black' : color === 'amber' ? 'text-amber-700 font-black' : color === 'blue' || color === 'indigo' ? 'text-indigo-700 font-black' : 'text-slate-800'
     }`}>
       {value}
     </span>

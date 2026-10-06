@@ -111,16 +111,19 @@ export const BookingDetailPanel = ({
   const [loadingGroup, setLoadingGroup] = useState(false);
 
   useEffect(() => {
+    let active = true;
     const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
     const groupId = rawRes?.group_id;
     if (groupId && groupId.trim() !== '') {
       setLoadingGroup(true);
-      supabase
-        .from('reservations')
-        .select('*')
-        .eq('group_id', groupId)
-        .then(({ data }) => {
-          if (data && data.length > 1) {
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('reservations')
+            .select('*')
+            .eq('group_id', groupId);
+          if (!active) return;
+          if (!error && data && data.length > 1) {
             const unique = (data as Reservation[]).filter(
               (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
             );
@@ -128,12 +131,18 @@ export const BookingDetailPanel = ({
           } else {
             setGroupReservations([]);
           }
-        })
-        .catch(() => setGroupReservations([]))
-        .finally(() => setLoadingGroup(false));
+        } catch {
+          if (active) setGroupReservations([]);
+        } finally {
+          if (active) setLoadingGroup(false);
+        }
+      })();
     } else {
       setGroupReservations([]);
     }
+    return () => {
+      active = false;
+    };
   }, [booking]);
 
   // Background body scroll lock while modal is open
