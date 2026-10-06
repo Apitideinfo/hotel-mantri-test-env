@@ -78,9 +78,18 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const isPhysical = (rm?: string | null) => {
+    const norm = (rm || '').trim().toLowerCase();
+    return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+  };
   const isMulti = Boolean(groupReservations && groupReservations.length > 1);
   const allRooms = isMulti
-    ? groupReservations!.filter((r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx)
+    ? groupReservations!.filter((r, idx, arr) => {
+        if (isPhysical(r.room_no)) {
+          return arr.findIndex((x) => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+        }
+        return arr.findIndex((x) => x.id === r.id) === idx;
+      })
     : [reservation];
   const totalStayAmount = allRooms.reduce(
     (sum, r) => sum + (r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1))),

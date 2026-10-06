@@ -306,8 +306,18 @@ export const resolveRoomCategoryName = async ({ reservation, hotelId }) => {
 };
 
 export const resolveBookingRooms = async ({ reservation, hotelId, multiRooms = [] }) => {
+  const isPhysical = (rm) => {
+    const norm = (rm || '').trim().toLowerCase();
+    return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+  };
+
   if (multiRooms && multiRooms.length > 0) {
-    return multiRooms.filter((r, idx, arr) => arr.findIndex(x => (x.id && x.id === r.id) || ((x.room_no || '').trim() && (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase())) === idx);
+    return multiRooms.filter((r, idx, arr) => {
+      if (isPhysical(r.room_no)) {
+        return arr.findIndex(x => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+      }
+      return arr.findIndex(x => x.id === r.id) === idx;
+    });
   }
 
   if (reservation.group_id) {
@@ -320,7 +330,12 @@ export const resolveBookingRooms = async ({ reservation, hotelId, multiRooms = [
         .order('room_no', { ascending: true });
 
       if (siblings && siblings.length > 0) {
-        return siblings.filter((r, idx, arr) => arr.findIndex(x => x.id === r.id) === idx);
+        return siblings.filter((r, idx, arr) => {
+          if (isPhysical(r.room_no)) {
+            return arr.findIndex(x => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+          }
+          return arr.findIndex(x => x.id === r.id) === idx;
+        });
       }
     } catch (e) {
       // Non-fatal

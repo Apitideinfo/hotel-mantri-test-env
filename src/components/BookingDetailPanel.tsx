@@ -114,6 +114,7 @@ export const BookingDetailPanel = ({
     let active = true;
     const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
     const groupId = rawRes?.group_id;
+    const currentResId = rawRes?.id || booking.id;
     if (groupId && groupId.trim() !== '') {
       setLoadingGroup(true);
       (async () => {
@@ -123,11 +124,43 @@ export const BookingDetailPanel = ({
             .select('*')
             .eq('group_id', groupId);
           if (!active) return;
-          if (!error && data && data.length > 1) {
-            const unique = (data as Reservation[]).filter(
-              (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
-            );
-            setGroupReservations(unique);
+          if (!error && data && data.length > 0) {
+            const isPhysical = (rm?: string | null) => {
+              const norm = (rm || '').trim().toLowerCase();
+              return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+            };
+            const list = data as Reservation[];
+            const seenPhysical = new Set<string>();
+            const seenIds = new Set<string>();
+            const unique: Reservation[] = [];
+
+            // If currentResId exists in list, prioritize it
+            const currentItem = list.find((r) => r.id === currentResId);
+            if (currentItem) {
+              if (isPhysical(currentItem.room_no)) {
+                seenPhysical.add((currentItem.room_no || '').trim().toLowerCase());
+              }
+              seenIds.add(currentItem.id);
+              unique.push(currentItem);
+            }
+
+            for (const r of list) {
+              if (r.id === currentResId) continue;
+              const norm = (r.room_no || '').trim().toLowerCase();
+              if (isPhysical(r.room_no)) {
+                if (seenPhysical.has(norm)) continue;
+                seenPhysical.add(norm);
+              } else {
+                if (seenIds.has(r.id)) continue;
+                seenIds.add(r.id);
+              }
+              unique.push(r);
+            }
+
+            // Natural sort by room number
+            unique.sort((a, b) => (a.room_no || '').localeCompare(b.room_no || '', undefined, { numeric: true }));
+
+            setGroupReservations(unique.length > 1 ? unique : []);
           } else {
             setGroupReservations([]);
           }
@@ -724,7 +757,7 @@ const ViewFields = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {groupReservations.map((r) => {
-              const isCurrent = r.id === (reservation?.id || booking.id);
+              const isCurrent = r.id === (reservation?.id || booking.id) || (Boolean(r.room_no) && r.room_no.trim().toLowerCase() === booking.roomNo.trim().toLowerCase());
               const rRoom = rooms.find(rm => rm.room_no === r.room_no);
               const rCat = categories.find(c => c.id === rRoom?.category_id);
               const rNights = toNum(r.nights) || booking.nights;

@@ -313,10 +313,17 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
     return order.map((key) => {
       const rawList = groupsMap.get(key)!;
-      // Deduplicate within the group list
-      const resList = rawList.filter(
-        (r, idx, arr) => arr.findIndex((x) => x.id === r.id) === idx
-      );
+      // Deduplicate within the group list (enforce physical room uniqueness)
+      const isPhysical = (rm?: string | null) => {
+        const norm = (rm || '').trim().toLowerCase();
+        return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+      };
+      const resList = rawList.filter((r, idx, arr) => {
+        if (isPhysical(r.room_no)) {
+          return arr.findIndex((x) => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+        }
+        return arr.findIndex((x) => x.id === r.id) === idx;
+      });
       const primary = resList[0];
       const isMultiRoom = resList.length > 1;
       const roomNos = resList.map((r) => (r.room_no || 'Unassigned').trim());

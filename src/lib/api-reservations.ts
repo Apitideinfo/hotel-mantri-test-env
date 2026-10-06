@@ -1145,7 +1145,17 @@ export const getGroupReservations = async (groupId: string): Promise<Reservation
     .eq('group_id', groupId)
     .order('room_no', { ascending: true });
   if (error) throw error;
-  return (data as Reservation[]) ?? [];
+  const raw = (data as Reservation[]) ?? [];
+  const isPhysical = (rm?: string | null) => {
+    const norm = (rm || '').trim().toLowerCase();
+    return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+  };
+  return raw.filter((r, idx, arr) => {
+    if (isPhysical(r.room_no)) {
+      return arr.findIndex((x) => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+    }
+    return arr.findIndex((x) => x.id === r.id) === idx;
+  });
 };
 
 // ── Phase 9: Rate Plans ──

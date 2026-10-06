@@ -288,9 +288,16 @@ export function buildReservationConfirmationPdf(options: ReservationPdfOptions):
     version = 1,
   } = options;
 
-  const multiRooms = rawMultiRooms.filter(
-    (rm, idx, arr) => arr.findIndex(x => (x.id && x.id === rm.id) || ((x.room_no || '').trim() && (x.room_no || '').trim().toLowerCase() === (rm.room_no || '').trim().toLowerCase())) === idx
-  );
+  const isPhysical = (rm?: string | null) => {
+    const norm = (rm || '').trim().toLowerCase();
+    return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+  };
+  const multiRooms = rawMultiRooms.filter((rm, idx, arr) => {
+    if (isPhysical(rm.room_no)) {
+      return arr.findIndex(x => (x.room_no || '').trim().toLowerCase() === (rm.room_no || '').trim().toLowerCase()) === idx;
+    }
+    return arr.findIndex(x => x.id === rm.id) === idx;
+  });
 
   const doc = new jsPDF({
     orientation: 'portrait',
