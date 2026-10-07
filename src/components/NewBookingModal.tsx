@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X, Loader2, Calendar, BedDouble, ChevronDown, Check,
   Users, Wallet, Banknote, Smartphone, CreditCard, AlertCircle,
@@ -49,6 +49,7 @@ export const NewBookingModal = ({
     return [preselectRoom.trim()];
   }, [preselectRoom]);
 
+  const isSubmittingRef = useRef(false);
   const [roomNos, setRoomNos] = useState<string[]>(initialRoomNos);
   const [guestName, setGuestName] = useState('');
   const [phone, setPhone] = useState('');
@@ -89,7 +90,7 @@ export const NewBookingModal = ({
   const [emailDelivery, setEmailDelivery] = useState<{ recipientEmail?: string; error?: string } | null>(null);
 
   const selectedRooms = useMemo(
-    () => rooms.filter((r) => roomNos.some(n => n.trim().toLowerCase() === r.room_no.trim().toLowerCase())),
+    () => rooms.filter((r) => roomNos.some(n => (n || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase())),
     [rooms, roomNos],
   );
 
@@ -112,7 +113,16 @@ export const NewBookingModal = ({
     if (!no) return;
 
     setRoomNos(prev => {
-      const cleanPrev = Array.from(new Set(prev.map(n => (n || '').trim()).filter(Boolean)));
+      const seen = new Set<string>();
+      const cleanPrev: string[] = [];
+      for (const n of prev) {
+        const trimmed = (n || '').trim();
+        const k = trimmed.toLowerCase();
+        if (trimmed && !seen.has(k)) {
+          seen.add(k);
+          cleanPrev.push(trimmed);
+        }
+      }
       const isRemoving = cleanPrev.some(n => n.toLowerCase() === no.toLowerCase());
       const newNos = isRemoving
         ? cleanPrev.filter(n => n.toLowerCase() !== no.toLowerCase())
@@ -173,10 +183,18 @@ export const NewBookingModal = ({
   };
 
   const buildInputs = (): ReservationInput[] => {
-    // Strictly deduplicate room numbers
-    const cleanRoomNos = Array.from(
-      new Set(roomNos.map((no) => (no || '').trim()).filter(Boolean))
-    );
+    // Strictly deduplicate room numbers case-insensitively
+    const seen = new Set<string>();
+    const cleanRoomNos: string[] = [];
+    for (const no of roomNos) {
+      const trimmed = (no || '').trim();
+      const k = trimmed.toLowerCase();
+      if (trimmed && !seen.has(k)) {
+        seen.add(k);
+        cleanRoomNos.push(trimmed);
+      }
+    }
+
     const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
     const fullPhone = phone.trim() ? `${countryCode} ${phone.trim()}` : '';
     
@@ -261,7 +279,9 @@ export const NewBookingModal = ({
   };
 
   const handleConfirm = async () => {
+    if (isSubmittingRef.current || submitting || saving) return;
     if (!validateForm()) return;
+    isSubmittingRef.current = true;
     const inputs = buildInputs();
     setSubmitting(true);
     setError(null);
@@ -280,6 +300,7 @@ export const NewBookingModal = ({
       setError(err?.message || 'Failed to create reservation. Please verify room availability.');
     } finally {
       setSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 

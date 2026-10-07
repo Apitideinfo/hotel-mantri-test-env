@@ -468,7 +468,20 @@ export const saveReservations = async (
     console.warn('[saveReservations] Backend call deferred to direct database update:', err?.message || err);
   }
 
-  // Fallback: Direct batch Supabase insert
+  // Fallback: Direct batch Supabase insert (only if not already created)
+  if (sharedGroupId) {
+    const { data: existingGroup } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('group_id', sharedGroupId);
+
+    if (existingGroup && existingGroup.length >= normalizedInputs.length) {
+      console.log(`[saveReservations] Found ${existingGroup.length} reservations already created for group ${sharedGroupId}`);
+      return existingGroup as Reservation[];
+    }
+  }
+
   const rawPayloads = normalizedInputs.map((input) => {
     const p = { ...input, hotel_id: hotelId };
     delete (p as { id?: string }).id;

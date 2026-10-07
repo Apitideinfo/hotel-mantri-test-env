@@ -230,8 +230,20 @@ router.post('/', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, code: 'EMPTY_INPUT', message: 'No reservation inputs provided.' });
     }
 
-    // Backend validation: Guest email is mandatory for manual reservations
+    // Backend validation: Guest email is mandatory for manual reservations and deduplicate physical rooms
+    const seenPhysicalRooms = new Set();
+    const cleanList = [];
     for (const item of rawList) {
+      const roomKey = (item.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'tbd' && roomKey !== 'unassigned';
+      if (isPhysical) {
+        if (seenPhysicalRooms.has(roomKey)) {
+          console.warn(`[API /reservations] Deduplicating redundant physical room in batch payload: ${item.room_no}`);
+          continue;
+        }
+        seenPhysicalRooms.add(roomKey);
+      }
+
       const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
       const cleanEmail = (item.guest_email || '').trim();
       if (!isOta) {
@@ -250,11 +262,12 @@ router.post('/', checkAuth, async (req, res) => {
           });
         }
       }
+      cleanList.push(item);
     }
 
     const result = await createReservationsAtomically({
       hotelId,
-      inputs: req.body,
+      inputs: cleanList,
       userId,
     });
 

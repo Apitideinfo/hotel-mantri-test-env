@@ -360,24 +360,48 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
     const rangeStart = timelineDates[0] || centerDate;
 
+    // Helper to test if two guest names match loosely
+    const isSameGuest = (nameA?: string | null, nameB?: string | null) => {
+      if (!nameA || !nameB) return false;
+      const cleanA = nameA.trim().toLowerCase();
+      const cleanB = nameB.trim().toLowerCase();
+      return cleanA === cleanB || cleanA.includes(cleanB) || cleanB.includes(cleanA);
+    };
+
     // 1. Process entries (checked-in / in-house stays and walk-ins)
     for (const e of entries) {
       const hasPay = toNum(e.pay_cash) + toNum(e.pay_upi) + toNum(e.pay_card) + toNum(e.pay_bank) + toNum(e.pay_advance) > 0;
-      const res = reservations.find((r) => 
-        (e.reservation_id && r.id === e.reservation_id) || 
-        (r.room_chart_entry_id && r.room_chart_entry_id === e.id) ||
-        (r.guest_name && e.guest_name && r.guest_name.trim().toLowerCase() === e.guest_name.trim().toLowerCase() && (r.room_no || '').trim().toLowerCase() === (e.room_no || '').trim().toLowerCase() && (r.check_in_date || '').slice(0, 10) === (e.arrival || e.report_date || '').slice(0, 10))
-      );
+      const eCheckIn = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+      const eCheckOut = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+      const eRoomKey = (e.room_no || '').trim().toLowerCase();
+
+      const res = reservations.find((r) => {
+        if (e.reservation_id && r.id === e.reservation_id) return true;
+        if (r.room_chart_entry_id && r.room_chart_entry_id === e.id) return true;
+        const rRoomKey = (r.room_no || '').trim().toLowerCase();
+        if (rRoomKey && eRoomKey && rRoomKey === eRoomKey) {
+          const rCheckIn = (r.check_in_date || '').slice(0, 10);
+          const rCheckOut = (r.check_out_date || '').slice(0, 10);
+          const overlaps = isStayOverlapping(eCheckIn, eCheckOut, rCheckIn, rCheckOut) || (eCheckIn === rCheckIn);
+          if (overlaps) {
+            if (isSameGuest(r.guest_name, e.guest_name)) return true;
+            if (r.guest_phone && e.guest_id && guests.find((g) => g.id === e.guest_id)?.mobile === r.guest_phone) return true;
+            if (r.group_id && (e as any).group_id && r.group_id === (e as any).group_id) return true;
+          }
+        }
+        return false;
+      });
+
       if (res) matchedReservationIds.add(res.id);
       matchedEntryIds.add(e.id);
 
-      const guest = guests.find((g) => (e.guest_id && g.id === e.guest_id) || (res && g.id === res.guest_id) || (g.name && e.guest_name && g.name.trim().toLowerCase() === e.guest_name.trim().toLowerCase()));
+      const guest = guests.find((g) => (e.guest_id && g.id === e.guest_id) || (res && g.id === res.guest_id) || (g.name && e.guest_name && isSameGuest(g.name, e.guest_name)));
       const phone = res?.guest_phone || guest?.mobile || '';
       const email = res?.guest_email || guest?.email || '';
       const vipType = guest?.vip_type || (phone ? vipGuests.find((g) => g.mobile === phone)?.vip_type : '') || '';
 
-      const checkIn = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
-      const checkOut = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+      const checkIn = eCheckIn;
+      const checkOut = eCheckOut;
       const isCheckedOut = Boolean(e.checked_out_at);
 
       // Exclude past bookings: if checkout is strictly before the visible timeline start date
@@ -416,9 +440,27 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
       const checkIn = (r.check_in_date ?? '').slice(0, 10);
       const checkOut = (r.check_out_date ?? '').slice(0, 10);
+      const rRoomKey = (r.room_no || '').trim().toLowerCase();
+      const isPhysical = Boolean(rRoomKey && rRoomKey !== 'unassigned' && rRoomKey !== 'tbd');
 
       // Exclude past reservations ending before rangeStart or checked out on/before rangeStart
       if (checkOut < rangeStart || (r.status === 'checked_out' && checkOut <= rangeStart)) continue;
+
+      // Check if another entry or reservation already in result occupies this physical room with overlapping stay
+      if (isPhysical) {
+        const isDuplicateInResult = result.some((existing) => {
+          if ((existing.roomNo || '').trim().toLowerCase() !== rRoomKey) return false;
+          const overlaps = isStayOverlapping(existing.checkIn, existing.checkOut, checkIn, checkOut) || (existing.checkIn === checkIn);
+          if (overlaps) {
+            if (existing.id === r.id) return true;
+            if (isSameGuest(existing.guestName, r.guest_name)) return true;
+            if (r.guest_phone && existing.phone && r.guest_phone === existing.phone) return true;
+            if (r.group_id && (existing.rawReservation?.group_id === r.group_id || (existing.raw as any)?.group_id === r.group_id)) return true;
+          }
+          return false;
+        });
+        if (isDuplicateInResult) continue;
+      }
 
       const guest = guests.find((g) => g.id === r.guest_id || (r.guest_phone && g.mobile === r.guest_phone));
       const phone = r.guest_phone || guest?.mobile || '';
@@ -497,8 +539,26 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     const map = new Map<string, BoardBooking[]>();
     for (const b of filteredBookings) {
       const key = b.roomNo.trim().toLowerCase();
+      if (!key) continue;
       if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(b);
+      const existingInRoom = map.get(key)!;
+      // Deduplicate if identical ID or identical guest + overlapping stay dates in the same physical room
+      const isDuplicate = existingInRoom.some((x) => {
+        if (x.id === b.id) return true;
+        const overlaps = isStayOverlapping(x.checkIn, x.checkOut, b.checkIn, b.checkOut) || (x.checkIn === b.checkIn);
+        if (overlaps) {
+          const cleanX = x.guestName.trim().toLowerCase();
+          const cleanB = b.guestName.trim().toLowerCase();
+          const sameGuest = cleanX === cleanB || cleanX.includes(cleanB) || cleanB.includes(cleanX) ||
+            (x.phone && b.phone && x.phone === b.phone) ||
+            (x.sourceName === b.sourceName && x.rate === b.rate);
+          if (sameGuest) return true;
+        }
+        return false;
+      });
+      if (!isDuplicate) {
+        existingInRoom.push(b);
+      }
     }
     return map;
   }, [filteredBookings]);
@@ -1497,6 +1557,13 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                       (b) => (d >= b.checkIn && d < b.checkOut) || (d === b.checkIn && b.checkIn === b.checkOut)
                     );
                     const isToday = d === date;
+                    const seenUnassignedIds = new Set<string>();
+                    const uniqueUnassignedBookings = dayBookings.filter((b) => {
+                      if (seenUnassignedIds.has(b.id)) return false;
+                      seenUnassignedIds.add(b.id);
+                      return true;
+                    });
+
                     return (
                       <div
                         key={d}
@@ -1506,9 +1573,9 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                           isToday ? 'bg-amber-50/50' : ''
                         }`}
                       >
-                        {dayBookings.map((b) => (
+                        {uniqueUnassignedBookings.map((b) => (
                           <BookingBar
-                            key={b.id}
+                            key={`${b.type}_${b.id}_unassigned_${d}`}
                             booking={b}
                             onClick={() => setSelectedBooking(b)}
                             isStart={b.checkIn === d}
@@ -1760,34 +1827,43 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                   <Plus className="w-3.5 h-3.5 text-slate-300 group-hover/empty:text-indigo-600 group-hover/empty:scale-110 transition-all" />
                                 </button>
                               ) : (
-                                dayBookings.map((b) => {
-                                  const effectiveCheckOut = (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) 
-                                    ? addDays(stretchTargetDate, 1) 
-                                    : b.checkOut;
-                                  const effectiveCheckIn = (adjustingCheckInBooking && b.id === adjustingCheckInBooking.id && adjustCheckInTargetDate)
-                                    ? adjustCheckInTargetDate
-                                    : b.checkIn;
-                                  const isStart = effectiveCheckIn === d;
-                                  const isEnd = addDays(effectiveCheckOut, -1) === d;
-                                  const isStretching = (stretchingBooking?.id === b.id) || (adjustingCheckInBooking?.id === b.id);
-                                  const isMoving = movingBooking?.id === b.id;
+                                (() => {
+                                  const seenDayBarIds = new Set<string>();
+                                  const uniqueDayBookings = dayBookings.filter((b) => {
+                                    if (seenDayBarIds.has(b.id)) return false;
+                                    seenDayBarIds.add(b.id);
+                                    return true;
+                                  });
 
-                                  return (
-                                    <BookingBar 
-                                      key={b.id} 
-                                      booking={b} 
-                                      onClick={() => setSelectedBooking(b)} 
-                                      isStart={isStart}
-                                      isEnd={isEnd}
-                                      isStretching={isStretching}
-                                      isMoving={isMoving}
-                                      onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
-                                      onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
-                                      onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
-                                      onQuickAction={handleBookingQuickAction}
-                                    />
-                                  );
-                                })
+                                  return uniqueDayBookings.map((b) => {
+                                    const effectiveCheckOut = (stretchingBooking && b.id === stretchingBooking.id && stretchTargetDate) 
+                                      ? addDays(stretchTargetDate, 1) 
+                                      : b.checkOut;
+                                    const effectiveCheckIn = (adjustingCheckInBooking && b.id === adjustingCheckInBooking.id && adjustCheckInTargetDate)
+                                      ? adjustCheckInTargetDate
+                                      : b.checkIn;
+                                    const isStart = effectiveCheckIn === d;
+                                    const isEnd = addDays(effectiveCheckOut, -1) === d;
+                                    const isStretching = (stretchingBooking?.id === b.id) || (adjustingCheckInBooking?.id === b.id);
+                                    const isMoving = movingBooking?.id === b.id;
+
+                                    return (
+                                      <BookingBar 
+                                        key={`${b.type}_${b.id}_${room.room_no}_${d}`} 
+                                        booking={b} 
+                                        onClick={() => setSelectedBooking(b)} 
+                                        isStart={isStart}
+                                        isEnd={isEnd}
+                                        isStretching={isStretching}
+                                        isMoving={isMoving}
+                                        onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
+                                        onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
+                                        onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
+                                        onQuickAction={handleBookingQuickAction}
+                                      />
+                                    );
+                                  });
+                                })()
                               )}
                             </div>
                           );
