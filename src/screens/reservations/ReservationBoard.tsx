@@ -101,7 +101,18 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [showFilters, setShowFilters] = useState(false);
 
   // Data states
-  const [paginatedData, setPaginatedData] = useState<{ reservations: Reservation[]; totalCount: number; totalPages: number }>({
+  const [paginatedData, setPaginatedData] = useState<{
+    reservations: Reservation[];
+    totalCount: number;
+    totalPages: number;
+    metrics?: {
+      totalBookings: number;
+      confirmed: number;
+      checkedIn: number;
+      unassigned: number;
+      totalRevenue: number;
+    };
+  }>({
     reservations: [],
     totalCount: 0,
     totalPages: 1,
@@ -184,6 +195,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         reservations: res.reservations,
         totalCount: res.totalCount,
         totalPages: res.totalPages,
+        metrics: res.metrics,
       });
     } catch (e: any) {
       setError(e?.message || 'Unable to load reservations');
@@ -303,7 +315,10 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     );
 
     for (const r of uniqueReservations) {
-      const key = (r.group_id && r.group_id.trim() !== '') ? r.group_id : r.id;
+      const normalizedName = (r.guest_name || '').trim().toLowerCase();
+      const key = (r.group_id && r.group_id.trim() !== '') 
+        ? r.group_id 
+        : (normalizedName ? `${normalizedName}::${r.check_in_date}::${r.check_out_date}` : r.id);
       if (!groupsMap.has(key)) {
         groupsMap.set(key, []);
         order.push(key);
@@ -366,39 +381,25 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
   // KPI calculations
   const kpiStats = useMemo(() => {
-    const isPhysical = (rm?: string | null) => {
-      const norm = (rm || '').trim().toLowerCase();
-      return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
-    };
-
-    const seenKeys = new Set<string>();
-    const uniqueReservations = paginatedData.reservations.filter((r) => {
-      const roomKey = (r.room_no || '').trim().toLowerCase();
-      if (r.group_id && isPhysical(r.room_no)) {
-        const key = `${r.group_id}::${roomKey}`;
-        if (seenKeys.has(key)) return false;
-        seenKeys.add(key);
-        return true;
-      }
-      if (seenKeys.has(r.id)) return false;
-      seenKeys.add(r.id);
-      return true;
-    });
-
-    const total = uniqueReservations.length;
-    const confirmed = uniqueReservations.filter(r => r.status === 'confirmed').length;
-    const checkedIn = uniqueReservations.filter(r => r.status === 'checked_in').length;
-    const unassigned = uniqueReservations.filter(r => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd').length;
-    const totalRevenue = uniqueReservations.reduce((sum, r) => sum + (r.invoice_total || (r.rate * (r.nights || 1))), 0);
-
+    if (paginatedData.metrics) {
+      return {
+        total: paginatedData.metrics.totalBookings || 0,
+        confirmed: paginatedData.metrics.confirmed || 0,
+        checkedIn: paginatedData.metrics.checkedIn || 0,
+        unassigned: paginatedData.metrics.unassigned || 0,
+        totalRevenue: paginatedData.metrics.totalRevenue || 0,
+      };
+    }
+    
+    // Fallback if API fails to provide metrics (should not happen now)
     return {
-      total,
-      confirmed,
-      checkedIn,
-      unassigned,
-      totalRevenue,
+      total: 0,
+      confirmed: 0,
+      checkedIn: 0,
+      unassigned: 0,
+      totalRevenue: 0,
     };
-  }, [paginatedData]);
+  }, [paginatedData.metrics]);
 
   // Actions
   const handleCheckIn = async (res: Reservation) => {

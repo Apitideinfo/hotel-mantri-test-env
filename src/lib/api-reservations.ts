@@ -1672,6 +1672,13 @@ export interface PaginatedReservationsResult {
   page: number;
   pageSize: number;
   totalPages: number;
+  metrics?: {
+    totalBookings: number;
+    confirmed: number;
+    checkedIn: number;
+    unassigned: number;
+    totalRevenue: number;
+  };
 }
 
 export const getReservationsPaginated = async (
@@ -1693,12 +1700,43 @@ export const getReservationsPaginated = async (
   try {
     const res = await apiFetch(`/api/reservations?${query.toString()}`);
     if (res && res.success) {
+      let metrics = res.metrics || {};
+      
+      // Polyfill for stale backend not returning totalRevenue
+      if (metrics.totalRevenue === undefined) {
+        const hotelId = getCurrentHotelId();
+        const { data: allHotelRes } = await supabase
+          .from('reservations')
+          .select('id, group_id, status, room_no, invoice_total, rate, nights')
+          .eq('hotel_id', hotelId);
+
+        const seenMetricsKeys = new Set<string>();
+        let pipelineTariff = 0;
+
+        for (const r of (allHotelRes || [])) {
+          const roomKey = (r.room_no || '').trim().toLowerCase();
+          const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+          const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+          const key = dedupeKey || r.id;
+
+          if (!seenMetricsKeys.has(key)) {
+            seenMetricsKeys.add(key);
+            const invoiceTotal = Number(r.invoice_total) || 0;
+            const rate = Number(r.rate) || 0;
+            const nights = Number(r.nights) || 1;
+            pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+          }
+        }
+        metrics.totalRevenue = pipelineTariff;
+      }
+
       return {
         reservations: res.reservations || [],
         totalCount: res.totalCount || 0,
         page: res.page || 1,
         pageSize: res.pageSize || 5,
         totalPages: res.totalPages || 1,
+        metrics,
       };
     }
   } catch (err) {
@@ -1713,7 +1751,7 @@ export const getReservationsPaginated = async (
 
   let q = supabase
     .from('reservations')
-    .select('*', { count: 'exact' })
+    .select('*')
     .eq('hotel_id', hotelId);
 
   if (params.status && params.status !== 'all') {
@@ -1743,9 +1781,9 @@ export const getReservationsPaginated = async (
   }
 
   const isAsc = params.sortOrder === 'asc';
-  q = q.order(params.sortBy || 'check_in_date', { ascending: isAsc }).range(offset, offset + limit - 1);
+  q = q.order(params.sortBy || 'check_in_date', { ascending: isAsc });
 
-  const { data, count, error } = await q;
+  const { data, error } = await q;
   if (error) throw error;
 
   const rawList = (data as Reservation[]) || [];
@@ -1776,14 +1814,75 @@ export const getReservationsPaginated = async (
     });
   }
 
-  const effectiveCount = Math.max(0, (count || 0) - duplicateIdsToDelete.length);
+  // Grouping BEFORE pagination
+  const groupsMap = new Map<string, Reservation[]>();
+  const groupOrder: string[] = [];
+
+  for (const r of cleanList) {
+    const normalizedName = (r.guest_name || '').trim().toLowerCase();
+    const key = (r.group_id && r.group_id.trim() !== '') 
+      ? r.group_id 
+      : (normalizedName ? `${normalizedName}::${r.check_in_date}::${r.check_out_date}` : r.id);
+
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+      groupOrder.push(key);
+    }
+    groupsMap.get(key)!.push(r);
+  }
+
+  const totalGroupsCount = groupOrder.length;
+  const paginatedGroupKeys = groupOrder.slice(offset, offset + limit);
+  const paginatedReservations: Reservation[] = [];
+  for (const k of paginatedGroupKeys) {
+    paginatedReservations.push(...groupsMap.get(k)!);
+  }
+
+  // Calculate Global Metrics independent of filters & pagination
+  const { data: allHotelRes } = await supabase
+    .from('reservations')
+    .select('id, group_id, status, room_no, invoice_total, rate, nights')
+    .eq('hotel_id', hotelId);
+
+  const seenMetricsKeys = new Set<string>();
+  let totalBookings = 0;
+  let confirmedCount = 0;
+  let checkedInCount = 0;
+  let unassignedCount = 0;
+  let pipelineTariff = 0;
+
+  for (const r of (allHotelRes || [])) {
+    const roomKey = (r.room_no || '').trim().toLowerCase();
+    const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+    const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+    const key = dedupeKey || r.id;
+
+    if (!seenMetricsKeys.has(key)) {
+      seenMetricsKeys.add(key);
+      totalBookings++;
+      if (r.status === 'confirmed') confirmedCount++;
+      if (r.status === 'checked_in') checkedInCount++;
+      if (!isPhysical) unassignedCount++;
+      const invoiceTotal = Number(r.invoice_total) || 0;
+      const rate = Number(r.rate) || 0;
+      const nights = Number(r.nights) || 1;
+      pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+    }
+  }
 
   return {
-    reservations: cleanList,
-    totalCount: effectiveCount,
+    reservations: paginatedReservations,
+    totalCount: totalGroupsCount,
     page: pageNum,
     pageSize: limit,
-    totalPages: Math.ceil(effectiveCount / limit),
+    totalPages: Math.ceil(totalGroupsCount / limit),
+    metrics: {
+      totalBookings,
+      confirmed: confirmedCount,
+      checkedIn: checkedInCount,
+      unassigned: unassignedCount,
+      totalRevenue: pipelineTariff
+    }
   };
 };
 

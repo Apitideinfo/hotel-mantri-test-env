@@ -90,7 +90,7 @@ router.get('/', checkAuth, async (req, res) => {
 
     let query = supabaseServiceRole
       .from('reservations')
-      .select('*', { count: 'exact' })
+      .select('*')
       .eq('hotel_id', hotelId);
 
     // Filter by status
@@ -138,10 +138,8 @@ router.get('/', checkAuth, async (req, res) => {
     const isAscending = String(sortOrder).toLowerCase() === 'asc';
     query = query.order(sortBy, { ascending: isAscending });
 
-    // Pagination
-    query = query.range(offset, offset + limit - 1);
-
-    const { data: reservations, count, error } = await query;
+    // Fetch all matching reservations for accurate grouping & pagination
+    const { data: rawReservations, error } = await query;
     if (error) {
       console.error('[API /reservations] Query error:', error);
       throw error;
@@ -152,7 +150,7 @@ router.get('/', checkAuth, async (req, res) => {
     const cleanReservations = [];
     const duplicateIdsToDelete = [];
 
-    for (const r of (reservations || [])) {
+    for (const r of (rawReservations || [])) {
       const roomKey = (r.room_no || '').trim().toLowerCase();
       const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
       const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
@@ -175,15 +173,76 @@ router.get('/', checkAuth, async (req, res) => {
         .catch((e) => console.warn('[API /reservations] Duplicate delete warning:', e.message));
     }
 
-    const effectiveCount = Math.max(0, (count || 0) - duplicateIdsToDelete.length);
+    // Grouping BEFORE pagination
+    const groupsMap = new Map();
+    const groupOrder = [];
+
+    for (const r of cleanReservations) {
+      const normalizedName = (r.guest_name || '').trim().toLowerCase();
+      const key = (r.group_id && r.group_id.trim() !== '') 
+        ? r.group_id 
+        : (normalizedName ? `${normalizedName}::${r.check_in_date}::${r.check_out_date}` : r.id);
+
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, []);
+        groupOrder.push(key);
+      }
+      groupsMap.get(key).push(r);
+    }
+
+    const totalGroupsCount = groupOrder.length;
+    const paginatedGroupKeys = groupOrder.slice(offset, offset + limit);
+    const paginatedReservations = [];
+    for (const k of paginatedGroupKeys) {
+      paginatedReservations.push(...groupsMap.get(k));
+    }
+
+    // Calculate Global Metrics independent of filters & pagination
+    const { data: allHotelRes } = await supabaseServiceRole
+      .from('reservations')
+      .select('id, group_id, status, room_no, invoice_total, rate, nights')
+      .eq('hotel_id', hotelId);
+
+    const seenMetricsKeys = new Set();
+    let totalBookings = 0;
+    let confirmedCount = 0;
+    let checkedInCount = 0;
+    let unassignedCount = 0;
+    let pipelineTariff = 0;
+
+    for (const r of (allHotelRes || [])) {
+      const roomKey = (r.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+      const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+      const key = dedupeKey || r.id;
+
+      if (!seenMetricsKeys.has(key)) {
+        seenMetricsKeys.add(key);
+        totalBookings++;
+        if (r.status === 'confirmed') confirmedCount++;
+        if (r.status === 'checked_in') checkedInCount++;
+        if (!isPhysical) unassignedCount++;
+        const invoiceTotal = Number(r.invoice_total) || 0;
+        const rate = Number(r.rate) || 0;
+        const nights = Number(r.nights) || 1;
+        pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+      }
+    }
 
     res.json({
       success: true,
-      reservations: cleanReservations,
-      totalCount: effectiveCount,
+      reservations: paginatedReservations,
+      totalCount: totalGroupsCount,
       page: pageNum,
       pageSize: limit,
-      totalPages: Math.ceil(effectiveCount / limit),
+      totalPages: Math.ceil(totalGroupsCount / limit),
+      metrics: {
+        totalBookings,
+        confirmed: confirmedCount,
+        checkedIn: checkedInCount,
+        unassigned: unassignedCount,
+        totalRevenue: pipelineTariff
+      }
     });
   } catch (err) {
     console.error('Error in GET /api/reservations:', err);
