@@ -503,7 +503,7 @@ function AppInner() {
 
   // Listen to browser Back/Forward (popstate) and hash changes
   useEffect(() => {
-    const handleLocationChange = (e?: PopStateEvent) => {
+    const handleLocationChange = (e?: Event) => {
       try {
         const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
 
@@ -532,7 +532,7 @@ function AppInner() {
           setNav((prev) => (prev.screen === matched ? prev : { screen: matched, date: prev.date }));
           return;
         }
-        const st = e?.state as { screen?: string; date?: string } | null;
+        const st = (e as PopStateEvent)?.state as { screen?: string; date?: string } | null;
         if (st && st.screen && HASH_TO_SCREEN[st.screen]) {
           const matched = (HASH_TO_SCREEN[st.screen] || st.screen) as Screen;
           setNav({ screen: matched, date: st.date });
