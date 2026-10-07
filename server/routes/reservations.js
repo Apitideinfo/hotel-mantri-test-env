@@ -147,13 +147,43 @@ router.get('/', checkAuth, async (req, res) => {
       throw error;
     }
 
+    // Deduplicate any accidental duplicate physical room records in the same group
+    const seenGroupRooms = new Set();
+    const cleanReservations = [];
+    const duplicateIdsToDelete = [];
+
+    for (const r of (reservations || [])) {
+      const roomKey = (r.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+      const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+      if (dedupeKey) {
+        if (seenGroupRooms.has(dedupeKey)) {
+          duplicateIdsToDelete.push(r.id);
+          continue;
+        }
+        seenGroupRooms.add(dedupeKey);
+      }
+      cleanReservations.push(r);
+    }
+
+    if (duplicateIdsToDelete.length > 0) {
+      console.log(`[API /reservations] Auto-purging ${duplicateIdsToDelete.length} duplicate room records:`, duplicateIdsToDelete);
+      supabaseServiceRole
+        .from('reservations')
+        .delete()
+        .in('id', duplicateIdsToDelete)
+        .catch((e) => console.warn('[API /reservations] Duplicate delete warning:', e.message));
+    }
+
+    const effectiveCount = Math.max(0, (count || 0) - duplicateIdsToDelete.length);
+
     res.json({
       success: true,
-      reservations: reservations || [],
-      totalCount: count || 0,
+      reservations: cleanReservations,
+      totalCount: effectiveCount,
       page: pageNum,
       pageSize: limit,
-      totalPages: Math.ceil((count || 0) / limit),
+      totalPages: Math.ceil(effectiveCount / limit),
     });
   } catch (err) {
     console.error('Error in GET /api/reservations:', err);

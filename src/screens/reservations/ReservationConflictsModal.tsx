@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle, ArrowRight, BedDouble, Calendar, User, CheckCircle2, RefreshCw } from 'lucide-react';
 import type { Reservation } from '@/lib/types-reservations';
-import { assignPhysicalRoom, updateReservationStatus, checkRoomAvailability } from '@/lib/api-reservations';
+import { assignPhysicalRoom, updateReservationStatus, checkRoomAvailability, deleteReservation } from '@/lib/api-reservations';
 
 interface ConflictItem {
   type: string;
   roomNo: string;
-  reservationA: Reservation | { id: string; guest_name?: string; guestName?: string; check_in_date?: string; checkIn?: string; check_out_date?: string; checkOut?: string; status?: string };
-  reservationB: Reservation | { id: string; guest_name?: string; guestName?: string; check_in_date?: string; checkIn?: string; check_out_date?: string; checkOut?: string; status?: string };
+  reservationA: Reservation | { id: string; group_id?: string; guest_name?: string; guestName?: string; check_in_date?: string; checkIn?: string; check_out_date?: string; checkOut?: string; status?: string };
+  reservationB: Reservation | { id: string; group_id?: string; guest_name?: string; guestName?: string; check_in_date?: string; checkIn?: string; check_out_date?: string; checkOut?: string; status?: string };
 }
 
 interface ReservationConflictsModalProps {
@@ -38,6 +38,21 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
 
   const getGuest = (r: any) => r.guest_name || r.guestName || 'Guest';
   const getDates = (r: any) => `${r.check_in_date || r.checkIn} → ${r.check_out_date || r.checkOut}`;
+
+  const handleDeleteDuplicate = async (resId: string) => {
+    if (!window.confirm('Are you sure you want to delete this duplicate reservation entry?')) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteReservation(resId);
+      setSuccessMsg('Duplicate reservation removed successfully.');
+      onResolved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete duplicate.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleReassign = async (resId: string, targetRoom: string) => {
     if (!targetRoom) {
@@ -170,7 +185,7 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
                         <p className="text-slate-500 flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" /> {getDates(a)}
                         </p>
-                        <div className="pt-2 flex items-center gap-2">
+                        <div className="pt-2 flex items-center gap-2 flex-wrap">
                           <button
                             onClick={() => setResolvingId(resolvingId === a.id ? null : a.id)}
                             className="px-2.5 py-1 bg-brand-50 hover:bg-brand-100 text-brand-700 text-[11px] font-bold rounded-lg transition"
@@ -184,13 +199,24 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
                           >
                             Unassign
                           </button>
-                          <button
-                            onClick={() => handleCancelBooking(a.id)}
-                            disabled={busy}
-                            className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 text-[11px] font-semibold rounded-lg transition"
-                          >
-                            Cancel
-                          </button>
+                          {((a.group_id && b.group_id && a.group_id === b.group_id) || getGuest(a) === getGuest(b)) ? (
+                            <button
+                              onClick={() => handleDeleteDuplicate(a.id)}
+                              disabled={busy}
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] rounded-lg transition"
+                              title="Delete this duplicate reservation row"
+                            >
+                              Delete Duplicate
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleCancelBooking(a.id)}
+                              disabled={busy}
+                              className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 text-[11px] font-semibold rounded-lg transition"
+                            >
+                              Cancel
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -205,7 +231,7 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
                         <p className="text-slate-500 flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5 text-slate-400" /> {getDates(b)}
                         </p>
-                        <div className="pt-2 flex items-center gap-2">
+                        <div className="pt-2 flex items-center gap-2 flex-wrap">
                           <button
                             onClick={() => setResolvingId(resolvingId === b.id ? null : b.id)}
                             className="px-2.5 py-1 bg-brand-50 hover:bg-brand-100 text-brand-700 text-[11px] font-bold rounded-lg transition"
@@ -219,13 +245,24 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
                           >
                             Unassign
                           </button>
-                          <button
-                            onClick={() => handleCancelBooking(b.id)}
-                            disabled={busy}
-                            className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 text-[11px] font-semibold rounded-lg transition"
-                          >
-                            Cancel
-                          </button>
+                          {((a.group_id && b.group_id && a.group_id === b.group_id) || getGuest(a) === getGuest(b)) ? (
+                            <button
+                              onClick={() => handleDeleteDuplicate(b.id)}
+                              disabled={busy}
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] rounded-lg transition"
+                              title="Delete this duplicate reservation row"
+                            >
+                              Delete Duplicate
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleCancelBooking(b.id)}
+                              disabled={busy}
+                              className="px-2.5 py-1 text-rose-600 hover:bg-rose-50 text-[11px] font-semibold rounded-lg transition"
+                            >
+                              Cancel
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>

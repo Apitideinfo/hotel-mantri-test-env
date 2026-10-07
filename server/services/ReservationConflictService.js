@@ -361,6 +361,13 @@ export const detectExistingConflicts = async (hotelId) => {
 
       if (roomA.toLowerCase() === roomB.toLowerCase() || (a.room_id && b.room_id && a.room_id === b.room_id)) {
         if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          // If a and b are identical duplicate records in the same group, auto-purge the duplicate!
+          if (a.group_id && b.group_id && a.group_id === b.group_id) {
+            console.log(`[detectExistingConflicts] Auto-purging duplicate reservation ${b.id} for Room ${roomB} in group ${a.group_id}`);
+            supabase.from('reservations').delete().eq('id', b.id).catch(() => {});
+            continue;
+          }
+
           conflicts.push({
             type: 'physical_room_overlap',
             roomNo: roomA,

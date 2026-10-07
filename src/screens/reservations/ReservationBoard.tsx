@@ -366,11 +366,30 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
   // KPI calculations
   const kpiStats = useMemo(() => {
-    const total = paginatedData.totalCount || paginatedData.reservations.length;
-    const confirmed = paginatedData.reservations.filter(r => r.status === 'confirmed').length;
-    const checkedIn = paginatedData.reservations.filter(r => r.status === 'checked_in').length;
-    const unassigned = paginatedData.reservations.filter(r => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd').length;
-    const totalRevenue = paginatedData.reservations.reduce((sum, r) => sum + (r.invoice_total || (r.rate * (r.nights || 1))), 0);
+    const isPhysical = (rm?: string | null) => {
+      const norm = (rm || '').trim().toLowerCase();
+      return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+    };
+
+    const seenKeys = new Set<string>();
+    const uniqueReservations = paginatedData.reservations.filter((r) => {
+      const roomKey = (r.room_no || '').trim().toLowerCase();
+      if (r.group_id && isPhysical(r.room_no)) {
+        const key = `${r.group_id}::${roomKey}`;
+        if (seenKeys.has(key)) return false;
+        seenKeys.add(key);
+        return true;
+      }
+      if (seenKeys.has(r.id)) return false;
+      seenKeys.add(r.id);
+      return true;
+    });
+
+    const total = uniqueReservations.length;
+    const confirmed = uniqueReservations.filter(r => r.status === 'confirmed').length;
+    const checkedIn = uniqueReservations.filter(r => r.status === 'checked_in').length;
+    const unassigned = uniqueReservations.filter(r => !r.room_no || r.room_no.toLowerCase() === 'unassigned' || r.room_no.toLowerCase() === 'tbd').length;
+    const totalRevenue = uniqueReservations.reduce((sum, r) => sum + (r.invoice_total || (r.rate * (r.nights || 1))), 0);
 
     return {
       total,

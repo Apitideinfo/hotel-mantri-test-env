@@ -1748,12 +1748,42 @@ export const getReservationsPaginated = async (
   const { data, count, error } = await q;
   if (error) throw error;
 
+  const rawList = (data as Reservation[]) || [];
+  const seenGroupRooms = new Set<string>();
+  const cleanList: Reservation[] = [];
+  const duplicateIdsToDelete: string[] = [];
+
+  for (const r of rawList) {
+    const roomKey = (r.room_no || '').trim().toLowerCase();
+    const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+    const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+    if (dedupeKey) {
+      if (seenGroupRooms.has(dedupeKey)) {
+        duplicateIdsToDelete.push(r.id);
+        continue;
+      }
+      seenGroupRooms.add(dedupeKey);
+    }
+    cleanList.push(r);
+  }
+
+  if (duplicateIdsToDelete.length > 0) {
+    console.log(`[getReservationsPaginated] Auto-purging ${duplicateIdsToDelete.length} duplicate reservation rows:`, duplicateIdsToDelete);
+    supabase.from('reservations').delete().in('id', duplicateIdsToDelete).then(() => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+      }
+    });
+  }
+
+  const effectiveCount = Math.max(0, (count || 0) - duplicateIdsToDelete.length);
+
   return {
-    reservations: (data as Reservation[]) || [],
-    totalCount: count || 0,
+    reservations: cleanList,
+    totalCount: effectiveCount,
     page: pageNum,
     pageSize: limit,
-    totalPages: Math.ceil((count || 0) / limit),
+    totalPages: Math.ceil(effectiveCount / limit),
   };
 };
 
@@ -1787,6 +1817,17 @@ export const getReservationConflicts = async (): Promise<any[]> => {
       if (!rA || rA === 'unassigned' || rA === 'tbd' || !rB || rB === 'unassigned' || rB === 'tbd') continue;
       if (rA === rB || (a.room_id && b.room_id && a.room_id === b.room_id)) {
         if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          // If a and b are identical duplicate records in the same group, auto-purge the duplicate!
+          if (a.group_id && b.group_id && a.group_id === b.group_id) {
+            console.log(`[getReservationConflicts] Auto-purging duplicate reservation ${b.id} for Room ${rB} in group ${a.group_id}`);
+            supabase.from('reservations').delete().eq('id', b.id).then(() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+              }
+            });
+            continue;
+          }
+
           conflicts.push({
             type: 'physical_room_overlap',
             roomNo: a.room_no,
