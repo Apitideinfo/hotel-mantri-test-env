@@ -65,6 +65,10 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
     success: true,
     message: 'Hotel Mantri Backend API Server is running',
     version: '1.0.0',
+    environment: process.env.VERCEL_ENV || process.env.NODE_ENV || 'development',
+    commit: process.env.VERCEL_GIT_COMMIT_SHA || 'unknown',
+    branch: process.env.VERCEL_GIT_COMMIT_REF || 'unknown',
+    buildTime: new Date().toISOString(),
     frontendUrl: 'http://localhost:5173',
     endpoints: [
       '/api/reservations',
