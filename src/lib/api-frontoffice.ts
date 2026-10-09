@@ -235,6 +235,40 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
 
   const validMealPlan = (['EP', 'CP', 'MAP', 'AP'].includes(params.mealPlan as any) ? params.mealPlan : 'EP') as MealPlan;
 
+  // Resolve room category from room inventory or reservation
+  let resolvedRoomCategory = (params as any).roomCategory || 'Standard';
+  if (params.roomNo) {
+    try {
+      const { data: rm } = await supabase
+        .from('rooms')
+        .select('category_id, room_categories(name)')
+        .eq('hotel_id', hotelId)
+        .eq('room_no', params.roomNo)
+        .maybeSingle();
+      if ((rm as any)?.room_categories?.name) {
+        resolvedRoomCategory = (rm as any).room_categories.name;
+      } else if (rm?.category_id) {
+        const { data: cat } = await supabase
+          .from('room_categories')
+          .select('name')
+          .eq('id', rm.category_id)
+          .maybeSingle();
+        if (cat?.name) resolvedRoomCategory = cat.name;
+      }
+    } catch { /* fallback */ }
+  }
+  if (resolvedRoomCategory === 'Standard' && params.reservationId) {
+    try {
+      const { data: resv } = await supabase
+        .from('reservations')
+        .select('room_category, rate_plan')
+        .eq('id', params.reservationId)
+        .maybeSingle();
+      if (resv?.room_category) resolvedRoomCategory = resv.room_category;
+      else if (resv?.rate_plan && resv.rate_plan !== 'Standard') resolvedRoomCategory = resv.rate_plan;
+    } catch { /* fallback */ }
+  }
+
   const entryInput: RoomChartEntryInput = {
     report_date: params.checkIn,
     room_no: params.roomNo,
@@ -260,7 +294,7 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     remarks: params.remarks ?? '',
     created_by: params.performedBy ?? '',
     business_date: params.checkIn,
-    room_category: 'Standard',
+    room_category: resolvedRoomCategory,
     pay_cash: finalCash,
     pay_upi: finalUpi,
     pay_card: finalCard,
@@ -418,6 +452,22 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
         pay_bank: params.collectBank ?? 0,
       },
     });
+    let checkoutRoomCategory = (res as any)?.room_category || res.rate_plan || 'Standard';
+    if (checkoutRoomCategory === 'Standard' && (params.roomNo || res.room_no)) {
+      try {
+        const targetRoomNo = params.roomNo || res.room_no;
+        const { data: rm } = await supabase
+          .from('rooms')
+          .select('category_id, room_categories(name)')
+          .eq('hotel_id', hotelId)
+          .eq('room_no', targetRoomNo)
+          .maybeSingle();
+        if ((rm as any)?.room_categories?.name) {
+          checkoutRoomCategory = (rm as any).room_categories.name;
+        }
+      } catch { /* fallback */ }
+    }
+
     return {
       id: res.id,
       hotel_id: res.hotel_id,
@@ -445,7 +495,7 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
       remarks: res.remarks ?? '',
       created_by: res.created_by ?? '',
       business_date: res.check_in_date,
-      room_category: 'Standard',
+      room_category: checkoutRoomCategory,
       pay_cash: toNum(res.pay_cash) + toNum(params.collectCash),
       pay_upi: toNum(res.pay_upi) + toNum(params.collectUpi),
       pay_card: toNum(res.pay_card) + toNum(params.collectCard),

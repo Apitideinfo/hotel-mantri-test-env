@@ -324,7 +324,7 @@ export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
     remarks: r.remarks || '',
     created_by: r.created_by ?? '',
     business_date: ci,
-    room_category: (r as any).room_category || 'Standard',
+    room_category: (r as any).room_category || (r as any).rate_plan || 'Standard',
     pay_cash: toNum(r.pay_cash),
     pay_upi: toNum(r.pay_upi),
     pay_card: toNum(r.pay_card),
@@ -751,7 +751,9 @@ export const getDerivedReportsForMonth = async (
     const dayEntries = combinedEntries.filter((e) => isStayOccupiedOnDate(e, d));
     const hasOther = otherByDate.has(d);
     const hasPayments = paymentTransactions.some((tx) => tx.payment_date === d);
-    if (dayEntries.length === 0 && !hasOther && !hasPayments) continue;
+    const hasFinance = financeByDate.has(d);
+    const hasRev = revenueByDate.has(d);
+    if (dayEntries.length === 0 && !hasOther && !hasPayments && !hasFinance && !hasRev) continue;
     const other = otherByDate.get(d) ?? {
       report_date: d, kitchen: 0, other_income: 0, housekeeping_supply: 0,
       other_expense: 0, salary_advance: 0, maintenance_bill: 0,
@@ -843,7 +845,9 @@ export const getDerivedReportsForYear = async (
       const dayEntries = combinedEntries.filter((e) => isStayOccupiedOnDate(e, d));
       const hasOther = otherByDate.has(d);
       const hasPayments = paymentTransactions.some((tx) => tx.payment_date === d);
-      if (dayEntries.length === 0 && !hasOther && !hasPayments) continue;
+      const hasFinance = financeByDate.has(d);
+      const hasRev = revenueByDate.has(d);
+      if (dayEntries.length === 0 && !hasOther && !hasPayments && !hasFinance && !hasRev) continue;
       const other = otherByDate.get(d) ?? {
         report_date: d, kitchen: 0, other_income: 0, housekeeping_supply: 0,
         other_expense: 0, salary_advance: 0, maintenance_bill: 0,

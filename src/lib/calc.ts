@@ -301,8 +301,8 @@ const SOURCE_KEYS: Record<SourceCategory, keyof RoomChartAggregate> = {
  * Uses string comparison (YYYY-MM-DD) — timezone-safe, no Date() conversion.
  */
 export const isStayOccupiedOnDate = (e: RoomChartEntry, date: string): boolean => {
-  const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
-  const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+  const arr = String((e.arrival && e.arrival.trim() !== '') ? e.arrival : (e.report_date || '')).slice(0, 10);
+  const dep = String((e.departure && e.departure.trim() !== '') ? e.departure : (e.report_date || '')).slice(0, 10);
   if (arr >= dep) {
     // Same-day stay (day-use) or missing departure: occupied only on arr
     return arr === date;
@@ -330,8 +330,8 @@ export const getNightlyRoomRevenue = (e: RoomChartEntry, date?: string): number 
   if (rr > 0) return rr;
   const tot = toNum(e.total);
   // Derive nights from dates when possible (authoritative), else e.nights
-  const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
-  const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+  const arr = String((e.arrival && e.arrival.trim() !== '') ? e.arrival : (e.report_date || '')).slice(0, 10);
+  const dep = String((e.departure && e.departure.trim() !== '') ? e.departure : (e.report_date || '')).slice(0, 10);
   const n = arr < dep ? Math.max(1, calcStayNights(arr, dep)) : Math.max(1, toNum(e.nights) || 1);
   return tot > 0 ? tot / n : 0;
 };
@@ -351,8 +351,8 @@ export const aggregateRoomChart = (
 
   // 1. REVENUE ACCRUAL: Strictly across occupied nights [checkIn, checkOut)
   for (const e of entries) {
-    const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
-    const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+    const arr = String((e.arrival && e.arrival.trim() !== '') ? e.arrival : (e.report_date || '')).slice(0, 10);
+    const dep = String((e.departure && e.departure.trim() !== '') ? e.departure : (e.report_date || '')).slice(0, 10);
 
     if (targetDate) {
       if (arr === targetDate) agg.expectedArrivals += 1;
@@ -483,30 +483,37 @@ export const calcTomorrowStatus = (entries: RoomChartEntry[], reportDate: string
   return { departures, expectedArrivals };
 };
 
-const OVERLAP_CATEGORIES = new Set(['Housekeeping', 'Housekeeping Supply', 'Maintenance', 'Maintenance Bill', 'Salary', 'Salary Advance']);
-
 export const buildDerivedReport = (
   date: string,
   entries: RoomChartEntry[],
   other: OtherDailyEntriesInput,
   prevClosing: number,
   totalRooms: number,
-  financeExpenses?: { category: string; amount: number }[],
-  otherRevenueEntries?: { category: string; amount: number }[],
+  financeExpenses?: { category: string; amount: number; payment_mode?: string }[],
+  otherRevenueEntries?: { category: string; amount: number; payment_mode?: string }[],
   paymentTransactions?: PaymentTransaction[],
 ): DerivedReport => {
   const agg = aggregateRoomChart(entries, date, paymentTransactions);
   const { departures, expectedArrivals } = calcTomorrowStatus(entries, date);
 
-  // Aggregate finance expenses, skipping categories already tracked in Other Daily Entries
+  // Aggregate finance expenses, avoiding duplicate counting if legacy other_daily_entries columns have values
   const financeCatMap = new Map<string, number>();
   let financeExpensesTotal = 0;
+  let financeCashExpensesTotal = 0;
   for (const fe of financeExpenses ?? []) {
     const cat = fe.category ?? 'Other';
-    if (OVERLAP_CATEGORIES.has(cat)) continue;
+    if ((cat === 'Housekeeping' || cat === 'Housekeeping Supply') && toNum(other.housekeeping_supply) > 0) continue;
+    if ((cat === 'Maintenance' || cat === 'Maintenance Bill') && toNum(other.maintenance_bill) > 0) continue;
+    if ((cat === 'Salary Advance' || cat === 'Salary') && toNum(other.salary_advance) > 0) continue;
+
     const amt = toNum(fe.amount);
     financeExpensesTotal += amt;
     financeCatMap.set(cat, (financeCatMap.get(cat) ?? 0) + amt);
+
+    const isCash = !fe.payment_mode || fe.payment_mode.toLowerCase() === 'cash';
+    if (isCash) {
+      financeCashExpensesTotal += amt;
+    }
   }
   const financeExpenseByCategory = Array.from(financeCatMap.entries())
     .map(([category, amount]) => ({ category, amount }))
@@ -515,29 +522,42 @@ export const buildDerivedReport = (
   // Aggregate other revenue entries (from daily_revenue_entries table)
   const revenueCatMap = new Map<string, number>();
   let otherRevenueTotal = 0;
+  let otherCashRevenueTotal = 0;
   for (const re of otherRevenueEntries ?? []) {
     const cat = re.category ?? 'Other Income';
+    if (cat === 'Kitchen' && toNum(other.kitchen) > 0) continue;
+    if (cat === 'Other Income' && toNum(other.other_income) > 0) continue;
+
     const amt = toNum(re.amount);
     otherRevenueTotal += amt;
     revenueCatMap.set(cat, (revenueCatMap.get(cat) ?? 0) + amt);
+
+    const isCash = !re.payment_mode || re.payment_mode.toLowerCase() === 'cash';
+    if (isCash) {
+      otherCashRevenueTotal += amt;
+    }
   }
   const otherRevenueByCategory = Array.from(revenueCatMap.entries())
     .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
 
-  const totalExpenses = toNum(other.housekeeping_supply) + toNum(other.other_expense) + toNum(other.maintenance_bill) + financeExpensesTotal;
+  const otherCashExpenses = toNum(other.housekeeping_supply) + toNum(other.other_expense) + toNum(other.maintenance_bill);
+  const cashExpenses = otherCashExpenses + financeCashExpensesTotal;
+  const totalExpenses = otherCashExpenses + financeExpensesTotal;
+
   const cashClosing =
-    prevClosing + agg.cash + toNum(other.other_income) + otherRevenueTotal - totalExpenses
+    prevClosing + agg.payCash + toNum(other.other_income) + otherCashRevenueTotal - cashExpenses
     - toNum(other.salary_advance)
     - toNum(other.cash_handover_md) - toNum(other.bank_cash_deposit);
+
   const occupiedForOcc = agg.roomsOccupied + agg.complimentary;
   const arr = agg.roomsOccupied > 0 ? agg.roomRevenue / agg.roomsOccupied : 0;
   const occ = totalRooms > 0 ? (occupiedForOcc / totalRooms) * 100 : 0;
   const revpar = totalRooms > 0 ? agg.roomRevenue / totalRooms : 0;
   const gstSplit = splitGst(agg.gstCollected);
-  const netRevenue = agg.roomRevenue - agg.gstCollected;
-  const invoiceTotal = agg.roomRevenue;
-  // Use the canonical per-night revenue function \u2014 room_rate priority, then total\u00f7nights.
+  const netRevenue = agg.taxableRevenue > 0 ? agg.taxableRevenue : Math.max(0, agg.roomRevenue - agg.gstCollected);
+  const invoiceTotal = agg.taxableRevenue > 0 ? (agg.taxableRevenue + agg.gstCollected) : agg.roomRevenue;
+  // Use the canonical per-night revenue function — room_rate priority, then total÷nights.
   // Nights are derived from arrival/departure dates (authoritative), not e.nights field.
   const roomRevenueCat = entries
     .filter((e) => !e.is_complimentary && isStayOccupiedOnDate(e, date) && (e.revenue_category || 'Room Revenue') === 'Room Revenue')
@@ -589,6 +609,7 @@ export const buildDerivedReport = (
     pay_balance: agg.payBalance,
     finance_expenses: financeExpensesTotal,
     finance_expense_by_category: financeExpenseByCategory,
+    cash_expenses: cashExpenses,
     other_revenue_entries: otherRevenueTotal,
     other_revenue_by_category: otherRevenueByCategory,
     day_status: 'open' as const,
@@ -705,7 +726,9 @@ export const buildCashFlow = (
   daily: DerivedReport,
 ): CashFlowData => {
   const cashCollection = toNum(daily.pay_cash) + toNum(daily.other_income) + toNum(daily.other_revenue_entries);
-  const cashExpenses = toNum(daily.housekeeping_supply) + toNum(daily.other_expense) + toNum(daily.maintenance_bill) + toNum(daily.finance_expenses);
+  const cashExpenses = daily.cash_expenses !== undefined
+    ? toNum(daily.cash_expenses)
+    : toNum(daily.housekeeping_supply) + toNum(daily.other_expense) + toNum(daily.maintenance_bill) + toNum(daily.finance_expenses);
   const salaryAdvance = toNum(daily.salary_advance);
   const cashHandover = toNum(daily.cash_handover_md);
   const bankDeposit = toNum(daily.bank_cash_deposit);

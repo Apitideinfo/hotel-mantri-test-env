@@ -309,11 +309,13 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
 
   const todayExpensesTotal = expenses.reduce((s, e) => s + toNum(e.amount), 0);
   const otherRevenueTotal = revenues.reduce((s, r) => s + toNum(r.amount), 0);
-  const roomRevenue = agg.roomRevenue;
-  const grossRevenue = roomRevenue + otherRevenueTotal;
+  const roomRevenueBeforeGst = agg.taxableRevenue > 0 ? agg.taxableRevenue : (agg.roomRevenue - agg.gstCollected);
+  const roomRevenueInclGst = roomRevenueBeforeGst + agg.gstCollected;
+  const roomRevenue = gstEnabled ? roomRevenueBeforeGst : agg.roomRevenue;
+  const grossRevenue = (gstEnabled ? roomRevenueInclGst : agg.roomRevenue) + otherRevenueTotal;
   const netOperatingProfit = grossRevenue - todayExpensesTotal;
 
-  const totalCollection = agg.cash + agg.bank + (gstEnabled ? agg.payUpi + agg.payCard : 0);
+  const totalCollection = agg.cash + agg.bank;
 
   // Build room cards from Property Master inventory, overlaid with today's entries.
   const roomCards = useMemo(() => {
@@ -1048,11 +1050,11 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                 )}
                 <ReviewRow label="Other Revenue" value={`₹${fmtMoney(otherRevenueTotal)}`} />
                 <div className="border-t border-slate-100 pt-3">
-                  <ReviewRow label="Gross Revenue" value={`₹${fmtMoney(grossRevenue + (gstEnabled ? agg.gstCollected : 0))}`} bold />
+                  <ReviewRow label="Gross Revenue" value={`₹${fmtMoney(grossRevenue)}`} bold />
                 </div>
                 <ReviewRow label="Total Expenses" value={`- ₹${fmtMoney(todayExpensesTotal)}`} negative />
                 <div className="border-t-2 border-slate-200 pt-3">
-                  <ReviewRow label="Net Operating Profit" value={`₹${fmtMoney(netOperatingProfit + (gstEnabled ? agg.gstCollected : 0))}`} bold />
+                  <ReviewRow label="Net Operating Profit" value={`₹${fmtMoney(netOperatingProfit)}`} bold />
                 </div>
               </div>
             </div>

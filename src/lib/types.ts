@@ -526,6 +526,7 @@ export interface DerivedReport {
   // Finance Management expenses (from expense_entries table)
   finance_expenses: number;
   finance_expense_by_category: { category: string; amount: number }[];
+  cash_expenses?: number;
   // Other Revenue entries (from daily_revenue_entries table)
   other_revenue_entries: number;
   other_revenue_by_category: { category: string; amount: number }[];

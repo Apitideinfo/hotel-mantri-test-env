@@ -130,7 +130,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
 
   const statusBadge = useMemo(() => {
     const s = (booking.status || '').toLowerCase();
-    const isCheckedIn = s === 'checked_in' || booking.type === 'stay';
+    const isCheckedIn = s === 'checked_in' || booking.type === 'entry';
     if (isCheckedIn) {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs">
@@ -170,7 +170,7 @@ export const RoomMoveModal: React.FC<RoomMoveModalProps> = ({
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h2 className="text-sm sm:text-base font-bold text-white tracking-tight leading-tight">
-                    {booking.type === 'stay' || booking.status === 'checked_in'
+                    {booking.type === 'entry' || booking.status === 'checked_in'
                       ? 'Shift Room & Stay Adjustment'
                       : 'Move / Shift Reservation'}
                   </h2>

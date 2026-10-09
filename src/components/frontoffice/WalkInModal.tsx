@@ -51,6 +51,7 @@ export const WalkInModal = ({
   const [payCard, setPayCard] = useState<number | ''>('');
   const [payBank, setPayBank] = useState<number | ''>('');
   const [performedBy, setPerformedBy] = useState('');
+  const [vacantRooms, setVacantRooms] = useState<Room[]>(rooms.filter((r) => r.is_active));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [emailError, setEmailError] = useState<string | null>(null);
