@@ -58,6 +58,7 @@ import reservationRoutes from './routes/reservations.js';
 import hotelBrandingRoutes from './routes/hotelBranding.js';
 import notificationRoutes from './routes/notifications.js';
 import revenueRoutes from './routes/revenue.js';
+import laundryRoutes from './routes/laundry.js';
 
 // Root / Health check endpoints
 app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
@@ -108,6 +109,9 @@ app.use('/api/reports/whatsapp', notificationRoutes);
 app.use('/reports/whatsapp', notificationRoutes);
 app.use('/api/reports', notificationRoutes);
 app.use('/reports', notificationRoutes);
+
+app.use('/api/laundry', laundryRoutes);
+app.use('/laundry', laundryRoutes);
 
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';

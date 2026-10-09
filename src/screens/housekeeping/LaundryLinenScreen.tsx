@@ -3,25 +3,30 @@ import {
   Shirt, Plus, X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, Clock,
   ArrowDownToLine, ArrowUpFromLine, Trash2, Eye, Save, Building2, Package,
   ChevronDown, ChevronLeft, Calendar, IndianRupee, Phone, MapPin, Filter,
-  AlertCircle, Ban,
+  AlertCircle, Ban, Send, FileText, Check, Layers, History as HistoryIcon,
+  DollarSign, Receipt, CreditCard, ShieldCheck, CheckCheck, Sparkles,
 } from 'lucide-react';
 import {
   getLaundryDashboard, getLaundryVendors, getLinenItems, saveLaundryVendor,
   saveLinenItem, deleteLaundryVendor, deleteLinenItem, saveDispatch, deleteDispatch,
-  getDispatchDetail, saveReceipt,
-  DEFAULT_LINEN_ITEMS, LINEN_CATEGORIES,
+  getDispatchDetail, saveReceipt, getStockMovements, recordStockMovement,
+  getVendorLedger, recordVendorPayment, generateDailyBill, approveDailyBill,
+  resolvePendingLinen, getDailyStatementData, sendDailyWhatsAppStatement,
+  seedStandardLinenItems, getVendorRates, DEFAULT_LINEN_ITEMS, LINEN_CATEGORIES,
 } from '@/lib/api-laundry-linen';
 import type {
   LaundryDashboardData, LaundryVendor, LinenItem, LaundryDispatch,
   LaundryDispatchItem, LaundryReceipt, DispatchWithReceipts, ReceiptItemEntry,
+  LinenStockMovement, VendorLedgerResult, DailyLedgerRow, VendorLedgerTransaction,
 } from '@/lib/api-laundry-linen';
 import { fmtMoney, toNum } from '@/lib/calc';
+import { downloadLaundryStatementPdf } from '@/lib/pdf-laundry';
 
 interface LaundryLinenScreenProps {
   onBack: () => void;
 }
 
-type Tab = 'overview' | 'dispatches' | 'pending' | 'history';
+type Tab = 'overview' | 'stock' | 'dispatches' | 'pending' | 'ledger' | 'history';
 
 const todayStr = (): string => new Date().toISOString().slice(0, 10);
 
@@ -38,27 +43,13 @@ const STATUS_STYLES: Record<string, string> = {
   'Partially Received': 'bg-amber-100 text-amber-700 border-amber-200',
   'Completed': 'bg-emerald-100 text-emerald-700 border-emerald-200',
   'Short/Lost': 'bg-red-100 text-red-700 border-red-200',
-};
-
-const getMonthRange = (date: string): { start: string; end: string } => {
-  const d = new Date(date + 'T00:00:00');
-  const start = date.slice(0, 7) + '-01';
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10);
-  return { start, end };
-};
-
-const getWeekRange = (date: string): { start: string; end: string } => {
-  const d = new Date(date + 'T00:00:00');
-  const day = d.getDay();
-  const monday = new Date(d);
-  monday.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10) };
+  'OPEN': 'bg-blue-100 text-blue-700 border-blue-200',
+  'PARTIALLY_RECEIVED': 'bg-amber-100 text-amber-700 border-amber-200',
+  'CLOSED': 'bg-emerald-100 text-emerald-700 border-emerald-200',
 };
 
 // ══════════════════════════════════════════════════════════════════
-// MAIN SCREEN
+// MAIN LAUNDRY & LINEN SCREEN
 // ══════════════════════════════════════════════════════════════════
 
 export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
@@ -67,11 +58,47 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
   const [data, setData] = useState<LaundryDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Modals state
   const [showDispatch, setShowDispatch] = useState(false);
   const [showVendor, setShowVendor] = useState(false);
   const [showLinen, setShowLinen] = useState(false);
+  const [showStockModal, setShowStockModal] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showStatementModal, setShowStatementModal] = useState(false);
+  const [showCloseDayModal, setShowCloseDayModal] = useState(false);
+  const [showReceiveSelect, setShowReceiveSelect] = useState(false);
   const [receiveDispatch, setReceiveDispatch] = useState<LaundryDispatch | null>(null);
   const [viewDispatch, setViewDispatch] = useState<LaundryDispatch | null>(null);
+  const [resolveItem, setResolveItem] = useState<{
+    dispatch_id: string;
+    dispatch_item_id: string;
+    item_name: string;
+    pending_qty: number;
+    dispatch_no: string;
+  } | null>(null);
+
+  const handleOpenReceive = () => {
+    if (!data) return;
+    const activeDispatches = (data.dispatches || []).filter(
+      (d) => d.status !== 'Completed' && d.status !== 'CLOSED'
+    );
+    if (activeDispatches.length === 0) {
+      alert('No active dispatches found with pending linen. All laundry has been received back!');
+      return;
+    }
+    if (activeDispatches.length === 1) {
+      setReceiveDispatch(activeDispatches[0]);
+      return;
+    }
+    setShowReceiveSelect(true);
+  };
+
+  const showNotification = (msg: string) => {
+    setSuccessMsg(msg);
+    setTimeout(() => setSuccessMsg(null), 4000);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -80,7 +107,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
       const d = await getLaundryDashboard(selectedDate);
       setData(d);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load');
+      setError(e instanceof Error ? e.message : 'Failed to load laundry data');
     } finally {
       setLoading(false);
     }
@@ -88,256 +115,940 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
 
   useEffect(() => { load(); }, [load]);
 
-  const tabs: { key: Tab; label: string }[] = [
+  const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: 'overview', label: 'Overview' },
-    { key: 'dispatches', label: 'Dispatches' },
-    { key: 'pending', label: 'Pending' },
-    { key: 'history', label: 'History' },
+    { key: 'stock', label: 'Stock Master' },
+    { key: 'dispatches', label: 'Dispatch & Receive', count: data?.dispatches.length },
+    { key: 'pending', label: 'Pending Linen', count: data?.at_laundry },
+    { key: 'ledger', label: 'Vendor Ledger' },
+    { key: 'history', label: 'Audit History' },
   ];
 
   return (
-    <div className="px-4 lg:px-6 py-5 w-full max-w-[1400px] mx-auto space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-brand-navy-800">Laundry & Linen</h1>
-          <p className="text-sm text-slate-400 mt-0.5">Date-wise hotel linen tracking</p>
+    <div className="px-4 lg:px-6 py-5 w-full max-w-[1500px] mx-auto space-y-5">
+      {/* ── Top Notifications ── */}
+      {successMsg && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between shadow-sm animate-fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span className="text-sm font-medium">{successMsg}</span>
+          </div>
+          <button onClick={() => setSuccessMsg(null)} className="text-emerald-500 hover:text-emerald-700">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <button
-          onClick={() => setShowDispatch(true)}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-soft-blue hover:shadow-md transition-all active:scale-[0.98]"
-        >
-          <Plus className="w-4 h-4" /> New Laundry Dispatch
-        </button>
-      </div>
-
-      {/* Date controls */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2">
-          <Calendar className="w-4 h-4 text-slate-400" />
-          <input
-            type="date"
-            value={selectedDate}
-            onChange={(e) => setSelectedDate(e.target.value)}
-            className="text-sm font-semibold text-slate-700 focus:outline-none bg-transparent"
-          />
-        </div>
-        <button
-          onClick={() => setSelectedDate(todayStr())}
-          className="text-xs font-semibold px-3 py-2.5 rounded-xl border bg-white text-slate-600 border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
-        >
-          Today
-        </button>
-        <button
-          onClick={() => { const r = getWeekRange(selectedDate); setSelectedDate(r.start); }}
-          className="text-xs font-semibold px-3 py-2.5 rounded-xl border bg-white text-slate-600 border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
-        >
-          This Week
-        </button>
-        <button
-          onClick={() => { const r = getMonthRange(selectedDate); setSelectedDate(r.start); }}
-          className="text-xs font-semibold px-3 py-2.5 rounded-xl border bg-white text-slate-600 border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
-        >
-          This Month
-        </button>
-        <button onClick={load} className="ml-auto p-2 text-slate-500 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition" title="Refresh">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl p-3 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
-          <button onClick={load} className="ml-auto text-xs font-semibold text-red-700 hover:text-red-800">Retry</button>
+        <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-xl flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <span className="text-sm font-medium">{error}</span>
+          </div>
+          <button onClick={() => setError(null)} className="text-rose-500 hover:text-rose-700">
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
-      {/* Summary cards */}
-      {data && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-          <SummaryCard label="Sent to Laundry" value={data.totalSent} icon={<ArrowUpFromLine className="w-5 h-5" />} color="text-blue-600" bg="bg-blue-50" />
-          <SummaryCard label="Received Back" value={data.totalReceived} icon={<ArrowDownToLine className="w-5 h-5" />} color="text-emerald-600" bg="bg-emerald-50" />
-          <SummaryCard label="Pending" value={data.totalPending} icon={<Clock className="w-5 h-5" />} color="text-amber-600" bg="bg-amber-50" />
-          <SummaryCard label="Damaged / Lost" value={data.totalDamaged} icon={<AlertCircle className="w-5 h-5" />} color="text-red-600" bg="bg-red-50" />
+      {/* ── Header ── */}
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white rounded-2xl border border-slate-200 p-4 lg:p-5 shadow-card">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="p-2 text-slate-500 hover:text-brand-navy-800 hover:bg-slate-100 rounded-xl transition"
+            title="Back"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-brand-600 flex items-center justify-center text-white shadow-md">
+            <Shirt className="w-5 h-5" />
+          </div>
+          <div>
+            <h1 className="text-lg lg:text-xl font-bold text-brand-navy-900 tracking-tight">Laundry & Linen Management</h1>
+            <p className="text-xs text-slate-500">Production Linen Stock • Partial Receiving • Vendor Ledger • WhatsApp Statements</p>
+          </div>
         </div>
-      )}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-200 pb-px">
+        {/* Date Selector & Primary Actions */}
+        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-inner">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="bg-transparent text-xs font-semibold text-slate-700 focus:outline-none"
+            />
+          </div>
+
+          <button
+            onClick={load}
+            disabled={loading}
+            className="p-2 text-slate-500 hover:text-brand-600 hover:bg-slate-100 rounded-xl transition"
+            title="Refresh Data"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+
+          <button
+            onClick={() => setShowCloseDayModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Close Day & WhatsApp</span>
+          </button>
+
+          <button
+            onClick={handleOpenReceive}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition shadow-sm"
+            title="Update that vendor has returned linen back"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+            <span>Receive from Vendor</span>
+          </button>
+
+          <button
+            onClick={() => setShowDispatch(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <ArrowUpFromLine className="w-3.5 h-3.5" />
+            <span>New Dispatch</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ── Executive KPI Cards (Row 1: Physical Stock) ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Active Stock</span>
+            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+              <Package className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-1">
+            <span className="text-2xl font-black text-slate-900 tabular-nums">{data?.total_linen_stock ?? 0}</span>
+            <span className="text-xs text-slate-400 font-medium">pcs</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">Opening + additions − discards</p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-emerald-100 bg-gradient-to-b from-white to-emerald-50/20 p-4 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Available in Hotel</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+              <CheckCircle2 className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-1">
+            <span className="text-2xl font-black text-emerald-700 tabular-nums">{data?.available_in_hotel ?? 0}</span>
+            <span className="text-xs text-emerald-600 font-medium">pcs</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">Ready for housekeeping usage</p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-amber-100 bg-gradient-to-b from-white to-amber-50/20 p-4 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">At Laundry / Pending</span>
+            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+              <Clock className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-1">
+            <span className="text-2xl font-black text-amber-700 tabular-nums">{data?.at_laundry ?? 0}</span>
+            <span className="text-xs text-amber-600 font-medium">pcs</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">Dispatched, awaiting return</p>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-rose-100 bg-gradient-to-b from-white to-rose-50/20 p-4 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-rose-600 uppercase tracking-wider">Damaged / Lost</span>
+            <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-2 flex items-baseline gap-1">
+            <span className="text-2xl font-black text-rose-700 tabular-nums">{data?.damaged_lost ?? 0}</span>
+            <span className="text-xs text-rose-600 font-medium">pcs</span>
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1">Resolved missing or discarded</p>
+        </div>
+      </div>
+
+      {/* ── Daily Activity Strip (Row 2: Physical & Financial Activity) ── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+        <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-sm">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today Sent</div>
+          <div className="text-xl font-bold mt-1 tabular-nums">{data?.today_sent ?? 0} <span className="text-xs font-normal text-slate-400">pcs</span></div>
+        </div>
+
+        <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-sm">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today Received</div>
+          <div className="text-xl font-bold mt-1 text-emerald-400 tabular-nums">{data?.today_received ?? 0} <span className="text-xs font-normal text-slate-400">pcs</span></div>
+        </div>
+
+        <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-sm">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today's Billable</div>
+          <div className="text-xl font-bold mt-1 text-amber-400 tabular-nums">{rs(data?.today_bill ?? 0)}</div>
+        </div>
+
+        <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-sm">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vendor Payment Due</div>
+          <div className="text-xl font-bold mt-1 text-rose-400 tabular-nums">{rs(data?.vendor_due ?? 0)}</div>
+        </div>
+      </div>
+
+      {/* ── Tabs Navigation ── */}
+      <div className="flex items-center gap-1.5 border-b border-slate-200 overflow-x-auto pb-1">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap border-b-2 transition-all rounded-t-lg ${
-              tab === t.key ? 'border-brand-600 text-brand-600 bg-brand-50/50' : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-xl transition whitespace-nowrap ${
+              tab === t.key
+                ? 'bg-brand-navy-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            {t.label}
+            <span>{t.label}</span>
+            {t.count !== undefined && t.count > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                tab === t.key ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+              }`}>
+                {t.count}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-      {/* Content */}
+      {/* ── Active Tab Content ── */}
       {loading && !data ? (
-        <div className="flex items-center justify-center py-20"><Loader2 className="w-6 h-6 text-brand-600 animate-spin" /></div>
+        <div className="flex items-center justify-center py-20 text-slate-400">
+          <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
+        </div>
       ) : data ? (
         <>
           {tab === 'overview' && (
-            <OverviewTab data={data} selectedDate={selectedDate} onReceive={setReceiveDispatch} onView={setViewDispatch} />
+            <OverviewTab
+              data={data}
+              onNewDispatch={() => setShowDispatch(true)}
+              onOpenReceive={handleOpenReceive}
+              onManageStock={() => setShowStockModal(true)}
+              onCloseDay={() => setShowCloseDayModal(true)}
+              onManageVendors={() => setShowVendor(true)}
+              onManageLinen={() => setShowLinen(true)}
+              onViewDispatch={(d) => setViewDispatch(d)}
+              onReceiveDispatch={(d) => setReceiveDispatch(d)}
+            />
           )}
+
+          {tab === 'stock' && (
+            <StockTab
+              linenItems={data.linen_items}
+              onAddStock={() => setShowStockModal(true)}
+              onManageLinen={() => setShowLinen(true)}
+              onReload={load}
+            />
+          )}
+
           {tab === 'dispatches' && (
-            <DispatchesTab data={data} onReceive={setReceiveDispatch} onView={setViewDispatch} onDelete={async (id) => { await deleteDispatch(id); load(); }} />
+            <DispatchesTab
+              dispatches={data.dispatches}
+              vendors={data.vendors}
+              onNewDispatch={() => setShowDispatch(true)}
+              onOpenReceive={handleOpenReceive}
+              onView={(d) => setViewDispatch(d)}
+              onReceive={(d) => setReceiveDispatch(d)}
+              onDeleted={() => {
+                showNotification('Dispatch deleted successfully.');
+                load();
+              }}
+            />
           )}
-          {tab === 'pending' && <PendingTab data={data} onReceive={setReceiveDispatch} onView={setViewDispatch} />}
-          {tab === 'history' && <HistoryTab data={data} onView={setViewDispatch} />}
+
+          {tab === 'pending' && (
+            <PendingTab
+              dispatches={data.dispatches}
+              vendors={data.vendors}
+              onView={(d) => setViewDispatch(d)}
+              onReceive={(d) => setReceiveDispatch(d)}
+              onResolve={(item) => setResolveItem(item)}
+            />
+          )}
+
+          {tab === 'ledger' && (
+            <VendorLedgerTab
+              vendors={data.vendors}
+              selectedDate={selectedDate}
+              onRecordPayment={() => setShowPaymentModal(true)}
+              onOpenStatement={(vId) => setShowStatementModal(true)}
+              onBillApproved={() => {
+                showNotification('Laundry bill approved and synced to Finance Expense!');
+                load();
+              }}
+            />
+          )}
+
+          {tab === 'history' && (
+            <AuditHistoryTab
+              dispatches={data.dispatches}
+              vendors={data.vendors}
+              onView={(d) => setViewDispatch(d)}
+            />
+          )}
         </>
       ) : null}
 
-      {/* Quick actions */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <QuickAction label="New Laundry Dispatch" icon={<Plus className="w-4 h-4" />} onClick={() => setShowDispatch(true)} />
-        <QuickAction label="Receive from Laundry" icon={<ArrowDownToLine className="w-4 h-4" />} onClick={() => setTab('pending')} />
-        <QuickAction label="Add Laundry Vendor" icon={<Building2 className="w-4 h-4" />} onClick={() => setShowVendor(true)} />
-        <QuickAction label="Linen Master" icon={<Package className="w-4 h-4" />} onClick={() => setShowLinen(true)} />
-      </div>
+      {/* ── Modals ── */}
+      {showReceiveSelect && data && (
+        <SelectDispatchToReceiveModal
+          dispatches={(data.dispatches || []).filter((d) => d.status !== 'Completed' && d.status !== 'CLOSED')}
+          onSelect={(d) => {
+            setShowReceiveSelect(false);
+            setReceiveDispatch(d);
+          }}
+          onClose={() => setShowReceiveSelect(false)}
+        />
+      )}
 
-      {/* Modals */}
-      {showDispatch && (
+      {showDispatch && data && (
         <NewDispatchModal
-          vendors={data?.vendors ?? []}
-          linenItems={data?.linenItems ?? []}
+          vendors={data.vendors}
+          linenItems={data.linen_items}
           defaultDate={selectedDate}
           onClose={() => setShowDispatch(false)}
-          onSaved={() => { setShowDispatch(false); load(); }}
+          onSaved={() => {
+            setShowDispatch(false);
+            showNotification('Dispatch created successfully.');
+            load();
+          }}
         />
       )}
-      {showVendor && (
-        <VendorModal onClose={() => setShowVendor(false)} onSaved={() => { setShowVendor(false); load(); }} />
-      )}
-      {showLinen && (
-        <LinenMasterModal onClose={() => setShowLinen(false)} onSaved={() => { setShowLinen(false); load(); }} />
-      )}
-      {receiveDispatch && (
+
+      {receiveDispatch && data && (
         <ReceiveModal
-          dispatchId={receiveDispatch.id}
-          dispatchNo={receiveDispatch.dispatch_no}
-          vendorName={receiveDispatch.vendor_name}
-          dispatchDate={receiveDispatch.dispatch_date}
-          challanNo={receiveDispatch.challan_no}
+          dispatch={receiveDispatch}
           onClose={() => setReceiveDispatch(null)}
-          onSaved={() => { setReceiveDispatch(null); load(); }}
+          onSaved={() => {
+            setReceiveDispatch(null);
+            showNotification('Linen receiving recorded successfully.');
+            load();
+          }}
         />
       )}
+
       {viewDispatch && (
-        <ViewDispatchModal
+        <DispatchDetailModal
           dispatchId={viewDispatch.id}
           onClose={() => setViewDispatch(null)}
-          onReceive={() => { setViewDispatch(null); setReceiveDispatch(viewDispatch); }}
+          onReceiveAgain={() => {
+            const d = viewDispatch;
+            setViewDispatch(null);
+            setReceiveDispatch(d);
+          }}
+        />
+      )}
+
+      {showStockModal && data && (
+        <StockMovementModal
+          linenItems={data.linen_items}
+          onClose={() => setShowStockModal(false)}
+          onOpenLinenMaster={() => {
+            setShowStockModal(false);
+            setShowLinen(true);
+          }}
+          onReload={load}
+          onSaved={() => {
+            setShowStockModal(false);
+            showNotification('Stock movement ledger entry recorded successfully.');
+            load();
+          }}
+        />
+      )}
+
+      {showVendor && (
+        <VendorMasterModal
+          onClose={() => setShowVendor(false)}
+          onSaved={() => {
+            showNotification('Vendors updated.');
+            load();
+          }}
+        />
+      )}
+
+      {showLinen && (
+        <LinenMasterModal
+          onClose={() => setShowLinen(false)}
+          onSaved={() => {
+            showNotification('Linen items updated.');
+            load();
+          }}
+        />
+      )}
+
+      {resolveItem && (
+        <ResolveLostDamagedModal
+          item={resolveItem}
+          onClose={() => setResolveItem(null)}
+          onResolved={() => {
+            setResolveItem(null);
+            showNotification('Missing linen pieces resolved successfully.');
+            load();
+          }}
+        />
+      )}
+
+      {showPaymentModal && data && (
+        <VendorPaymentModal
+          vendors={data.vendors}
+          defaultDate={selectedDate}
+          onClose={() => setShowPaymentModal(false)}
+          onSaved={() => {
+            setShowPaymentModal(false);
+            showNotification('Vendor payment recorded successfully.');
+            load();
+          }}
+        />
+      )}
+
+      {showCloseDayModal && data && (
+        <CloseLaundryDayModal
+          vendors={data.vendors}
+          selectedDate={selectedDate}
+          onClose={() => setShowCloseDayModal(false)}
+          onDayClosed={() => {
+            setShowCloseDayModal(false);
+            showNotification('Laundry day closed and WhatsApp statement ready!');
+            load();
+          }}
         />
       )}
     </div>
   );
 };
 
-// ── Summary Card ──
-const SummaryCard = ({ label, value, icon, color, bg }: {
-  label: string; value: number; icon: React.ReactNode; color: string; bg: string;
-}) => (
-  <div className="bg-white rounded-2xl border border-slate-200 shadow-card hover:shadow-card-hover transition-all p-4">
-    <div className="flex items-center justify-between mb-3">
-      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${bg} ${color}`}>{icon}</div>
-    </div>
-    <p className={`text-2xl font-bold tabular-nums leading-none ${color}`}>{value}</p>
-    <p className="text-[10px] text-slate-400 mt-1.5">pieces</p>
-  </div>
-);
-
-// ── Quick Action ──
-const QuickAction = ({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) => (
-  <button
-    onClick={onClick}
-    className="flex items-center gap-2.5 bg-white border border-slate-200 rounded-xl p-3.5 hover:border-brand-300 hover:shadow-card transition text-left group"
-  >
-    <div className="w-9 h-9 rounded-lg bg-brand-50 text-brand-600 flex items-center justify-center group-hover:bg-brand-100 transition">{icon}</div>
-    <span className="text-sm font-semibold text-slate-700">{label}</span>
-  </button>
-);
-
 // ══════════════════════════════════════════════════════════════════
-// OVERVIEW TAB — Today's dispatch summary by linen item
+// 1. OVERVIEW TAB
 // ══════════════════════════════════════════════════════════════════
 
-const OverviewTab = ({ data, selectedDate, onReceive, onView }: {
+const OverviewTab = ({
+  data,
+  onNewDispatch,
+  onOpenReceive,
+  onManageStock,
+  onCloseDay,
+  onManageVendors,
+  onManageLinen,
+  onViewDispatch,
+  onReceiveDispatch,
+}: {
   data: LaundryDashboardData;
-  selectedDate: string;
-  onReceive: (d: LaundryDispatch) => void;
-  onView: (d: LaundryDispatch) => void;
+  onNewDispatch: () => void;
+  onOpenReceive: () => void;
+  onManageStock: () => void;
+  onCloseDay: () => void;
+  onManageVendors: () => void;
+  onManageLinen: () => void;
+  onViewDispatch: (d: LaundryDispatch) => void;
+  onReceiveDispatch: (d: LaundryDispatch) => void;
 }) => {
-  // Build per-item summary for selected date
-  const itemSummary = useMemo(() => {
-    const map = new Map<string, { sent: number; received: number; damaged: number }>();
-    const dateDispatchIds = new Set(data.dispatches.filter((d) => d.dispatch_date === selectedDate).map((d) => d.id));
-    for (const it of data.dispatchItems) {
-      if (!dateDispatchIds.has(it.dispatch_id)) continue;
-      const cur = map.get(it.item_name) ?? { sent: 0, received: 0, damaged: 0 };
-      cur.sent += it.sent_qty;
-      map.set(it.item_name, cur);
-    }
-    for (const r of data.receipts) {
-      if (!dateDispatchIds.has(r.dispatch_id)) continue;
-      for (const it of r.items_json ?? []) {
-        const cur = map.get(it.item_name) ?? { sent: 0, received: 0, damaged: 0 };
-        cur.received += it.received_now ?? 0;
-        cur.damaged += it.damaged_lost ?? 0;
-        map.set(it.item_name, cur);
-      }
-    }
-    const rows = Array.from(map.entries()).map(([item, v]) => ({
-      item, sent: v.sent, received: v.received, damaged: v.damaged,
-      pending: Math.max(0, v.sent - v.received - v.damaged),
-    }));
-    return rows;
-  }, [data, selectedDate]);
+  return (
+    <div className="space-y-5">
+      {/* Quick Actions Deck */}
+      <div className="bg-gradient-to-r from-slate-900 to-brand-navy-950 text-white rounded-2xl p-4 lg:p-5 shadow-card flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-base font-bold">Linen Operations Deck</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Authoritative stock tracking, partial returns, and vendor billing reconciliation.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={onNewDispatch}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <ArrowUpFromLine className="w-3.5 h-3.5" />
+            <span>Send to Laundry</span>
+          </button>
+          <button
+            onClick={onOpenReceive}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition shadow-sm"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+            <span>Receive from Vendor</span>
+          </button>
+          <button
+            onClick={onManageStock}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition"
+          >
+            <Package className="w-3.5 h-3.5" />
+            <span>Add / Adjust Stock</span>
+          </button>
+          <button
+            onClick={onCloseDay}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Close Laundry Day</span>
+          </button>
+          <button
+            onClick={onManageVendors}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition"
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            <span>Vendors</span>
+          </button>
+          <button
+            onClick={onManageLinen}
+            className="flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/20 text-white text-xs font-semibold rounded-xl transition"
+          >
+            <Shirt className="w-3.5 h-3.5" />
+            <span>Linen Master</span>
+          </button>
+        </div>
+      </div>
 
-  const getItemStatus = (sent: number, received: number, damaged: number): string => {
-    if (sent <= 0) return 'Sent';
-    if (received + damaged >= sent) return damaged > 0 ? 'Short/Lost' : 'Completed';
-    if (received > 0 || damaged > 0) return 'Partially Received';
-    return 'Sent';
+      {/* Linen Position Matrix */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-brand-navy-900">Current Linen Stock Position</h3>
+            <p className="text-[11px] text-slate-400">Reconciled breakdown per linen item.</p>
+          </div>
+          <button onClick={onManageStock} className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1">
+            <Plus className="w-3.5 h-3.5" />
+            <span>Update Stock</span>
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[700px]">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                <th className="text-left px-4 py-2.5">Item Name</th>
+                <th className="text-left px-4 py-2.5">Category</th>
+                <th className="text-right px-4 py-2.5">Total Active Stock</th>
+                <th className="text-right px-4 py-2.5 text-emerald-600">Available in Hotel</th>
+                <th className="text-right px-4 py-2.5 text-amber-600">At Laundry / Pending</th>
+                <th className="text-right px-4 py-2.5 text-rose-600">Damaged / Lost</th>
+                <th className="text-center px-4 py-2.5">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.linen_items.map((item) => {
+                const total = item.total_active_stock ?? 0;
+                const avail = item.available_in_hotel ?? 0;
+                const atLnd = item.at_laundry ?? 0;
+                const dmg = item.damaged_lost ?? 0;
+                const pctAvail = total > 0 ? Math.round((avail / total) * 100) : 0;
+
+                return (
+                  <tr key={item.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
+                    <td className="px-4 py-3 text-xs font-bold text-slate-800">{item.item_name}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{item.category}</td>
+                    <td className="px-4 py-3 text-xs font-bold text-slate-700 text-right tabular-nums">{total} pcs</td>
+                    <td className="px-4 py-3 text-xs font-bold text-emerald-600 text-right tabular-nums">{avail} pcs</td>
+                    <td className="px-4 py-3 text-xs font-bold text-amber-600 text-right tabular-nums">{atLnd} pcs</td>
+                    <td className="px-4 py-3 text-xs font-bold text-rose-600 text-right tabular-nums">{dmg} pcs</td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700">
+                        <span>{pctAvail}% Avail</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Recent Dispatches Deck */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-brand-navy-900">Recent Laundry Dispatches</h3>
+          <span className="text-xs text-slate-400">Latest 5 dispatches</span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {data.dispatches.slice(0, 5).map((d) => (
+            <div key={d.id} className="p-3.5 lg:px-4 flex items-center justify-between hover:bg-slate-50/50 transition">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs">
+                  {d.dispatch_no.slice(-3)}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-slate-800">{d.vendor_name || 'Vendor'}</span>
+                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_STYLES[d.status] || STATUS_STYLES['Sent']}`}>
+                      {d.status}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    {d.dispatch_no} • {fmtDate(d.dispatch_date)} • Sent by {d.sent_by || 'Staff'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onViewDispatch(d)}
+                  className="px-2.5 py-1 text-xs font-semibold text-slate-600 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition"
+                >
+                  View
+                </button>
+                {d.status !== 'Completed' && d.status !== 'CLOSED' && (
+                  <button
+                    onClick={() => onReceiveDispatch(d)}
+                    className="px-2.5 py-1 text-xs font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition"
+                  >
+                    Receive
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// 2. STOCK MASTER TAB
+// ══════════════════════════════════════════════════════════════════
+
+const StockTab = ({
+  linenItems,
+  onAddStock,
+  onManageLinen,
+  onReload,
+}: {
+  linenItems: LinenItem[];
+  onAddStock: () => void;
+  onManageLinen: () => void;
+  onReload: () => void;
+}) => {
+  const [movements, setMovements] = useState<LinenStockMovement[]>([]);
+  const [loadingMovements, setLoadingMovements] = useState(true);
+  const [seeding, setSeeding] = useState(false);
+
+  useEffect(() => {
+    getStockMovements()
+      .then(setMovements)
+      .catch((err) => console.warn('[StockMasterTab] Stock movements fetch note:', err?.message || err))
+      .finally(() => setLoadingMovements(false));
+  }, []);
+
+  const handleSeedDefaults = async () => {
+    try {
+      setSeeding(true);
+      await seedStandardLinenItems();
+      onReload();
+    } catch (e: any) {
+      alert(e.message || 'Failed to seed linen items');
+    } finally {
+      setSeeding(false);
+    }
   };
 
-  // Cost section
   return (
-    <div className="space-y-4">
-      {/* Today's dispatch summary */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-brand-navy-800">Dispatch Summary — {fmtDate(selectedDate)}</h3>
+    <div className="space-y-5">
+      {/* Stock Master Header */}
+      <div className="flex items-center justify-between bg-white rounded-2xl border border-slate-200 p-4 shadow-card">
+        <div>
+          <h2 className="text-sm font-bold text-brand-navy-900">Authoritative Linen Stock Ledger</h2>
+          <p className="text-xs text-slate-500">Every piece added or discarded creates a permanent audit movement record.</p>
         </div>
-        {itemSummary.length > 0 ? (
+        <div className="flex items-center gap-2">
+          {linenItems.length < 5 && (
+            <button
+              onClick={handleSeedDefaults}
+              disabled={seeding}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-xl border border-indigo-200 transition shadow-sm"
+              title="Add standard hotel items (Pillows, Towels, Mats, Blankets, Duvets)"
+            >
+              {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5 text-indigo-600" />}
+              <span>{seeding ? 'Adding Items...' : 'Add Standard Items'}</span>
+            </button>
+          )}
+          <button
+            onClick={onAddStock}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add / Adjust Stock</span>
+          </button>
+          <button
+            onClick={onManageLinen}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition"
+          >
+            <Shirt className="w-3.5 h-3.5" />
+            <span>Linen Items ({linenItems.length})</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Setup banner if fewer than 5 items configured */}
+      {linenItems.length < 5 && (
+        <div className="flex items-center justify-between bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200/80 rounded-2xl p-3.5 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-600 text-white rounded-xl shadow-sm">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <h4 className="text-xs font-bold text-slate-800">
+                {linenItems.length === 1 ? `Only 1 item configured ("${linenItems[0]?.item_name}")` : 'Setup Standard Hotel Linen Master'}
+              </h4>
+              <p className="text-[11px] text-slate-500">
+                Instantly populate standard hotel items (Pillow Covers, Bath Towels, Hand Towels, Bath Mats, Duvets, Blankets) so they appear in all selection dropdowns.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleSeedDefaults}
+            disabled={seeding}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-sm transition shrink-0"
+          >
+            {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            <span>{seeding ? 'Adding...' : 'Populate Standard Items'}</span>
+          </button>
+        </div>
+      )}
+
+      {/* Stock Balance Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+        {linenItems.map((item) => (
+          <div key={item.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-card space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">{item.item_name}</h4>
+                <span className="text-[10px] text-slate-400">{item.category}</span>
+              </div>
+              <span className="text-xs font-bold text-brand-600 bg-brand-50 px-2 py-0.5 rounded-lg">
+                Rs.{item.standard_rate}/pc
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 bg-slate-50 rounded-xl p-2.5 text-center">
+              <div>
+                <div className="text-[10px] text-slate-400 uppercase font-bold">Total</div>
+                <div className="text-sm font-extrabold text-slate-800 tabular-nums">{item.total_active_stock ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-emerald-600 uppercase font-bold">In Hotel</div>
+                <div className="text-sm font-extrabold text-emerald-600 tabular-nums">{item.available_in_hotel ?? 0}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-amber-600 uppercase font-bold">At Laundry</div>
+                <div className="text-sm font-extrabold text-amber-600 tabular-nums">{item.at_laundry ?? 0}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Stock Movements Audit Table */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-brand-navy-900">Stock Movement Audit Trail</h3>
+          <span className="text-xs text-slate-400">Chronological history</span>
+        </div>
+
+        {loadingMovements ? (
+          <div className="p-8 text-center text-slate-400">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto text-brand-600" />
+          </div>
+        ) : movements.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[700px]">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Linen Item</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Sent Qty</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Received Qty</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Pending</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Damaged/Lost</th>
-                  <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Status</th>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                  <th className="text-left px-4 py-2.5">Date</th>
+                  <th className="text-left px-4 py-2.5">Linen Item</th>
+                  <th className="text-left px-4 py-2.5">Movement Type</th>
+                  <th className="text-right px-4 py-2.5">Qty</th>
+                  <th className="text-right px-4 py-2.5">Before</th>
+                  <th className="text-right px-4 py-2.5">After</th>
+                  <th className="text-left px-4 py-2.5">Reason</th>
+                  <th className="text-left px-4 py-2.5">Recorded By</th>
                 </tr>
               </thead>
               <tbody>
-                {itemSummary.map((r, i) => (
-                  <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
-                    <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">{r.item}</td>
-                    <td className="px-4 py-2.5 text-sm text-slate-600 text-right tabular-nums">{r.sent}</td>
-                    <td className="px-4 py-2.5 text-sm text-emerald-600 text-right tabular-nums">{r.received}</td>
-                    <td className="px-4 py-2.5 text-sm text-amber-600 text-right tabular-nums font-semibold">{r.pending}</td>
-                    <td className="px-4 py-2.5 text-sm text-red-600 text-right tabular-nums">{r.damaged}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[getItemStatus(r.sent, r.received, r.damaged)]}`}>{getItemStatus(r.sent, r.received, r.damaged)}</span>
+                {movements.map((m) => (
+                  <tr key={m.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                    <td className="px-4 py-2.5 text-slate-500 font-mono">{fmtDate(m.movement_date)}</td>
+                    <td className="px-4 py-2.5 font-bold text-slate-800">{m.linen_items?.item_name || 'Linen'}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 capitalize">
+                        {m.movement_type.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-bold text-brand-600 tabular-nums">+{m.quantity}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-400 tabular-nums">{m.before_qty}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-slate-800 tabular-nums">{m.after_qty}</td>
+                    <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{m.reason || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-400">{m.created_by || 'Staff'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-8 text-center text-slate-400 text-xs">
+            No stock movements recorded yet. Click "Add / Adjust Stock" to initialize stock.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// 3. DISPATCHES TAB (Dispatch & Receive)
+// ══════════════════════════════════════════════════════════════════
+
+const DispatchesTab = ({
+  dispatches,
+  vendors,
+  onNewDispatch,
+  onOpenReceive,
+  onView,
+  onReceive,
+  onDeleted,
+}: {
+  dispatches: LaundryDispatch[];
+  vendors: LaundryVendor[];
+  onNewDispatch: () => void;
+  onOpenReceive: () => void;
+  onView: (d: LaundryDispatch) => void;
+  onReceive: (d: LaundryDispatch) => void;
+  onDeleted: () => void;
+}) => {
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [vendorFilter, setVendorFilter] = useState('all');
+
+  const filtered = useMemo(() => {
+    return dispatches.filter((d) => {
+      if (filterStatus !== 'all' && d.status !== filterStatus) return false;
+      if (vendorFilter !== 'all' && d.vendor_id !== vendorFilter) return false;
+      return true;
+    });
+  }, [dispatches, filterStatus, vendorFilter]);
+
+  return (
+    <div className="space-y-4">
+      {/* Header and Filters */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white rounded-2xl border border-slate-200 p-4 shadow-card">
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none"
+          >
+            <option value="all">All Statuses</option>
+            <option value="Sent">Sent (Open)</option>
+            <option value="Partially Received">Partially Received</option>
+            <option value="Completed">Completed</option>
+            <option value="Short/Lost">Short/Lost</option>
+          </select>
+
+          <select
+            value={vendorFilter}
+            onChange={(e) => setVendorFilter(e.target.value)}
+            className="text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none"
+          >
+            <option value="all">All Vendors</option>
+            {vendors.map((v) => (
+              <option key={v.id} value={v.id}>{v.vendor_name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenReceive}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <ArrowDownToLine className="w-3.5 h-3.5" />
+            <span>Receive from Vendor</span>
+          </button>
+          <button
+            onClick={onNewDispatch}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <ArrowUpFromLine className="w-3.5 h-3.5" />
+            <span>New Dispatch</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Dispatches Table */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        {filtered.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[800px]">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                  <th className="text-left px-4 py-2.5">Dispatch No.</th>
+                  <th className="text-left px-4 py-2.5">Date</th>
+                  <th className="text-left px-4 py-2.5">Vendor</th>
+                  <th className="text-left px-4 py-2.5">Challan</th>
+                  <th className="text-center px-4 py-2.5">Status</th>
+                  <th className="text-right px-4 py-2.5">Items Sent</th>
+                  <th className="text-center px-4 py-2.5">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((d) => (
+                  <tr key={d.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                    <td className="px-4 py-3 font-mono font-bold text-slate-700">{d.dispatch_no}</td>
+                    <td className="px-4 py-3 text-slate-500">{fmtDate(d.dispatch_date)}</td>
+                    <td className="px-4 py-3 font-bold text-slate-800">{d.vendor_name}</td>
+                    <td className="px-4 py-3 text-slate-400 font-mono">{d.challan_no || '—'}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_STYLES[d.status] || STATUS_STYLES['Sent']}`}>
+                        {d.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
+                      {(d.items || []).reduce((s, i) => s + (Number(i.sent_qty) || 0), 0)} pcs
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => onView(d)}
+                          className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-slate-100 rounded-lg transition"
+                          title="View Details"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        {d.status !== 'Completed' && d.status !== 'CLOSED' && (
+                          <button
+                            onClick={() => onReceive(d)}
+                            className="px-2.5 py-1 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg shadow-sm flex items-center gap-1 transition"
+                            title="Receive Linen Return"
+                          >
+                            <ArrowDownToLine className="w-3.5 h-3.5" />
+                            <span>Receive</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (window.confirm(`Delete dispatch ${d.dispatch_no}? This is only allowed if no receipts exist.`)) {
+                              try {
+                                await deleteDispatch(d.id);
+                                onDeleted();
+                              } catch (err: any) {
+                                alert(err.message);
+                              }
+                            }
+                          }}
+                          className="p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          title="Delete Dispatch"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -345,364 +1056,160 @@ const OverviewTab = ({ data, selectedDate, onReceive, onView }: {
             </table>
           </div>
         ) : (
-          <div className="p-8 text-center">
-            <Shirt className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <p className="text-sm text-slate-400">No linen dispatched on {fmtDate(selectedDate)}.</p>
+          <div className="p-8 text-center text-slate-400 text-xs">
+            No dispatches found for selected filter.
           </div>
         )}
       </div>
-
-      {/* Laundry cost */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Selected Date Cost</p>
-          <p className="text-xl font-bold text-brand-navy-700 mt-2 tabular-nums">{rs(data.dateCost)}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">MTD Laundry Cost</p>
-          <p className="text-xl font-bold text-brand-600 mt-2 tabular-nums">{rs(data.mtdCost)}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-4">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Vendor Outstanding</p>
-          <p className="text-xl font-bold text-amber-600 mt-2 tabular-nums">{rs(data.vendorOutstanding)}</p>
-        </div>
-      </div>
     </div>
   );
 };
 
 // ══════════════════════════════════════════════════════════════════
-// DISPATCHES TAB
+// 4. PENDING LINEN TAB
 // ══════════════════════════════════════════════════════════════════
 
-const DispatchesTab = ({ data, onReceive, onView, onDelete }: {
-  data: LaundryDashboardData;
+const PendingTab = ({
+  dispatches,
+  vendors,
+  onView,
+  onReceive,
+  onResolve,
+}: {
+  dispatches: LaundryDispatch[];
+  vendors: LaundryVendor[];
+  onView: (d: LaundryDispatch) => void;
   onReceive: (d: LaundryDispatch) => void;
-  onView: (d: LaundryDispatch) => void;
-  onDelete: (id: string) => Promise<void>;
+  onResolve: (item: any) => void;
 }) => {
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-      <div className="px-4 py-3 border-b border-slate-100">
-        <h3 className="text-sm font-bold text-brand-navy-800">All Dispatches</h3>
-      </div>
-      {data.dispatches.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px]">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Dispatch No.</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Date</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Vendor</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Challan</th>
-                <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Amount</th>
-                <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Status</th>
-                <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.dispatches.map((d) => (
-                <tr key={d.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
-                  <td className="px-4 py-2.5 text-sm font-mono font-semibold text-slate-700">{d.dispatch_no || '—'}</td>
-                  <td className="px-4 py-2.5 text-sm text-slate-600">{fmtDate(d.dispatch_date)}</td>
-                  <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">{d.vendor_name || '—'}</td>
-                  <td className="px-4 py-2.5 text-sm text-slate-500">{d.challan_no || '—'}</td>
-                  <td className="px-4 py-2.5 text-sm font-bold text-slate-700 text-right tabular-nums">{rs(d.total_amount)}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[d.status]}`}>{d.status}</span>
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    <div className="flex items-center justify-center gap-1">
-                      <button onClick={() => onView(d)} className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition" title="View"><Eye className="w-4 h-4" /></button>
-                      {d.status !== 'Completed' && d.status !== 'Short/Lost' && (
-                        <button onClick={() => onReceive(d)} className="p-1.5 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition" title="Receive Laundry"><ArrowDownToLine className="w-4 h-4" /></button>
-                      )}
-                      <button onClick={() => { if (confirm('Delete this dispatch and all its items/receipts?')) onDelete(d.id); }} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="p-8 text-center">
-          <Shirt className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-400">No dispatches yet. Click "New Laundry Dispatch" to create one.</p>
-        </div>
-      )}
-    </div>
-  );
-};
+  // Extract all pending items across dispatches
+  const pendingItems = useMemo(() => {
+    const list: Array<{
+      dispatch_id: string;
+      dispatch_no: string;
+      dispatch_date: string;
+      vendor_id: string | null;
+      vendor_name: string;
+      dispatch_item_id: string;
+      item_name: string;
+      sent_qty: number;
+      received_qty: number;
+      damaged_qty: number;
+      pending_qty: number;
+      days_pending: number;
+    }> = [];
 
-// ══════════════════════════════════════════════════════════════════
-// PENDING TAB — Vendor-wise pending
-// ══════════════════════════════════════════════════════════════════
+    const today = new Date();
 
-const PendingTab = ({ data, onReceive, onView }: {
-  data: LaundryDashboardData;
-  onReceive: (d: LaundryDispatch) => void;
-  onView: (d: LaundryDispatch) => void;
-}) => {
-  const vendorPending = useMemo(() => {
-    const vMap = new Map<string, { vendorName: string; pendingPieces: number; oldestDate: string; expectedReturn: string | null; dispatchIds: string[] }>();
-    const recvMap = new Map<string, number>();
-    const dmgMap = new Map<string, number>();
-    for (const r of data.receipts) {
-      for (const it of r.items_json ?? []) {
-        const key = `${r.dispatch_id}|${it.item_name}`;
-        recvMap.set(key, (recvMap.get(key) ?? 0) + (it.received_now ?? 0));
-        dmgMap.set(key, (dmgMap.get(key) ?? 0) + (it.damaged_lost ?? 0));
+    for (const d of dispatches) {
+      if (d.status === 'Completed' || d.status === 'CLOSED') continue;
+      const dDate = new Date(d.dispatch_date + 'T00:00:00');
+      const days = Math.max(0, Math.floor((today.getTime() - dDate.getTime()) / (1000 * 60 * 60 * 24)));
+
+      for (const it of d.items || []) {
+        const sent = Number(it.sent_qty) || 0;
+        const recv = Number(it.total_received) || 0;
+        const dmg = (Number(it.total_damaged) || 0) + (Number(it.total_lost) || 0);
+        const pending = Math.max(0, sent - recv - dmg);
+
+        if (pending > 0) {
+          list.push({
+            dispatch_id: d.id,
+            dispatch_no: d.dispatch_no,
+            dispatch_date: d.dispatch_date,
+            vendor_id: d.vendor_id,
+            vendor_name: d.vendor_name,
+            dispatch_item_id: it.id,
+            item_name: it.item_name,
+            sent_qty: sent,
+            received_qty: recv,
+            damaged_qty: dmg,
+            pending_qty: pending,
+            days_pending: days,
+          });
+        }
       }
     }
-    for (const d of data.dispatches) {
-      if (d.status === 'Completed' || d.status === 'Short/Lost') continue;
-      const dItems = data.dispatchItems.filter((it) => it.dispatch_id === d.id);
-      let pending = 0;
-      for (const it of dItems) {
-        const key = `${it.dispatch_id}|${it.item_name}`;
-        pending += Math.max(0, it.sent_qty - (recvMap.get(key) ?? 0) - (dmgMap.get(key) ?? 0));
-      }
-      if (pending <= 0) continue;
-      const vKey = d.vendor_id ?? d.vendor_name ?? 'unknown';
-      const cur = vMap.get(vKey) ?? { vendorName: d.vendor_name || 'Unknown', pendingPieces: 0, oldestDate: d.dispatch_date, expectedReturn: d.expected_return_date, dispatchIds: [] };
-      cur.pendingPieces += pending;
-      if (d.dispatch_date < cur.oldestDate) cur.oldestDate = d.dispatch_date;
-      if (d.expected_return_date && (!cur.expectedReturn || d.expected_return_date < cur.expectedReturn)) cur.expectedReturn = d.expected_return_date;
-      cur.dispatchIds.push(d.id);
-      vMap.set(vKey, cur);
-    }
-    return Array.from(vMap.values()).sort((a, b) => b.pendingPieces - a.pendingPieces);
-  }, [data]);
 
-  const [expandedVendor, setExpandedVendor] = useState<string | null>(null);
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-      <div className="px-4 py-3 border-b border-slate-100">
-        <h3 className="text-sm font-bold text-brand-navy-800">Vendor-wise Pending</h3>
-        <p className="text-xs text-slate-400 mt-0.5">Linen still with laundry vendors</p>
-      </div>
-      {vendorPending.length > 0 ? (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[700px]">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50">
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Vendor Name</th>
-                <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Pending Pieces</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Oldest Pending Since</th>
-                <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Expected Return</th>
-                <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {vendorPending.map((v, i) => {
-                const key = `${v.vendorName}-${i}`;
-                const isExpanded = expandedVendor === key;
-                const vendorDispatches = data.dispatches.filter((d) => v.dispatchIds.includes(d.id));
-                return (
-                  <React.Fragment key={key}>
-                    <tr className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 cursor-pointer" onClick={() => setExpandedVendor(isExpanded ? null : key)}>
-                      <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">
-                        <div className="flex items-center gap-1.5">
-                          <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isExpanded ? '' : '-rotate-90'}`} />
-                          {v.vendorName}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5 text-sm font-bold text-amber-600 text-right tabular-nums">{v.pendingPieces}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-500">{fmtDate(v.oldestDate)}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-500">{v.expectedReturn ? fmtDate(v.expectedReturn) : '—'}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <button onClick={(e) => { e.stopPropagation(); setExpandedVendor(isExpanded ? null : key); }} className="text-xs font-semibold text-brand-600 hover:text-brand-700">
-                          {isExpanded ? 'Hide' : 'View'}
-                        </button>
-                      </td>
-                    </tr>
-                    {isExpanded && vendorDispatches.map((d) => {
-                      const dItems = data.dispatchItems.filter((it) => it.dispatch_id === d.id);
-                      let dPending = 0;
-                      const recvMap = new Map<string, number>();
-                      const dmgMap = new Map<string, number>();
-                      for (const r of data.receipts.filter((r) => r.dispatch_id === d.id)) {
-                        for (const it of r.items_json ?? []) {
-                          recvMap.set(it.item_name, (recvMap.get(it.item_name) ?? 0) + (it.received_now ?? 0));
-                          dmgMap.set(it.item_name, (dmgMap.get(it.item_name) ?? 0) + (it.damaged_lost ?? 0));
-                        }
-                      }
-                      for (const it of dItems) dPending += Math.max(0, it.sent_qty - (recvMap.get(it.item_name) ?? 0) - (dmgMap.get(it.item_name) ?? 0));
-                      return (
-                        <tr key={d.id} className="bg-amber-50/30 border-b border-slate-50">
-                          <td className="px-4 py-2 pl-10 text-xs font-mono text-slate-500">{d.dispatch_no}</td>
-                          <td className="px-4 py-2 text-xs text-amber-600 text-right font-semibold tabular-nums">{dPending}</td>
-                          <td className="px-4 py-2 text-xs text-slate-500">{fmtDate(d.dispatch_date)}</td>
-                          <td className="px-4 py-2 text-xs text-slate-500">{d.expected_return_date ? fmtDate(d.expected_return_date) : '—'}</td>
-                          <td className="px-4 py-2 text-center">
-                            <button onClick={() => onView(d)} className="p-1 text-slate-400 hover:text-brand-600 rounded transition" title="View"><Eye className="w-3.5 h-3.5" /></button>
-                            <button onClick={() => onReceive(d)} className="p-1 text-emerald-500 hover:text-emerald-700 rounded transition" title="Receive"><ArrowDownToLine className="w-3.5 h-3.5" /></button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <div className="p-8 text-center">
-          <CheckCircle2 className="w-10 h-10 text-emerald-300 mx-auto mb-3" />
-          <p className="text-sm text-slate-400">No pending linen. All dispatched items have been received.</p>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ══════════════════════════════════════════════════════════════════
-// HISTORY TAB
-// ══════════════════════════════════════════════════════════════════
-
-const HistoryTab = ({ data, onView }: {
-  data: LaundryDashboardData;
-  onView: (d: LaundryDispatch) => void;
-}) => {
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-  const [vendorFilter, setVendorFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [search, setSearch] = useState('');
-
-  const filtered = useMemo(() => {
-    let result = data.dispatches;
-    if (fromDate) result = result.filter((d) => d.dispatch_date >= fromDate);
-    if (toDate) result = result.filter((d) => d.dispatch_date <= toDate);
-    if (vendorFilter !== 'all') result = result.filter((d) => (d.vendor_id ?? '') === vendorFilter || d.vendor_name === data.vendors.find((v) => v.id === vendorFilter)?.vendor_name);
-    if (statusFilter !== 'all') result = result.filter((d) => d.status === statusFilter);
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      result = result.filter((d) => d.dispatch_no.toLowerCase().includes(q) || d.vendor_name.toLowerCase().includes(q) || d.challan_no.toLowerCase().includes(q));
-    }
-    return result;
-  }, [data, fromDate, toDate, vendorFilter, statusFilter, search]);
-
-  // Build per-dispatch received/damaged/pending
-  const dispatchStats = useMemo(() => {
-    const stats = new Map<string, { sent: number; received: number; damaged: number; pending: number }>();
-    const recvMap = new Map<string, number>();
-    const dmgMap = new Map<string, number>();
-    for (const r of data.receipts) {
-      for (const it of r.items_json ?? []) {
-        const key = `${r.dispatch_id}|${it.item_name}`;
-        recvMap.set(key, (recvMap.get(key) ?? 0) + (it.received_now ?? 0));
-        dmgMap.set(key, (dmgMap.get(key) ?? 0) + (it.damaged_lost ?? 0));
-      }
-    }
-    for (const d of data.dispatches) {
-      let sent = 0, received = 0, damaged = 0;
-      for (const it of data.dispatchItems.filter((i) => i.dispatch_id === d.id)) {
-        sent += it.sent_qty;
-        const key = `${it.dispatch_id}|${it.item_name}`;
-        received += recvMap.get(key) ?? 0;
-        damaged += dmgMap.get(key) ?? 0;
-      }
-      stats.set(d.id, { sent, received, damaged, pending: Math.max(0, sent - received - damaged) });
-    }
-    return stats;
-  }, [data]);
+    return list;
+  }, [dispatches]);
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Filter className="w-4 h-4 text-slate-400" />
-          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Filters</span>
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-card flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-bold text-brand-navy-900">Pending Linen at Laundry</h2>
+          <p className="text-xs text-slate-500">Items still outstanding from vendors. Can be received or explicitly resolved as lost/damaged.</p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">From Date</label>
-            <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">To Date</label>
-            <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Vendor</label>
-            <select value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-              <option value="all">All Vendors</option>
-              {data.vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Status</label>
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-              <option value="all">All Status</option>
-              <option value="Sent">Sent</option>
-              <option value="Partially Received">Partially Received</option>
-              <option value="Completed">Completed</option>
-              <option value="Short/Lost">Short/Lost</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Search</label>
-            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Dispatch no, vendor..." className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-          </div>
-        </div>
+        <span className="text-xs font-bold text-amber-600 bg-amber-50 px-3 py-1 rounded-full border border-amber-200">
+          {pendingItems.reduce((s, i) => s + i.pending_qty, 0)} Total Pending Pieces
+        </span>
       </div>
 
-      {/* History table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-brand-navy-800">History ({filtered.length})</h3>
-        </div>
-        {filtered.length > 0 ? (
+        {pendingItems.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1000px]">
+            <table className="w-full min-w-[800px]">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Dispatch No.</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Date</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Vendor</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Sent</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Received</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Pending</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Damaged/Lost</th>
-                  <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Amount</th>
-                  <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">Status</th>
-                  <th className="text-center px-4 py-2.5 text-xs font-bold text-slate-500 uppercase">View</th>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                  <th className="text-left px-4 py-2.5">Linen Item</th>
+                  <th className="text-left px-4 py-2.5">Vendor</th>
+                  <th className="text-left px-4 py-2.5">Dispatch Ref</th>
+                  <th className="text-left px-4 py-2.5">Dispatch Date</th>
+                  <th className="text-right px-4 py-2.5">Sent</th>
+                  <th className="text-right px-4 py-2.5">Received</th>
+                  <th className="text-right px-4 py-2.5 text-amber-600">Pending</th>
+                  <th className="text-center px-4 py-2.5">Age</th>
+                  <th className="text-center px-4 py-2.5">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((d) => {
-                  const s = dispatchStats.get(d.id) ?? { sent: 0, received: 0, damaged: 0, pending: 0 };
-                  return (
-                    <tr key={d.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50">
-                      <td className="px-4 py-2.5 text-sm font-mono font-semibold text-slate-700">{d.dispatch_no || '—'}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600">{fmtDate(d.dispatch_date)}</td>
-                      <td className="px-4 py-2.5 text-sm font-semibold text-slate-800">{d.vendor_name || '—'}</td>
-                      <td className="px-4 py-2.5 text-sm text-slate-600 text-right tabular-nums">{s.sent}</td>
-                      <td className="px-4 py-2.5 text-sm text-emerald-600 text-right tabular-nums">{s.received}</td>
-                      <td className="px-4 py-2.5 text-sm text-amber-600 text-right tabular-nums font-semibold">{s.pending}</td>
-                      <td className="px-4 py-2.5 text-sm text-red-600 text-right tabular-nums">{s.damaged}</td>
-                      <td className="px-4 py-2.5 text-sm font-bold text-slate-700 text-right tabular-nums">{rs(d.total_amount)}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${STATUS_STYLES[d.status]}`}>{d.status}</span>
-                      </td>
-                      <td className="px-4 py-2.5 text-center">
-                        <button onClick={() => onView(d)} className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded-lg transition" title="View"><Eye className="w-4 h-4" /></button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {pendingItems.map((p, idx) => (
+                  <tr key={idx} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                    <td className="px-4 py-3 font-bold text-slate-800">{p.item_name}</td>
+                    <td className="px-4 py-3 text-slate-600">{p.vendor_name}</td>
+                    <td className="px-4 py-3 font-mono text-slate-500">{p.dispatch_no}</td>
+                    <td className="px-4 py-3 text-slate-500">{fmtDate(p.dispatch_date)}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-slate-600">{p.sent_qty}</td>
+                    <td className="px-4 py-3 text-right tabular-nums text-emerald-600">{p.received_qty}</td>
+                    <td className="px-4 py-3 text-right tabular-nums font-bold text-amber-600">{p.pending_qty} pcs</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                        p.days_pending > 3 ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {p.days_pending} {p.days_pending === 1 ? 'day' : 'days'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => {
+                            const d = dispatches.find((disp) => disp.id === p.dispatch_id);
+                            if (d) onReceive(d);
+                          }}
+                          className="px-2.5 py-1 text-xs font-bold bg-emerald-600 text-white hover:bg-emerald-700 rounded-lg shadow-sm flex items-center gap-1 transition"
+                          title="Receive Linen Return"
+                        >
+                          <ArrowDownToLine className="w-3.5 h-3.5" />
+                          <span>Receive Return</span>
+                        </button>
+                        <button
+                          onClick={() => onResolve(p)}
+                          className="px-2.5 py-1 text-xs font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg transition"
+                        >
+                          Resolve Missing
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         ) : (
-          <div className="p-8 text-center">
-            <Shirt className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <p className="text-sm text-slate-400">No dispatches match the filters.</p>
+          <div className="p-8 text-center text-slate-400 text-xs">
+            <CheckCircle2 className="w-10 h-10 text-emerald-300 mx-auto mb-2" />
+            No pending linen pieces at laundry! All dispatches are reconciled.
           </div>
         )}
       </div>
@@ -711,18 +1218,479 @@ const HistoryTab = ({ data, onView }: {
 };
 
 // ══════════════════════════════════════════════════════════════════
-// NEW DISPATCH MODAL
+// 5. VENDOR LEDGER TAB
 // ══════════════════════════════════════════════════════════════════
 
-interface DispatchRow {
-  linen_item_id: string | null;
-  item_name: string;
-  sent_qty: number;
-  rate_per_piece: number;
-  amount: number;
-}
+const VendorLedgerTab = ({
+  vendors,
+  selectedDate,
+  onRecordPayment,
+  onOpenStatement,
+  onBillApproved,
+}: {
+  vendors: LaundryVendor[];
+  selectedDate: string;
+  onRecordPayment: () => void;
+  onOpenStatement: (vId: string) => void;
+  onBillApproved: () => void;
+}) => {
+  const [selectedVendorId, setSelectedVendorId] = useState<string>(vendors[0]?.id || '');
+  const [ledger, setLedger] = useState<VendorLedgerResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [viewMode, setViewMode] = useState<'daily' | 'transactions'>('daily');
 
-const NewDispatchModal = ({ vendors, linenItems, defaultDate, onClose, onSaved }: {
+  const loadLedger = useCallback(async () => {
+    if (!selectedVendorId) return;
+    try {
+      setLoading(true);
+      const res = await getVendorLedger(selectedVendorId);
+      setLedger(res);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedVendorId]);
+
+  useEffect(() => { loadLedger(); }, [loadLedger]);
+
+  const handleGenerateAndApproveBill = async () => {
+    if (!selectedVendorId) return;
+    try {
+      setApproving(true);
+      // Generate draft bill for selected date
+      const bill = await generateDailyBill(selectedVendorId, selectedDate);
+      if (bill.total_amount <= 0) {
+        alert('Today has no approved received linen for this vendor. Bill amount is ₹0.');
+        return;
+      }
+      // Approve bill and sync to Finance
+      await approveDailyBill(bill.id);
+      onBillApproved();
+      loadLedger();
+    } catch (e: any) {
+      alert(e.message || 'Failed to approve bill');
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Vendor Selector & Action Deck */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-white rounded-2xl border border-slate-200 p-4 shadow-card">
+        <div className="flex items-center gap-2">
+          <label className="text-xs font-bold text-slate-500 uppercase">Vendor:</label>
+          <select
+            value={selectedVendorId}
+            onChange={(e) => setSelectedVendorId(e.target.value)}
+            className="text-xs font-semibold border border-slate-200 rounded-lg px-3 py-1.5 focus:outline-none"
+          >
+            {vendors.map((v) => (
+              <option key={v.id} value={v.id}>{v.vendor_name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRecordPayment}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            <span>Record Payment</span>
+          </button>
+          <button
+            onClick={handleGenerateAndApproveBill}
+            disabled={approving}
+            className="flex items-center gap-1.5 px-3 py-2 bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold rounded-xl transition shadow-sm"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>{approving ? 'Syncing...' : "Approve Today's Bill"}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Separate Metrics: Physical Linen Pending vs Financial Payment Due */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-gradient-to-br from-amber-50/80 to-amber-100/30 rounded-2xl border-2 border-amber-300 p-4 lg:p-5 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+              <Package className="w-4 h-4 text-amber-600" />
+              Physical Linen Pending
+            </span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-200 text-amber-900">
+              Physical Stock
+            </span>
+          </div>
+          <div className="text-3xl font-black text-amber-900 mt-2 tabular-nums">
+            {ledger?.physical_pending_pieces ?? 0} <span className="text-sm font-semibold text-amber-700">pieces</span>
+          </div>
+          <p className="text-xs text-amber-700/80 mt-1">
+            Physical items still with vendor. Incurs <strong className="font-bold text-amber-900">₹0 billing</strong> until received back.
+          </p>
+        </div>
+
+        <div className="bg-gradient-to-br from-rose-50/80 to-rose-100/30 rounded-2xl border-2 border-rose-300 p-4 lg:p-5 shadow-card">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-rose-800 uppercase tracking-wider flex items-center gap-1.5">
+              <IndianRupee className="w-4 h-4 text-rose-600" />
+              Vendor Payment Due
+            </span>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-200 text-rose-900">
+              Financial Liability
+            </span>
+          </div>
+          <div className="text-3xl font-black text-rose-900 mt-2 tabular-nums">
+            {rs(ledger?.financial_due_amount ?? 0)}
+          </div>
+          <p className="text-xs text-rose-700/80 mt-1">
+            Total Approved Bills: <strong>{rs(ledger?.total_billed_amount ?? 0)}</strong> • Total Paid: <strong>{rs(ledger?.total_paid_amount ?? 0)}</strong>
+          </p>
+        </div>
+      </div>
+
+      {/* Explicit Distinction Callout */}
+      <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-blue-900">
+        <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+        <div>
+          <strong className="font-bold">Important: </strong>
+          <span>
+            <strong>Linen Pending</strong> ({ledger?.physical_pending_pieces ?? 0} pcs) and <strong>Payment Due</strong> ({rs(ledger?.financial_due_amount ?? 0)}) are two completely different things and are tracked separately. Pending laundry pieces have ₹0 billing until actually returned and approved.
+          </span>
+        </div>
+      </div>
+
+      {/* Ledger Table Section */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-bold text-brand-navy-900">
+              {viewMode === 'daily' ? 'Vendor-Wise Date Ledger' : 'Vendor Transaction Audit Trail'}
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              {viewMode === 'daily'
+                ? 'Chronological balance: Sent Qty, Received Qty, Pending Qty, Bills, Payments, and Payment Due'
+                : 'Individual invoices, payment receipts, and dispatch entries'}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+            <button
+              onClick={() => setViewMode('daily')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                viewMode === 'daily' ? 'bg-white text-brand-navy-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Date-Wise Ledger
+            </button>
+            <button
+              onClick={() => setViewMode('transactions')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                viewMode === 'transactions' ? 'bg-white text-brand-navy-900 shadow-xs' : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Transaction Trail
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-slate-400">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto text-brand-600" />
+          </div>
+        ) : viewMode === 'daily' ? (
+          /* ── 1. DATE-WISE LEDGER TABLE (Exact Requested Columns) ── */
+          ledger?.daily_ledger && ledger.daily_ledger.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[850px]">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="text-left px-4 py-2.5">Date</th>
+                    <th className="text-right px-4 py-2.5">Sent Qty</th>
+                    <th className="text-right px-4 py-2.5 text-emerald-600">Received Qty</th>
+                    <th className="text-right px-4 py-2.5 text-amber-600">Pending Qty</th>
+                    <th className="text-right px-4 py-2.5">Bill Amount</th>
+                    <th className="text-right px-4 py-2.5 text-emerald-600">Paid Amount</th>
+                    <th className="text-right px-4 py-2.5 font-black text-brand-navy-900">Payment Due</th>
+                    <th className="text-left px-4 py-2.5">Activity Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.daily_ledger.map((row, idx) => (
+                    <tr key={idx} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                      <td className="px-4 py-3 text-slate-600 font-mono font-medium">{fmtDate(row.date)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-slate-700 tabular-nums">
+                        {row.sent_qty > 0 ? `${row.sent_qty} pcs` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
+                        {row.received_qty > 0 ? `${row.received_qty} pcs` : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">
+                        <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
+                          row.pending_qty > 0 ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'
+                        }`}>
+                          {row.pending_qty} pcs
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
+                        {row.bill_amount > 0 ? rs(row.bill_amount) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
+                        {row.paid_amount > 0 ? rs(row.paid_amount) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-black text-brand-navy-900 tabular-nums">
+                        {rs(row.payment_due)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-500 text-[11px] max-w-xs truncate" title={row.details}>
+                        {row.details || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-slate-400 text-xs">
+              No ledger activity recorded yet for this vendor.
+            </div>
+          )
+        ) : (
+          /* ── 2. INDIVIDUAL TRANSACTION AUDIT TRAIL ── */
+          ledger?.transactions && ledger.transactions.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[750px]">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+                    <th className="text-left px-4 py-2.5">Date</th>
+                    <th className="text-left px-4 py-2.5">Type</th>
+                    <th className="text-left px-4 py-2.5">Reference</th>
+                    <th className="text-left px-4 py-2.5">Description</th>
+                    <th className="text-right px-4 py-2.5">Bill Amount</th>
+                    <th className="text-right px-4 py-2.5">Paid Amount</th>
+                    <th className="text-right px-4 py-2.5 font-black text-brand-navy-900">Balance Due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.transactions.map((t, idx) => (
+                    <tr key={idx} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                      <td className="px-4 py-3 text-slate-500 font-mono">{fmtDate(t.date)}</td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          t.type === 'BILL' ? 'bg-amber-100 text-amber-800'
+                          : t.type === 'PAYMENT' ? 'bg-emerald-100 text-emerald-800'
+                          : t.type === 'DISPATCH' ? 'bg-blue-100 text-blue-800'
+                          : 'bg-teal-100 text-teal-800'
+                        }`}>
+                          {t.type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-slate-600">{t.reference}</td>
+                      <td className="px-4 py-3 text-slate-700">{t.description}</td>
+                      <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
+                        {t.bill_amount > 0 ? rs(t.bill_amount) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
+                        {t.paid_amount > 0 ? rs(t.paid_amount) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right font-black text-slate-900 tabular-nums">
+                        {rs(t.balance_due)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-8 text-center text-slate-400 text-xs">
+              No transactions found for this vendor.
+            </div>
+          )
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// 6. AUDIT HISTORY TAB
+// ══════════════════════════════════════════════════════════════════
+
+const AuditHistoryTab = ({
+  dispatches,
+  vendors,
+  onView,
+}: {
+  dispatches: LaundryDispatch[];
+  vendors: LaundryVendor[];
+  onView: (d: LaundryDispatch) => void;
+}) => {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-card overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-100">
+        <h3 className="text-sm font-bold text-brand-navy-900">Historical Dispatches & Receipts Audit</h3>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[700px]">
+          <thead>
+            <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold text-slate-500 uppercase">
+              <th className="text-left px-4 py-2.5">Date</th>
+              <th className="text-left px-4 py-2.5">Dispatch No</th>
+              <th className="text-left px-4 py-2.5">Vendor</th>
+              <th className="text-left px-4 py-2.5">Status</th>
+              <th className="text-right px-4 py-2.5">Amount</th>
+              <th className="text-center px-4 py-2.5">View</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dispatches.map((d) => (
+              <tr key={d.id} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
+                <td className="px-4 py-3 text-slate-500 font-mono">{fmtDate(d.dispatch_date)}</td>
+                <td className="px-4 py-3 font-mono font-bold text-slate-700">{d.dispatch_no}</td>
+                <td className="px-4 py-3 font-semibold text-slate-800">{d.vendor_name}</td>
+                <td className="px-4 py-3">
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_STYLES[d.status] || STATUS_STYLES['Sent']}`}>
+                    {d.status}
+                  </span>
+                </td>
+                <td className="px-4 py-3 text-right font-bold text-slate-700 tabular-nums">{rs(d.total_amount)}</td>
+                <td className="px-4 py-3 text-center">
+                  <button onClick={() => onView(d)} className="p-1.5 text-slate-400 hover:text-brand-600 rounded-lg">
+                    <Eye className="w-4 h-4" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════
+// MODALS
+// ══════════════════════════════════════════════════════════════════
+
+// ── New Dispatch Modal ──
+// ── Select Dispatch to Receive Modal (Direct Entry) ──
+const SelectDispatchToReceiveModal = ({
+  dispatches,
+  onSelect,
+  onClose,
+}: {
+  dispatches: LaundryDispatch[];
+  onSelect: (d: LaundryDispatch) => void;
+  onClose: () => void;
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const filtered = dispatches.filter((d) => {
+    const q = searchTerm.toLowerCase();
+    return (
+      d.dispatch_no.toLowerCase().includes(q) ||
+      (d.vendor_name || '').toLowerCase().includes(q) ||
+      (d.challan_no || '').toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+          <div>
+            <h3 className="text-base font-bold text-brand-navy-900 flex items-center gap-2">
+              <ArrowDownToLine className="w-5 h-5 text-emerald-600" />
+              Receive Linen from Vendor
+            </h3>
+            <p className="text-xs text-slate-500">Select an active dispatch to record returned laundry items.</p>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg">
+            <X className="w-5 h-5 text-slate-400" />
+          </button>
+        </div>
+
+        <div className="shrink-0">
+          <input
+            type="text"
+            placeholder="Search vendor name, dispatch number (e.g. LD-2026...), or challan..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full text-xs border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+          />
+        </div>
+
+        <div className="overflow-y-auto space-y-2.5 flex-1 pr-1">
+          {filtered.length === 0 ? (
+            <div className="py-10 text-center text-slate-400 text-xs">
+              <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+              No active dispatches waiting for receipt.
+            </div>
+          ) : (
+            filtered.map((d) => {
+              const totalSent = (d.items || []).reduce((s, i) => s + (Number(i.sent_qty) || 0), 0);
+              const totalRecv = (d.items || []).reduce((s, i) => s + (Number(i.total_received) || 0), 0);
+              const totalDmg = (d.items || []).reduce((s, i) => s + ((Number(i.total_damaged) || 0) + (Number(i.total_lost) || 0)), 0);
+              const pending = Math.max(0, totalSent - totalRecv - totalDmg);
+
+              return (
+                <div
+                  key={d.id}
+                  className="p-3.5 border border-slate-200 hover:border-emerald-500 rounded-xl bg-slate-50/50 hover:bg-white transition flex items-center justify-between gap-3 shadow-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900">{d.vendor_name || 'Vendor'}</span>
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_STYLES[d.status] || STATUS_STYLES['Sent']}`}>
+                        {d.status}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      {d.dispatch_no} • {fmtDate(d.dispatch_date)}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs">
+                      <span className="text-slate-600">Sent: <strong>{totalSent} pcs</strong></span>
+                      <span className="text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                        {pending} pcs pending
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => onSelect(d)}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5 shrink-0"
+                  >
+                    <ArrowDownToLine className="w-3.5 h-3.5" />
+                    <span>Receive Return</span>
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        <div className="border-t border-slate-100 pt-3 flex justify-end shrink-0">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── New Dispatch Modal (With Vendor Pricing / Charges) ──
+const NewDispatchModal = ({
+  vendors,
+  linenItems,
+  defaultDate,
+  onClose,
+  onSaved,
+}: {
   vendors: LaundryVendor[];
   linenItems: LinenItem[];
   defaultDate: string;
@@ -730,172 +1698,279 @@ const NewDispatchModal = ({ vendors, linenItems, defaultDate, onClose, onSaved }
   onSaved: () => void;
 }) => {
   const [dispatchDate, setDispatchDate] = useState(defaultDate);
-  const [vendorId, setVendorId] = useState('');
+  const [vendorId, setVendorId] = useState(vendors[0]?.id || '');
   const [challanNo, setChallanNo] = useState('');
-  const [expectedReturn, setExpectedReturn] = useState('');
   const [remarks, setRemarks] = useState('');
-  const [sentBy, setSentBy] = useState('');
-  const [rows, setRows] = useState<DispatchRow[]>([
-    { linen_item_id: null, item_name: '', sent_qty: 0, rate_per_piece: 0, amount: 0 },
+  const [rows, setRows] = useState<Array<{
+    linen_item_id: string;
+    item_name: string;
+    sent_qty: number;
+    rate_per_piece: number;
+    amount: number;
+  }>>([
+    {
+      linen_item_id: linenItems[0]?.id || '',
+      item_name: linenItems[0]?.item_name || '',
+      sent_qty: 1,
+      rate_per_piece: linenItems[0]?.standard_rate || 0,
+      amount: linenItems[0]?.standard_rate || 0,
+    },
   ]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const totalAmount = rows.reduce((s, r) => s + r.amount, 0);
-
-  const updateRow = (idx: number, patch: Partial<DispatchRow>) => {
-    setRows((prev) => prev.map((r, i) => {
-      if (i !== idx) return r;
-      const next = { ...r, ...patch };
-      next.amount = (next.sent_qty ?? 0) * (next.rate_per_piece ?? 0);
-      return next;
-    }));
-  };
+  // When vendor changes, load vendor-specific rates
+  useEffect(() => {
+    if (!vendorId) return;
+    getVendorRates(vendorId)
+      .then((rates) => {
+        if (!rates || rates.length === 0) return;
+        const rateMap = new Map(rates.map((r) => [r.linen_item_id, r.rate_per_piece]));
+        setRows((prev) =>
+          prev.map((r) => {
+            if (r.linen_item_id && rateMap.has(r.linen_item_id)) {
+              const rate = rateMap.get(r.linen_item_id)!;
+              return {
+                ...r,
+                rate_per_piece: rate,
+                amount: (r.sent_qty || 1) * rate,
+              };
+            }
+            return r;
+          })
+        );
+      })
+      .catch((e) => console.warn('Vendor rates lookup note:', e?.message));
+  }, [vendorId]);
 
   const addRow = () => {
-    setRows((prev) => [...prev, { linen_item_id: null, item_name: '', sent_qty: 0, rate_per_piece: 0, amount: 0 }]);
+    const item = linenItems[0];
+    if (!item) return;
+    setRows([
+      ...rows,
+      {
+        linen_item_id: item.id,
+        item_name: item.item_name,
+        sent_qty: 1,
+        rate_per_piece: item.standard_rate || 0,
+        amount: item.standard_rate || 0,
+      },
+    ]);
   };
 
-  const removeRow = (idx: number) => {
-    setRows((prev) => prev.filter((_, i) => i !== idx));
-  };
-
-  const handleLinenSelect = (idx: number, itemId: string) => {
-    if (itemId === 'custom') {
-      updateRow(idx, { linen_item_id: null, item_name: '' });
-      return;
-    }
-    const item = linenItems.find((i) => i.id === itemId);
-    if (item) updateRow(idx, { linen_item_id: item.id, item_name: item.item_name, rate_per_piece: item.standard_rate ?? 0 });
-  };
+  const totalPieces = rows.reduce((s, r) => s + (Number(r.sent_qty) || 0), 0);
+  const totalCost = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
   const handleSave = async () => {
-    setError(null);
-    const validRows = rows.filter((r) => r.item_name.trim() && r.sent_qty > 0);
-    if (validRows.length === 0) { setError('Add at least one linen item with quantity > 0.'); return; }
-    if (!vendorId && !vendors.some((v) => v.id === vendorId)) { setError('Select a laundry vendor.'); return; }
     try {
       setSaving(true);
-      const vendor = vendors.find((v) => v.id === vendorId);
+      setError(null);
+      const v = vendors.find((vend) => vend.id === vendorId);
       await saveDispatch({
         dispatch_date: dispatchDate,
-        vendor_id: vendorId || null,
-        vendor_name: vendor?.vendor_name ?? '',
+        vendor_id: vendorId,
+        vendor_name: v?.vendor_name || '',
         challan_no: challanNo,
-        expected_return_date: expectedReturn || null,
+        expected_return_date: null,
         remarks,
-        sent_by: sentBy,
-        items: validRows.map((r) => ({
-          linen_item_id: r.linen_item_id,
+        sent_by: 'Staff',
+        items: rows.map((r) => ({
+          linen_item_id: r.linen_item_id || null,
           item_name: r.item_name,
-          sent_qty: r.sent_qty,
-          rate_per_piece: r.rate_per_piece,
-          amount: r.amount,
+          sent_qty: Number(r.sent_qty),
+          rate_per_piece: Number(r.rate_per_piece),
+          amount: Number(r.sent_qty) * Number(r.rate_per_piece),
         })),
       });
       onSaved();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save dispatch');
+    } catch (e: any) {
+      setError(e.message || 'Failed to dispatch linen');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-          <h3 className="text-base font-bold text-brand-navy-800">New Laundry Dispatch</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-3xl w-full p-5 lg:p-6 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+          <div>
+            <h3 className="text-base font-bold text-slate-800">New Laundry Dispatch</h3>
+            <p className="text-xs text-slate-400">Specify linen quantities and vendor washing charges per piece.</p>
+          </div>
+          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
         </div>
-        <div className="p-5 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />{error}</div>}
-          {/* Header fields */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Dispatch Date</label>
-              <input type="date" value={dispatchDate} onChange={(e) => setDispatchDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Laundry Vendor</label>
-              <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-                <option value="">Select vendor…</option>
-                {vendors.filter((v) => v.is_active).map((v) => <option key={v.id} value={v.id}>{v.vendor_name}</option>)}
-              </select>
-              {vendors.length === 0 && <p className="text-[10px] text-amber-600 mt-1">No vendors yet. Add one from Quick Actions.</p>}
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Challan / Slip No. (optional)</label>
-              <input type="text" value={challanNo} onChange={(e) => setChallanNo(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Expected Return Date (optional)</label>
-              <input type="date" value={expectedReturn} onChange={(e) => setExpectedReturn(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Sent By</label>
-              <input type="text" value={sentBy} onChange={(e) => setSentBy(e.target.value)} placeholder="Staff name" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Remarks</label>
-              <input type="text" value={remarks} onChange={(e) => setRemarks(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
+
+        {error && <div className="text-xs text-rose-600 bg-rose-50 p-2.5 rounded-lg shrink-0">{error}</div>}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 shrink-0">
+          <div>
+            <label className="text-[11px] font-bold text-slate-600 block mb-1">Dispatch Date</label>
+            <input
+              type="date"
+              value={dispatchDate}
+              onChange={(e) => setDispatchDate(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-lg p-2 font-medium"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] font-bold text-slate-600 block mb-1">Vendor</label>
+            <select
+              value={vendorId}
+              onChange={(e) => setVendorId(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-lg p-2 font-medium"
+            >
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] font-bold text-slate-600 block mb-1">Challan / Slip No. (Optional)</label>
+            <input
+              type="text"
+              placeholder="e.g. CH-9901"
+              value={challanNo}
+              onChange={(e) => setChallanNo(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-lg p-2 font-medium"
+            />
+          </div>
+        </div>
+
+        {/* Linen Items Table */}
+        <div className="space-y-2 flex-1 overflow-y-auto pr-1">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-800">Linen Items & Washing Rates</span>
+            <button
+              onClick={addRow}
+              className="text-xs text-brand-600 hover:text-brand-700 font-bold hover:underline flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Item</span>
+            </button>
           </div>
 
-          {/* Linen rows */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Linen Items</label>
-              <button onClick={addRow} className="flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700"><Plus className="w-3.5 h-3.5" /> Add Linen Item</button>
-            </div>
-            <div className="space-y-2">
-              {rows.map((r, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-center bg-slate-50 rounded-lg p-2">
-                  <div className="col-span-12 sm:col-span-5">
+          {/* Table Header */}
+          <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-slate-500 uppercase px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
+            <div className="col-span-5">Linen Item</div>
+            <div className="col-span-2 text-right">Sent Qty (Pcs)</div>
+            <div className="col-span-2 text-right">Vendor Rate (₹/pc)</div>
+            <div className="col-span-2 text-right">Est. Charge (₹)</div>
+            <div className="col-span-1 text-center"></div>
+          </div>
+
+          {/* Rows */}
+          <div className="space-y-2">
+            {rows.map((r, i) => {
+              const selectedLinen = linenItems.find((l) => l.id === r.linen_item_id);
+              return (
+                <div key={i} className="grid grid-cols-12 gap-2 items-center bg-slate-50/70 p-2.5 rounded-xl border border-slate-200">
+                  <div className="col-span-5">
                     <select
-                      value={r.linen_item_id ?? (r.item_name ? 'custom' : '')}
-                      onChange={(e) => handleLinenSelect(idx, e.target.value)}
-                      className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none bg-white"
+                      value={r.linen_item_id}
+                      onChange={(e) => {
+                        const it = linenItems.find((l) => l.id === e.target.value);
+                        const updated = [...rows];
+                        const rate = it?.standard_rate || 0;
+                        const qty = updated[i].sent_qty || 1;
+                        updated[i] = {
+                          ...updated[i],
+                          linen_item_id: e.target.value,
+                          item_name: it?.item_name || '',
+                          rate_per_piece: rate,
+                          amount: qty * rate,
+                        };
+                        setRows(updated);
+                      }}
+                      className="w-full text-xs border border-slate-200 rounded-lg p-2 font-medium bg-white"
                     >
-                      <option value="">Select item…</option>
-                      {linenItems.filter((i) => i.is_active).map((i) => <option key={i.id} value={i.id}>{i.item_name}</option>)}
-                      <option value="custom">Custom (type below)</option>
+                      <option value="">-- Select Linen Item --</option>
+                      {linenItems.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.item_name} ({l.category} • In Hotel: {l.available_in_hotel ?? 0} pcs)
+                        </option>
+                      ))}
                     </select>
-                    {(!r.linen_item_id) && (
+                    {selectedLinen && (
+                      <span className="text-[10px] text-slate-400 block px-1 mt-0.5">
+                        In Hotel Stock: <strong className="text-emerald-700">{selectedLinen.available_in_hotel ?? 0} pcs</strong>
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="col-span-2">
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Qty"
+                      value={r.sent_qty}
+                      onChange={(e) => {
+                        const qty = Number(e.target.value);
+                        const updated = [...rows];
+                        updated[i].sent_qty = qty;
+                        updated[i].amount = qty * updated[i].rate_per_piece;
+                        setRows(updated);
+                      }}
+                      className="w-full text-xs border border-slate-200 rounded-lg p-2 text-right font-bold"
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <div className="relative">
+                      <span className="absolute left-2 top-2 text-xs text-slate-400">₹</span>
                       <input
-                        type="text"
-                        value={r.item_name}
-                        onChange={(e) => updateRow(idx, { item_name: e.target.value })}
-                        placeholder="Enter item name"
-                        className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 mt-1 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        placeholder="Rate"
+                        value={r.rate_per_piece}
+                        onChange={(e) => {
+                          const rate = Number(e.target.value);
+                          const updated = [...rows];
+                          updated[i].rate_per_piece = rate;
+                          updated[i].amount = (updated[i].sent_qty || 0) * rate;
+                          setRows(updated);
+                        }}
+                        className="w-full text-xs border border-slate-200 rounded-lg p-2 pl-5 text-right font-semibold"
+                        title="Vendor washing charge per piece"
                       />
-                    )}
+                    </div>
                   </div>
-                  <div className="col-span-4 sm:col-span-2">
-                    <input type="number" min="0" value={r.sent_qty} onChange={(e) => updateRow(idx, { sent_qty: parseInt(e.target.value) || 0 })} placeholder="Qty" className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none text-center" />
+
+                  <div className="col-span-2 text-right font-extrabold text-xs text-slate-800 pr-1 tabular-nums">
+                    {rs(r.amount)}
                   </div>
-                  <div className="col-span-4 sm:col-span-2">
-                    <input type="number" min="0" step="0.01" value={r.rate_per_piece} onChange={(e) => updateRow(idx, { rate_per_piece: parseFloat(e.target.value) || 0 })} placeholder="Rate" className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none text-center" />
-                  </div>
-                  <div className="col-span-3 sm:col-span-2 text-sm font-bold text-slate-700 text-right tabular-nums">{rs(r.amount)}</div>
-                  <div className="col-span-1 flex justify-end">
-                    {rows.length > 1 && (
-                      <button onClick={() => removeRow(idx)} className="p-1 text-slate-300 hover:text-red-500 rounded transition"><Trash2 className="w-4 h-4" /></button>
-                    )}
+
+                  <div className="col-span-1 text-center">
+                    <button
+                      onClick={() => setRows(rows.filter((_, idx) => idx !== i))}
+                      disabled={rows.length === 1}
+                      className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-30 rounded-lg transition"
+                      title="Remove Item"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </div>
-              ))}
-            </div>
-            <div className="flex justify-end mt-2">
-              <div className="text-sm font-bold text-brand-navy-700">Total: <span className="tabular-nums">{rs(totalAmount)}</span></div>
-            </div>
+              );
+            })}
           </div>
         </div>
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex items-center gap-2">
-          <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-3 transition">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-3 transition">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save Dispatch
+
+        {/* Pricing & Estimation Card */}
+        <div className="bg-gradient-to-r from-slate-50 to-indigo-50/40 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div>
+            <span className="text-xs font-bold text-slate-700">Total Estimated Laundry Charge: </span>
+            <span className="text-sm font-black text-brand-600">{rs(totalCost)}</span>
+            <span className="text-xs text-slate-400 ml-2">({totalPieces} pieces total)</span>
+          </div>
+          <div className="text-[11px] text-slate-500 max-w-sm">
+            💡 The washing rate set here is used when linen is received back. Pending linen is billed at ₹0 until returned.
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 shrink-0">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-4 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg shadow-sm">
+            {saving ? 'Saving...' : 'Confirm Dispatch'}
           </button>
         </div>
       </div>
@@ -903,173 +1978,511 @@ const NewDispatchModal = ({ vendors, linenItems, defaultDate, onClose, onSaved }
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// RECEIVE MODAL
-// ══════════════════════════════════════════════════════════════════
-
-const ReceiveModal = ({ dispatchId, dispatchNo, vendorName, dispatchDate, challanNo, onClose, onSaved }: {
-  dispatchId: string;
-  dispatchNo: string;
-  vendorName: string;
-  dispatchDate: string;
-  challanNo: string;
+// ── Receive Modal (With Full Accounting: Received Clean, Damaged, Lost & Remaining Pending) ──
+const ReceiveModal = ({
+  dispatch,
+  onClose,
+  onSaved,
+}: {
+  dispatch: LaundryDispatch;
   onClose: () => void;
   onSaved: () => void;
 }) => {
-  const [detail, setDetail] = useState<DispatchWithReceipts | null>(null);
-  const [loading, setLoading] = useState(true);
   const [receiptDate, setReceiptDate] = useState(todayStr());
-  const [receiveNow, setReceiveNow] = useState<Record<string, number>>({});
-  const [damagedLost, setDamagedLost] = useState<Record<string, number>>({});
   const [remarks, setRemarks] = useState('');
-  const [receivedBy, setReceivedBy] = useState('');
+  const [items, setItems] = useState<Array<{
+    dispatch_item_id: string;
+    linen_item_id: string | null;
+    item_name: string;
+    sent_qty: number;
+    pending_before: number;
+    received_now: number;
+    damaged_qty: number;
+    lost_qty: number;
+    is_billable: boolean;
+    rate_applied: number;
+  }>>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const d = await getDispatchDetail(dispatchId);
-        setDetail(d);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load dispatch');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [dispatchId]);
+    const initItems = (sourceList: any[]) => {
+      const list = sourceList.map((it) => {
+        const sent = Number(it.sent_qty) || 0;
+        const recv = Number(it.total_received) || 0;
+        const dmg = Number(it.total_damaged) || 0;
+        const lost = Number(it.total_lost) || 0;
+        const pending = Math.max(0, sent - recv - dmg - lost);
+
+        return {
+          dispatch_item_id: it.id,
+          linen_item_id: it.linen_item_id,
+          item_name: it.item_name,
+          sent_qty: sent,
+          pending_before: pending,
+          received_now: pending, // Default: full remaining clean
+          damaged_qty: 0,
+          lost_qty: 0,
+          is_billable: true,
+          rate_applied: Number(it.rate_per_piece) || 0,
+        };
+      });
+      setItems(list);
+    };
+
+    const directItems = dispatch.items || (dispatch as any).laundry_dispatch_items;
+    if (directItems && directItems.length > 0) {
+      initItems(directItems);
+    } else if (dispatch.id) {
+      setLoadingItems(true);
+      getDispatchDetail(dispatch.id)
+        .then((detail) => {
+          if (detail && detail.items && detail.items.length > 0) {
+            initItems(detail.items);
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to load dispatch items:', err);
+          setError('Failed to load items for this dispatch.');
+        })
+        .finally(() => setLoadingItems(false));
+    }
+  }, [dispatch]);
+
+  // Quick Action: Fill all as Clean Received
+  const handleReceiveAllClean = () => {
+    setItems((prev) =>
+      prev.map((i) => ({
+        ...i,
+        received_now: i.pending_before,
+        damaged_qty: 0,
+        lost_qty: 0,
+      }))
+    );
+  };
+
+  // Quick Action: Clear all inputs to 0
+  const handleClearAll = () => {
+    setItems((prev) =>
+      prev.map((i) => ({
+        ...i,
+        received_now: 0,
+        damaged_qty: 0,
+        lost_qty: 0,
+      }))
+    );
+  };
+
+  // Derived totals
+  const totalCleanReceived = items.reduce((s, i) => s + (Number(i.received_now) || 0), 0);
+  const totalDamaged = items.reduce((s, i) => s + (Number(i.damaged_qty) || 0), 0);
+  const totalLost = items.reduce((s, i) => s + (Number(i.lost_qty) || 0), 0);
+  const totalStillPending = items.reduce(
+    (s, i) =>
+      s +
+      Math.max(
+        0,
+        i.pending_before -
+          (Number(i.received_now) || 0) -
+          (Number(i.damaged_qty) || 0) -
+          (Number(i.lost_qty) || 0)
+      ),
+    0
+  );
+  const totalBillableAmount = items.reduce(
+    (s, i) =>
+      s +
+      (i.is_billable
+        ? (Number(i.received_now) || 0) * (Number(i.rate_applied) || 0)
+        : 0),
+    0
+  );
 
   const handleSave = async () => {
-    if (!detail) return;
-    setError(null);
-    const items: ReceiptItemEntry[] = detail.items.map((it) => {
-      const recvNow = receiveNow[it.item_name] ?? 0;
-      const dmg = damagedLost[it.item_name] ?? 0;
-      const prevRecv = detail.received_totals[it.item_name] ?? 0;
-      const remaining = Math.max(0, it.sent_qty - prevRecv - (detail.damaged_totals[it.item_name] ?? 0));
-      return {
-        item_name: it.item_name,
-        linen_item_id: it.linen_item_id,
-        sent_qty: it.sent_qty,
-        received_now: Math.min(recvNow, remaining),
-        damaged_lost: Math.min(dmg, Math.max(0, it.sent_qty - prevRecv - recvNow)),
-      };
-    });
-    // Validate: received + damaged <= sent - previously received - previously damaged
-    for (const it of items) {
-      const prevRecv = detail.received_totals[it.item_name] ?? 0;
-      const prevDmg = detail.damaged_totals[it.item_name] ?? 0;
-      if (it.received_now + it.damaged_lost > it.sent_qty - prevRecv - prevDmg) {
-        setError(`Cannot receive more than pending for ${it.item_name}.`);
+    try {
+      if (items.length === 0) {
+        setError('No items available in this dispatch.');
         return;
       }
-    }
-    if (items.every((i) => i.received_now === 0 && i.damaged_lost === 0)) {
-      setError('Enter at least one receive or damaged quantity.');
-      return;
-    }
-    try {
+      const totalAccountedNow = totalCleanReceived + totalDamaged + totalLost;
+      if (totalAccountedNow === 0) {
+        setError('Please enter at least one quantity for Received Clean, Damaged, or Lost.');
+        return;
+      }
+
       setSaving(true);
+      setError(null);
       await saveReceipt({
-        dispatch_id: dispatchId,
+        dispatch_id: dispatch.id,
         receipt_date: receiptDate,
-        items,
         remarks,
-        received_by: receivedBy,
+        received_by: 'Staff',
+        items: items.map((i) => ({
+          dispatch_item_id: i.dispatch_item_id,
+          item_name: i.item_name,
+          linen_item_id: i.linen_item_id,
+          sent_qty: i.sent_qty,
+          received_now: Number(i.received_now) || 0,
+          damaged_qty: Number(i.damaged_qty) || 0,
+          lost_qty: Number(i.lost_qty) || 0,
+          damaged_lost: (Number(i.damaged_qty) || 0) + (Number(i.lost_qty) || 0),
+          remaining_pending: Math.max(
+            0,
+            i.pending_before -
+              (Number(i.received_now) || 0) -
+              (Number(i.damaged_qty) || 0) -
+              (Number(i.lost_qty) || 0)
+          ),
+          is_billable: i.is_billable,
+          rate_applied: Number(i.rate_applied) || 0,
+        })),
       });
       onSaved();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save receipt');
+    } catch (e: any) {
+      setError(e.message || 'Failed to record receipt');
     } finally {
       setSaving(false);
     }
   };
 
-  if (loading) return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl p-8"><Loader2 className="w-6 h-6 text-brand-600 animate-spin" /></div>
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-white rounded-2xl max-w-5xl w-full p-5 shadow-2xl space-y-4 max-h-[92vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
+          <div>
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <ArrowDownToLine className="w-5 h-5 text-emerald-600" />
+              Receive from Laundry Vendor
+            </h3>
+            <p className="text-xs text-slate-500">
+              Dispatch <span className="font-mono font-bold text-slate-700">{dispatch.dispatch_no}</span> •{' '}
+              <span className="font-semibold text-slate-800">{dispatch.vendor_name}</span> •{' '}
+              Sent on {fmtDate(dispatch.dispatch_date)}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-slate-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {error && (
+          <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 p-2.5 rounded-xl shrink-0 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Date, Remarks, & Quick Fill Actions */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 shrink-0 items-end bg-slate-50/60 p-3 rounded-xl border border-slate-200">
+          <div className="sm:col-span-3">
+            <label className="text-[11px] font-bold text-slate-700 block mb-1">Return Date</label>
+            <input
+              type="date"
+              value={receiptDate}
+              onChange={(e) => setReceiptDate(e.target.value)}
+              className="w-full text-xs border border-slate-200 bg-white rounded-lg p-2 font-medium focus:ring-2 focus:ring-emerald-500/20"
+            />
+          </div>
+          <div className="sm:col-span-5">
+            <label className="text-[11px] font-bold text-slate-700 block mb-1">Remarks / Notes</label>
+            <input
+              type="text"
+              placeholder="e.g. Received clean linen, 1 pc damaged, 1 pc pending"
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              className="w-full text-xs border border-slate-200 bg-white rounded-lg p-2 font-medium focus:ring-2 focus:ring-emerald-500/20"
+            />
+          </div>
+          <div className="sm:col-span-4 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleReceiveAllClean}
+              className="px-2.5 py-1.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100 rounded-lg transition"
+            >
+              Receive All Clean
+            </button>
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-lg transition"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+
+        {/* Real-Time Accounting Breakdown Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 shrink-0">
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-2.5">
+            <div className="text-[11px] font-semibold text-emerald-800 flex items-center justify-between">
+              <span>🧺 Received Clean</span>
+              <span className="text-[10px] bg-emerald-200/70 text-emerald-900 px-1.5 py-0.2 rounded font-mono">Billable</span>
+            </div>
+            <div className="text-lg font-black text-emerald-700 mt-0.5">{totalCleanReceived} pcs</div>
+            <div className="text-[10px] text-emerald-600">Back in active hotel stock</div>
+          </div>
+
+          <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-2.5">
+            <div className="text-[11px] font-semibold text-amber-900 flex items-center justify-between">
+              <span>⚠️ Damaged</span>
+              <span className="text-[10px] bg-amber-200/70 text-amber-900 px-1.5 py-0.2 rounded font-mono">₹0 Bill</span>
+            </div>
+            <div className="text-lg font-black text-amber-700 mt-0.5">{totalDamaged} pcs</div>
+            <div className="text-[10px] text-amber-600">Recorded as damaged</div>
+          </div>
+
+          <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-2.5">
+            <div className="text-[11px] font-semibold text-rose-900 flex items-center justify-between">
+              <span>❌ Lost / Missing</span>
+              <span className="text-[10px] bg-rose-200/70 text-rose-900 px-1.5 py-0.2 rounded font-mono">₹0 Bill</span>
+            </div>
+            <div className="text-lg font-black text-rose-700 mt-0.5">{totalLost} pcs</div>
+            <div className="text-[10px] text-rose-600">Subtracted from linen stock</div>
+          </div>
+
+          <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5">
+            <div className="text-[11px] font-semibold text-indigo-900 flex items-center justify-between">
+              <span>⏳ Remaining Pending</span>
+              <span className="text-[10px] bg-indigo-200/70 text-indigo-900 px-1.5 py-0.2 rounded font-mono">OPEN</span>
+            </div>
+            <div className="text-lg font-black text-indigo-700 mt-0.5">{totalStillPending} pcs</div>
+            <div className="text-[10px] text-indigo-600">Still with laundry vendor</div>
+          </div>
+        </div>
+
+        {/* Partial Receiving Guidance Alert */}
+        {totalStillPending > 0 ? (
+          <div className="bg-amber-50 border border-amber-300 rounded-xl p-2.5 flex items-start gap-2.5 text-xs text-amber-950 shrink-0">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-bold">Partial Return In Progress: </strong>
+              <span>
+                <strong>{totalStillPending} piece(s)</strong> will remain PENDING with the vendor.
+                This dispatch stays <em>Partially Received (OPEN)</em>. When the vendor returns the remaining piece(s) later, receive against this same dispatch to close it.
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-2 flex items-center gap-2 text-xs text-emerald-950 shrink-0">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>All dispatched items will be fully accounted for. This dispatch will be completed.</span>
+          </div>
+        )}
+
+        {/* Items Table */}
+        <div className="overflow-x-auto flex-1 overflow-y-auto border border-slate-200 rounded-xl">
+          {loadingItems ? (
+            <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+              <span className="text-xs">Loading dispatch linen items...</span>
+            </div>
+          ) : (
+            <table className="w-full text-xs min-w-[760px]">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold text-slate-600 uppercase sticky top-0">
+                  <th className="text-left p-2.5">Item Name</th>
+                  <th className="text-right p-2.5">Sent</th>
+                  <th className="text-right p-2.5">Outstanding</th>
+                  <th className="text-right p-2.5 text-emerald-700 font-bold bg-emerald-50/50">Received (Clean)</th>
+                  <th className="text-right p-2.5 text-amber-700 font-bold bg-amber-50/50">Damaged</th>
+                  <th className="text-right p-2.5 text-rose-700 font-bold bg-rose-50/50">Lost</th>
+                  <th className="text-right p-2.5 text-indigo-700 font-bold">Remaining Pending</th>
+                  <th className="text-center p-2.5">Billable?</th>
+                  <th className="text-right p-2.5">Rate</th>
+                  <th className="text-right p-2.5 font-bold">Bill (₹)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {items.map((it, idx) => {
+                  const recv = Number(it.received_now) || 0;
+                  const dmg = Number(it.damaged_qty) || 0;
+                  const lost = Number(it.lost_qty) || 0;
+                  const remaining = Math.max(0, it.pending_before - recv - dmg - lost);
+                  const lineBill = it.is_billable ? recv * (it.rate_applied || 0) : 0;
+
+                  return (
+                    <tr key={idx} className="hover:bg-slate-50/60">
+                      <td className="p-2.5 font-bold text-slate-800">{it.item_name}</td>
+                      <td className="p-2.5 text-right tabular-nums text-slate-500">{it.sent_qty}</td>
+                      <td className="p-2.5 text-right font-bold text-slate-700 tabular-nums">{it.pending_before}</td>
+                      
+                      {/* Received Clean */}
+                      <td className="p-2.5 text-right bg-emerald-50/20">
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.max(0, it.pending_before - dmg - lost)}
+                          value={it.received_now}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value));
+                            const updated = [...items];
+                            updated[idx].received_now = val;
+                            setItems(updated);
+                          }}
+                          className="w-18 border border-emerald-300 rounded-lg p-1 text-right font-bold text-emerald-700 bg-white focus:ring-2 focus:ring-emerald-500/20"
+                        />
+                      </td>
+
+                      {/* Damaged */}
+                      <td className="p-2.5 text-right bg-amber-50/20">
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.max(0, it.pending_before - recv - lost)}
+                          value={it.damaged_qty}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value));
+                            const updated = [...items];
+                            updated[idx].damaged_qty = val;
+                            setItems(updated);
+                          }}
+                          className="w-16 border border-amber-300 rounded-lg p-1 text-right font-bold text-amber-700 bg-white focus:ring-2 focus:ring-amber-500/20"
+                        />
+                      </td>
+
+                      {/* Lost */}
+                      <td className="p-2.5 text-right bg-rose-50/20">
+                        <input
+                          type="number"
+                          min="0"
+                          max={Math.max(0, it.pending_before - recv - dmg)}
+                          value={it.lost_qty}
+                          onChange={(e) => {
+                            const val = Math.max(0, Number(e.target.value));
+                            const updated = [...items];
+                            updated[idx].lost_qty = val;
+                            setItems(updated);
+                          }}
+                          className="w-16 border border-rose-300 rounded-lg p-1 text-right font-bold text-rose-700 bg-white focus:ring-2 focus:ring-rose-500/20"
+                        />
+                      </td>
+
+                      {/* Remaining Pending */}
+                      <td className="p-2.5 text-right tabular-nums">
+                        {remaining > 0 ? (
+                          <span className="font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full text-[11px]">
+                            {remaining} pcs
+                          </span>
+                        ) : (
+                          <span className="text-emerald-600 font-semibold text-[11px]">0 pcs ✓</span>
+                        )}
+                      </td>
+
+                      {/* Billable Checkbox */}
+                      <td className="p-2.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={it.is_billable}
+                          onChange={(e) => {
+                            const updated = [...items];
+                            updated[idx].is_billable = e.target.checked;
+                            setItems(updated);
+                          }}
+                          title="Include in laundry washing billing"
+                          className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500"
+                        />
+                      </td>
+
+                      {/* Rate */}
+                      <td className="p-2.5 text-right tabular-nums text-slate-500 font-mono">
+                        ₹{it.rate_applied}
+                      </td>
+
+                      {/* Bill (₹) */}
+                      <td className="p-2.5 text-right tabular-nums font-bold text-slate-800">
+                        {rs(lineBill)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Billing Rule Summary Box */}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <div>
+            <span className="text-xs font-bold text-slate-700">Receipt Billable Amount: </span>
+            <span className="text-sm font-black text-emerald-600">{rs(totalBillableAmount)}</span>
+            <span className="text-xs text-slate-400 ml-2">({totalCleanReceived} clean returned pieces approved as billable)</span>
+          </div>
+          <div className="text-[11px] text-slate-500 max-w-sm">
+            🛡️ <strong>Rule:</strong> Pending pieces ({totalStillPending} pcs), damaged ({totalDamaged} pcs), and lost ({totalLost} pcs) have <strong>₹0 washing billing</strong>.
+          </div>
+        </div>
+
+        {/* Modal Buttons */}
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 shrink-0">
+          <button onClick={onClose} className="px-3.5 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-5 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm transition">
+            {saving ? 'Processing...' : 'Confirm Receipt'}
+          </button>
+        </div>
+      </div>
     </div>
   );
+};
+
+// ── Dispatch Detail Modal ──
+const DispatchDetailModal = ({
+  dispatchId,
+  onClose,
+  onReceiveAgain,
+}: {
+  dispatchId: string;
+  onClose: () => void;
+  onReceiveAgain: () => void;
+}) => {
+  const [detail, setDetail] = useState<DispatchWithReceipts | null>(null);
+
+  useEffect(() => {
+    getDispatchDetail(dispatchId).then(setDetail);
+  }, [dispatchId]);
+
   if (!detail) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-3xl w-full p-5 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
           <div>
-            <h3 className="text-base font-bold text-brand-navy-800">Receive from Laundry</h3>
-            <p className="text-xs text-slate-400 mt-0.5">{dispatchNo} · {vendorName} · {fmtDate(dispatchDate)} {challanNo && `· Challan: ${challanNo}`}</p>
+            <h3 className="text-base font-bold text-slate-800">Dispatch Details: {detail.dispatch_no}</h3>
+            <p className="text-xs text-slate-400">{detail.vendor_name} • {fmtDate(detail.dispatch_date)} • Status: <span className="font-semibold">{detail.status}</span></p>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
         </div>
-        <div className="p-5 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />{error}</div>}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Receipt Date</label>
-              <input type="date" value={receiptDate} onChange={(e) => setReceiptDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Received By</label>
-              <input type="text" value={receivedBy} onChange={(e) => setReceivedBy(e.target.value)} placeholder="Staff name" className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Remarks</label>
-              <input type="text" value={remarks} onChange={(e) => setRemarks(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-          </div>
 
-          {/* Items table */}
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[600px]">
+        <div className="space-y-3 flex-1 overflow-y-auto">
+          <h4 className="text-xs font-bold uppercase text-slate-500">Items Dispatched & Current Accounting</h4>
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="text-left px-3 py-2 text-xs font-bold text-slate-500 uppercase">Linen Item</th>
-                  <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Sent</th>
-                  <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Prev. Received</th>
-                  <th className="text-center px-3 py-2 text-xs font-bold text-slate-500 uppercase">Receive Now</th>
-                  <th className="text-center px-3 py-2 text-xs font-bold text-slate-500 uppercase">Damaged/Lost</th>
-                  <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Remaining</th>
+                <tr className="border-b bg-slate-50 text-[10px] uppercase font-bold text-slate-600">
+                  <th className="text-left p-2.5">Item</th>
+                  <th className="text-right p-2.5">Sent</th>
+                  <th className="text-right p-2.5 text-emerald-600">Clean Received</th>
+                  <th className="text-right p-2.5 text-amber-600">Damaged</th>
+                  <th className="text-right p-2.5 text-rose-600">Lost</th>
+                  <th className="text-right p-2.5 text-indigo-600 font-bold">Pending</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {detail.items.map((it) => {
-                  const prevRecv = detail.received_totals[it.item_name] ?? 0;
-                  const prevDmg = detail.damaged_totals[it.item_name] ?? 0;
-                  const remaining = Math.max(0, it.sent_qty - prevRecv - prevDmg);
-                  const recvNow = receiveNow[it.item_name] ?? 0;
-                  const dmg = damagedLost[it.item_name] ?? 0;
-                  const afterPending = Math.max(0, remaining - recvNow - dmg);
+                  const recv = it.total_received !== undefined ? Number(it.total_received) : (detail.received_totals[it.item_name] || 0);
+                  const dmg = it.total_damaged !== undefined ? Number(it.total_damaged) : (detail.damaged_totals[it.item_name] || 0);
+                  const lost = it.total_lost !== undefined ? Number(it.total_lost) : ((detail.lost_totals && detail.lost_totals[it.item_name]) || 0);
+                  const pend = Math.max(0, it.sent_qty - recv - dmg - lost);
                   return (
-                    <tr key={it.id} className="border-b border-slate-50 last:border-0">
-                      <td className="px-3 py-2 text-sm font-semibold text-slate-800">{it.item_name}</td>
-                      <td className="px-3 py-2 text-sm text-slate-600 text-right tabular-nums">{it.sent_qty}</td>
-                      <td className="px-3 py-2 text-sm text-emerald-600 text-right tabular-nums">{prevRecv}</td>
-                      <td className="px-3 py-2 text-center">
-                        <input
-                          type="number"
-                          min="0"
-                          max={remaining}
-                          value={recvNow || ''}
-                          onChange={(e) => setReceiveNow((prev) => ({ ...prev, [it.item_name]: parseInt(e.target.value) || 0 }))}
-                          placeholder="0"
-                          className="w-16 text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-brand-400 focus:outline-none text-center"
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <input
-                          type="number"
-                          min="0"
-                          max={Math.max(0, remaining - recvNow)}
-                          value={dmg || ''}
-                          onChange={(e) => setDamagedLost((prev) => ({ ...prev, [it.item_name]: parseInt(e.target.value) || 0 }))}
-                          placeholder="0"
-                          className="w-16 text-sm border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-red-400 focus:outline-none text-center"
-                        />
-                      </td>
-                      <td className="px-3 py-2 text-sm text-amber-600 text-right tabular-nums font-semibold">{afterPending}</td>
+                    <tr key={it.id} className="hover:bg-slate-50/50">
+                      <td className="p-2.5 font-bold text-slate-800">{it.item_name}</td>
+                      <td className="p-2.5 text-right text-slate-500 tabular-nums">{it.sent_qty}</td>
+                      <td className="p-2.5 text-right text-emerald-600 font-semibold tabular-nums">{recv}</td>
+                      <td className="p-2.5 text-right text-amber-600 tabular-nums">{dmg}</td>
+                      <td className="p-2.5 text-right text-rose-600 tabular-nums">{lost}</td>
+                      <td className="p-2.5 text-right font-bold text-indigo-600 tabular-nums">{pend}</td>
                     </tr>
                   );
                 })}
@@ -1077,29 +2490,205 @@ const ReceiveModal = ({ dispatchId, dispatchNo, vendorName, dispatchDate, challa
             </table>
           </div>
 
-          {/* Previous receipts history */}
-          {detail.receipts.length > 0 && (
-            <div className="bg-slate-50 rounded-xl p-3">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Receipt History</p>
-              <div className="space-y-1.5">
+          {/* Receipt History */}
+          {detail.receipts && detail.receipts.length > 0 && (
+            <div className="space-y-2 pt-2">
+              <h4 className="text-xs font-bold uppercase text-slate-500">Return Receipts Recorded ({detail.receipts.length})</h4>
+              <div className="space-y-2">
                 {detail.receipts.map((r) => (
-                  <div key={r.id} className="text-xs text-slate-500 flex items-center gap-2">
-                    <Clock className="w-3 h-3" />
-                    <span className="font-semibold">{fmtDate(r.receipt_date)}</span>
-                    <span>·</span>
-                    {r.items_json.map((it, i) => (
-                      <span key={i}>{it.item_name}: +{it.received_now}{it.damaged_lost > 0 && <span className="text-red-500"> (DMG: {it.damaged_lost})</span>}{i < r.items_json.length - 1 ? ', ' : ''}</span>
-                    ))}
+                  <div key={r.id} className="p-3 border border-slate-200 rounded-xl bg-slate-50/50 text-xs space-y-1.5">
+                    <div className="flex items-center justify-between font-semibold">
+                      <span className="text-slate-800">Date: {fmtDate(r.receipt_date)}</span>
+                      <span className="text-slate-500">Received By: {r.received_by || 'Staff'}</span>
+                    </div>
+                    {r.remarks && <p className="text-[11px] text-slate-500 italic">"{r.remarks}"</p>}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {(r.items_json || []).map((entry, idx) => (
+                        <span key={idx} className="bg-white border border-slate-200 px-2 py-0.5 rounded text-[11px] text-slate-700">
+                          <strong>{entry.item_name}:</strong> {entry.received_now || 0} clean
+                          {(Number(entry.damaged_qty) || 0) > 0 && `, ${entry.damaged_qty} damaged`}
+                          {(Number(entry.lost_qty) || 0) > 0 && `, ${entry.lost_qty} lost`}
+                          {entry.bill_amount ? ` (₹${entry.bill_amount})` : ''}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
         </div>
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex items-center gap-2">
-          <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-3 transition">Cancel</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl py-3 transition">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowDownToLine className="w-4 h-4" />} Save Receipt
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 shrink-0">
+          <button onClick={onClose} className="px-3.5 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg">Close</button>
+          {detail.status !== 'Completed' && detail.status !== 'CLOSED' && (
+            <button onClick={onReceiveAgain} className="px-4 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm">Receive Linen</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Stock Movement Modal (Add / Adjust Stock) ──
+const StockMovementModal = ({
+  linenItems,
+  onClose,
+  onSaved,
+  onOpenLinenMaster,
+  onReload,
+}: {
+  linenItems: LinenItem[];
+  onClose: () => void;
+  onSaved: () => void;
+  onOpenLinenMaster?: () => void;
+  onReload?: () => void;
+}) => {
+  const [itemId, setItemId] = useState(linenItems[0]?.id || '');
+  const [movementType, setMovementType] = useState<LinenStockMovement['movement_type']>('addition');
+  const [quantity, setQuantity] = useState(10);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedItem = linenItems.find((l) => l.id === itemId);
+  const currentTotal = selectedItem?.total_active_stock || 0;
+  const currentAvail = selectedItem?.available_in_hotel || 0;
+
+  let afterPreview = currentTotal;
+  if (['addition', 'opening', 'adjustment_add', 'correction'].includes(movementType)) {
+    afterPreview = currentTotal + Number(quantity);
+  } else {
+    afterPreview = Math.max(0, currentTotal - Number(quantity));
+  }
+
+  const handleSeedDefaults = async () => {
+    try {
+      setSeeding(true);
+      setError(null);
+      await seedStandardLinenItems();
+      if (onReload) await onReload();
+    } catch (e: any) {
+      setError(e.message || 'Failed to seed linen items');
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setError(null);
+      await recordStockMovement({
+        linen_item_id: itemId,
+        movement_date: todayStr(),
+        movement_type: movementType,
+        quantity: Number(quantity),
+        reason,
+      });
+      onSaved();
+    } catch (e: any) {
+      setError(e.message || 'Failed to record stock movement');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <h3 className="text-base font-bold text-slate-800">Add or Adjust Linen Stock</h3>
+          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+
+        {error && <div className="text-xs text-rose-600 bg-rose-50 p-2.5 rounded-lg">{error}</div>}
+
+        <div className="space-y-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] text-slate-500 font-bold block">Select Linen Item</label>
+              {onOpenLinenMaster && (
+                <button
+                  type="button"
+                  onClick={onOpenLinenMaster}
+                  className="text-[10px] text-brand-600 font-semibold hover:underline"
+                >
+                  + Add New Linen Master Item
+                </button>
+              )}
+            </div>
+            <select
+              value={itemId}
+              onChange={(e) => setItemId(e.target.value)}
+              className="w-full text-xs border border-slate-200 rounded-lg p-2.5 font-medium bg-white"
+            >
+              <option value="" disabled>-- Select Linen Item --</option>
+              {linenItems.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.item_name} ({l.category} • Total Stock: {l.total_active_stock} pcs)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {linenItems.length <= 1 && (
+            <div className="p-3 bg-blue-50/90 border border-blue-200 rounded-xl flex items-center justify-between text-xs">
+              <div>
+                <span className="text-[11px] font-semibold text-blue-900 block">
+                  Only {linenItems.length === 1 ? `"${linenItems[0]?.item_name}"` : '0 items'} configured
+                </span>
+                <span className="text-[10px] text-blue-700">Need Pillow Covers, Towels, Mats, Blankets?</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSeedDefaults}
+                disabled={seeding || saving}
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-[11px] rounded-lg shrink-0 shadow-sm transition"
+              >
+                {seeding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                <span>{seeding ? 'Adding...' : 'Add Standard Items'}</span>
+              </button>
+            </div>
+          )}
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Movement Type</label>
+            <select value={movementType} onChange={(e) => setMovementType(e.target.value as any)} className="w-full text-xs border border-slate-200 rounded-lg p-2">
+              <option value="addition">New Purchase / Addition (+)</option>
+              <option value="adjustment_add">Physical Audit Surplus (+)</option>
+              <option value="discard">Permanent Discard / Torn (-)</option>
+              <option value="adjustment_sub">Physical Audit Deficit (-)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Quantity (Pieces)</label>
+            <input type="number" min="1" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} className="w-full text-xs border border-slate-200 rounded-lg p-2 font-bold" />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Reason / Notes</label>
+            <input type="text" placeholder="e.g. Purchased 50 new pieces from supplier" value={reason} onChange={(e) => setReason(e.target.value)} className="w-full text-xs border border-slate-200 rounded-lg p-2" />
+          </div>
+
+          <div className="bg-slate-50 rounded-xl p-3 text-xs space-y-1">
+            <div className="flex justify-between text-slate-500">
+              <span>Current Total Stock:</span>
+              <span className="font-bold">{currentTotal} pcs</span>
+            </div>
+            <div className="flex justify-between font-bold text-brand-navy-900 border-t pt-1">
+              <span>Stock After Movement:</span>
+              <span className="text-brand-600">{afterPreview} pcs</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500 hover:bg-slate-100 rounded-lg">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-4 py-1.5 text-xs font-semibold bg-brand-600 text-white rounded-lg shadow-sm">
+            {saving ? 'Recording...' : 'Commit Stock Movement'}
           </button>
         </div>
       </div>
@@ -1107,406 +2696,456 @@ const ReceiveModal = ({ dispatchId, dispatchNo, vendorName, dispatchDate, challa
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// VIEW DISPATCH MODAL
-// ══════════════════════════════════════════════════════════════════
-
-const ViewDispatchModal = ({ dispatchId, onClose, onReceive }: {
-  dispatchId: string;
+// ── Resolve Missing Linen Modal ──
+const ResolveLostDamagedModal = ({
+  item,
+  onClose,
+  onResolved,
+}: {
+  item: { dispatch_id: string; dispatch_item_id: string; item_name: string; pending_qty: number; dispatch_no: string };
   onClose: () => void;
-  onReceive: () => void;
+  onResolved: () => void;
 }) => {
-  const [detail, setDetail] = useState<DispatchWithReceipts | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [type, setType] = useState<'lost' | 'damaged'>('lost');
+  const [qty, setQty] = useState(1);
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const d = await getDispatchDetail(dispatchId);
-        setDetail(d);
-      } catch { /* ignore */ } finally { setLoading(false); }
-    })();
-  }, [dispatchId]);
+  const handleResolve = async () => {
+    try {
+      setSaving(true);
+      await resolvePendingLinen({
+        dispatch_id: item.dispatch_id,
+        dispatch_item_id: item.dispatch_item_id,
+        resolution_type: type,
+        quantity: qty,
+        reason,
+      });
+      onResolved();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        {loading ? (
-          <div className="p-8 flex items-center justify-center"><Loader2 className="w-6 h-6 text-brand-600 animate-spin" /></div>
-        ) : detail ? (
-          <>
-            <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-              <div>
-                <h3 className="text-base font-bold text-brand-navy-800">{detail.dispatch_no || 'Dispatch'}</h3>
-                <p className="text-xs text-slate-400 mt-0.5">{detail.vendor_name} · {fmtDate(detail.dispatch_date)} {detail.challan_no && `· Challan: ${detail.challan_no}`}</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${STATUS_STYLES[detail.status]}`}>{detail.status}</span>
-                <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
-              </div>
-            </div>
-            <div className="p-5 space-y-4">
-              {/* Items */}
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[500px]">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50">
-                      <th className="text-left px-3 py-2 text-xs font-bold text-slate-500 uppercase">Linen Item</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Sent</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Received</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Damaged</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Pending</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Rate</th>
-                      <th className="text-right px-3 py-2 text-xs font-bold text-slate-500 uppercase">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detail.items.map((it) => {
-                      const recv = detail.received_totals[it.item_name] ?? 0;
-                      const dmg = detail.damaged_totals[it.item_name] ?? 0;
-                      const pending = Math.max(0, it.sent_qty - recv - dmg);
-                      return (
-                        <tr key={it.id} className="border-b border-slate-50 last:border-0">
-                          <td className="px-3 py-2 text-sm font-semibold text-slate-800">{it.item_name}</td>
-                          <td className="px-3 py-2 text-sm text-slate-600 text-right tabular-nums">{it.sent_qty}</td>
-                          <td className="px-3 py-2 text-sm text-emerald-600 text-right tabular-nums">{recv}</td>
-                          <td className="px-3 py-2 text-sm text-red-600 text-right tabular-nums">{dmg}</td>
-                          <td className="px-3 py-2 text-sm text-amber-600 text-right tabular-nums font-semibold">{pending}</td>
-                          <td className="px-3 py-2 text-sm text-slate-500 text-right tabular-nums">{rs(it.rate_per_piece)}</td>
-                          <td className="px-3 py-2 text-sm font-bold text-slate-700 text-right tabular-nums">{rs(it.amount)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t-2 border-slate-200 bg-slate-50">
-                      <td colSpan={6} className="px-3 py-2.5 text-sm font-bold text-slate-700 text-right">Total Amount</td>
-                      <td className="px-3 py-2.5 text-sm font-bold text-brand-navy-700 text-right tabular-nums">{rs(detail.total_amount)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-
-              {/* Summary */}
-              <div className="grid grid-cols-4 gap-2">
-                <div className="bg-blue-50 rounded-lg p-2.5 text-center"><p className="text-[10px] text-slate-500 uppercase font-semibold">Sent</p><p className="text-lg font-bold text-blue-600 tabular-nums">{detail.total_sent}</p></div>
-                <div className="bg-emerald-50 rounded-lg p-2.5 text-center"><p className="text-[10px] text-slate-500 uppercase font-semibold">Received</p><p className="text-lg font-bold text-emerald-600 tabular-nums">{detail.total_received}</p></div>
-                <div className="bg-amber-50 rounded-lg p-2.5 text-center"><p className="text-[10px] text-slate-500 uppercase font-semibold">Pending</p><p className="text-lg font-bold text-amber-600 tabular-nums">{detail.total_pending}</p></div>
-                <div className="bg-red-50 rounded-lg p-2.5 text-center"><p className="text-[10px] text-slate-500 uppercase font-semibold">Damaged</p><p className="text-lg font-bold text-red-600 tabular-nums">{detail.total_damaged}</p></div>
-              </div>
-
-              {/* Receipt history */}
-              {detail.receipts.length > 0 && (
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Receipt History ({detail.receipts.length})</p>
-                  <div className="space-y-2">
-                    {detail.receipts.map((r) => (
-                      <div key={r.id} className="bg-slate-50 rounded-lg p-3 border border-slate-100">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-semibold text-slate-600">{fmtDate(r.receipt_date)} {r.received_by && `· ${r.received_by}`}</span>
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          {r.items_json.map((it, i) => (
-                            <span key={i}>{it.item_name}: +{it.received_now}{it.damaged_lost > 0 && <span className="text-red-500"> (DMG: {it.damaged_lost})</span>}{i < r.items_json.length - 1 ? ', ' : ''}</span>
-                          ))}
-                        </div>
-                        {r.remarks && <p className="text-xs text-slate-400 mt-1">{r.remarks}</p>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {detail.remarks && <p className="text-xs text-slate-400"><span className="font-semibold">Dispatch Remarks:</span> {detail.remarks}</p>}
-              {detail.sent_by && <p className="text-xs text-slate-400"><span className="font-semibold">Sent By:</span> {detail.sent_by}</p>}
-            </div>
-            {detail.status !== 'Completed' && detail.status !== 'Short/Lost' && (
-              <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4">
-                <button onClick={onReceive} className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl py-3 transition">
-                  <ArrowDownToLine className="w-4 h-4" /> Receive Laundry
-                </button>
-              </div>
-            )}
-          </>
-        ) : null}
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b pb-2">
+          <h3 className="text-sm font-bold">Resolve Missing Linen</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
+        </div>
+        <p className="text-xs text-slate-500">Dispatch {item.dispatch_no} • Item: {item.item_name} (Pending: {item.pending_qty})</p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Resolution Type</label>
+            <select value={type} onChange={(e) => setType(e.target.value as any)} className="w-full text-xs border rounded p-2">
+              <option value="lost">Mark Permanently Lost at Laundry</option>
+              <option value="damaged">Mark Damaged beyond repair</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Quantity</label>
+            <input type="number" min="1" max={item.pending_qty} value={qty} onChange={(e) => setQty(Number(e.target.value))} className="w-full text-xs border rounded p-2 font-bold" />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Reason</label>
+            <input type="text" placeholder="Vendor admitted lost during washing" value={reason} onChange={(e) => setReason(e.target.value)} className="w-full text-xs border rounded p-2" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Cancel</button>
+          <button onClick={handleResolve} disabled={saving} className="px-4 py-1.5 text-xs font-semibold bg-rose-600 text-white rounded-lg">
+            {saving ? 'Processing...' : 'Confirm Resolution'}
+          </button>
+        </div>
       </div>
     </div>
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// VENDOR MODAL
-// ══════════════════════════════════════════════════════════════════
-
-const VendorModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) => {
-  const [vendors, setVendors] = useState<LaundryVendor[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<LaundryVendor | null>(null);
-  const [vendorName, setVendorName] = useState('');
-  const [contactPerson, setContactPerson] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [address, setAddress] = useState('');
-  const [gstin, setGstin] = useState('');
-  const [rateType, setRateType] = useState<'Per Piece' | 'Per Kg'>('Per Piece');
+// ── Vendor Payment Modal ──
+const VendorPaymentModal = ({
+  vendors,
+  defaultDate,
+  onClose,
+  onSaved,
+}: {
+  vendors: LaundryVendor[];
+  defaultDate: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) => {
+  const [vendorId, setVendorId] = useState(vendors[0]?.id || '');
+  const [amount, setAmount] = useState(500);
+  const [mode, setMode] = useState<'Cash' | 'Bank' | 'UPI' | 'Credit'>('Cash');
+  const [refNo, setRefNo] = useState('');
   const [notes, setNotes] = useState('');
-  const [isActive, setIsActive] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = async () => {
-    try { setVendors(await getLaundryVendors()); } catch { /* ignore */ } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
-
-  const reset = () => {
-    setEditing(null); setVendorName(''); setContactPerson(''); setMobile(''); setAddress(''); setGstin(''); setRateType('Per Piece'); setNotes(''); setIsActive(true);
-  };
-
-  const handleEdit = (v: LaundryVendor) => {
-    setEditing(v); setVendorName(v.vendor_name); setContactPerson(v.contact_person); setMobile(v.mobile_number); setAddress(v.address); setGstin(v.gstin); setRateType(v.default_rate_type); setNotes(v.notes); setIsActive(v.is_active);
-  };
 
   const handleSave = async () => {
-    setError(null);
-    if (!vendorName.trim()) { setError('Vendor name is required.'); return; }
+    try {
+      setSaving(true);
+      await recordVendorPayment({
+        vendor_id: vendorId,
+        payment_date: defaultDate,
+        amount: Number(amount),
+        payment_mode: mode,
+        reference_no: refNo,
+        notes,
+      });
+      onSaved();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b pb-2">
+          <h3 className="text-sm font-bold">Record Vendor Payment</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Vendor</label>
+            <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="w-full text-xs border rounded p-2">
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Amount (₹)</label>
+            <input type="number" min="1" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="w-full text-xs border rounded p-2 font-bold" />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Payment Mode</label>
+            <select value={mode} onChange={(e) => setMode(e.target.value as any)} className="w-full text-xs border rounded p-2">
+              <option value="Cash">Cash</option>
+              <option value="UPI">UPI</option>
+              <option value="Bank">Bank Transfer</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Reference / UTR</label>
+            <input type="text" placeholder="UPI ref / cheque no" value={refNo} onChange={(e) => setRefNo(e.target.value)} className="w-full text-xs border rounded p-2" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-2 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Cancel</button>
+          <button onClick={handleSave} disabled={saving} className="px-4 py-1.5 text-xs font-semibold bg-emerald-600 text-white rounded-lg">
+            {saving ? 'Recording...' : 'Record Payment'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Close Laundry Day & WhatsApp Modal ──
+const CloseLaundryDayModal = ({
+  vendors,
+  selectedDate,
+  onClose,
+  onDayClosed,
+}: {
+  vendors: LaundryVendor[];
+  selectedDate: string;
+  onClose: () => void;
+  onDayClosed: () => void;
+}) => {
+  const [vendorId, setVendorId] = useState(vendors[0]?.id || '');
+  const [statement, setStatement] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (!vendorId) return;
+    setLoading(true);
+    getDailyStatementData(vendorId, selectedDate)
+      .then(setStatement)
+      .catch(console.error)
+      .finally(() => setLoading(false));
+  }, [vendorId, selectedDate]);
+
+  const handleSendWhatsApp = async () => {
+    try {
+      setSending(true);
+      const res = await sendDailyWhatsAppStatement({
+        vendor_id: vendorId,
+        date: selectedDate,
+      });
+      if (res?.whatsappDirectUrl && !res?.success) {
+        // Open manual fallback
+        window.open(res.whatsappDirectUrl, '_blank');
+      }
+      onDayClosed();
+    } catch (e: any) {
+      alert(e.message || 'Failed to dispatch statement');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!statement) return;
+    await downloadLaundryStatementPdf(statement);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-xl w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b pb-3">
+          <div>
+            <h3 className="text-base font-bold text-slate-800">Close Laundry Day & WhatsApp Statement</h3>
+            <p className="text-xs text-slate-400">Date: {fmtDate(selectedDate)}</p>
+          </div>
+          <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
+        </div>
+
+        <div>
+          <label className="text-[10px] text-slate-400 block mb-1">Select Vendor</label>
+          <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="w-full text-xs border rounded p-2">
+            {vendors.map((v) => <option key={v.id} value={v.id}>{v.vendor_name}</option>)}
+          </select>
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-slate-400">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto text-brand-600" />
+          </div>
+        ) : statement ? (
+          <div className="space-y-3">
+            {/* Reconciliation Box */}
+            <div className="grid grid-cols-4 gap-2 bg-slate-50 p-2.5 rounded-xl text-center text-xs">
+              <div>
+                <div className="text-[9px] text-slate-400 uppercase font-bold">Opening</div>
+                <div className="font-bold text-slate-700">{statement.opening_pending} pcs</div>
+              </div>
+              <div>
+                <div className="text-[9px] text-slate-400 uppercase font-bold">Sent Today</div>
+                <div className="font-bold text-blue-600">{statement.sent_today} pcs</div>
+              </div>
+              <div>
+                <div className="text-[9px] text-slate-400 uppercase font-bold">Received</div>
+                <div className="font-bold text-emerald-600">{statement.received_today} pcs</div>
+              </div>
+              <div>
+                <div className="text-[9px] text-slate-400 uppercase font-bold">Closing</div>
+                <div className="font-bold text-amber-600">{statement.closing_pending} pcs</div>
+              </div>
+            </div>
+
+            {/* Bill Preview */}
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex justify-between items-center text-xs">
+              <span className="font-medium text-amber-900">Today's Approved Billable Amount:</span>
+              <span className="text-base font-black text-amber-900">{rs(statement.today_billable_amount)}</span>
+            </div>
+
+            {/* WhatsApp Text Preview */}
+            <div className="bg-slate-900 text-slate-200 font-mono text-[11px] p-3 rounded-xl max-h-48 overflow-y-auto whitespace-pre-wrap">
+              {statement.whatsapp_text}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="flex justify-between items-center pt-2 border-t">
+          <button
+            onClick={handleDownloadPdf}
+            disabled={!statement}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg"
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>Download PDF</span>
+          </button>
+
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Cancel</button>
+            <button
+              onClick={handleSendWhatsApp}
+              disabled={sending || !statement}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg shadow-sm"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{sending ? 'Sending...' : 'Send WhatsApp & Close'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Vendor Master Modal ──
+const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) => {
+  const [vendors, setVendors] = useState<LaundryVendor[]>([]);
+  const [name, setName] = useState('');
+  const [contact, setContact] = useState('');
+  const [mobile, setMobile] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { getLaundryVendors().then(setVendors); }, []);
+
+  const handleAdd = async () => {
+    if (!name.trim()) return;
     try {
       setSaving(true);
       await saveLaundryVendor({
-        vendor_name: vendorName.trim(), contact_person: contactPerson, mobile_number: mobile,
-        address, gstin, default_rate_type: rateType, notes, is_active: isActive,
-      }, editing?.id);
-      reset();
-      await load();
+        vendor_name: name.trim(),
+        contact_person: contact,
+        mobile_number: mobile,
+        address: '',
+        gstin: '',
+        default_rate_type: 'Per Piece',
+        notes: '',
+        is_active: true,
+      });
+      setName('');
+      setContact('');
+      setMobile('');
+      const updated = await getLaundryVendors();
+      setVendors(updated);
       onSaved();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save vendor');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this vendor?')) return;
-    try { await deleteLaundryVendor(id); await load(); } catch { /* ignore */ }
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-          <h3 className="text-base font-bold text-brand-navy-800">Laundry Vendors</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b pb-2">
+          <h3 className="text-sm font-bold">Laundry Vendors Master</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
         </div>
-        <div className="p-5 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />{error}</div>}
-          {/* Form */}
-          <div className="space-y-3 bg-slate-50 rounded-xl p-3">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">{editing ? 'Edit Vendor' : 'Add Vendor'}</p>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Vendor Name</label>
-              <input type="text" value={vendorName} onChange={(e) => setVendorName(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
+
+        <div className="flex gap-2">
+          <input type="text" placeholder="Vendor Name" value={name} onChange={(e) => setName(e.target.value)} className="flex-1 text-xs border rounded p-2" />
+          <input type="text" placeholder="Mobile" value={mobile} onChange={(e) => setMobile(e.target.value)} className="w-28 text-xs border rounded p-2" />
+          <button onClick={handleAdd} disabled={saving} className="px-3 py-2 bg-brand-600 text-white text-xs font-semibold rounded-lg">Add</button>
+        </div>
+
+        <div className="divide-y max-h-60 overflow-y-auto">
+          {vendors.map((v) => (
+            <div key={v.id} className="py-2 flex justify-between items-center text-xs">
               <div>
-                <label className="text-xs font-semibold text-slate-500">Contact Person</label>
-                <input type="text" value={contactPerson} onChange={(e) => setContactPerson(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+                <div className="font-bold text-slate-800">{v.vendor_name}</div>
+                <div className="text-[10px] text-slate-400">{v.mobile_number || 'No phone'}</div>
               </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-500">Mobile Number</label>
-                <input type="text" value={mobile} onChange={(e) => setMobile(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Address</label>
-              <textarea value={address} onChange={(e) => setAddress(e.target.value)} rows={2} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-500">GSTIN (optional)</label>
-                <input type="text" value={gstin} onChange={(e) => setGstin(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-500">Default Rate Type</label>
-                <select value={rateType} onChange={(e) => setRateType(e.target.value as 'Per Piece' | 'Per Kg')} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-                  <option value="Per Piece">Per Piece</option>
-                  <option value="Per Kg">Per Kg</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Notes</label>
-              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400" />
-              <span className="text-sm text-slate-600">Active</span>
-            </label>
-            <div className="flex items-center gap-2">
-              {editing && <button onClick={reset} className="text-sm font-semibold text-slate-500 hover:text-slate-700 px-3 py-2">Cancel Edit</button>}
-              <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-lg py-2.5 transition">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {editing ? 'Update' : 'Add'} Vendor
+              <button
+                onClick={async () => {
+                  if (window.confirm(`Delete ${v.vendor_name}?`)) {
+                    await deleteLaundryVendor(v.id);
+                    setVendors(await getLaundryVendors());
+                    onSaved();
+                  }
+                }}
+                className="text-rose-500 hover:text-rose-700 p-1"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
-          </div>
+          ))}
+        </div>
 
-          {/* Vendor list */}
-          {loading ? <p className="text-sm text-slate-400 text-center py-4">Loading…</p> : vendors.length > 0 ? (
-            <div className="space-y-2">
-              {vendors.map((v) => (
-                <div key={v.id} className="flex items-center gap-3 bg-white border border-slate-200 rounded-lg p-3">
-                  <div className="w-9 h-9 rounded-lg bg-brand-navy-50 flex items-center justify-center"><Building2 className="w-4 h-4 text-brand-navy-600" /></div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{v.vendor_name}</p>
-                    <p className="text-xs text-slate-400 truncate">{v.contact_person || v.mobile_number || 'No contact'}</p>
-                  </div>
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${v.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{v.is_active ? 'Active' : 'Inactive'}</span>
-                  <button onClick={() => handleEdit(v)} className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded transition"><Eye className="w-4 h-4" /></button>
-                  <button onClick={() => handleDelete(v.id)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition"><Trash2 className="w-4 h-4" /></button>
-                </div>
-              ))}
-            </div>
-          ) : <p className="text-sm text-slate-400 text-center py-4">No vendors yet.</p>}
+        <div className="flex justify-end pt-2 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Close</button>
         </div>
       </div>
     </div>
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// LINEN MASTER MODAL
-// ══════════════════════════════════════════════════════════════════
-
+// ── Linen Item Master Modal ──
 const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) => {
   const [items, setItems] = useState<LinenItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<LinenItem | null>(null);
-  const [itemName, setItemName] = useState('');
-  const [category, setCategory] = useState('Bed Linen');
-  const [unit, setUnit] = useState<'Pieces' | 'Kg'>('Pieces');
-  const [standardRate, setStandardRate] = useState('0');
-  const [isActive, setIsActive] = useState(true);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState(LINEN_CATEGORIES[0]);
+  const [rate, setRate] = useState(15);
+  const [initialStock, setInitialStock] = useState(50);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
-    try { setItems(await getLinenItems()); } catch { /* ignore */ } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { getLinenItems().then(setItems); }, []);
 
-  const reset = () => { setEditing(null); setItemName(''); setCategory('Bed Linen'); setUnit('Pieces'); setStandardRate('0'); setIsActive(true); };
-
-  const handleEdit = (it: LinenItem) => {
-    setEditing(it); setItemName(it.item_name); setCategory(it.category || 'Bed Linen'); setUnit(it.unit); setStandardRate(String(it.standard_rate ?? 0)); setIsActive(it.is_active);
-  };
-
-  const handleSave = async () => {
-    setError(null);
-    if (!itemName.trim()) { setError('Item name is required.'); return; }
+  const handleAdd = async () => {
+    if (!name.trim()) return;
     try {
       setSaving(true);
       await saveLinenItem({
-        item_name: itemName.trim(), category, unit,
-        standard_rate: parseFloat(standardRate) || 0, is_active: isActive,
-      }, editing?.id);
-      reset();
-      await load();
+        item_name: name.trim(),
+        category,
+        unit: 'Pieces',
+        standard_rate: Number(rate),
+        is_active: true,
+        initial_stock: Number(initialStock),
+      });
+      setName('');
+      setItems(await getLinenItems());
       onSaved();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save linen item');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this linen item?')) return;
-    try { await deleteLinenItem(id); await load(); } catch { /* ignore */ }
-  };
-
-  const handleSeedDefaults = async () => {
-    if (!confirm('Add all default linen items (Bedsheet, Pillow Cover, etc.)?')) return;
-    try {
-      setSaving(true);
-      for (const name of DEFAULT_LINEN_ITEMS) {
-        await saveLinenItem({ item_name: name, category: 'Bed Linen', unit: 'Pieces', standard_rate: 0, is_active: true });
-      }
-      await load();
-      onSaved();
-    } catch { /* ignore */ } finally { setSaving(false); }
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto animate-scale-in">
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-          <h3 className="text-base font-bold text-brand-navy-800">Linen Master</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b pb-2">
+          <h3 className="text-sm font-bold">Linen Master Configuration</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
         </div>
-        <div className="p-5 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-2 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />{error}</div>}
-          {/* Form */}
-          <div className="space-y-3 bg-slate-50 rounded-xl p-3">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">{editing ? 'Edit Item' : 'Add Linen Item'}</p>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Linen Item Name</label>
-              <input type="text" value={itemName} onChange={(e) => setItemName(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-500">Category</label>
-                <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-                  {LINEN_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-semibold text-slate-500">Unit</label>
-                <select value={unit} onChange={(e) => setUnit(e.target.value as 'Pieces' | 'Kg')} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none">
-                  <option value="Pieces">Pieces</option>
-                  <option value="Kg">Kg</option>
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-500">Standard Laundry Rate (optional)</label>
-              <input type="number" min="0" step="0.01" value={standardRate} onChange={(e) => setStandardRate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-            </div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-brand-400" />
-              <span className="text-sm text-slate-600">Active</span>
-            </label>
-            <div className="flex items-center gap-2">
-              {editing && <button onClick={reset} className="text-sm font-semibold text-slate-500 hover:text-slate-700 px-3 py-2">Cancel Edit</button>}
-              <button onClick={handleSave} disabled={saving} className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-lg py-2.5 transition">
-                {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {editing ? 'Update' : 'Add'} Item
-              </button>
-            </div>
-          </div>
 
-          {/* Item list */}
-          {loading ? <p className="text-sm text-slate-400 text-center py-4">Loading…</p> : items.length > 0 ? (
-            <div className="space-y-2">
-              {items.map((it) => (
-                <div key={it.id} className="flex items-center gap-3 bg-white border border-slate-200 rounded-lg p-3">
-                  <div className="w-9 h-9 rounded-lg bg-brand-50 flex items-center justify-center"><Package className="w-4 h-4 text-brand-600" /></div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-800 truncate">{it.item_name}</p>
-                    <p className="text-xs text-slate-400 truncate">{it.category} · {it.unit} · {rs(it.standard_rate ?? 0)}</p>
-                  </div>
-                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${it.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{it.is_active ? 'Active' : 'Inactive'}</span>
-                  <button onClick={() => handleEdit(it)} className="p-1.5 text-slate-400 hover:text-brand-600 hover:bg-brand-50 rounded transition"><Eye className="w-4 h-4" /></button>
-                  <button onClick={() => handleDelete(it.id)} className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded transition"><Trash2 className="w-4 h-4" /></button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-4">
-              <p className="text-sm text-slate-400 mb-2">No linen items yet.</p>
-              <button onClick={handleSeedDefaults} disabled={saving} className="text-sm font-semibold text-brand-600 hover:text-brand-700">
-                Add default items (Bedsheet, Pillow Cover, etc.)
+        <div className="grid grid-cols-2 gap-2">
+          <input type="text" placeholder="Item Name (e.g. Duvet)" value={name} onChange={(e) => setName(e.target.value)} className="text-xs border rounded p-2" />
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className="text-xs border rounded p-2">
+            {LINEN_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input type="number" placeholder="Std Rate (₹)" value={rate} onChange={(e) => setRate(Number(e.target.value))} className="text-xs border rounded p-2" />
+          <input type="number" placeholder="Initial Stock (pcs)" value={initialStock} onChange={(e) => setInitialStock(Number(e.target.value))} className="text-xs border rounded p-2" />
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={handleAdd} disabled={saving} className="px-3 py-1.5 bg-brand-600 text-white text-xs font-semibold rounded-lg">
+            Add Linen Item
+          </button>
+        </div>
+
+        <div className="divide-y max-h-56 overflow-y-auto">
+          {items.map((it) => (
+            <div key={it.id} className="py-2 flex justify-between items-center text-xs">
+              <div>
+                <div className="font-bold text-slate-800">{it.item_name}</div>
+                <div className="text-[10px] text-slate-400">{it.category} • Rs.{it.standard_rate}/pc</div>
+              </div>
+              <button
+                onClick={async () => {
+                  if (window.confirm(`Delete ${it.item_name}?`)) {
+                    await deleteLinenItem(it.id);
+                    setItems(await getLinenItems());
+                    onSaved();
+                  }
+                }}
+                className="text-rose-500 hover:text-rose-700 p-1"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
-          )}
+          ))}
+        </div>
+
+        <div className="flex justify-end pt-2 border-t">
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Close</button>
         </div>
       </div>
     </div>
   );
 };
+
+export default LaundryLinenScreen;
