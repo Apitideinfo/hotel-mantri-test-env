@@ -33,6 +33,7 @@ import {
   buildOtaOwnerConfirmationEmail,
   buildCustomerConfirmationEmail,
   buildReservationConfirmationWhatsAppText,
+  buildMetaBookingConfirmationTemplate,
   resolveReservationNotificationRecipient,
   isOTAReservation,
   normalizeBookingSource,
@@ -386,7 +387,24 @@ router.post('/', checkAuth, async (req, res) => {
       ? 'EMAIL_SENT'
       : firstDelivery?.emailDelivery?.status === 'not_configured'
       ? 'EMAIL_NOT_CONFIGURED'
+      : firstDelivery?.email?.status === 'sent'
+      ? 'EMAIL_SENT'
+      : firstDelivery?.email?.status === 'not_configured'
+      ? 'EMAIL_NOT_CONFIGURED'
       : 'EMAIL_FAILED';
+
+    const waStatusRaw = firstDelivery?.whatsapp?.status || firstDelivery?.whatsappDelivery?.status;
+    const whatsappStatus = waStatusRaw === 'sent'
+      ? 'WHATSAPP_SENT'
+      : waStatusRaw === 'duplicate'
+      ? 'WHATSAPP_DUPLICATE_PREVENTED'
+      : waStatusRaw === 'not_configured'
+      ? 'WHATSAPP_NOT_CONFIGURED'
+      : waStatusRaw === 'skipped'
+      ? 'WHATSAPP_SKIPPED'
+      : waStatusRaw === 'ready_manual'
+      ? 'WHATSAPP_READY_MANUAL'
+      : 'WHATSAPP_FAILED';
 
     res.status(201).json({
       success: true,
@@ -394,8 +412,10 @@ router.post('/', checkAuth, async (req, res) => {
       reservations: result,
       reservation: result[0],
       emailStatus,
-      emailDelivery: firstDelivery?.emailDelivery || null,
-      pdfDocument: firstDelivery?.document || null,
+      emailDelivery: firstDelivery?.email || firstDelivery?.emailDelivery || null,
+      whatsappStatus,
+      whatsappDelivery: firstDelivery?.whatsapp || firstDelivery?.whatsappDelivery || null,
+      pdfDocument: firstDelivery?.pdf || firstDelivery?.document || null,
     });
   } catch (err) {
     const status = err.status || 500;
@@ -788,10 +808,15 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
 
     const latestDoc = docs && docs.length > 0 ? docs[0] : null;
 
-    // 3. Resolve owner WhatsApp direct link
+    // 3. Resolve WhatsApp direct link (guest phone for direct, owner phone for OTA)
     const ownerWhatsApp = await resolveHotelOwnerWhatsApp(hotelId);
     let whatsappDirectUrl = null;
-    if (ownerWhatsApp.valid) {
+    const isOta = isOTAReservation(reservation);
+    const targetPhone = isOta
+      ? (ownerWhatsApp.valid ? ownerWhatsApp.phone : null)
+      : (reservation.guest_phone || (ownerWhatsApp.valid ? ownerWhatsApp.phone : null));
+
+    if (targetPhone) {
       const ci = String(reservation.check_in_date || '').slice(0, 10);
       const co = String(reservation.check_out_date || '').slice(0, 10);
       const d1 = new Date(ci + 'T00:00:00');
@@ -799,11 +824,11 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
       const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 3600 * 24)));
 
       const waText = buildReservationConfirmationWhatsAppText({
-        hotelName: ownerWhatsApp.hotelName,
+        hotelName: ownerWhatsApp.hotelName || 'Hotel Mantri',
         reservationId: id,
         confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
         otaBookingId: reservation.remarks || '',
-        bookingSource: reservation.source_name || reservation.source_category || 'Direct',
+        bookingSource: reservation.source_name || reservation.source_category || (isOta ? 'OTA' : 'Direct'),
         guestName: reservation.guest_name || 'Guest',
         checkIn: reservation.check_in_date,
         checkOut: reservation.check_out_date,
@@ -815,7 +840,7 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
         balanceDue: Math.max(0, (reservation.invoice_total || 0) - (reservation.advance_paid || 0)),
         version: latestDoc?.version || 1,
       });
-      whatsappDirectUrl = buildWhatsAppDirectUrl(ownerWhatsApp.phone, waText);
+      whatsappDirectUrl = buildWhatsAppDirectUrl(targetPhone, waText);
     }
 
     const ownerEmail = await resolveHotelOwnerEmail(hotelId);
@@ -1129,22 +1154,30 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
 
     // 2. Resolve recipient phone
     let targetPhone = phoneNumber;
-    let hotelName = 'Hotel Mantri';
+    const hotelObj = (await supabaseServiceRole.from('hotels').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const settingsObj = (await supabaseServiceRole.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const hotelName = settingsObj.hotel_name || hotelObj.hotel_name || 'Hotel Mantri';
+
     if (!targetPhone) {
-      const ownerWhatsApp = await resolveHotelOwnerWhatsApp(hotelId);
-      if (ownerWhatsApp.valid) {
-        targetPhone = ownerWhatsApp.phone;
-        hotelName = ownerWhatsApp.hotelName;
+      if (reservation.guest_phone) {
+        targetPhone = reservation.guest_phone;
+      } else {
+        const ownerWhatsApp = await resolveHotelOwnerWhatsApp(hotelId);
+        if (ownerWhatsApp.valid) {
+          targetPhone = ownerWhatsApp.phone;
+        }
       }
     }
 
-    if (!targetPhone) {
+    const norm = normalizeWhatsAppPhone(targetPhone);
+    if (!norm.valid) {
       return res.status(400).json({
         success: false,
         code: 'INVALID_PHONE',
-        message: 'No valid recipient WhatsApp phone number available.',
+        message: norm.error || 'No valid recipient WhatsApp phone number available.',
       });
     }
+    targetPhone = norm.normalized;
 
     const checkIn = String(reservation.check_in_date || '').slice(0, 10);
     const checkOut = String(reservation.check_out_date || '').slice(0, 10);
@@ -1174,13 +1207,34 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
 
     const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);
 
+    const roomInfo = `${reservation.rate_plan || reservation.room_category || 'Standard'}${
+      reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${reservation.room_no})` : ''
+    }`;
+
+    const metaTemplate = buildMetaBookingConfirmationTemplate({
+      guestName: reservation.guest_name || 'Guest',
+      hotelName,
+      confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      roomDetails: roomInfo,
+      checkIn: formatDateReadable(checkIn),
+      checkOut: formatDateReadable(checkOut),
+      totalAmount: totalVal,
+    });
+
     // Send via provider
     const sendResult = await sendWhatsAppMessage({
       to: targetPhone,
       text: waText,
+      templateName: metaTemplate.templateName,
+      templateComponents: metaTemplate.templateComponents,
+      templateLanguage: metaTemplate.templateLanguage,
     });
 
+    // Update document delivery status if document exists
+    const docs = await getReservationDocuments(hotelId, id);
+    const latestVersion = docs && docs.length > 0 ? docs[0].version : 1;
     if (sendResult.success) {
+      await updateDocumentDeliveryStatus(hotelId, id, latestVersion, { whatsappStatus: DELIVERY_STATUS.SENT });
       return res.json({
         success: true,
         message: 'WhatsApp confirmation sent successfully.',
@@ -1188,6 +1242,11 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
         whatsappDirectUrl: directUrl,
       });
     } else {
+      const isNotConfigured = sendResult.status === 'provider_not_configured';
+      await updateDocumentDeliveryStatus(hotelId, id, latestVersion, {
+        whatsappStatus: isNotConfigured ? DELIVERY_STATUS.NOT_CONFIGURED : DELIVERY_STATUS.FAILED,
+        errorDetails: sendResult.message || sendResult.errorCode,
+      });
       return res.json({
         success: false,
         code: sendResult.errorCode,

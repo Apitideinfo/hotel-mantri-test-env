@@ -94,6 +94,7 @@ export const createReservationsAtomically = async ({
   hotelId,
   inputs,
   userId = null,
+  allowEmptyEmail = false,
 }) => {
   if (!hotelId) {
     throw { status: 400, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' };
@@ -138,7 +139,7 @@ export const createReservationsAtomically = async ({
     // Mandatory Guest Email Check for manual reservations
     const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
     const cleanEmail = (item.guest_email || '').trim();
-    if (!isOta) {
+    if (!isOta && !allowEmptyEmail && !item.allowEmptyEmail) {
       if (!cleanEmail) {
         throw {
           status: 422,
@@ -267,23 +268,27 @@ export const createReservationsAtomically = async ({
 
       if (Number(inserted.advance_paid) > 0) {
         const todayDate = (new Date()).toISOString().slice(0, 10);
-        await supabaseServiceRole.from('booking_timeline').insert({
-          hotel_id: hotelId,
-          reservation_id: inserted.id,
-          event_type: 'advance_payment',
-          event_description: `Advance payment for reservation: ${inserted.guest_name}`,
-          event_amount: Number(inserted.advance_paid),
-          event_data: {
-            payment_date: todayDate,
-            business_date: todayDate,
-            payment_method: inserted.payment_mode || 'Cash',
-            pay_cash: inserted.pay_cash || 0,
-            pay_bank: inserted.pay_bank || 0,
-            pay_upi: inserted.pay_upi || 0,
-            pay_card: inserted.pay_card || 0,
-          },
-          performed_by: userId || 'STAFF',
-        }).catch(err => console.warn('[RoomAssignmentService] Timeline insert warning:', err.message));
+        try {
+          await supabaseServiceRole.from('booking_timeline').insert({
+            hotel_id: hotelId,
+            reservation_id: inserted.id,
+            event_type: 'advance_payment',
+            event_description: `Advance payment for reservation: ${inserted.guest_name}`,
+            event_amount: Number(inserted.advance_paid),
+            event_data: {
+              payment_date: todayDate,
+              business_date: todayDate,
+              payment_method: inserted.payment_mode || 'Cash',
+              pay_cash: inserted.pay_cash || 0,
+              pay_bank: inserted.pay_bank || 0,
+              pay_upi: inserted.pay_upi || 0,
+              pay_card: inserted.pay_card || 0,
+            },
+            performed_by: userId || 'STAFF',
+          });
+        } catch (err) {
+          console.warn('[RoomAssignmentService] Timeline insert warning:', err?.message || err);
+        }
       }
 
       createdRecords.push(inserted);

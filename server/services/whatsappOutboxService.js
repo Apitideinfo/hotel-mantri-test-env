@@ -160,6 +160,44 @@ export const isOtaReservationAlertSent = async ({ hotelId, reservationId }) => {
   return false;
 };
 
+/**
+ * Checks if a WhatsApp booking confirmation was already sent for this reservation and version.
+ */
+export const isReservationConfirmationWhatsAppSent = async ({
+  hotelId,
+  reservationId,
+  version = 1,
+  targetRecipientType = 'CUSTOMER',
+}) => {
+  const eventKey = `RESERVATION_CONFIRMATION_WHATSAPP_${targetRecipientType}_V${version}`;
+
+  // 1. Check local durable outbox
+  const localRecords = readLocalOutbox();
+  const foundLocal = localRecords.find((r) =>
+    r.hotel_id === hotelId &&
+    r.reservation_id === reservationId &&
+    (r.event_type === eventKey || r.report_type === eventKey) &&
+    r.status === OUTBOX_STATUS.SENT
+  );
+  if (foundLocal) return true;
+
+  // 2. Check Supabase notification_outbox
+  try {
+    const { data } = await supabaseServiceRole
+      .from('notification_outbox')
+      .select('id, status')
+      .eq('hotel_id', hotelId)
+      .eq('reservation_id', reservationId)
+      .eq('event_type', eventKey)
+      .eq('status', OUTBOX_STATUS.SENT)
+      .limit(1);
+
+    if (data && data.length > 0) return true;
+  } catch { /* ignore */ }
+
+  return false;
+};
+
 // ─── Record Outbox Event ──────────────────────────────────────────────────────
 
 /**
