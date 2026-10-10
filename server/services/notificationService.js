@@ -14,7 +14,8 @@ import { supabaseServiceRole } from '../supabaseClient.js';
 import { sendEmail } from './emailService.js';
 import { buildOtaReservationEmail } from './emailTemplates.js';
 import { resolveHotelOwnerWhatsApp, buildOtaReservationWhatsAppText } from './dailySummaryService.js';
-import { sendWhatsAppMessage } from './whatsappService.js';
+import { sendWhatsAppMessage, buildMetaBookingConfirmationTemplate } from './whatsappService.js';
+import { buildReservationConfirmationWhatsAppText } from './reservationDeliveryService.js';
 import {
   isOtaReservationAlertSent,
   recordWhatsAppOutboxEvent,
@@ -472,6 +473,88 @@ export const retryFailedNotifications = async (hotelId = null) => {
             attemptCount,
           });
           results.push({ id: record.id, status: 'failed', errorCode: sendResult.errorCode });
+        }
+      } else if (record.event_type && record.event_type.startsWith('RESERVATION_CONFIRMATION_WHATSAPP') && record.recipient) {
+        // Fetch full reservation for WhatsApp retry
+        const { data: reservation } = await supabase
+          .from('reservations')
+          .select('*')
+          .eq('id', record.reservation_id)
+          .maybeSingle();
+
+        if (!reservation) {
+          await updateNotificationStatus(record.id, {
+            status: STATUS.FAILED,
+            lastError: 'Reservation no longer exists',
+            attemptCount,
+          });
+          results.push({ id: record.id, status: 'skipped', reason: 'reservation_not_found' });
+          continue;
+        }
+
+        await updateNotificationStatus(record.id, { status: STATUS.SENDING, attemptCount });
+
+        const hotelObj = (await supabase.from('hotels').select('*').eq('id', record.hotel_id).maybeSingle()).data || {};
+        const settingsObj = (await supabase.from('hotel_settings').select('*').eq('id', record.hotel_id).maybeSingle()).data || {};
+        const hotelName = settingsObj.hotel_name || hotelObj.hotel_name || 'Hotel Mantri';
+
+        const totalVal = Number(reservation.invoice_total) || 0;
+        const advanceVal = Number(reservation.advance_paid) || 0;
+        const dueVal = Math.max(0, totalVal - advanceVal);
+
+        const waText = buildReservationConfirmationWhatsAppText({
+          hotelName,
+          reservationId: reservation.id,
+          confirmationNumber: `HM-RES-${reservation.id.slice(0, 8).toUpperCase()}`,
+          otaBookingId: reservation.remarks || '',
+          bookingSource: reservation.source_name || reservation.source_category || 'Direct',
+          guestName: reservation.guest_name || 'Guest',
+          checkIn: String(reservation.check_in_date || '').slice(0, 10),
+          checkOut: String(reservation.check_out_date || '').slice(0, 10),
+          nights: 1,
+          roomCategory: reservation.rate_plan || reservation.room_category || 'Standard',
+          roomNo: reservation.room_no,
+          totalAmount: totalVal,
+          advancePaid: advanceVal,
+          balanceDue: dueVal,
+        });
+
+        const roomInfo = `${reservation.rate_plan || reservation.room_category || 'Standard'}${
+          reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${reservation.room_no})` : ''
+        }`;
+
+        const metaTemplate = buildMetaBookingConfirmationTemplate({
+          guestName: reservation.guest_name || 'Guest',
+          hotelName,
+          confirmationNumber: `HM-RES-${reservation.id.slice(0, 8).toUpperCase()}`,
+          roomDetails: roomInfo,
+          checkIn: String(reservation.check_in_date || '').slice(0, 10),
+          checkOut: String(reservation.check_out_date || '').slice(0, 10),
+          totalAmount: totalVal,
+        });
+
+        const waSendResult = await sendWhatsAppMessage({
+          to: record.recipient,
+          text: waText,
+          templateName: metaTemplate.templateName,
+          templateComponents: metaTemplate.templateComponents,
+          templateLanguage: metaTemplate.templateLanguage,
+        });
+
+        if (waSendResult.success) {
+          await updateNotificationStatus(record.id, {
+            status: STATUS.SENT,
+            providerMessageId: waSendResult.messageId,
+            attemptCount,
+          });
+          results.push({ id: record.id, status: 'sent', provider: waSendResult.provider });
+        } else {
+          await updateNotificationStatus(record.id, {
+            status: STATUS.FAILED,
+            lastError: waSendResult.errorCode || waSendResult.message,
+            attemptCount,
+          });
+          results.push({ id: record.id, status: 'failed', errorCode: waSendResult.errorCode });
         }
       }
     }

@@ -35,14 +35,23 @@ export const supabaseServiceRole = createClient(SUPABASE_URL, SUPABASE_SERVICE_R
   },
 });
 
+export let authPromise = null;
+
 // If no true service_role key was provided in environment, elevate client to super_admin session
 // so background server operations and tests are not silently blocked by RLS policies.
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  supabaseServiceRole.auth.signInWithPassword({
+  authPromise = supabaseServiceRole.auth.signInWithPassword({
     email: process.env.SUPER_ADMIN_EMAIL || 'admin@hotelmis.com',
     password: process.env.SUPER_ADMIN_PASSWORD || 'Admin@2026',
   }).catch((err) => {
     console.warn('[SupabaseClient] Auto-elevation fallback warning:', err?.message || err);
   });
 }
+
+export const ensureAuth = async () => {
+  if (authPromise) {
+    await authPromise;
+  }
+  return supabaseServiceRole;
+};
 

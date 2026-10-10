@@ -16,7 +16,7 @@
  * - Test 12: Walk-in without email resilience (PDF generated, zero fake email, download ready)
  */
 
-import { supabaseServiceRole } from '../server/supabaseClient.js';
+import { supabaseServiceRole, ensureAuth } from '../server/supabaseClient.js';
 import {
   generateAndStoreReservationConfirmation,
   getReservationDocuments,
@@ -67,14 +67,16 @@ async function runTests() {
   console.log('HOTEL MANTRI — RESERVATION CONFIRMATION MASTER TEST SUITE');
   console.log('================================================================\n');
 
+  await ensureAuth();
+
   // Resolve test hotels
   let hotelA;
   let hotelB;
   try {
     const { data: hotels } = await supabaseServiceRole.from('hotels').select('*').limit(2);
     if (hotels && hotels.length > 0) {
-      hotelA = hotels[0];
-      hotelB = hotels.length > 1 ? hotels[1] : { id: '99999999-9999-9999-9999-999999999999', hotel_name: 'Hotel B Isolated' };
+      hotelA = hotels.find(h => h.hotel_name.toLowerCase().includes('gopal')) || hotels[0];
+      hotelB = hotels.find(h => h.id !== hotelA.id) || (hotels.length > 1 ? hotels[1] : { id: '99999999-9999-9999-9999-999999999999', hotel_name: 'Hotel B Isolated' });
     }
   } catch (e) {
     // Continue to fallback
@@ -497,6 +499,7 @@ async function runTests() {
     hotelId,
     inputs: walkInInput,
     userId: 'frontdesk-agent',
+    allowEmptyEmail: true,
   });
 
   const walkInRes = walkInCreated[0];
