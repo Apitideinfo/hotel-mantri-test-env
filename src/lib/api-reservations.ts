@@ -1807,11 +1807,7 @@ export const getReservationsPaginated = async (
 
   if (duplicateIdsToDelete.length > 0) {
     console.log(`[getReservationsPaginated] Auto-purging ${duplicateIdsToDelete.length} duplicate reservation rows:`, duplicateIdsToDelete);
-    supabase.from('reservations').delete().in('id', duplicateIdsToDelete).then(() => {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
-      }
-    });
+    supabase.from('reservations').delete().in('id', duplicateIdsToDelete).then(() => {}, () => {});
   }
 
   // Grouping BEFORE pagination
@@ -1919,11 +1915,7 @@ export const getReservationConflicts = async (): Promise<any[]> => {
           // If a and b are identical duplicate records in the same group, auto-purge the duplicate!
           if (a.group_id && b.group_id && a.group_id === b.group_id) {
             console.log(`[getReservationConflicts] Auto-purging duplicate reservation ${b.id} for Room ${rB} in group ${a.group_id}`);
-            supabase.from('reservations').delete().eq('id', b.id).then(() => {
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
-              }
-            });
+            supabase.from('reservations').delete().eq('id', b.id).then(() => {}, () => {});
             continue;
           }
 

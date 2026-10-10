@@ -339,38 +339,44 @@ export const detectExistingConflicts = async (hotelId) => {
 
   const { data: reservations, error } = await supabase
     .from('reservations')
-    .select('*')
+    .select('id, group_id, guest_name, room_no, room_id, check_in_date, check_out_date, status, source_name, source_category')
     .eq('hotel_id', hotelId)
     .in('status', ['confirmed', 'checked_in'])
     .order('check_in_date', { ascending: true });
 
-  if (error || !reservations) return [];
+  if (error || !reservations || reservations.length === 0) return [];
+
+  // Group reservations by physical room to reduce comparisons from O(N^2) to O(N)
+  const roomBuckets = new Map();
+  for (const r of reservations) {
+    const room = normalizePhysicalRoom(r.room_no);
+    if (!room) continue;
+    const key = room.toLowerCase();
+    if (!roomBuckets.has(key)) roomBuckets.set(key, []);
+    roomBuckets.get(key).push({ ...r, normalizedRoom: room });
+  }
 
   const conflicts = [];
+  const duplicateIdsToDelete = [];
 
-  for (let i = 0; i < reservations.length; i++) {
-    for (let j = i + 1; j < reservations.length; j++) {
-      const a = reservations[i];
-      const b = reservations[j];
+  for (const [, roomResList] of roomBuckets.entries()) {
+    if (roomResList.length < 2) continue;
 
-      const roomA = normalizePhysicalRoom(a.room_no);
-      const roomB = normalizePhysicalRoom(b.room_no);
+    for (let i = 0; i < roomResList.length; i++) {
+      for (let j = i + 1; j < roomResList.length; j++) {
+        const a = roomResList[i];
+        const b = roomResList[j];
 
-      // Only physical room assignments can conflict with each other
-      if (!roomA || !roomB) continue;
-
-      if (roomA.toLowerCase() === roomB.toLowerCase() || (a.room_id && b.room_id && a.room_id === b.room_id)) {
         if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
-          // If a and b are identical duplicate records in the same group, auto-purge the duplicate!
+          // If a and b are identical duplicate records in the same group, schedule auto-purge
           if (a.group_id && b.group_id && a.group_id === b.group_id) {
-            console.log(`[detectExistingConflicts] Auto-purging duplicate reservation ${b.id} for Room ${roomB} in group ${a.group_id}`);
-            supabase.from('reservations').delete().eq('id', b.id).catch(() => {});
+            duplicateIdsToDelete.push(b.id);
             continue;
           }
 
           conflicts.push({
             type: 'physical_room_overlap',
-            roomNo: roomA,
+            roomNo: a.normalizedRoom,
             reservationA: {
               id: a.id,
               guestName: a.guest_name,
@@ -392,6 +398,11 @@ export const detectExistingConflicts = async (hotelId) => {
         }
       }
     }
+  }
+
+  if (duplicateIdsToDelete.length > 0) {
+    console.log(`[detectExistingConflicts] Auto-purging ${duplicateIdsToDelete.length} duplicate room records:`, duplicateIdsToDelete);
+    supabase.from('reservations').delete().in('id', duplicateIdsToDelete).catch(() => {});
   }
 
   return conflicts;

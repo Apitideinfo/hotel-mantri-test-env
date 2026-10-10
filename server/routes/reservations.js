@@ -33,7 +33,6 @@ import {
   buildOtaOwnerConfirmationEmail,
   buildCustomerConfirmationEmail,
   buildReservationConfirmationWhatsAppText,
-  buildMetaBookingConfirmationTemplate,
   resolveReservationNotificationRecipient,
   isOTAReservation,
   normalizeBookingSource,
@@ -47,7 +46,12 @@ import {
   DELIVERY_STATUS,
 } from '../services/documentService.js';
 import { sendEmail, isValidEmail } from '../services/emailService.js';
-import { sendWhatsAppMessage, buildWhatsAppDirectUrl, normalizeWhatsAppPhone } from '../services/whatsappService.js';
+import {
+  sendWhatsAppMessage,
+  buildWhatsAppDirectUrl,
+  normalizeWhatsAppPhone,
+  buildMetaBookingConfirmationTemplate,
+} from '../services/whatsappService.js';
 import { resolveHotelOwnerEmail } from '../services/notificationService.js';
 import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
 
@@ -62,13 +66,6 @@ router.get('/', checkAuth, async (req, res) => {
     const hotelId = req.hotelId || req.auth?.hotelId;
     if (!hotelId) {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
-    }
-
-    // Opportunistic automatic reconciliation for pending unassigned OTA reservations
-    try {
-      await processPendingRoomAllocations(hotelId);
-    } catch (allocErr) {
-      console.warn('[Reservations] Background reconciliation non-blocking warning:', allocErr.message);
     }
 
     const {
@@ -139,8 +136,33 @@ router.get('/', checkAuth, async (req, res) => {
     const isAscending = String(sortOrder).toLowerCase() === 'asc';
     query = query.order(sortBy, { ascending: isAscending });
 
-    // Fetch all matching reservations for accurate grouping & pagination
-    const { data: rawReservations, error } = await query;
+    // Determine if any filters are applied
+    const hasFilters = Boolean(
+      (status && status !== 'all') ||
+      (sourceCategory && sourceCategory !== 'all') ||
+      (roomNo && roomNo !== 'all') ||
+      (assignedStatus && assignedStatus !== 'all') ||
+      fromDate ||
+      toDate ||
+      (search && search.trim())
+    );
+
+    // If no filters are active, rawReservations is the complete set of hotel reservations,
+    // so we can compute global metrics without a 2nd round trip to Supabase!
+    // If filters ARE active, execute both queries concurrently with Promise.all.
+    const metricsPromise = hasFilters
+      ? supabaseServiceRole
+          .from('reservations')
+          .select('id, group_id, status, room_no, invoice_total, rate, nights')
+          .eq('hotel_id', hotelId)
+      : null;
+
+    const [queryResult, metricsResult] = await Promise.all([
+      query,
+      metricsPromise
+    ]);
+
+    const { data: rawReservations, error } = queryResult;
     if (error) {
       console.error('[API /reservations] Query error:', error);
       throw error;
@@ -199,10 +221,7 @@ router.get('/', checkAuth, async (req, res) => {
     }
 
     // Calculate Global Metrics independent of filters & pagination
-    const { data: allHotelRes } = await supabaseServiceRole
-      .from('reservations')
-      .select('id, group_id, status, room_no, invoice_total, rate, nights')
-      .eq('hotel_id', hotelId);
+    const allHotelRes = hasFilters ? (metricsResult?.data || []) : (rawReservations || []);
 
     const seenMetricsKeys = new Set();
     let totalBookings = 0;

@@ -91,6 +91,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   // List View Pagination & Filters
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
+  const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
@@ -99,6 +100,15 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [filterFromDate, setFilterFromDate] = useState<string>('');
   const [filterToDate, setFilterToDate] = useState<string>('');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Debounce search input by 250ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearch(searchInput);
+      setPage(1);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // Data states
   const [paginatedData, setPaginatedData] = useState<{
@@ -930,13 +940,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               <input
                 type="text"
                 placeholder="Search guest, mobile, room no, ID…"
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 className="w-full pl-9 pr-8 py-2 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500 transition shadow-2xs"
               />
-              {search && (
+              {searchInput && (
                 <button
-                  onClick={() => setSearch('')}
+                  onClick={() => { setSearchInput(''); setSearch(''); setPage(1); }}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -981,6 +991,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                   setFilterRoomNo('all');
                   setFilterFromDate('');
                   setFilterToDate('');
+                  setSearchInput('');
                   setSearch('');
                   setPage(1);
                 }}
@@ -1140,14 +1151,19 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           1. PRIMARY VIEW: All Reservations Table (List View)
          ══════════════════════════════════════════════════════════════ */}
       {view === 'list' && (
-        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card overflow-hidden">
-          {loading ? (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card overflow-hidden relative">
+          {loading && paginatedData.reservations.length > 0 && (
+            <div className="absolute top-0 left-0 right-0 h-1 bg-indigo-100 overflow-hidden z-10">
+              <div className="h-full bg-indigo-600 animate-pulse w-full" />
+            </div>
+          )}
+          {loading && paginatedData.reservations.length === 0 ? (
             <div className="p-20 text-center flex flex-col items-center justify-center gap-3">
               <Loader2 className="w-9 h-9 animate-spin text-indigo-600" />
               <p className="text-sm font-bold text-slate-700">Loading reservations database…</p>
               <p className="text-xs text-slate-400">Fetching live bookings, OTA channels, and room statuses</p>
             </div>
-          ) : paginatedData.reservations.length === 0 ? (
+          ) : !loading && paginatedData.reservations.length === 0 ? (
             <div className="p-20 text-center flex flex-col items-center justify-center gap-3">
               <div className="w-14 h-14 rounded-3xl bg-slate-100 flex items-center justify-center text-slate-400 shadow-inner">
                 <List className="w-7 h-7" />
@@ -1164,6 +1180,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                   setFilterRoomNo('all');
                   setFilterFromDate('');
                   setFilterToDate('');
+                  setSearchInput('');
                   setSearch('');
                   setPage(1);
                 }}
@@ -1173,7 +1190,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               </button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className={`overflow-x-auto transition-opacity duration-150 ${loading ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
                   <tr className="bg-slate-50/90 border-b border-slate-200/90 text-[11px] font-black text-slate-500 uppercase tracking-wider">
