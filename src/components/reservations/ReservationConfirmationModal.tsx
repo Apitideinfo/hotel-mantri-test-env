@@ -214,7 +214,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     }
   };
 
-  // ── Send / Open WhatsApp ──
+  // ── Send WhatsApp via Whinta ──
   const handleSendWhatsApp = async () => {
     setActing(true);
     setActionError(null);
@@ -228,22 +228,15 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
       });
 
       if (res.success) {
-        setActionSuccess('WhatsApp confirmation dispatched successfully.');
+        setActionSuccess('WhatsApp confirmation dispatched successfully via Whinta.');
         setShowPhoneInput(false);
         await fetchConfirmationInfo();
         onUpdated?.();
-      } else if (res.whatsappDirectUrl) {
-        window.open(res.whatsappDirectUrl, '_blank', 'noopener,noreferrer');
-        setActionSuccess('Opened WhatsApp Web / App with confirmation details.');
       } else {
-        setActionError(res.message || 'WhatsApp delivery unavailable.');
+        setActionError(res.message || 'Whinta WhatsApp delivery unavailable.');
       }
     } catch (err: any) {
-      if (docData?.whatsappDirectUrl) {
-        window.open(docData.whatsappDirectUrl, '_blank', 'noopener,noreferrer');
-      } else {
-        setActionError(err?.message || 'WhatsApp delivery unavailable.');
-      }
+      setActionError(err?.message || 'Whinta WhatsApp delivery unavailable.');
     } finally {
       setActing(false);
       setTimeout(() => setActionSuccess(null), 5000);
@@ -586,7 +579,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
                   className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition"
                 >
                   {acting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                  Dispatch WhatsApp
+                  Dispatch via Whinta
                 </button>
               </div>
             </div>
@@ -633,25 +626,16 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
             </button>
 
             {/* WhatsApp */}
-            {docData?.whatsappDirectUrl ? (
-              <a
-                href={docData.whatsappDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>Open WhatsApp</span>
-              </a>
-            ) : (
-              <button
-                onClick={() => setShowPhoneInput(!showPhoneInput)}
-                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-              >
-                <MessageCircle className="w-4 h-4" />
-                <span>WhatsApp</span>
-              </button>
-            )}
+            <button
+              onClick={() => setShowPhoneInput(!showPhoneInput)}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              title="Send WhatsApp confirmation via Whinta"
+            >
+              <MessageCircle className="w-4 h-4" />
+              <span>
+                {whatsappStatus === 'SENT' ? 'Resend WhatsApp (Whinta)' : whatsappStatus === 'FAILED' ? 'Retry WhatsApp (Whinta)' : 'Send WhatsApp (Whinta)'}
+              </span>
+            </button>
 
             {/* Regenerate */}
             <button

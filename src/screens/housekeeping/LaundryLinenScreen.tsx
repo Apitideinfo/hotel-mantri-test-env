@@ -2878,9 +2878,8 @@ const CloseLaundryDayModal = ({
         vendor_id: vendorId,
         date: selectedDate,
       });
-      if (res?.whatsappDirectUrl && !res?.success) {
-        // Open manual fallback
-        window.open(res.whatsappDirectUrl, '_blank');
+      if (!res?.success) {
+        throw new Error(res?.message || 'Failed to dispatch WhatsApp statement via Whinta');
       }
       onDayClosed();
     } catch (e: any) {

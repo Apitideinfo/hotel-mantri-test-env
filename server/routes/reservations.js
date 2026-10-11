@@ -53,6 +53,18 @@ import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
 
 const router = express.Router();
 
+const formatDateReadable = (iso) => {
+  if (!iso) return '—';
+  const clean = String(iso).slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length === 3 && parts[0].length === 4) {
+    const [y, m, d] = parts;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${d} ${months[parseInt(m, 10) - 1] || m} ${y}`;
+  }
+  return clean;
+};
+
 /**
  * GET /api/reservations
  * Authoritative paginated list with search, date range, channel, and status filters.
@@ -1188,7 +1200,26 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     const advanceVal = Number(reservation.advance_paid) || 0;
     const dueVal = Math.max(0, totalVal - advanceVal);
 
-    const waText = buildReservationConfirmationWhatsAppText({
+    // 3. Ensure confirmation PDF is generated and persistently stored
+    let targetDoc = null;
+    try {
+      const pdfGenResult = await generateAndStoreReservationConfirmation({
+        hotelId,
+        reservationId: id,
+        reservation,
+      });
+      targetDoc = pdfGenResult?.document;
+    } catch (pdfErr) {
+      console.warn('[CONFIRMATION_WHATSAPP] Non-fatal PDF generation error:', pdfErr.message);
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = process.env.APP_URL || process.env.PUBLIC_URL || `${protocol}://${host}`;
+    const pdfUrl = `${baseUrl}/api/reservations/${id}/confirmation/pdf`;
+    const fileName = targetDoc?.file_name || `Hotel-Mantri-Reservation-HM-${id.slice(0, 8).toUpperCase()}.pdf`;
+
+    let waText = buildReservationConfirmationWhatsAppText({
       hotelName,
       reservationId: id,
       confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
@@ -1204,6 +1235,9 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
       advancePaid: advanceVal,
       balanceDue: dueVal,
     });
+
+    // Append PDF download link to the text
+    waText = `${waText}\n\n📄 *Official PDF:* ${pdfUrl}`;
 
     const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);
 
@@ -1221,10 +1255,14 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
       totalAmount: totalVal,
     });
 
-    // Send via provider
+    // Send via Whinta provider with PDF attachment
     const sendResult = await sendWhatsAppMessage({
       to: targetPhone,
       text: waText,
+      mediaUrl: pdfUrl,
+      fileName,
+      caption: waText,
+      mediaType: 'document',
       templateName: metaTemplate.templateName,
       templateComponents: metaTemplate.templateComponents,
       templateLanguage: metaTemplate.templateLanguage,

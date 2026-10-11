@@ -62,18 +62,42 @@ export const resolveHotelOwnerWhatsApp = async (hotelId) => {
   try {
     const [{ data: hotel }, { data: settings }] = await Promise.all([
       supabase.from('hotels').select('id, hotel_name, mobile, owner_name').eq('id', hotelId).maybeSingle(),
-      supabase.from('hotel_settings').select('id, hotel_name, whatsapp_number, phone, manager_mobile').eq('id', hotelId).maybeSingle(),
+      supabase
+        .from('hotel_settings')
+        .select(`
+          id, hotel_name, whatsapp_report_recipient_phone, whatsapp_number, phone, manager_mobile,
+          whatsapp_country_code, whatsapp_daily_report_enabled, whatsapp_laundry_statement_enabled,
+          whatsapp_preferred_delivery_time, whatsapp_timezone, whatsapp_delivery_preferences,
+          whatsapp_consent_status, whatsapp_last_successful_send, whatsapp_last_failure_reason,
+          whatsapp_last_failure_at
+        `)
+        .eq('id', hotelId)
+        .maybeSingle(),
     ]);
 
     const hotelName = settings?.hotel_name || hotel?.hotel_name || 'Hotel Property';
     const ownerName = hotel?.owner_name || '';
 
     const candidates = [
+      { num: settings?.whatsapp_report_recipient_phone, source: 'hotel_settings.whatsapp_report_recipient_phone' },
       { num: settings?.whatsapp_number, source: 'hotel_settings.whatsapp_number' },
       { num: hotel?.mobile, source: 'hotels.mobile' },
       { num: settings?.phone, source: 'hotel_settings.phone' },
       { num: settings?.manager_mobile, source: 'hotel_settings.manager_mobile' },
     ];
+
+    const preferences = {
+      countryCode: settings?.whatsapp_country_code || '91',
+      dailyReportEnabled: settings?.whatsapp_daily_report_enabled ?? true,
+      laundryStatementEnabled: settings?.whatsapp_laundry_statement_enabled ?? true,
+      preferredDeliveryTime: settings?.whatsapp_preferred_delivery_time || '22:00',
+      timezone: settings?.whatsapp_timezone || 'Asia/Kolkata',
+      deliveryPreferences: settings?.whatsapp_delivery_preferences || { send_morning: false, send_evening: true, include_pdf: false },
+      consentStatus: settings?.whatsapp_consent_status || 'opted_in',
+      lastSuccessfulSend: settings?.whatsapp_last_successful_send || null,
+      lastFailureReason: settings?.whatsapp_last_failure_reason || null,
+      lastFailureAt: settings?.whatsapp_last_failure_at || null,
+    };
 
     for (const cand of candidates) {
       if (cand.num && typeof cand.num === 'string' && cand.num.trim()) {
@@ -87,6 +111,7 @@ export const resolveHotelOwnerWhatsApp = async (hotelId) => {
             source: cand.source,
             hotelName,
             ownerName,
+            ...preferences,
           };
         }
       }
@@ -97,6 +122,7 @@ export const resolveHotelOwnerWhatsApp = async (hotelId) => {
       error: 'No valid owner WhatsApp number configured for this hotel.',
       hotelName,
       ownerName,
+      ...preferences,
     };
   } catch (err) {
     console.error('[DAILY_SUMMARY] resolveHotelOwnerWhatsApp error:', err.message);
@@ -400,6 +426,14 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
       pendingCheckouts,
     },
 
+    // Expenses
+    expenses: {
+      housekeepingSupply: toNum(otherDaily?.housekeeping_supply),
+      maintenance: toNum(otherDaily?.maintenance_bill),
+      otherExpense: toNum(otherDaily?.other_expense),
+      total: toNum(otherDaily?.housekeeping_supply) + toNum(otherDaily?.other_expense) + toNum(otherDaily?.maintenance_bill),
+    },
+
     // Revenue
     revenue: {
       roomRevenue,
@@ -534,12 +568,13 @@ export const buildDailySummaryText = (s) => {
     '',
     '━━━━━━━━━━━━━━━━',
     '',
-    '💳 *COLLECTION*',
+    '💳 *COLLECTION & FINANCIALS*',
     `Cash: ${fmtMoney(s.collection.cash)}`,
     `Digital/UPI/Bank: ${fmtMoney(s.collection.digital)}`,
     `OTA Collection: ${fmtMoney(s.collection.ota)}`,
     `Total Collection: *${fmtMoney(s.collection.total)}*`,
-    `Pending / Due: *${fmtMoney(s.collection.pendingDue)}*`,
+    `Expenses: ${fmtMoney(s.expenses?.total || 0)}`,
+    `Outstanding Due: *${fmtMoney(s.collection.pendingDue)}*`,
     '',
     '━━━━━━━━━━━━━━━━',
     '',
@@ -621,11 +656,12 @@ export const buildEveningSummaryText = (s) => {
     `Other Revenue: ${fmtMoney(s.revenue.otherRevenue)}`,
     `Gross Revenue: *${fmtMoney(s.revenue.grossRevenue)}*`,
     '',
-    '💳 *COLLECTIONS*',
+    '💳 *COLLECTIONS & EXPENSES*',
     `Cash: ${fmtMoney(s.collection.cash)}`,
     `Digital: ${fmtMoney(s.collection.digital)}`,
     `OTA: ${fmtMoney(s.collection.ota)}`,
     `Total Collection: *${fmtMoney(s.collection.total)}*`,
+    `Expenses: ${fmtMoney(s.expenses?.total || 0)}`,
     `Pending / Due: *${fmtMoney(s.collection.pendingDue)}*`,
     '',
     '━━━━━━━━━━━━━━━━',

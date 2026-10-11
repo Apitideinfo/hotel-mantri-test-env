@@ -2233,19 +2233,34 @@ export const buildWhatsAppConfirmationText = (data: ReservationConfirmationData)
 };
 
 /**
- * Dispatches or opens WhatsApp with authoritative reservation text (Section 15)
+ * Sends reservation confirmation via Whinta WhatsApp Business API (server-side)
  */
-export const openWhatsAppConfirmation = (data: ReservationConfirmationData): string => {
-  const targetPhone = data.contacts.targetPhone || data.contacts.guestContact.phone || data.contacts.ownerContact.phone;
-  const digits = (targetPhone || '').replace(/\D/g, '');
-  if (!digits) {
-    throw new Error('No valid mobile phone number available for WhatsApp.');
+export const sendReservationConfirmationWhatsApp = async (
+  reservationId: string,
+  phoneNumberOverride?: string
+): Promise<{ success: boolean; message: string; messageId?: string; whatsappDirectUrl?: string }> => {
+  const res = await apiFetch(`/api/reservations/${reservationId}/confirmation/send-whatsapp`, {
+    method: 'POST',
+    body: JSON.stringify({
+      phoneNumber: phoneNumberOverride?.trim() || undefined,
+    }),
+  });
+
+  if (!res.success) {
+    throw new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
   }
-  const formattedPhone = digits.length === 10 ? `91${digits}` : digits;
-  const text = buildWhatsAppConfirmationText(data);
-  const url = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`;
-  window.open(url, '_blank', 'noopener,noreferrer');
-  return url;
+
+  return res;
+};
+
+/**
+ * Dispatches WhatsApp reservation confirmation via Whinta (Section 15)
+ */
+export const openWhatsAppConfirmation = async (
+  data: ReservationConfirmationData
+): Promise<{ success: boolean; message: string; messageId?: string }> => {
+  const targetPhone = data.contacts.targetPhone || data.contacts.guestContact.phone || data.contacts.ownerContact.phone;
+  return sendReservationConfirmationWhatsApp(data.reservation.id, targetPhone);
 };
 
 /**

@@ -1,10 +1,10 @@
 /**
  * Hotel Mantri — WhatsApp Provider Service
  *
- * Provides a clean server-side provider abstraction for WhatsApp delivery:
- *   - MetaCloudProvider: WhatsApp Business Cloud API (WHATSAPP_API_TOKEN + WHATSAPP_PHONE_NUMBER_ID)
- *   - TwilioProvider: Twilio WhatsApp API (TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM)
- *   - CustomWebhookProvider: Webhook gateway (WHATSAPP_PROVIDER_URL + WHATSAPP_API_KEY)
+ * Provides a clean server-side provider abstraction for WhatsApp delivery
+ * using Whinta as the exclusive WhatsApp Business API provider.
+ *
+ *   - WhintaProvider: Whinta Web API (WHINTA_ACCESS_TOKEN)
  *   - Manual wa.me fallback: Always available even when automated provider is not configured
  *
  * CRITICAL REQUIREMENTS:
@@ -15,6 +15,7 @@
  */
 
 import dotenv from 'dotenv';
+import { WhintaProvider, getWhintaConfig, formatWhintaPhone } from './whintaService.js';
 
 dotenv.config();
 
@@ -97,285 +98,35 @@ export const buildWhatsAppDirectUrl = (phone, text) => {
 
 /**
  * Returns safe provider configuration status WITHOUT exposing secrets.
+ * Exclusively checks for Whinta provider configuration.
  */
 export const getWhatsAppProviderConfig = () => {
-  const metaToken = process.env.WHATSAPP_API_TOKEN || process.env.META_WHATSAPP_TOKEN;
-  const metaPhoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID;
-
-  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-  const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
-  const twilioFrom = process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_FROM_NUMBER;
-
-  const customUrl = process.env.WHATSAPP_PROVIDER_URL;
-
-  if (metaToken && metaPhoneId) {
+  const whintaCfg = getWhintaConfig();
+  if (whintaCfg.configured) {
     return {
       configured: true,
-      provider: 'META_CLOUD_API',
-      metaPhoneId,
-    };
-  }
-
-  if (twilioSid && twilioAuth && twilioFrom) {
-    return {
-      configured: true,
-      provider: 'TWILIO',
-      twilioFrom,
-    };
-  }
-
-  if (customUrl) {
-    return {
-      configured: true,
-      provider: 'CUSTOM_WEBHOOK',
-      endpoint: customUrl,
+      enabled: whintaCfg.enabled,
+      active: whintaCfg.active,
+      provider: 'WHINTA',
+      baseUrl: whintaCfg.baseUrl,
+      defaultCountryCode: whintaCfg.defaultCountryCode,
     };
   }
 
   return {
     configured: false,
     provider: 'NONE',
-    message: 'Automated WhatsApp delivery is not configured on the server.',
+    message: 'Automated WhatsApp delivery is not configured. Set WHINTA_ACCESS_TOKEN and WHINTA_ENABLED=true in your environment.',
   };
 };
-
-// ─── Provider Implementations ─────────────────────────────────────────────────
-
-/**
- * Meta WhatsApp Business Cloud API Provider
- */
-export class MetaCloudWhatsAppProvider {
-  constructor(tokenOrOptions, phoneNumberId, fetchFn = globalThis.fetch) {
-    if (typeof tokenOrOptions === 'object' && tokenOrOptions !== null) {
-      this.token = tokenOrOptions.apiToken || tokenOrOptions.token;
-      this.phoneNumberId = tokenOrOptions.phoneNumberId;
-      this.fetchFn = tokenOrOptions.fetchFn || globalThis.fetch;
-    } else {
-      this.token = tokenOrOptions;
-      this.phoneNumberId = phoneNumberId;
-      this.fetchFn = fetchFn || globalThis.fetch;
-    }
-  }
-
-  isConfigured() {
-    return Boolean(this.token && this.phoneNumberId);
-  }
-
-  async send(recipientOrParams, text, templateName = null, templateComponents = [], templateLanguage = 'en') {
-    let recipient = recipientOrParams;
-    let messageText = text;
-    let tName = templateName;
-    let tComponents = templateComponents;
-    let tLang = templateLanguage;
-
-    if (typeof recipientOrParams === 'object' && recipientOrParams !== null) {
-      recipient = recipientOrParams.to;
-      messageText = recipientOrParams.text;
-      tName = recipientOrParams.templateName;
-      tComponents = recipientOrParams.templateComponents || [];
-      tLang = recipientOrParams.templateLanguage || 'en';
-    }
-
-    const url = `https://graph.facebook.com/v18.0/${this.phoneNumberId}/messages`;
-
-    let payload;
-    if (tName) {
-      payload = {
-        messaging_product: 'whatsapp',
-        to: recipient,
-        type: 'template',
-        template: {
-          name: tName,
-          language: { code: tLang || 'en' },
-          components: tComponents,
-        },
-      };
-    } else {
-      payload = {
-        messaging_product: 'whatsapp',
-        recipient_type: 'individual',
-        to: recipient,
-        type: 'text',
-        text: { body: messageText },
-      };
-    }
-
-    const response = await this.fetchFn(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const resData = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const status = response.status;
-      let errorCode = WHATSAPP_ERRORS.PROVIDER_ERROR;
-      if (status === 400) errorCode = WHATSAPP_ERRORS.MESSAGE_REJECTED;
-      else if (status === 401 || status === 403) errorCode = WHATSAPP_ERRORS.AUTH_FAILED;
-      else if (status === 429) errorCode = WHATSAPP_ERRORS.RATE_LIMITED;
-
-      const safeMessage = resData?.error?.message || `Meta API HTTP ${status}`;
-      return {
-        success: false,
-        provider: 'META_CLOUD',
-        status: status === 429 ? 'rate_limited' : 'failed',
-        statusCode: status,
-        error: errorCode,
-        errorCode,
-        providerErrorCode: resData?.error?.code || null,
-        message: safeMessage,
-      };
-    }
-
-    const messageId = resData?.messages?.[0]?.id || `meta_${Date.now()}`;
-    return {
-      success: true,
-      provider: 'META_CLOUD',
-      status: 'sent',
-      messageId,
-      message: 'WhatsApp message accepted by Meta Cloud API.',
-    };
-  }
-}
-
-/**
- * Twilio WhatsApp Provider
- */
-export class TwilioWhatsAppProvider {
-  constructor(accountSidOrOptions, authToken, fromNumber, fetchFn = globalThis.fetch) {
-    if (typeof accountSidOrOptions === 'object' && accountSidOrOptions !== null) {
-      this.accountSid = accountSidOrOptions.accountSid;
-      this.authToken = accountSidOrOptions.authToken;
-      const from = accountSidOrOptions.from || accountSidOrOptions.fromNumber || '';
-      this.fromNumber = from.startsWith('whatsapp:') ? from : (from ? `whatsapp:${from}` : '');
-      this.fetchFn = accountSidOrOptions.fetchFn || globalThis.fetch;
-    } else {
-      this.accountSid = accountSidOrOptions;
-      this.authToken = authToken;
-      const from = fromNumber || '';
-      this.fromNumber = from.startsWith('whatsapp:') ? from : (from ? `whatsapp:${from}` : '');
-      this.fetchFn = fetchFn || globalThis.fetch;
-    }
-  }
-
-  isConfigured() {
-    return Boolean(this.accountSid && this.authToken && this.fromNumber);
-  }
-
-  async send(recipientOrParams, text) {
-    let recipient = recipientOrParams;
-    let messageText = text;
-
-    if (typeof recipientOrParams === 'object' && recipientOrParams !== null) {
-      recipient = recipientOrParams.to;
-      messageText = recipientOrParams.text;
-    }
-
-    const url = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Messages.json`;
-    const authHeader = 'Basic ' + Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64');
-
-    const params = new URLSearchParams();
-    params.append('From', this.fromNumber);
-    params.append('To', recipient.startsWith('whatsapp:') ? recipient : `whatsapp:+${recipient.replace(/^\+/, '')}`);
-    params.append('Body', messageText);
-
-    const response = await this.fetchFn(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params.toString(),
-    });
-
-    const resData = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const status = response.status;
-      let errorCode = WHATSAPP_ERRORS.PROVIDER_ERROR;
-      if (status === 401 || status === 403) errorCode = WHATSAPP_ERRORS.AUTH_FAILED;
-      else if (status === 429) errorCode = WHATSAPP_ERRORS.RATE_LIMITED;
-      else if (resData?.code === 21211 || resData?.code === 21614) errorCode = WHATSAPP_ERRORS.INVALID_RECIPIENT;
-
-      return {
-        success: false,
-        provider: 'TWILIO',
-        status: status === 429 ? 'rate_limited' : 'failed',
-        statusCode: status,
-        error: errorCode,
-        errorCode,
-        message: resData?.message || `Twilio HTTP ${status}`,
-      };
-    }
-
-    const messageId = resData?.sid || `twilio_${Date.now()}`;
-    return {
-      success: true,
-      provider: 'TWILIO',
-      status: 'sent',
-      messageId,
-      message: 'WhatsApp message accepted by Twilio.',
-    };
-  }
-}
-
-/**
- * Custom Webhook Provider
- */
-class CustomWebhookProvider {
-  constructor(url, apiKey) {
-    this.url = url;
-    this.apiKey = apiKey;
-  }
-
-  async send(recipient, text) {
-    const headers = { 'Content-Type': 'application/json' };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
-
-    const response = await fetch(this.url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        phone: recipient,
-        message: text,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-
-    const resData = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      return {
-        success: false,
-        status: 'failed',
-        statusCode: response.status,
-        error: WHATSAPP_ERRORS.PROVIDER_ERROR,
-        errorCode: WHATSAPP_ERRORS.PROVIDER_ERROR,
-        message: resData?.message || `Webhook HTTP ${response.status}`,
-      };
-    }
-
-    const messageId = resData?.messageId || resData?.id || `wh_${Date.now()}`;
-    return {
-      success: true,
-      status: 'sent',
-      messageId,
-      message: 'WhatsApp message accepted by webhook gateway.',
-    };
-  }
-}
 
 // ─── Meta WhatsApp Booking Confirmation Template Builder ──────────────────────
 
 /**
- * Constructs standard Meta WhatsApp Business Cloud API template payload components
+ * Constructs standard WhatsApp Business Cloud API template payload components
  * for reservation booking confirmations.
  *
- * Meta approved template convention for `booking_confirmation`:
+ * Template convention for `booking_confirmation`:
  * Body parameters:
  *   {{1}} = Guest Name
  *   {{2}} = Hotel Name
@@ -453,7 +204,7 @@ export const buildMetaBookingConfirmationTemplate = ({
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Sends a WhatsApp message using the active provider with transient retry logic.
+ * Sends a WhatsApp message using Whinta provider with transient retry logic.
  *
  * @param {Object} params
  * @param {string} params.to - Recipient phone number
@@ -463,13 +214,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
  * @param {string} [params.templateLanguage='en']
  * @returns {Promise<Object>} Structured delivery result
  */
-export const sendWhatsAppMessage = async ({
-  to,
-  text,
-  templateName = null,
-  templateComponents = [],
-  templateLanguage = 'en',
-}) => {
+export const sendWhatsAppMessage = async (params) => {
+  // Support both object destructuring and flexible field names
+  const to = params?.to || params?.recipientPhone || params?.phone || '';
+  const text = params?.text || params?.messageText || params?.message || '';
+  const templateName = params?.templateName || null;
+  const templateComponents = params?.templateComponents || [];
+  const templateLanguage = params?.templateLanguage || 'en';
+  const mediaUrl = params?.mediaUrl || params?.documentUrl || null;
+  const fileName = params?.fileName || params?.filename || null;
+  const caption = params?.caption || null;
+  const mediaType = params?.mediaType || 'document';
+
   // 1. Phone number validation
   const norm = normalizeWhatsAppPhone(to);
   if (!norm.valid) {
@@ -496,34 +252,22 @@ export const sendWhatsAppMessage = async ({
       status: 'provider_not_configured',
       error: WHATSAPP_ERRORS.PROVIDER_NOT_CONFIGURED,
       errorCode: WHATSAPP_ERRORS.PROVIDER_NOT_CONFIGURED,
-      message: 'Automated WhatsApp delivery is not configured on the server. Configure WHATSAPP_API_TOKEN or Twilio credentials in environment.',
+      message: 'Automated WhatsApp delivery is not configured. Set WHINTA_ACCESS_TOKEN and WHINTA_ENABLED=true in your environment.',
       whatsappDirectUrl: directUrl,
     };
   }
 
-  // 3. Resolve active provider instance
-  let providerInstance = null;
-  if (config.provider === 'META_CLOUD_API') {
-    const token = process.env.WHATSAPP_API_TOKEN || process.env.META_WHATSAPP_TOKEN;
-    providerInstance = new MetaCloudWhatsAppProvider(token, config.metaPhoneId);
-  } else if (config.provider === 'TWILIO') {
-    const sid = process.env.TWILIO_ACCOUNT_SID;
-    const auth = process.env.TWILIO_AUTH_TOKEN;
-    providerInstance = new TwilioWhatsAppProvider(sid, auth, config.twilioFrom);
-  } else if (config.provider === 'CUSTOM_WEBHOOK') {
-    const url = process.env.WHATSAPP_PROVIDER_URL;
-    const key = process.env.WHATSAPP_API_KEY;
-    providerInstance = new CustomWebhookProvider(url, key);
-  }
+  // 3. Resolve Whinta provider instance
+  const providerInstance = new WhintaProvider();
 
-  if (!providerInstance) {
+  if (!providerInstance.isConfigured()) {
     return {
       success: false,
-      provider: config.provider,
+      provider: 'WHINTA',
       status: 'provider_not_configured',
       error: WHATSAPP_ERRORS.PROVIDER_NOT_CONFIGURED,
       errorCode: WHATSAPP_ERRORS.PROVIDER_NOT_CONFIGURED,
-      message: 'No active WhatsApp provider instance resolved.',
+      message: 'Whinta access token is missing or invalid.',
       whatsappDirectUrl: directUrl,
     };
   }
@@ -534,16 +278,26 @@ export const sendWhatsAppMessage = async ({
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const result = await providerInstance.send(recipient, text, templateName, templateComponents, templateLanguage);
+      const result = await providerInstance.send({
+        to: recipient,
+        text,
+        templateName,
+        templateComponents,
+        templateLanguage,
+        mediaUrl,
+        fileName,
+        caption,
+        mediaType,
+      });
 
       if (result.success) {
         return {
           success: true,
-          provider: config.provider,
-          status: 'sent',
+          provider: 'WHINTA',
+          status: result.status || 'submitted',
           messageId: result.messageId,
-          recipient: `+${recipient}`,
-          message: result.message || 'WhatsApp message accepted by provider.',
+          recipient: result.recipient || `+${recipient}`,
+          message: result.message || 'WhatsApp message accepted by Whinta.',
           whatsappDirectUrl: directUrl,
         };
       }
@@ -575,7 +329,7 @@ export const sendWhatsAppMessage = async ({
 
   return {
     success: false,
-    provider: config.provider,
+    provider: 'WHINTA',
     status: lastResult?.status || 'failed',
     error: lastResult?.error || WHATSAPP_ERRORS.PROVIDER_ERROR,
     errorCode: lastResult?.errorCode || WHATSAPP_ERRORS.PROVIDER_ERROR,
@@ -591,6 +345,7 @@ export default {
   buildMetaBookingConfirmationTemplate,
   getWhatsAppProviderConfig,
   sendWhatsAppMessage,
-  MetaCloudWhatsAppProvider,
-  TwilioWhatsAppProvider,
+  WhintaProvider,
+  getWhintaConfig,
+  formatWhintaPhone,
 };

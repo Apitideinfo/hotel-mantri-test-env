@@ -109,6 +109,8 @@ app.use('/api/reports/whatsapp', notificationRoutes);
 app.use('/reports/whatsapp', notificationRoutes);
 app.use('/api/reports', notificationRoutes);
 app.use('/reports', notificationRoutes);
+app.use('/api/webhooks/whinta', notificationRoutes);
+app.use('/webhooks/whinta', notificationRoutes);
 
 app.use('/api/laundry', laundryRoutes);
 app.use('/laundry', laundryRoutes);
