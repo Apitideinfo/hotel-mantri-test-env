@@ -65,6 +65,7 @@ export const REPORT_TYPES = {
   EVENING_SUMMARY: 'EVENING_SUMMARY',
   OTA_SUMMARY: 'OTA_SUMMARY',
   TEST_MESSAGE: 'TEST_MESSAGE',
+  LAUNDRY_STATEMENT: 'LAUNDRY_STATEMENT',
   OTA_NEW_RESERVATION_OWNER_WHATSAPP: 'OTA_NEW_RESERVATION_OWNER_WHATSAPP',
 };
 
@@ -77,9 +78,35 @@ export const DELIVERY_TYPES = {
 export const OUTBOX_STATUS = {
   QUEUED: 'queued',
   SENDING: 'sending',
+  SUBMITTED: 'submitted',
   SENT: 'sent',
+  DELIVERED: 'delivered',
   FAILED: 'failed',
   DUPLICATE: 'duplicate',
+};
+
+/**
+ * Generates an authoritative SHA-256 idempotency key for logical report deliveries.
+ * Form: hotel_id:report_type:business_date:normalized_recipient[:vendor_id]
+ */
+export const generateIdempotencyKey = ({
+  hotelId,
+  reportType,
+  businessDate,
+  recipient,
+  deliveryType = DELIVERY_TYPES.MANUAL,
+  vendorId = null,
+}) => {
+  const cleanPhone = recipient ? String(recipient).replace(/\D/g, '') : 'default';
+  const parts = [
+    hotelId || 'any',
+    reportType || 'REPORT',
+    businessDate || 'today',
+    cleanPhone,
+    deliveryType,
+  ];
+  if (vendorId) parts.push(String(vendorId));
+  return crypto.createHash('sha256').update(parts.join(':')).digest('hex');
 };
 
 // ─── Idempotency Check ────────────────────────────────────────────────────────
@@ -201,7 +228,7 @@ export const isReservationConfirmationWhatsAppSent = async ({
 // ─── Record Outbox Event ──────────────────────────────────────────────────────
 
 /**
- * Creates or logs an outbox notification event.
+ * Creates or logs an outbox notification event with idempotency and provider tracking.
  */
 export const recordWhatsAppOutboxEvent = async ({
   hotelId,
@@ -210,19 +237,36 @@ export const recordWhatsAppOutboxEvent = async ({
   deliveryType = DELIVERY_TYPES.MANUAL,
   recipient,
   status = OUTBOX_STATUS.QUEUED,
+  provider = 'WHINTA',
   providerMessageId = null,
+  idempotencyKey = null,
   lastError = null,
   metadata = {},
   reservationId = null,
 }) => {
   const eventId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const resolvedIdempotencyKey =
+    idempotencyKey ||
+    generateIdempotencyKey({
+      hotelId,
+      reportType,
+      businessDate,
+      recipient,
+      deliveryType,
+    });
+
   const metaObj = {
     ...metadata,
     business_date: businessDate,
     report_type: reportType,
     delivery_type: deliveryType,
+    provider,
+    idempotency_key: resolvedIdempotencyKey,
   };
+
+  const isTerminalSuccess = status === OUTBOX_STATUS.SENT || status === OUTBOX_STATUS.DELIVERED;
+  const isSubmitted = status === OUTBOX_STATUS.SUBMITTED;
 
   const record = {
     id: eventId,
@@ -233,11 +277,16 @@ export const recordWhatsAppOutboxEvent = async ({
     delivery_type: deliveryType,
     recipient,
     status,
-    attempt_count: status === OUTBOX_STATUS.SENT || status === OUTBOX_STATUS.FAILED ? 1 : 0,
+    provider,
+    idempotency_key: resolvedIdempotencyKey,
+    attempt_count: isTerminalSuccess || status === OUTBOX_STATUS.FAILED || isSubmitted ? 1 : 0,
     provider_message_id: providerMessageId,
     last_error: lastError,
     metadata: metaObj,
-    sent_at: status === OUTBOX_STATUS.SENT ? now : null,
+    submitted_at: isSubmitted || isTerminalSuccess ? now : null,
+    delivered_at: status === OUTBOX_STATUS.DELIVERED ? now : null,
+    failed_at: status === OUTBOX_STATUS.FAILED ? now : null,
+    sent_at: isTerminalSuccess ? now : null,
     created_at: now,
     updated_at: now,
   };
@@ -256,18 +305,26 @@ export const recordWhatsAppOutboxEvent = async ({
       hotel_id: hotelId,
       reservation_id: reservationId,
       event_type: `WHATSAPP_${reportType}`,
+      business_date: businessDate,
+      report_type: reportType,
+      delivery_type: deliveryType,
       recipient,
       status,
+      provider,
+      idempotency_key: resolvedIdempotencyKey,
       attempt_count: record.attempt_count,
       provider_message_id: providerMessageId,
       last_error: lastError,
       metadata: JSON.stringify(metaObj),
+      submitted_at: record.submitted_at,
+      delivered_at: record.delivered_at,
+      failed_at: record.failed_at,
       sent_at: record.sent_at,
       created_at: now,
       updated_at: now,
     });
   } catch (err) {
-    // If Supabase fails (e.g. RLS), local record is already saved
+    // If Supabase fails (e.g. column not yet created), local record is already saved
     console.warn('[OUTBOX] Supabase notification_outbox insert skipped:', err.message);
   }
 
@@ -280,8 +337,14 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
   const now = new Date().toISOString();
   const localRecords = readLocalOutbox();
   const idx = localRecords.findIndex((r) => r.id === eventId);
-  const lastError = updates.last_error || updates.lastError || null;
-  const providerMessageId = updates.provider_message_id || updates.providerMessageId || null;
+  const lastError = updates.last_error !== undefined ? updates.last_error : (updates.lastError || null);
+  const providerMessageId = updates.provider_message_id !== undefined ? updates.provider_message_id : (updates.providerMessageId || null);
+
+  const status = updates.status;
+  const isTerminalSuccess = status === OUTBOX_STATUS.SENT || status === OUTBOX_STATUS.DELIVERED;
+  const isDelivered = status === OUTBOX_STATUS.DELIVERED;
+  const isFailed = status === OUTBOX_STATUS.FAILED;
+  const isSubmitted = status === OUTBOX_STATUS.SUBMITTED;
 
   if (idx !== -1) {
     localRecords[idx] = {
@@ -289,8 +352,11 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
       ...updates,
       last_error: lastError !== undefined ? lastError : localRecords[idx].last_error,
       provider_message_id: providerMessageId !== undefined ? providerMessageId : localRecords[idx].provider_message_id,
+      submitted_at: isSubmitted || isTerminalSuccess ? (localRecords[idx].submitted_at || now) : localRecords[idx].submitted_at,
+      delivered_at: isDelivered ? now : localRecords[idx].delivered_at,
+      failed_at: isFailed ? now : localRecords[idx].failed_at,
+      sent_at: isTerminalSuccess ? (localRecords[idx].sent_at || now) : localRecords[idx].sent_at,
       updated_at: now,
-      sent_at: updates.status === OUTBOX_STATUS.SENT ? now : localRecords[idx].sent_at,
     };
     writeLocalOutbox(localRecords);
   }
@@ -302,12 +368,74 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
       provider_message_id: providerMessageId,
       updated_at: now,
     };
-    if (updates.status === OUTBOX_STATUS.SENT) dbUpdates.sent_at = now;
+    if (isTerminalSuccess) dbUpdates.sent_at = now;
+    if (isDelivered) dbUpdates.delivered_at = now;
+    if (isFailed) dbUpdates.failed_at = now;
+    if (isSubmitted) dbUpdates.submitted_at = now;
+
     await supabaseServiceRole
       .from('notification_outbox')
       .update(dbUpdates)
       .eq('id', eventId);
   } catch { /* ignore */ }
+};
+
+/**
+ * Updates delivery status by external provider message ID (from incoming webhook event).
+ */
+export const updateDeliveryStatusByProviderMessageId = async ({
+  providerMessageId,
+  status,
+  error = null,
+}) => {
+  if (!providerMessageId) return { updated: false, count: 0 };
+
+  const now = new Date().toISOString();
+  let updatedCount = 0;
+
+  // 1. Update local records
+  const localRecords = readLocalOutbox();
+  for (let i = 0; i < localRecords.length; i++) {
+    if (localRecords[i].provider_message_id === providerMessageId) {
+      localRecords[i].status = status;
+      localRecords[i].updated_at = now;
+      if (status === OUTBOX_STATUS.DELIVERED) localRecords[i].delivered_at = now;
+      if (status === OUTBOX_STATUS.FAILED) {
+        localRecords[i].failed_at = now;
+        localRecords[i].last_error = error || localRecords[i].last_error;
+      }
+      updatedCount++;
+    }
+  }
+  if (updatedCount > 0) writeLocalOutbox(localRecords);
+
+  // 2. Update Supabase notification_outbox
+  try {
+    const dbUpdates = { status, updated_at: now };
+    if (status === OUTBOX_STATUS.DELIVERED) dbUpdates.delivered_at = now;
+    if (status === OUTBOX_STATUS.FAILED) {
+      dbUpdates.failed_at = now;
+      if (error) dbUpdates.last_error = error;
+    }
+
+    await supabaseServiceRole
+      .from('notification_outbox')
+      .update(dbUpdates)
+      .eq('provider_message_id', providerMessageId);
+  } catch { /* ignore */ }
+
+  // 3. Also check laundry_statement_log if present
+  try {
+    await supabaseServiceRole
+      .from('laundry_statement_log')
+      .update({
+        status: status === OUTBOX_STATUS.DELIVERED ? 'delivered' : (status === OUTBOX_STATUS.FAILED ? 'failed' : status),
+        updated_at: now,
+      })
+      .eq('provider_message_id', providerMessageId);
+  } catch { /* ignore */ }
+
+  return { updated: true, count: updatedCount, status };
 };
 
 // ─── Get Outbox History ───────────────────────────────────────────────────────
@@ -379,9 +507,11 @@ export default {
   REPORT_TYPES,
   DELIVERY_TYPES,
   OUTBOX_STATUS,
+  generateIdempotencyKey,
   isScheduledReportAlreadySent,
   isOtaReservationAlertSent,
   recordWhatsAppOutboxEvent,
   updateWhatsAppOutboxEvent,
+  updateDeliveryStatusByProviderMessageId,
   getWhatsAppHistory,
 };

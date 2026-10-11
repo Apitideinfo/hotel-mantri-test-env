@@ -19,6 +19,13 @@
 
 import { supabaseServiceRole } from '../supabaseClient.js';
 import whatsappService from './whatsappService.js';
+import {
+  generateIdempotencyKey,
+  recordWhatsAppOutboxEvent,
+  REPORT_TYPES,
+  DELIVERY_TYPES,
+  OUTBOX_STATUS,
+} from './whatsappOutboxService.js';
 
 // Helper to sanitize UUID fields (prevents 22P02 on postgres uuid columns)
 const toUuidOrNull = (val) => {
@@ -1685,34 +1692,81 @@ export const sendDailyWhatsAppStatement = async (hotelId, params, userId = '') =
     throw new Error('Vendor does not have a registered mobile number for WhatsApp.');
   }
 
+  const idempotencyKey = generateIdempotencyKey({
+    hotelId,
+    reportType: REPORT_TYPES.LAUNDRY_STATEMENT,
+    businessDate: date,
+    recipient: phone,
+    deliveryType: DELIVERY_TYPES.MANUAL,
+    vendorId: vendor_id,
+  });
+
   // Attempt send via WhatsApp service
   const result = await whatsappService.sendWhatsAppMessage({
+    to: phone,
     recipientPhone: phone,
+    text: statement.whatsapp_text,
     messageText: statement.whatsapp_text,
     messageType: 'laundry_statement',
+    reportType: REPORT_TYPES.LAUNDRY_STATEMENT,
   });
 
   // Log delivery attempt truthfully
   const logStatus = result.success ? 'sent' : (result.whatsappDirectUrl ? 'manual' : 'failed');
+  const provider = result.provider || 'WHINTA';
+  const providerMessageId = result.messageId || null;
 
-  await supabaseServiceRole
-    .from('laundry_statement_log')
-    .insert({
-      hotel_id: hotelId,
-      vendor_id,
-      statement_date: date,
-      delivery_type: result.success ? 'whatsapp' : 'manual',
+  // 1. Record in laundry_statement_log
+  try {
+    await supabaseServiceRole
+      .from('laundry_statement_log')
+      .insert({
+        hotel_id: hotelId,
+        vendor_id,
+        statement_date: date,
+        delivery_type: result.success ? 'whatsapp' : 'manual',
+        recipient: phone,
+        status: logStatus,
+        statement_data: statement,
+        error_message: result.error || '',
+        sent_by: userId || 'Staff',
+        provider,
+        provider_message_id: providerMessageId,
+        idempotency_key: idempotencyKey,
+      });
+  } catch (err) {
+    console.warn('[LaundryService] Insert laundry_statement_log warning:', err.message);
+  }
+
+  // 2. Also track in unified notification_outbox
+  try {
+    await recordWhatsAppOutboxEvent({
+      hotelId,
+      businessDate: date,
+      reportType: REPORT_TYPES.LAUNDRY_STATEMENT,
+      deliveryType: DELIVERY_TYPES.MANUAL,
       recipient: phone,
-      status: logStatus,
-      statement_data: statement,
-      error_message: result.error || '',
-      sent_by: userId || 'Staff',
+      provider,
+      status: result.success ? OUTBOX_STATUS.SENT : OUTBOX_STATUS.FAILED,
+      providerMessageId,
+      idempotencyKey,
+      lastError: result.success ? null : (result.error || result.message),
+      metadata: {
+        vendorId: vendor_id,
+        vendorName: statement.vendor?.vendor_name,
+        todayBillableAmount: statement.today_billable_amount,
+      },
     });
+  } catch (err) {
+    console.warn('[LaundryService] Outbox event recording warning:', err.message);
+  }
 
   return {
     ...result,
     statement,
     log_status: logStatus,
+    idempotency_key: idempotencyKey,
+    provider_message_id: providerMessageId,
   };
 };
 

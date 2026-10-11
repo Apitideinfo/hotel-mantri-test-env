@@ -105,7 +105,7 @@ export interface WhatsAppHistoryItem {
   report_type: string;
   delivery_type: string;
   recipient: string;
-  status: 'queued' | 'sending' | 'sent' | 'failed' | 'duplicate';
+  status: 'queued' | 'sending' | 'sent' | 'failed' | 'duplicate' | 'submitted' | 'delivered';
   attempt_count: number;
   provider_message_id?: string | null;
   last_error?: string | null;
@@ -115,12 +115,46 @@ export interface WhatsAppHistoryItem {
 
 export interface WhatsAppSettingsResponse {
   success: boolean;
+  hotelId?: string;
+  hotelName?: string;
   whatsappNumber: string;
+  reportRecipientPhone?: string;
   normalizedNumber: string;
+  countryCode?: string;
+  dailyReportEnabled?: boolean;
+  laundryStatementEnabled?: boolean;
+  preferredDeliveryTime?: string;
+  timezone?: string;
+  deliveryPreferences?: {
+    send_morning?: boolean;
+    send_evening?: boolean;
+    include_pdf?: boolean;
+  };
+  consentStatus?: string;
+  lastSuccessfulSend?: string | null;
+  lastFailureReason?: string | null;
+  lastFailureAt?: string | null;
   isValid: boolean;
   source: string;
   provider: string;
   providerConfigured: boolean;
+  providerEnabled?: boolean;
+}
+
+export interface SaveWhatsAppSettingsParams {
+  whatsappNumber?: string;
+  reportRecipientPhone?: string;
+  countryCode?: string;
+  dailyReportEnabled?: boolean;
+  laundryStatementEnabled?: boolean;
+  preferredDeliveryTime?: string;
+  timezone?: string;
+  deliveryPreferences?: {
+    send_morning?: boolean;
+    send_evening?: boolean;
+    include_pdf?: boolean;
+  };
+  consentStatus?: string;
 }
 
 export interface SendWhatsAppParams {
@@ -130,6 +164,7 @@ export interface SendWhatsAppParams {
   summaryType?: WhatsAppReportType;
   businessDate?: string;
   deliveryType?: 'MANUAL' | 'SCHEDULED';
+  includePdf?: boolean;
 }
 
 /**
@@ -255,21 +290,67 @@ export const fetchWhatsAppSettings = async (): Promise<WhatsAppSettingsResponse>
 };
 
 /**
- * Updates WhatsApp phone number for this hotel.
+ * Updates WhatsApp recipient and delivery preferences for this hotel.
  */
-export const saveWhatsAppSettings = async (whatsappNumber: string): Promise<any> => {
+export const saveWhatsAppSettings = async (
+  settingsOrPhone: string | SaveWhatsAppSettingsParams
+): Promise<any> => {
+  const body = typeof settingsOrPhone === 'string'
+    ? { whatsappNumber: settingsOrPhone }
+    : settingsOrPhone;
+
   return apiFetch('/api/reports/whatsapp/settings', {
     method: 'POST',
-    body: JSON.stringify({ whatsappNumber }),
+    body: JSON.stringify(body),
   });
+};
+
+/**
+ * Tests connection with Whinta Web API without sending any message.
+ */
+export const verifyWhintaConnection = async (): Promise<{
+  success: boolean;
+  configured: boolean;
+  connected: boolean;
+  provider?: string;
+  templateCount?: number;
+  message?: string;
+  error?: string;
+}> => {
+  return apiFetch('/api/reports/whatsapp/verify-connection', {
+    method: 'POST',
+  });
+};
+
+/**
+ * Fetches server-side WhatsApp provider status without exposing credentials.
+ */
+export const fetchWhatsAppConfig = async (): Promise<{
+  success: boolean;
+  provider: string;
+  configured: boolean;
+  enabled: boolean;
+  active: boolean;
+  baseUrl: string;
+  defaultCountryCode: string;
+  hasWebhookSecret: boolean;
+}> => {
+  return apiFetch('/api/reports/whatsapp/config');
 };
 
 /**
  * Retries sending a failed notification.
  */
 export const retryWhatsAppSend = async (notificationId: string): Promise<any> => {
-  return apiFetch('/api/notifications/retry', {
-    method: 'POST',
-    body: JSON.stringify({ notificationId }),
-  });
+  try {
+    return await apiFetch('/api/reports/whatsapp/retry-send', {
+      method: 'POST',
+      body: JSON.stringify({ notificationId }),
+    });
+  } catch {
+    return apiFetch('/api/notifications/retry', {
+      method: 'POST',
+      body: JSON.stringify({ notificationId }),
+    });
+  }
 };

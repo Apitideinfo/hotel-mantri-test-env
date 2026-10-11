@@ -15,7 +15,8 @@
     "test:finance": "node scripts/run_financial_accounting_tests.mjs",
     "test:revenue": "node scripts/test_master_revenue_allocation.mjs",
     "test:diagnostics": "node scripts/test-server-import-diagnostics.mjs",
-    "test": "npm run test:auth && npm run test:revenue && npm run test:diagnostics"
+    "test:whinta": "node scripts/test_whinta_integration.mjs",
+    "test": "npm run test:auth && npm run test:revenue && npm run test:diagnostics && npm run test:whinta"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

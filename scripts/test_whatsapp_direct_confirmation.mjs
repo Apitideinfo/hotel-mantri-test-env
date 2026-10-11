@@ -2,22 +2,19 @@
  * Hotel Mantri — Direct Booking WhatsApp Confirmation Test Suite
  *
  * Verifies:
- * 1. Meta WhatsApp template payload construction (booking_confirmation 7 dynamic parameters)
+ * 1. WhatsApp template payload construction (booking_confirmation 7 dynamic parameters)
  * 2. Mobile number normalization & validation
  * 3. Durable notification_outbox idempotency (duplicate prevention)
  * 4. Recipient routing: Direct -> Guest Mobile vs OTA -> Hotel Owner
  * 5. Provider failure resilience (error logging, outbox tracking, non-blocking booking)
- * 6. Mocked Meta Cloud API dispatch & delivery status tracking
- * 7. Mocked Twilio WhatsApp dispatch fallback
- * 8. API endpoints (confirmation details & send-whatsapp route logic)
+ * 6. Whinta provider dispatch (mocked)
+ * 7. API endpoints (confirmation details & send-whatsapp route logic)
  */
 
 import { supabaseServiceRole, ensureAuth } from '../server/supabaseClient.js';
 import {
   normalizeWhatsAppPhone,
   buildMetaBookingConfirmationTemplate,
-  MetaCloudWhatsAppProvider,
-  TwilioWhatsAppProvider,
   sendWhatsAppMessage,
 } from '../server/services/whatsappService.js';
 import {
@@ -83,9 +80,9 @@ async function runDirectWhatsAppTests() {
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 2 — Meta WhatsApp Template Payload Structure
+  // TEST 2 — WhatsApp Template Payload Structure
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 2: Meta WhatsApp Template Payload Construction ───');
+  console.log('─── TEST 2: WhatsApp Template Payload Construction ───');
   const templatePayload = buildMetaBookingConfirmationTemplate({
     guestName: 'Rajesh Kumar',
     hotelName: 'Hotel Gopal',
@@ -115,96 +112,9 @@ async function runDirectWhatsAppTests() {
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 3 — Meta Cloud Provider Mock Dispatch
+  // TEST 3 — End-to-End Direct Booking Confirmation Delivery with Mock WhatsApp
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 3: Meta Cloud WhatsApp Provider Mock Dispatch ───');
-  let capturedFetchUrl = null;
-  let capturedFetchOpts = null;
-
-  const mockMetaProvider = new MetaCloudWhatsAppProvider({
-    apiToken: 'mock_meta_token_xyz',
-    phoneNumberId: 'mock_phone_number_id_123',
-    fetchFn: async (url, opts) => {
-      capturedFetchUrl = url;
-      capturedFetchOpts = opts;
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          messaging_product: 'whatsapp',
-          contacts: [{ input: '919876543210', wa_id: '919876543210' }],
-          messages: [{ id: 'wamid.HBgLOTE5ODc2NTQzMjEwFQIAERgSQzBFM0Q1...' }],
-        }),
-      };
-    },
-  });
-
-  assert(mockMetaProvider.isConfigured() === true, 'Mock Meta provider reports isConfigured = true');
-
-  const metaSendResult = await mockMetaProvider.send({
-    to: '919876543210',
-    text: 'Fallback text',
-    templateName: templatePayload.name,
-    templateComponents: templatePayload.components,
-    templateLanguage: 'en',
-  });
-
-  assert(metaSendResult.success === true, 'Meta mock send returns success: true');
-  assert(metaSendResult.status === 'sent', 'Meta mock send status is sent');
-  assert(metaSendResult.provider === 'META_CLOUD', 'Provider identifier is META_CLOUD');
-  assert(metaSendResult.messageId?.startsWith('wamid.'), 'Message ID captured from provider response');
-  assert(capturedFetchUrl?.includes('/mock_phone_number_id_123/messages'), 'POSTs to correct Graph API endpoint with phone_number_id');
-
-  const sentBody = JSON.parse(capturedFetchOpts.body);
-  assert(sentBody.type === 'template', 'API payload type is template');
-  assert(sentBody.template?.name === 'booking_confirmation', 'API payload template name is booking_confirmation');
-  assert(sentBody.to === '919876543210', 'API payload recipient is normalized 919876543210');
-  console.log('');
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // TEST 4 — Twilio Provider Mock Dispatch
-  // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 4: Twilio WhatsApp Provider Mock Dispatch ───');
-  let capturedTwilioUrl = null;
-  let capturedTwilioOpts = null;
-
-  const mockTwilioProvider = new TwilioWhatsAppProvider({
-    accountSid: 'AC_mock_twilio_account_sid_12345',
-    authToken: 'mock_twilio_auth_token_xyz',
-    from: '+14155238886',
-    fetchFn: async (url, opts) => {
-      capturedTwilioUrl = url;
-      capturedTwilioOpts = opts;
-      return {
-        ok: true,
-        status: 201,
-        json: async () => ({
-          sid: 'SM_mock_twilio_message_sid_67890',
-          status: 'queued',
-          to: 'whatsapp:+919876543210',
-          from: 'whatsapp:+14155238886',
-        }),
-      };
-    },
-  });
-
-  assert(mockTwilioProvider.isConfigured() === true, 'Mock Twilio provider reports isConfigured = true');
-
-  const twilioSendResult = await mockTwilioProvider.send({
-    to: '919876543210',
-    text: 'Booking confirmed for Hotel Gopal!',
-  });
-
-  assert(twilioSendResult.success === true, 'Twilio send returns success: true');
-  assert(twilioSendResult.provider === 'TWILIO', 'Provider is TWILIO');
-  assert(twilioSendResult.messageId === 'SM_mock_twilio_message_sid_67890', 'Twilio message SID captured');
-  assert(capturedTwilioUrl?.includes('AC_mock_twilio_account_sid_12345/Messages.json'), 'POSTs to Twilio Messages.json endpoint');
-  console.log('');
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // TEST 5 — End-to-End Direct Booking Confirmation Delivery with Mock WhatsApp
-  // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 5: Direct Booking WhatsApp Confirmation End-to-End ───');
+  console.log('─── TEST 3: Direct Booking WhatsApp Confirmation End-to-End ───');
   const guestPhone = '9876543210';
   const directGuestEmail = `direct.wa.${Date.now()}@example.com`;
   const directResInput = {
@@ -255,9 +165,9 @@ async function runDirectWhatsAppTests() {
       dispatchedWhatsAppTemplate = options.templateName;
       return {
         success: true,
-        status: 'sent',
-        provider: 'META_CLOUD',
-        messageId: 'wamid.MOCK_TEST_DISPATCH_123',
+        status: 'submitted',
+        provider: 'WHINTA',
+        messageId: 'whinta_MOCK_TEST_DISPATCH_123',
       };
     },
   });
@@ -265,20 +175,22 @@ async function runDirectWhatsAppTests() {
   assert(deliveryResult.success === true, 'Confirmation execution succeeded');
   assert(dispatchedWhatsAppRecipient === '919876543210', `WhatsApp sent to guest normalized mobile: ${dispatchedWhatsAppRecipient}`);
   assert(dispatchedWhatsAppTemplate === 'booking_confirmation', `WhatsApp template used: ${dispatchedWhatsAppTemplate}`);
-  assert(deliveryResult.whatsApp?.status === 'sent', 'deliveryResult.whatsApp status is "sent"');
-  assert(deliveryResult.whatsApp?.provider === 'META_CLOUD', 'deliveryResult.whatsApp provider is META_CLOUD');
-  assert(deliveryResult.whatsApp?.messageId === 'wamid.MOCK_TEST_DISPATCH_123', 'deliveryResult.whatsApp has messageId');
+  const whatsAppStatus = deliveryResult.whatsApp?.status;
+  assert(whatsAppStatus === 'submitted' || whatsAppStatus === 'sent', `deliveryResult.whatsApp status is "${whatsAppStatus}"`);
+  assert(deliveryResult.whatsApp?.provider === 'WHINTA', 'deliveryResult.whatsApp provider is WHINTA');
+  assert(deliveryResult.whatsApp?.messageId === 'whinta_MOCK_TEST_DISPATCH_123', 'deliveryResult.whatsApp has messageId');
 
   // Check document record
   const docs = await getReservationDocuments(hotelId, createdRes.id);
   assert(docs.length > 0, 'Reservation document record exists');
-  assert(docs[0].whatsapp_status?.toLowerCase() === 'sent', `Document whatsapp_status is 'sent' (got '${docs[0].whatsapp_status}')`);
+  const docStatus = docs[0].whatsapp_status?.toLowerCase();
+  assert(docStatus === 'sent' || docStatus === 'submitted', `Document whatsapp_status is '${docStatus}'`);
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 6 — Durable Notification Outbox Idempotency Check
+  // TEST 4 — Durable Notification Outbox Idempotency Check
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 6: Durable notification_outbox Idempotency Prevention ───');
+  console.log('─── TEST 4: Durable notification_outbox Idempotency Prevention ───');
   // Attempting second dispatch for the same reservation
   let secondDispatchCalled = false;
   const duplicateDeliveryResult = await generateAndDeliverConfirmation({
@@ -288,7 +200,7 @@ async function runDirectWhatsAppTests() {
     eventType: 'NEW_RESERVATION',
     whatsAppSenderFn: async () => {
       secondDispatchCalled = true;
-      return { success: true, status: 'sent', provider: 'META_CLOUD' };
+      return { success: true, status: 'submitted', provider: 'WHINTA' };
     },
   });
 
@@ -297,9 +209,9 @@ async function runDirectWhatsAppTests() {
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 7 — OTA Route Preservation (Owner Alert, NOT Guest Mobile)
+  // TEST 5 — OTA Route Preservation (Owner Alert, NOT Guest Mobile)
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 7: Preservation of OTA-to-Hotel-Owner WhatsApp Routing ───');
+  console.log('─── TEST 5: Preservation of OTA-to-Hotel-Owner WhatsApp Routing ───');
   const otaResRecord = {
     id: 'mock-ota-res-uuid-12345678',
     hotel_id: hotelId,
@@ -332,7 +244,7 @@ async function runDirectWhatsAppTests() {
     eventType: 'NEW_OTA_RESERVATION',
     whatsAppSenderFn: async (options) => {
       otaDispatchedRecipient = options.to;
-      return { success: true, status: 'sent', provider: 'META_CLOUD' };
+      return { success: true, status: 'submitted', provider: 'WHINTA' };
     },
   });
 
@@ -340,9 +252,9 @@ async function runDirectWhatsAppTests() {
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 8 — Provider Failure Resilience (Booking NEVER Rolled Back)
+  // TEST 6 — Provider Failure Resilience (Booking NEVER Rolled Back)
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 8: Provider Failure Resilience (No Rollback / Safe Status) ───');
+  console.log('─── TEST 6: Provider Failure Resilience (No Rollback / Safe Status) ───');
   const failGuestEmail = `fail.wa.${Date.now()}@example.com`;
   const failResInput = {
     guest_name: 'WhatsApp Fail Guest',
@@ -370,7 +282,7 @@ async function runDirectWhatsAppTests() {
   const failRes = failCreatedList[0];
   assert(!!failRes?.id, 'Booking created in database');
 
-  // Simulate Meta Cloud API 500 error / token expired
+  // Simulate Whinta API 500 error
   const failDeliveryResult = await generateAndDeliverConfirmation({
     hotelId,
     reservationId: failRes.id,
@@ -380,8 +292,8 @@ async function runDirectWhatsAppTests() {
       return {
         success: false,
         status: 'failed',
-        errorCode: 'META_API_500_SERVER_ERROR',
-        error: 'WhatsApp Meta Graph API returned 500 Internal Server Error',
+        errorCode: 'WHINTA_API_500_SERVER_ERROR',
+        error: 'Whinta API returned 500 Internal Server Error',
         whatsappDirectUrl: 'https://wa.me/919911223344?text=FallbackText',
       };
     },
@@ -390,7 +302,7 @@ async function runDirectWhatsAppTests() {
   // Verify delivery handled failure gracefully
   assert(failDeliveryResult.success === true, 'Overall confirmation execution returned success (non-blocking)');
   assert(failDeliveryResult.whatsApp?.status === 'failed', 'whatsApp status recorded as "failed"');
-  assert(failDeliveryResult.whatsApp?.errorCode === 'META_API_500_SERVER_ERROR', 'errorCode preserved');
+  assert(failDeliveryResult.whatsApp?.errorCode === 'WHINTA_API_500_SERVER_ERROR', 'errorCode preserved');
   assert(!!failDeliveryResult.whatsApp?.whatsappDirectUrl, 'Direct wa.me URL returned as fallback');
 
   // Verify booking STILL EXISTS in database
@@ -404,9 +316,9 @@ async function runDirectWhatsAppTests() {
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────
-  // TEST 9 — Unconfigured Provider Resilience & wa.me Fallback
+  // TEST 7 — Unconfigured Provider Resilience & wa.me Fallback
   // ──────────────────────────────────────────────────────────────────────────
-  console.log('─── TEST 9: Unconfigured Provider Fallback ───');
+  console.log('─── TEST 7: Unconfigured Provider Fallback ───');
   const unconfiguredDeliveryResult = await generateAndDeliverConfirmation({
     hotelId,
     reservationId: failRes.id,

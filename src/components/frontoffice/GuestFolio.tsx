@@ -153,10 +153,10 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
     setActionSuccess(null);
     try {
       const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
-      openWhatsAppConfirmation(data);
-      setActionSuccess('Opened WhatsApp with reservation confirmation.');
+      const res = await openWhatsAppConfirmation(data);
+      setActionSuccess(res?.message || 'WhatsApp confirmation dispatched via Whinta.');
     } catch (err: any) {
-      setActionError(err.message || 'No valid phone number for WhatsApp.');
+      setActionError(err.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
     } finally {
       setActiveAction(null);
       setTimeout(() => setActionSuccess(null), 4000);
