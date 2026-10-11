@@ -1259,6 +1259,10 @@ export const generateAndDeliverConfirmation = async ({
   };
 };
 
+export {
+  buildMetaBookingConfirmationTemplate,
+};
+
 export default {
   isOTAReservation,
   isManualReservation,
