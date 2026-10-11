@@ -93,6 +93,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Master',
     items: [
       { key: 'property', label: 'Property Master', icon: <Building2 className="w-4 h-4" /> },
+      { key: 'users', label: 'Staff & Roles', icon: <Users className="w-4 h-4" /> },
       { key: 'settings', label: 'Settings', icon: <SettingsIcon className="w-4 h-4" /> },
     ],
   },
@@ -300,7 +301,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState('');
   const profileRef = useRef<HTMLDivElement>(null);
-  const { user, role, changePassword, updateUserProfile } = useAuth();
+  const { user, role, permissions, changePassword, updateUserProfile } = useAuth();
 
   const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const userName = typeof metadata.full_name === 'string' && metadata.full_name.trim()
@@ -321,8 +322,46 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   }, []);
 
   const allGroups = useMemo(() => {
+    if (role === 'housekeeping') {
+      const canLaundry = Boolean(permissions?.canLaundry);
+      const items = [
+        { key: 'housekeeping', label: 'Housekeeping Board', icon: <Sparkles className="w-4 h-4" /> },
+      ];
+      if (canLaundry) {
+        items.push({ key: 'laundry-linen', label: 'Laundry & Linen', icon: <Shirt className="w-4 h-4" /> });
+      }
+      return [
+        {
+          label: 'Housekeeping Workspace',
+          items,
+        },
+      ];
+    }
+
+    if (role === 'accounts') {
+      return [
+        {
+          label: 'Finance & Accounts',
+          items: [
+            { key: 'finance', label: 'Finance Hub', icon: <Wallet className="w-4 h-4" /> },
+            { key: 'close-day', label: 'Day Closing', icon: <Lock className="w-4 h-4" /> },
+          ],
+        },
+        {
+          label: 'Reports & Accounting',
+          items: [
+            { key: 'report', label: 'Daily Report', icon: <FileText className="w-4 h-4" /> },
+            { key: 'mtd', label: 'MTD Report', icon: <CalendarRange className="w-4 h-4" /> },
+            { key: 'ytd', label: 'YTD Report', icon: <TrendingUp className="w-4 h-4" /> },
+            { key: 'mis-report', label: 'Daily MIS', icon: <FileBarChart className="w-4 h-4" /> },
+            { key: 'pdf', label: 'PDF Reports', icon: <FileBarChart className="w-4 h-4" /> },
+          ],
+        },
+      ];
+    }
+
     let base = posEnabled ? [...NAV_GROUPS, POS_GROUP] : NAV_GROUPS;
-    if (role === 'hotel_staff') {
+    if (role === 'reception' || role === 'hotel_staff') {
       const restrictedLabels = ['Finance', 'Reports', 'Channel Manager', 'Master'];
       base = base.filter((g) => !restrictedLabels.includes(g.label));
     }
@@ -350,7 +389,7 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
     }
 
     return base;
-  }, [posEnabled, role, enabledFeatures]);
+  }, [posEnabled, role, enabledFeatures, permissions?.canLaundry]);
 
   const filteredGroups = useMemo(() => {
     if (!searchQuery.trim()) return allGroups;
@@ -360,8 +399,21 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
       items: g.items.filter((i) => i.label.toLowerCase().includes(q)),
     })).filter((g) => g.items.length > 0);
   }, [searchQuery, allGroups]);
-  const roleLabel = role === 'super_admin' ? 'Super Admin' : role === 'hotel_admin' ? 'Hotel Admin' : role === 'hotel_staff' ? 'Receptionist' : role ?? 'User';
-  const canManageProperty = role === 'hotel_admin' || role === 'super_admin';
+
+  const roleLabel = role === 'super_admin'
+    ? 'Super Admin'
+    : role === 'owner' || role === 'hotel_admin'
+      ? 'Hotel Owner'
+      : role === 'manager'
+        ? 'Manager'
+        : role === 'reception' || role === 'hotel_staff'
+          ? 'Reception'
+          : role === 'accounts'
+            ? 'Accounts'
+            : role === 'housekeeping'
+              ? 'Housekeeping'
+              : role ?? 'User';
+  const canManageProperty = role === 'hotel_admin' || role === 'super_admin' || role === 'owner' || role === 'manager';
 
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => {
@@ -460,36 +512,40 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
   const hour = new Date().getHours();
   const greeting = hour < 12 ? 'Good Morning' : hour < 17 ? 'Good Afternoon' : 'Good Evening';
 
+  const isHousekeeping = role === 'housekeeping';
+
   return (
     <div className={`min-h-screen bg-slate-50 flex app-wrapper ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}>
-      {/* Desktop sidebar */}
-      <aside
-        className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container bg-white border-r border-slate-200/80 shadow-sm transition-all ${collapsed ? 'duration-500 ease-in-out delay-300 lg:w-[72px]' : 'duration-700 ease-out delay-0 lg:w-[280px]'}`}
-      >
-        <SidebarContent
-          collapsed={collapsed}
-          hotelName={hotelName}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          filteredGroups={filteredGroups}
-          expandedGroups={expandedGroups}
-          toggleGroup={toggleGroup}
-          currentScreen={currentScreen}
-          go={go}
-          onSignOut={onSignOut}
-          setSidebarOpen={setSidebarOpen}
-        />
-        <button
-          onClick={() => setCollapsed((c) => !c)}
-          className="absolute top-1/2 -right-3 -translate-y-1/2 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-card flex items-center justify-center hover:bg-slate-50 transition"
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      {/* Desktop sidebar (Hidden for Housekeeping users) */}
+      {!isHousekeeping && (
+        <aside
+          className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container bg-white border-r border-slate-200/80 shadow-sm transition-all ${collapsed ? 'duration-500 ease-in-out delay-300 lg:w-[72px]' : 'duration-700 ease-out delay-0 lg:w-[280px]'}`}
         >
-          <ChevronLeft className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-300 ${collapsed ? 'rotate-180' : ''}`} />
-        </button>
-      </aside>
+          <SidebarContent
+            collapsed={collapsed}
+            hotelName={hotelName}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            filteredGroups={filteredGroups}
+            expandedGroups={expandedGroups}
+            toggleGroup={toggleGroup}
+            currentScreen={currentScreen}
+            go={go}
+            onSignOut={onSignOut}
+            setSidebarOpen={setSidebarOpen}
+          />
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            className="absolute top-1/2 -right-3 -translate-y-1/2 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-card flex items-center justify-center hover:bg-slate-50 transition"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <ChevronLeft className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-300 ${collapsed ? 'rotate-180' : ''}`} />
+          </button>
+        </aside>
+      )}
 
-      {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
+      {/* Mobile sidebar overlay (Hidden for Housekeeping users) */}
+      {sidebarOpen && !isHousekeeping && (
         <div className="lg:hidden fixed inset-0 z-40">
           <div className="absolute inset-0 bg-black/50 animate-fade-in" onClick={() => setSidebarOpen(false)} />
           <aside
@@ -514,163 +570,256 @@ export const AppShell = ({ currentScreen, onNavigate, onSignOut, hotelName, posE
       )}
 
       {/* Main content */}
-      <div className={`flex-1 ${collapsed ? 'lg:ml-[72px]' : 'lg:ml-[280px]'} min-w-0 flex flex-col main-content transition-all ${collapsed ? 'duration-500 ease-in-out delay-300' : 'duration-700 ease-out delay-0'}`}>
-        {/* Top header — modern Navy & Crisp White theme */}
+      <div className={`flex-1 ${!isHousekeeping ? (collapsed ? 'lg:ml-[72px]' : 'lg:ml-[280px]') : 'lg:ml-0'} min-w-0 flex flex-col main-content transition-all ${collapsed ? 'duration-500 ease-in-out delay-300' : 'duration-700 ease-out delay-0'}`}>
+        {/* Top header */}
         <header
           className="sticky top-0 z-20 bg-white/95 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
           style={{ height: layout.headerHeight }}
         >
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-1.5 text-slate-600 hover:text-blue-700 hover:bg-slate-100 rounded-xl transition"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="min-w-0">
-              <h1 className="text-sm font-black text-slate-900 truncate leading-tight flex items-center gap-2">
-                <span>{greeting}, {hotelName ?? 'Hotel Mantri'}</span>
-                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-xs hidden xl:inline-block tracking-wider">LIVE</span>
-              </h1>
-              <p className="text-[11px] font-bold text-blue-600 hidden sm:block">
-                {findLabel(currentScreen) || 'Dashboard'}
-              </p>
-            </div>
-          </div>
-
-          {/* Right cluster */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Search (desktop) */}
-            <div className="hidden md:flex items-center gap-2 bg-slate-100/90 border border-slate-200/90 rounded-xl px-3 py-1.5 w-48 lg:w-56 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-600 focus-within:bg-white transition-all shadow-inner">
-              <Search className="w-4 h-4 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search menu or bookings…"
-                value={headerSearch}
-                onChange={(e) => setHeaderSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && headerSearch.trim()) {
-                    const q = headerSearch.toLowerCase().trim();
-                    const match = allGroups.flatMap((g) => g.items).find((i) => i.label.toLowerCase().includes(q));
-                    if (match) {
-                      go(match.key);
-                    } else {
-                      go('reservations');
-                    }
-                  }
-                }}
-                className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full font-medium"
-              />
-            </div>
-
-            {/* Business date */}
-            <div className="hidden sm:flex flex-col items-end leading-tight px-2.5 py-1 rounded-xl bg-slate-100/90 border border-slate-200/90 shadow-2xs">
-              <span className="text-[9px] text-slate-500 uppercase tracking-wider font-extrabold">Business Date</span>
-              <span className="text-xs font-black text-slate-900">{todayDisplay}</span>
-            </div>
-
-            {/* OTA Live Sync Badge */}
-            <button
-              type="button"
-              onClick={() => syncStatus.syncNow()}
-              disabled={syncStatus.isSyncing}
-              title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
-              className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${
-                syncStatus.status === 'SYNCING'
-                  ? 'bg-blue-50 border-blue-200 text-blue-700'
-                  : syncStatus.status === 'SUCCESS'
-                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
-                  : syncStatus.status === 'PARTIAL_SUCCESS'
-                  ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700'
-                  : syncStatus.status === 'FAILED'
-                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
-                  : syncStatus.status === 'NOT_AUTHORIZED'
-                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
-                  : syncStatus.status === 'NOT_CONFIGURED'
-                  ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500'
-                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
-              }`}
-            >
-              {syncStatus.isSyncing ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
-              ) : syncStatus.status === 'SUCCESS' ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              ) : syncStatus.status === 'PARTIAL_SUCCESS' || syncStatus.status === 'FAILED' || syncStatus.status === 'NOT_AUTHORIZED' ? (
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-              ) : (
-                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-              )}
-              <span>
-                {syncStatus.isSyncing
-                  ? 'Syncing OTAs…'
-                  : syncStatus.status === 'SUCCESS'
-                  ? 'OTA Live'
-                  : syncStatus.status === 'PARTIAL_SUCCESS'
-                  ? 'OTA Notice'
-                  : syncStatus.status === 'FAILED'
-                  ? 'OTA Sync Failed'
-                  : syncStatus.status === 'NOT_AUTHORIZED'
-                  ? 'OTA Unauthorized'
-                  : syncStatus.status === 'NOT_CONFIGURED'
-                  ? 'OTA Unconfigured'
-                  : 'Sync OTAs'}
-              </span>
-            </button>
-
-            {/* Notifications */}
-            <button className="relative p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer">
-              <Bell className="w-4.5 h-4.5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600 shadow-soft-blue animate-pulse" />
-            </button>
-
-            {/* User profile menu */}
-            <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
-              <button
-                type="button"
-                onClick={() => setProfileOpen((open) => !open)}
-                aria-label="Open profile menu"
-                aria-expanded={profileOpen}
-                className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
-              >
-                <span
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-slate-900 via-blue-900 to-blue-600 shadow-md ring-2 ring-white"
-                >
-                  {userName.charAt(0).toUpperCase()}
-                </span>
-                <ChevronDown className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {profileOpen && (
-                <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
-                  <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 px-4 py-3 text-white">
-                    <p className="truncate text-sm font-black text-white">{hotelName ?? 'Hotel Mantri'}</p>
-                    <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
-                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-400/30 px-2 py-0.5 text-[10px] font-extrabold text-blue-200">
-                      <ShieldCheck className="h-3 w-3" /> {roleLabel}
-                    </span>
-                  </div>
-                  <div className="p-2">
-                    {role === 'super_admin' && (
-                      <ProfileMenuButton
-                        icon={<ShieldCheck className="text-blue-600" />}
-                        label="Super Admin Panel"
-                        onClick={() => {
-                          setProfileOpen(false);
-                          onNavigate('super-admin-panel');
-                        }}
-                      />
-                    )}
-                    <ProfileMenuButton icon={<UserRound />} label="My Profile" onClick={openProfileDialog} />
-                    {canManageProperty && <ProfileMenuButton icon={<Building2 />} label="Hotel / Property Settings" onClick={() => navigateFromProfile('property')} />}
-                    <ProfileMenuButton icon={<KeyRound />} label="Change Password" onClick={openPasswordDialog} />
-                    <ProfileMenuButton icon={<HelpCircle />} label="Help & Support" onClick={() => { setProfileOpen(false); setDialog('help'); }} />
-                    <div className="my-1 border-t border-slate-100" />
-                    <ProfileMenuButton icon={<LogOut />} label="Sign Out" danger onClick={onSignOut} />
-                  </div>
+          {isHousekeeping ? (
+            <div className="flex items-center gap-3 min-w-0">
+              <BrandIcon size={34} onDark={false} className="shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-black text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</span>
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-600 text-white shadow-xs tracking-wider uppercase">
+                    Housekeeping
+                  </span>
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 truncate mt-0.5">
+                  {metadata.assigned_floor ? `Floor: ${metadata.assigned_floor} • ` : ''}
+                  {metadata.shift ? `${metadata.shift} Shift • ` : ''}
+                  {userName}
+                </p>
+              </div>
+              {Boolean(permissions?.canLaundry) && (
+                <div className="hidden sm:flex items-center gap-1.5 ml-4 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    onClick={() => onNavigate('housekeeping')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${currentScreen === 'housekeeping' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Housekeeping Board
+                  </button>
+                  <button
+                    onClick={() => onNavigate('laundry-linen')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${currentScreen === 'laundry-linen' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Laundry & Linen
+                  </button>
                 </div>
               )}
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="lg:hidden p-1.5 text-slate-600 hover:text-blue-700 hover:bg-slate-100 rounded-xl transition"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="min-w-0">
+                <h1 className="text-sm font-black text-slate-900 truncate leading-tight flex items-center gap-2">
+                  <span>{greeting}, {hotelName ?? 'Hotel Mantri'}</span>
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-blue-600 text-white shadow-xs hidden xl:inline-block tracking-wider">LIVE</span>
+                </h1>
+                <p className="text-[11px] font-bold text-blue-600 hidden sm:block">
+                  {findLabel(currentScreen) || 'Dashboard'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Right cluster */}
+          {isHousekeeping ? (
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Laundry tab toggle on mobile if enabled */}
+              {Boolean(permissions?.canLaundry) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate(currentScreen === 'housekeeping' ? 'laundry-linen' : 'housekeeping')}
+                  className="sm:hidden px-2.5 py-1.5 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1 cursor-pointer"
+                >
+                  {currentScreen === 'housekeeping' ? <Shirt className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  {currentScreen === 'housekeeping' ? 'Laundry' : 'Rooms'}
+                </button>
+              )}
+
+              {/* Date */}
+              <div className="hidden sm:flex flex-col items-end leading-tight px-2.5 py-1 rounded-xl bg-slate-100/90 border border-slate-200/90 shadow-2xs">
+                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-extrabold">Today</span>
+                <span className="text-xs font-black text-slate-900">{todayDisplay}</span>
+              </div>
+
+              {/* User profile menu */}
+              <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen((open) => !open)}
+                  aria-label="Open profile menu"
+                  aria-expanded={profileOpen}
+                  className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
+                >
+                  <span
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-sky-600 via-blue-600 to-indigo-600 shadow-md ring-2 ring-white"
+                  >
+                    {userName.charAt(0).toUpperCase()}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {profileOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                    <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-sky-950 px-4 py-3 text-white">
+                      <p className="truncate text-sm font-black text-white">{hotelName ?? 'Hotel Mantri'}</p>
+                      <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
+                      <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-500/20 border border-sky-400/30 px-2 py-0.5 text-[10px] font-extrabold text-sky-200">
+                        <ShieldCheck className="h-3 w-3" /> Housekeeping
+                      </span>
+                    </div>
+                    <div className="p-2">
+                      <ProfileMenuButton icon={<UserRound />} label="My Profile" onClick={openProfileDialog} />
+                      <ProfileMenuButton icon={<KeyRound />} label="Change Password" onClick={openPasswordDialog} />
+                      <div className="my-1 border-t border-slate-100" />
+                      <ProfileMenuButton icon={<LogOut />} label="Sign Out" danger onClick={onSignOut} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Search (desktop) */}
+              <div className="hidden md:flex items-center gap-2 bg-slate-100/90 border border-slate-200/90 rounded-xl px-3 py-1.5 w-48 lg:w-56 focus-within:ring-2 focus-within:ring-blue-500/20 focus-within:border-blue-600 focus-within:bg-white transition-all shadow-inner">
+                <Search className="w-4 h-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search menu or bookings…"
+                  value={headerSearch}
+                  onChange={(e) => setHeaderSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && headerSearch.trim()) {
+                      const q = headerSearch.toLowerCase().trim();
+                      const match = allGroups.flatMap((g) => g.items).find((i) => i.label.toLowerCase().includes(q));
+                      if (match) {
+                        go(match.key);
+                      } else {
+                        go('reservations');
+                      }
+                    }
+                  }}
+                  className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full font-medium"
+                />
+              </div>
+
+              {/* Business date */}
+              <div className="hidden sm:flex flex-col items-end leading-tight px-2.5 py-1 rounded-xl bg-slate-100/90 border border-slate-200/90 shadow-2xs">
+                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-extrabold">Business Date</span>
+                <span className="text-xs font-black text-slate-900">{todayDisplay}</span>
+              </div>
+
+              {/* OTA Live Sync Badge */}
+              <button
+                type="button"
+                onClick={() => syncStatus.syncNow()}
+                disabled={syncStatus.isSyncing}
+                title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
+                className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                  syncStatus.status === 'SYNCING'
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : syncStatus.status === 'SUCCESS'
+                    ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+                    : syncStatus.status === 'PARTIAL_SUCCESS'
+                    ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700'
+                    : syncStatus.status === 'FAILED'
+                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    : syncStatus.status === 'NOT_AUTHORIZED'
+                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    : syncStatus.status === 'NOT_CONFIGURED'
+                    ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500'
+                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
+                }`}
+              >
+                {syncStatus.isSyncing ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                ) : syncStatus.status === 'SUCCESS' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                ) : syncStatus.status === 'PARTIAL_SUCCESS' || syncStatus.status === 'FAILED' || syncStatus.status === 'NOT_AUTHORIZED' ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                )}
+                <span>
+                  {syncStatus.isSyncing
+                    ? 'Syncing OTAs…'
+                    : syncStatus.status === 'SUCCESS'
+                    ? 'OTA Live'
+                    : syncStatus.status === 'PARTIAL_SUCCESS'
+                    ? 'OTA Notice'
+                    : syncStatus.status === 'FAILED'
+                    ? 'OTA Sync Failed'
+                    : syncStatus.status === 'NOT_AUTHORIZED'
+                    ? 'OTA Unauthorized'
+                    : syncStatus.status === 'NOT_CONFIGURED'
+                    ? 'OTA Unconfigured'
+                    : 'Sync OTAs'}
+                </span>
+              </button>
+
+              {/* Notifications */}
+              <button className="relative p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer">
+                <Bell className="w-4.5 h-4.5" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-blue-600 shadow-soft-blue animate-pulse" />
+              </button>
+
+              {/* User profile menu */}
+              <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen((open) => !open)}
+                  aria-label="Open profile menu"
+                  aria-expanded={profileOpen}
+                  className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
+                >
+                  <span
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-slate-900 via-blue-900 to-blue-600 shadow-md ring-2 ring-white"
+                  >
+                    {userName.charAt(0).toUpperCase()}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {profileOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                    <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 px-4 py-3 text-white">
+                      <p className="truncate text-sm font-black text-white">{hotelName ?? 'Hotel Mantri'}</p>
+                      <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
+                      <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-400/30 px-2 py-0.5 text-[10px] font-extrabold text-blue-200">
+                        <ShieldCheck className="h-3 w-3" /> {roleLabel}
+                      </span>
+                    </div>
+                    <div className="p-2">
+                      {role === 'super_admin' && (
+                        <ProfileMenuButton
+                          icon={<ShieldCheck className="text-blue-600" />}
+                          label="Super Admin Panel"
+                          onClick={() => {
+                            setProfileOpen(false);
+                            onNavigate('super-admin-panel');
+                          }}
+                        />
+                      )}
+                      <ProfileMenuButton icon={<UserRound />} label="My Profile" onClick={openProfileDialog} />
+                      {canManageProperty && <ProfileMenuButton icon={<Building2 />} label="Hotel / Property Settings" onClick={() => navigateFromProfile('property')} />}
+                      <ProfileMenuButton icon={<KeyRound />} label="Change Password" onClick={openPasswordDialog} />
+                      <ProfileMenuButton icon={<HelpCircle />} label="Help & Support" onClick={() => { setProfileOpen(false); setDialog('help'); }} />
+                      <div className="my-1 border-t border-slate-100" />
+                      <ProfileMenuButton icon={<LogOut />} label="Sign Out" danger onClick={onSignOut} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </header>
 
         {/* Page content */}

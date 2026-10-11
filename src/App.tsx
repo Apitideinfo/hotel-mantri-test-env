@@ -35,6 +35,7 @@ const PeriodView = lazy(() => import('@/screens/PeriodView').then(m => ({ defaul
 const WhatsAppScreen = lazy(() => import('@/screens/WhatsAppScreen').then(m => ({ default: m.WhatsAppScreen })));
 const History = lazy(() => import('@/screens/History').then(m => ({ default: m.History })));
 const Settings = lazy(() => import('@/screens/Settings').then(m => ({ default: m.Settings })));
+const UserManagementScreen = lazy(() => import('@/screens/UserManagementScreen').then(m => ({ default: m.UserManagementScreen })));
 const DailyEntryTabs = lazy(() => import('@/screens/DailyEntryTabs').then(m => ({ default: m.DailyEntryTabs })));
 const PropertyMaster = lazy(() => import('@/screens/PropertyMaster').then(m => ({ default: m.PropertyMaster })));
 const OtherEntries = lazy(() => import('@/screens/OtherEntries').then(m => ({ default: m.OtherEntries })));
@@ -109,7 +110,7 @@ const PostingRulesScreen = lazy(() => import('@/screens/finance/FinanceSettingsS
 
 type Screen =
   | 'dashboard' | 'entry' | 'report' | 'mtd' | 'ytd' | 'whatsapp' | 'history'
-  | 'settings' | 'roomchart' | 'other' | 'ledger' | 'pdf' | 'property'
+  | 'settings' | 'users' | 'roomchart' | 'other' | 'ledger' | 'pdf' | 'property'
   | 'finance' | 'expense-entry' | 'expense-ledger' | 'staff' | 'salary-advance'
   | 'salary-settlement' | 'electricity' | 'utility-bills' | 'laundry'
   | 'monthly-bills' | 'profitability' | 'gst-report' | 'subscription' | 'housekeeping'
@@ -168,6 +169,7 @@ const SCREEN_TO_HASH: Record<string, string> = {
   'whatsapp': 'whatsapp',
   'history': 'history',
   'settings': 'settings',
+  'users': 'staff-roles',
   'subscription': 'subscription',
   'finance': 'finance',
   'close-day': 'close-day',
@@ -254,6 +256,8 @@ const HASH_TO_SCREEN: Record<string, string> = {
   'entry': 'entry',
   'daily-report': 'report',
   'report': 'report',
+  'staff-roles': 'users',
+  'users': 'users',
   'mtd-report': 'mtd',
   'mtd': 'mtd',
   'ytd-report': 'ytd',
@@ -332,7 +336,7 @@ const HASH_TO_SCREEN: Record<string, string> = {
 };
 
 function AppInner() {
-  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
+  const { user, loading, profileLoaded, profileError, role, permissions, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
   const { hotelId, hotel, isSuperAdmin, status: hotelStatus, error: hotelError, setSelectedHotel } = useHotel();
   const [showSuperAdminHotelSelector, setShowSuperAdminHotelSelector] = useState(false);
   const [nav, setNav] = useState<NavState>(() => {
@@ -387,6 +391,34 @@ function AppInner() {
       }).catch(() => setFeatures(null));
     }
   }, [user, profileLoaded, role, hotelId]);
+
+  // Role-Based Screen Enforcement (Housekeeping, Accounts, Reception)
+  useEffect(() => {
+    if (user && profileLoaded && role) {
+      if (role === 'housekeeping') {
+        const canLaundry = Boolean(permissions?.canLaundry);
+        if (nav.screen !== 'housekeeping' && !(canLaundry && nav.screen === 'laundry-linen')) {
+          setNav({ screen: 'housekeeping', date: getTodayLocal() });
+          window.history.replaceState({ screen: 'housekeeping', date: getTodayLocal() }, '', '#housekeeping');
+        }
+      } else if (role === 'accounts') {
+        const allowedAccountsScreens = [
+          'finance', 'close-day', 'ledgers', 'pl-report', 'mtd', 'ytd', 'pdf',
+          'mis-report', 'expense-entry', 'expense-ledger', 'staff', 'salary-advance',
+          'salary-settlement', 'electricity', 'utility-bills', 'laundry', 'monthly-bills',
+          'profitability', 'gst-report', 'finance-dashboard', 'chart-of-accounts',
+          'journals', 'cash-book', 'bank-book', 'vouchers', 'receivables', 'payables',
+          'vendor-ledger', 'accounting-pl', 'trial-balance', 'balance-sheet',
+          'reconciliation', 'finance-exceptions', 'opening-balances', 'budgets',
+          'historical-posting', 'posting-rules', 'report'
+        ];
+        if (!allowedAccountsScreens.includes(nav.screen)) {
+          setNav({ screen: 'finance', date: getTodayLocal() });
+          window.history.replaceState({ screen: 'finance', date: getTodayLocal() }, '', '#finance');
+        }
+      }
+    }
+  }, [user, profileLoaded, role, nav.screen, permissions?.canLaundry]);
 
   // Automatic non-blocking live OTA sync on application/page open when hotel context is ready
   useEffect(() => {
@@ -520,6 +552,17 @@ function AppInner() {
           } else {
             setPublicView('landing');
           }
+          return;
+        }
+
+        if (role === 'housekeeping') {
+          const canLaundry = Boolean(permissions?.canLaundry);
+          if (hash === 'laundry-linen' && canLaundry) {
+            setNav((prev) => (prev.screen === 'laundry-linen' ? prev : { screen: 'laundry-linen', date: prev.date }));
+            return;
+          }
+          setNav((prev) => (prev.screen === 'housekeeping' ? prev : { screen: 'housekeeping', date: prev.date }));
+          window.history.replaceState({ screen: 'housekeeping', date: getTodayLocal() }, '', '#housekeeping');
           return;
         }
 
@@ -714,15 +757,40 @@ function AppInner() {
       return;
     }
 
-    if (role === 'hotel_staff') {
+    if (role === 'housekeeping') {
+      const canLaundry = Boolean(permissions?.canLaundry);
+      if (screen !== 'housekeeping' && !(canLaundry && screen === 'laundry-linen')) {
+        go('housekeeping', { date: nav.date });
+        return;
+      }
+    }
+
+    if (role === 'accounts') {
+      const allowedAccountsScreens = [
+        'finance', 'close-day', 'ledgers', 'pl-report', 'mtd', 'ytd', 'pdf',
+        'mis-report', 'expense-entry', 'expense-ledger', 'staff', 'salary-advance',
+        'salary-settlement', 'electricity', 'utility-bills', 'laundry', 'monthly-bills',
+        'profitability', 'gst-report', 'finance-dashboard', 'chart-of-accounts',
+        'journals', 'cash-book', 'bank-book', 'vouchers', 'receivables', 'payables',
+        'vendor-ledger', 'accounting-pl', 'trial-balance', 'balance-sheet',
+        'reconciliation', 'finance-exceptions', 'opening-balances', 'budgets',
+        'historical-posting', 'posting-rules', 'report'
+      ];
+      if (!allowedAccountsScreens.includes(screen)) {
+        go('finance', { date: nav.date });
+        return;
+      }
+    }
+
+    if (role === 'reception' || role === 'hotel_staff') {
       const restrictedScreens = [
-        'finance', 'property', 'settings', 'close-day', 'ledgers', 'pl-report',
+        'finance', 'property', 'settings', 'users', 'close-day', 'ledgers', 'pl-report',
         'mtd', 'ytd', 'pdf', 'channel-manager', 'mis-report', 'analytics', 'owner-dashboard',
         'expense-entry', 'expense-ledger', 'staff', 'salary-advance', 'salary-settlement',
         'electricity', 'utility-bills', 'laundry', 'monthly-bills', 'profitability', 'gst-report',
       ];
       if (restrictedScreens.includes(screen)) {
-        go('dashboard', { date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
     }
@@ -843,7 +911,10 @@ function AppInner() {
             <History initialDate={nav.date} onBack={back} onNavigate={go} />
           )}
           {nav.screen === 'settings' && (
-            <Settings onBack={back} />
+            <Settings onBack={back} onNavigate={go} />
+          )}
+          {nav.screen === 'users' && (
+            <UserManagementScreen onBack={back} />
           )}
           {nav.screen === 'subscription' && (
             <HotelSubscriptionBilling onBack={back} />

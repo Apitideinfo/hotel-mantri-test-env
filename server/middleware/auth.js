@@ -227,11 +227,26 @@ export const resolveAuthorizedHotel = async (req) => {
     .eq('id', authorizedHotelId)
     .maybeSingle();
 
+  // Check user metadata role first (e.g. housekeeping, manager, reception, accounts)
+  const metaRole = user.user_metadata?.role;
+  let effectiveRole = metaRole || userRole;
+  if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+
+  const userPermissions = user.user_metadata?.permissions || {
+    canLaundry: Boolean(user.user_metadata?.can_laundry),
+    canMaintenance: user.user_metadata?.can_maintenance !== false,
+    canApproveInspection: Boolean(user.user_metadata?.can_approve_inspection),
+    assignedFloor: user.user_metadata?.assigned_floor || '',
+    assignedCategoryId: user.user_metadata?.assigned_category_id || '',
+    shift: user.user_metadata?.shift || 'General',
+  };
+
   return {
     success: true,
     user,
     userId: user.id,
-    role: userRole,
+    role: effectiveRole,
+    permissions: userPermissions,
     isSuperAdmin: false,
     hotelId: authorizedHotelId,
     hotel: hotel || { id: authorizedHotelId, hotel_name: 'Hotel' },
@@ -328,6 +343,8 @@ export const requireHotelAccess = async (req, res, next) => {
     req.auth = {
       userId: resolution.userId,
       role: resolution.role,
+      permissions: resolution.permissions || {},
+      userMetadata: resolution.user?.user_metadata || {},
       isSuperAdmin: resolution.isSuperAdmin,
       hotelId: resolution.hotelId,
       hotel: resolution.hotel,
@@ -345,3 +362,65 @@ export const requireHotelAccess = async (req, res, next) => {
     });
   }
 };
+
+/**
+ * Middleware: Requires the authenticated user to have one of the specified roles.
+ * Super Admin always passes.
+ * 'owner' and 'hotel_admin' are treated interchangeably.
+ */
+export const requireRoles = (allowedRoles = []) => {
+  return (req, res, next) => {
+    const requestId = req.requestId || crypto.randomUUID();
+    const role = (req.userRole || req.auth?.role || '').toLowerCase();
+    if (req.auth?.isSuperAdmin || role === 'super_admin') {
+      return next();
+    }
+
+    const allowed = allowedRoles.map((r) => r.toLowerCase());
+    const isOwnerOrAdmin = role === 'hotel_admin' || role === 'owner';
+    const isPermitted =
+      allowed.includes(role) ||
+      (isOwnerOrAdmin && (allowed.includes('hotel_admin') || allowed.includes('owner')));
+
+    if (!isPermitted) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        code: 'ROLE_FORBIDDEN',
+        message: `Access denied. Users with role "${role}" cannot perform this action or access this module.`,
+        requestId,
+      });
+    }
+
+    next();
+  };
+};
+
+/**
+ * Middleware: Denies access if the user has any of the specified roles.
+ * Super Admin is never forbidden.
+ */
+export const forbidRoles = (forbiddenRoles = []) => {
+  return (req, res, next) => {
+    const requestId = req.requestId || crypto.randomUUID();
+    if (req.auth?.isSuperAdmin) {
+      return next();
+    }
+
+    const role = (req.userRole || req.auth?.role || '').toLowerCase();
+    const forbidden = forbiddenRoles.map((r) => r.toLowerCase());
+
+    if (forbidden.includes(role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        code: 'ROLE_FORBIDDEN',
+        message: `Access denied. Users with role "${role}" cannot access this module or resource.`,
+        requestId,
+      });
+    }
+
+    next();
+  };
+};
+

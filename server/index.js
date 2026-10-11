@@ -59,6 +59,9 @@ import hotelBrandingRoutes from './routes/hotelBranding.js';
 import notificationRoutes from './routes/notifications.js';
 import revenueRoutes from './routes/revenue.js';
 import laundryRoutes from './routes/laundry.js';
+import userRoutes from './routes/users.js';
+import housekeepingRoutes from './routes/housekeeping.js';
+import { resolveAuthorizedHotel } from './middleware/auth.js';
 
 // Root / Health check endpoints
 app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
@@ -77,6 +80,9 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
       '/api/hotel-branding',
       '/api/notifications',
       '/api/aiosell',
+      '/api/laundry',
+      '/api/users',
+      '/api/housekeeping',
       '/api/create-order',
       '/api/verify-payment'
     ]
@@ -115,6 +121,12 @@ app.use('/webhooks/whinta', notificationRoutes);
 app.use('/api/laundry', laundryRoutes);
 app.use('/laundry', laundryRoutes);
 
+app.use('/api/users', userRoutes);
+app.use('/users', userRoutes);
+
+app.use('/api/housekeeping', housekeepingRoutes);
+app.use('/housekeeping', housekeepingRoutes);
+
 const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 
@@ -129,6 +141,15 @@ const razorpay = KEY_ID && KEY_SECRET ? new Razorpay({
  */
 app.post(['/api/create-order', '/create-order'], async (req, res) => {
   try {
+    // If authenticated user is Housekeeping, strictly deny payment processing
+    if (req.headers.authorization) {
+      try {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success && authRes.role === 'housekeeping') {
+          return res.status(403).json({ success: false, error: 'ACCESS_DENIED', message: 'Housekeeping users are not authorized to collect or process payments.' });
+        }
+      } catch { /* proceed */ }
+    }
     const { amount, currency = 'INR', receipt, notes } = req.body;
 
     if (!amount || typeof amount !== 'number' || amount < 100) {
@@ -165,8 +186,17 @@ app.post(['/api/create-order', '/create-order'], async (req, res) => {
  * STEP 3: Backend Endpoint to Verify Signature
  * POST /api/verify-payment
  */
-app.post(['/api/verify-payment', '/verify-payment'], (req, res) => {
+app.post(['/api/verify-payment', '/verify-payment'], async (req, res) => {
   try {
+    // If authenticated user is Housekeeping, strictly deny payment processing
+    if (req.headers.authorization) {
+      try {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success && authRes.role === 'housekeeping') {
+          return res.status(403).json({ success: false, error: 'ACCESS_DENIED', message: 'Housekeeping users are not authorized to collect or process payments.' });
+        }
+      } catch { /* proceed */ }
+    }
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
