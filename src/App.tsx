@@ -927,7 +927,7 @@ function AppInner() {
           {nav.screen === 'finance' && (
             <FinanceHub onBack={back} onNavigate={(s) => setNav({ screen: s as Screen })} />
           )}
-          {nav.screen === 'expense-entry' && <ExpenseEntryScreen onBack={backToFinance} />}
+          {nav.screen === 'expense-entry' && <ExpenseEntryScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
           {nav.screen === 'expense-ledger' && <ExpenseLedgerScreen onBack={backToFinance} />}
           {nav.screen === 'staff' && <StaffMasterScreen onBack={backToFinance} />}
           {nav.screen === 'salary-advance' && <SalaryAdvanceScreen onBack={backToFinance} />}
@@ -950,8 +950,8 @@ function AppInner() {
           {nav.screen === 'cash-book' && <CashBookScreen onBack={backToFinance} />}
           {nav.screen === 'bank-book' && <BankBookScreen onBack={backToFinance} />}
           {nav.screen === 'vouchers' && <VouchersScreen onBack={backToFinance} />}
-          {nav.screen === 'receivables' && <ReceivablesScreen onBack={backToFinance} />}
-          {nav.screen === 'payables' && <PayablesScreen onBack={backToFinance} />}
+          {nav.screen === 'receivables' && <ReceivablesScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
+          {nav.screen === 'payables' && <PayablesScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
           {nav.screen === 'vendor-ledger' && <VendorLedgerScreen onBack={backToFinance} />}
           {nav.screen === 'accounting-pl' && <AccountingProfitLossScreen onBack={backToFinance} />}
           {nav.screen === 'trial-balance' && <AccountingTrialBalanceScreen onBack={backToFinance} />}

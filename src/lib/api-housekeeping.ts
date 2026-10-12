@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { getCurrentHotelId } from './api';
+import { getCurrentHotelId, getRooms } from './api';
 import type { HousekeepingStatus, CleaningPriority, Room } from './types';
 import type {
   HousekeepingStaff, HousekeepingTimelineEntry, HousekeepingAssignment,
@@ -537,3 +537,67 @@ export const updateRoomNote = async (roomNo: string, note: string): Promise<void
     .eq('room_no', roomNo);
   if (error) throw error;
 };
+
+// ── Status Normalization & Enriched Rooms ──
+
+export const normalizeHousekeepingStatus = (status?: string | null): HousekeepingStatus => {
+  if (!status) return 'Vacant Clean';
+  if (status === 'Inspection') return 'Ready for Inspection';
+  if (status === 'Assigned') return 'Vacant Dirty';
+  return status as HousekeepingStatus;
+};
+
+export const getHousekeepingRooms = async (): Promise<Room[]> => {
+  const hotelId = getCurrentHotelId();
+  try {
+    const rooms = await getRooms();
+    let assignments: HousekeepingAssignment[] = [];
+    try {
+      const { data } = await supabase
+        .from('housekeeping_assignments')
+        .select('id, room_no, staff_id, status, cleaning_started_at, cleaning_completed_at')
+        .eq('hotel_id', hotelId)
+        .in('status', ['pending', 'in_progress', 'completed']);
+      assignments = (data || []) as HousekeepingAssignment[];
+    } catch {
+      assignments = [];
+    }
+
+    const assignMap = new Map<string, HousekeepingAssignment>();
+    assignments.forEach((a) => {
+      const existing = assignMap.get(a.room_no);
+      if (!existing || a.status === 'in_progress' || (a.status === 'completed' && existing.status !== 'in_progress')) {
+        assignMap.set(a.room_no, a);
+      }
+    });
+
+    return rooms.map((r: Room) => {
+      const assignment = assignMap.get(r.room_no);
+      let effectiveStatus = normalizeHousekeepingStatus(r.housekeeping_status);
+
+      if (r.housekeeping_status === 'Vacant Dirty' || (r.housekeeping_status as string) === 'Inspection') {
+        if (assignment?.status === 'in_progress') {
+          effectiveStatus = 'Cleaning In Progress';
+        } else if (assignment?.status === 'completed' || (r.housekeeping_status as string) === 'Inspection') {
+          effectiveStatus = 'Ready for Inspection';
+        }
+      }
+
+      const assignedStaffId = r.assigned_staff_id || assignment?.staff_id || null;
+
+      return {
+        ...r,
+        housekeeping_status: effectiveStatus,
+        assigned_staff_id: assignedStaffId,
+      };
+    });
+  } catch (err) {
+    console.warn('[getHousekeepingRooms] Fallback to raw getRooms:', err);
+    const rooms = await getRooms();
+    return rooms.map((r) => ({
+      ...r,
+      housekeeping_status: normalizeHousekeepingStatus(r.housekeeping_status),
+    }));
+  }
+};
+
