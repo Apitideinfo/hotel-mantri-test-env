@@ -221,6 +221,7 @@ const PRIMARY_NAV_CARDS: NavCardItem[] = [
     activeSquircleColor: 'text-white',
     subItems: [
       { key: 'property', label: 'Property Master' },
+      { key: 'users', label: 'Staff & Roles' },
       { key: 'settings', label: 'System Settings' },
     ],
   },
@@ -799,7 +800,7 @@ export const AppShell = ({
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState('');
   const profileRef = useRef<HTMLDivElement>(null);
-  const { user, role, changePassword, updateUserProfile } = useAuth();
+  const { user, role, permissions, changePassword, updateUserProfile } = useAuth();
 
   const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const userName =
@@ -825,12 +826,18 @@ export const AppShell = ({
   const roleLabel =
     role === 'super_admin'
       ? 'Super Admin'
-      : role === 'hotel_admin'
-      ? 'Hotel Admin'
-      : role === 'hotel_staff'
-      ? 'Receptionist'
+      : role === 'owner' || role === 'hotel_admin'
+      ? 'Hotel Owner'
+      : role === 'manager'
+      ? 'Manager'
+      : role === 'reception' || role === 'hotel_staff'
+      ? 'Reception'
+      : role === 'accounts'
+      ? 'Accounts'
+      : role === 'housekeeping'
+      ? 'Housekeeping'
       : role ?? 'User';
-  const canManageProperty = role === 'hotel_admin' || role === 'super_admin';
+  const canManageProperty = role === 'hotel_admin' || role === 'super_admin' || role === 'owner' || role === 'manager';
 
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => {
@@ -931,48 +938,52 @@ export const AppShell = ({
     setSidebarOpen(false);
   };
 
+  const isHousekeeping = role === 'housekeeping';
+
   return (
     <div
       className={`min-h-screen bg-slate-50 flex app-wrapper ${
         collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'
       }`}
     >
-      {/* Desktop Sidebar — Clean White Card Theme */}
-      <aside
-        className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container bg-white border-r border-slate-200/80 shadow-xs transition-all ${
-          collapsed ? 'duration-500 ease-in-out lg:w-[84px]' : 'duration-500 ease-out lg:w-[320px]'
-        }`}
-      >
-        <SidebarContent
-          collapsed={collapsed}
-          hotelName={hotelName}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          currentScreen={currentScreen}
-          go={go}
-          onSignOut={onSignOut}
-          setSidebarOpen={setSidebarOpen}
-          posEnabled={posEnabled}
-          role={role}
-          enabledFeatures={enabledFeatures}
-        />
-        {/* Sidebar Collapse Toggle Button */}
-        <button
-          type="button"
-          onClick={() => setCollapsed((c) => !c)}
-          className="absolute top-1/2 -right-3.5 -translate-y-1/2 w-7 h-7 rounded-full bg-white border border-slate-200 shadow-md flex items-center justify-center hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition cursor-pointer z-40"
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+      {/* Desktop Sidebar — Clean White Card Theme (Hidden for Housekeeping users) */}
+      {!isHousekeeping && (
+        <aside
+          className={`hidden lg:flex flex-col shrink-0 fixed inset-y-0 left-0 z-30 sidebar-container bg-white border-r border-slate-200/80 shadow-xs transition-all ${
+            collapsed ? 'duration-500 ease-in-out lg:w-[84px]' : 'duration-500 ease-out lg:w-[320px]'
+          }`}
         >
-          <ChevronLeft
-            className={`w-3.5 h-3.5 transition-transform duration-300 ${
-              collapsed ? 'rotate-180' : ''
-            }`}
+          <SidebarContent
+            collapsed={collapsed}
+            hotelName={hotelName}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            currentScreen={currentScreen}
+            go={go}
+            onSignOut={onSignOut}
+            setSidebarOpen={setSidebarOpen}
+            posEnabled={posEnabled}
+            role={role}
+            enabledFeatures={enabledFeatures}
           />
-        </button>
-      </aside>
+          {/* Sidebar Collapse Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setCollapsed((c) => !c)}
+            className="absolute top-1/2 -right-3.5 -translate-y-1/2 w-7 h-7 rounded-full bg-white border border-slate-200 shadow-md flex items-center justify-center hover:bg-slate-50 text-slate-500 hover:text-slate-800 transition cursor-pointer z-40"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <ChevronLeft
+              className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                collapsed ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+        </aside>
+      )}
 
-      {/* Mobile Drawer Overlay — 100% Matching Floating Modal Card */}
-      {sidebarOpen && (
+      {/* Mobile Drawer Overlay — 100% Matching Floating Modal Card (Hidden for Housekeeping users) */}
+      {sidebarOpen && !isHousekeeping && (
         <div className="lg:hidden fixed inset-0 z-50 flex justify-start p-2.5 sm:p-4">
           {/* Dimmed Backdrop */}
           <div
@@ -1003,7 +1014,11 @@ export const AppShell = ({
       {/* Main Content Area */}
       <div
         className={`flex-1 ${
-          collapsed ? 'lg:ml-[84px]' : 'lg:ml-[320px]'
+          !isHousekeeping
+            ? collapsed
+              ? 'lg:ml-[84px]'
+              : 'lg:ml-[320px]'
+            : 'lg:ml-0'
         } min-w-0 flex flex-col main-content transition-all duration-500`}
       >
         {/* Top Header */}
@@ -1011,207 +1026,302 @@ export const AppShell = ({
           className="sticky top-0 z-20 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
           style={{ height: layout.headerHeight }}
         >
-          <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-1.5 text-slate-600 hover:text-sky-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
-              aria-label="Open sidebar"
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-black text-slate-900 truncate leading-tight tracking-tight">
-                  {hotelName ?? 'Hotel Mantri'}
-                </span>
-                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-2xs hidden xl:inline-flex">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live PMS
-                </span>
+          {isHousekeeping ? (
+            <div className="flex items-center gap-3 min-w-0">
+              <BrandIcon size={34} onDark={false} className="shrink-0" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-black text-slate-900 truncate leading-tight">{hotelName ?? 'Hotel Mantri'}</span>
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-sky-600 text-white shadow-xs tracking-wider uppercase">
+                    Housekeeping
+                  </span>
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 truncate mt-0.5">
+                  {metadata.assigned_floor ? `Floor: ${metadata.assigned_floor} • ` : ''}
+                  {metadata.shift ? `${metadata.shift} Shift • ` : ''}
+                  {userName}
+                </p>
               </div>
-              <p className="text-[11px] font-bold text-sky-600 hidden sm:block">
-                {findLabel(currentScreen) || 'Dashboard'}
-              </p>
-            </div>
-          </div>
-
-          {/* Right Cluster */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Header Search (Desktop) */}
-            <div className="hidden md:flex items-center gap-2 bg-slate-100/80 border border-slate-200/80 rounded-xl px-3 py-1.5 w-48 lg:w-60 focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-500 focus-within:bg-white transition-all shadow-2xs">
-              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <input
-                type="text"
-                placeholder="Search menu or bookings…"
-                value={headerSearch}
-                onChange={(e) => setHeaderSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && headerSearch.trim()) {
-                    const q = headerSearch.toLowerCase().trim();
-                    const match = PRIMARY_NAV_CARDS.find((card) =>
-                      card.label.toLowerCase().includes(q)
-                    );
-                    if (match) {
-                      go(match.defaultScreen);
-                    } else {
-                      go('reservations');
-                    }
-                  }
-                }}
-                className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full font-medium"
-              />
-              <kbd className="hidden lg:inline-block text-[10px] font-bold bg-white text-slate-400 px-1 py-0.2 rounded border border-slate-200 shadow-2xs">
-                ⌘K
-              </kbd>
-            </div>
-
-            {/* Business Date */}
-            <div className="hidden sm:flex flex-col items-end leading-tight px-3 py-1 rounded-xl bg-slate-50 border border-slate-200 shadow-2xs">
-              <span className="text-[9px] text-slate-400 uppercase tracking-wider font-extrabold">
-                Business Date
-              </span>
-              <span className="text-xs font-black text-slate-800">{todayDisplay}</span>
-            </div>
-
-            {/* OTA Live Sync Badge */}
-            <button
-              type="button"
-              onClick={() => syncStatus.syncNow()}
-              disabled={syncStatus.isSyncing}
-              title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
-              className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${
-                syncStatus.status === 'SYNCING'
-                  ? 'bg-sky-50 border-sky-200 text-sky-700'
-                  : syncStatus.status === 'SUCCESS'
-                  ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
-                  : syncStatus.status === 'PARTIAL_SUCCESS'
-                  ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700'
-                  : syncStatus.status === 'FAILED'
-                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
-                  : syncStatus.status === 'NOT_AUTHORIZED'
-                  ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
-                  : syncStatus.status === 'NOT_CONFIGURED'
-                  ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500'
-                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
-              }`}
-            >
-              {syncStatus.isSyncing ? (
-                <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
-              ) : syncStatus.status === 'SUCCESS' ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              ) : syncStatus.status === 'PARTIAL_SUCCESS' ||
-                syncStatus.status === 'FAILED' ||
-                syncStatus.status === 'NOT_AUTHORIZED' ? (
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-              ) : (
-                <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
-              )}
-              <span>
-                {syncStatus.isSyncing
-                  ? 'Syncing OTAs…'
-                  : syncStatus.status === 'SUCCESS'
-                  ? 'OTA Live'
-                  : syncStatus.status === 'PARTIAL_SUCCESS'
-                  ? 'OTA Notice'
-                  : syncStatus.status === 'FAILED'
-                  ? 'OTA Sync Failed'
-                  : syncStatus.status === 'NOT_AUTHORIZED'
-                  ? 'OTA Unauthorized'
-                  : syncStatus.status === 'NOT_CONFIGURED'
-                  ? 'OTA Unconfigured'
-                  : 'Sync OTAs'}
-              </span>
-            </button>
-
-            {/* Notifications */}
-            <button
-              type="button"
-              className="relative p-2 text-slate-500 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition cursor-pointer"
-              aria-label="Notifications"
-            >
-              <Bell className="w-4.5 h-4.5" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-sky-500 shadow-soft-blue animate-pulse" />
-            </button>
-
-            {/* User Profile Menu */}
-            <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
-              <button
-                type="button"
-                onClick={() => setProfileOpen((open) => !open)}
-                aria-label="Open profile menu"
-                aria-expanded={profileOpen}
-                className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
-              >
-                <span className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-slate-900 via-blue-900 to-blue-600 shadow-md ring-2 ring-white">
-                  {userName.charAt(0).toUpperCase()}
-                </span>
-                <ChevronDown
-                  className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${
-                    profileOpen ? 'rotate-180' : ''
-                  }`}
-                />
-              </button>
-
-              {profileOpen && (
-                <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
-                  <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 px-4 py-3 text-white">
-                    <p className="truncate text-sm font-black text-white">
-                      {hotelName ?? 'Hotel Mantri'}
-                    </p>
-                    <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
-                    <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-400/30 px-2 py-0.5 text-[10px] font-extrabold text-blue-200">
-                      <ShieldCheck className="h-3 w-3" /> {roleLabel}
-                    </span>
-                  </div>
-                  <div className="p-2">
-                    {role === 'super_admin' && (
-                      <ProfileMenuButton
-                        icon={<ShieldCheck className="text-blue-600" />}
-                        label="Super Admin Panel"
-                        onClick={() => {
-                          setProfileOpen(false);
-                          onNavigate('super-admin-panel');
-                        }}
-                      />
-                    )}
-                    <ProfileMenuButton
-                      icon={<UserRound />}
-                      label="My Profile"
-                      onClick={openProfileDialog}
-                    />
-                    {canManageProperty && (
-                      <ProfileMenuButton
-                        icon={<Building2 />}
-                        label="Hotel / Property Settings"
-                        onClick={() => navigateFromProfile('property')}
-                      />
-                    )}
-                    <ProfileMenuButton
-                      icon={<KeyRound />}
-                      label="Change Password"
-                      onClick={openPasswordDialog}
-                    />
-                    <ProfileMenuButton
-                      icon={<HelpCircle />}
-                      label="Help & Support"
-                      onClick={() => {
-                        setProfileOpen(false);
-                        setDialog('help');
-                      }}
-                    />
-                    <div className="my-1 border-t border-slate-100" />
-                    <ProfileMenuButton
-                      icon={<LogOut />}
-                      label="Sign Out"
-                      danger
-                      onClick={onSignOut}
-                    />
-                  </div>
+              {Boolean(permissions?.canLaundry) && (
+                <div className="hidden sm:flex items-center gap-1.5 ml-4 bg-slate-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('housekeeping')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${currentScreen === 'housekeeping' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Housekeeping Board
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('laundry-linen')}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${currentScreen === 'laundry-linen' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    Laundry & Linen
+                  </button>
                 </div>
               )}
             </div>
-          </div>
+          ) : (
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(true)}
+                className="lg:hidden p-1.5 text-slate-600 hover:text-sky-700 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                aria-label="Open sidebar"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-black text-slate-900 truncate leading-tight tracking-tight">
+                    {hotelName ?? 'Hotel Mantri'}
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shadow-2xs hidden xl:inline-flex">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    Live PMS
+                  </span>
+                </div>
+                <p className="text-[11px] font-bold text-sky-600 hidden sm:block">
+                  {findLabel(currentScreen) || 'Dashboard'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Right cluster */}
+          {isHousekeeping ? (
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Laundry tab toggle on mobile if enabled */}
+              {Boolean(permissions?.canLaundry) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate(currentScreen === 'housekeeping' ? 'laundry-linen' : 'housekeeping')}
+                  className="sm:hidden px-2.5 py-1.5 rounded-xl text-xs font-bold bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1 cursor-pointer"
+                >
+                  {currentScreen === 'housekeeping' ? <Shirt className="w-3.5 h-3.5" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  {currentScreen === 'housekeeping' ? 'Laundry' : 'Rooms'}
+                </button>
+              )}
+
+              {/* Date */}
+              <div className="hidden sm:flex flex-col items-end leading-tight px-2.5 py-1 rounded-xl bg-slate-100/90 border border-slate-200/90 shadow-2xs">
+                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-extrabold">Today</span>
+                <span className="text-xs font-black text-slate-900">{todayDisplay}</span>
+              </div>
+
+              {/* User profile menu */}
+              <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen((open) => !open)}
+                  aria-label="Open profile menu"
+                  aria-expanded={profileOpen}
+                  className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
+                >
+                  <span
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-sky-600 via-blue-600 to-indigo-600 shadow-md ring-2 ring-white"
+                  >
+                    {userName.charAt(0).toUpperCase()}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {profileOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                    <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-sky-950 px-4 py-3 text-white">
+                      <p className="truncate text-sm font-black text-white">{hotelName ?? 'Hotel Mantri'}</p>
+                      <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
+                      <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-sky-500/20 border border-sky-400/30 px-2 py-0.5 text-[10px] font-extrabold text-sky-200">
+                        <ShieldCheck className="h-3 w-3" /> Housekeeping
+                      </span>
+                    </div>
+                    <div className="p-2">
+                      <ProfileMenuButton icon={<UserRound />} label="My Profile" onClick={openProfileDialog} />
+                      <ProfileMenuButton icon={<KeyRound />} label="Change Password" onClick={openPasswordDialog} />
+                      <div className="my-1 border-t border-slate-100" />
+                      <ProfileMenuButton icon={<LogOut />} label="Sign Out" danger onClick={onSignOut} />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Header Search (Desktop) */}
+              <div className="hidden md:flex items-center gap-2 bg-slate-100/80 border border-slate-200/80 rounded-xl px-3 py-1.5 w-48 lg:w-60 focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-500 focus-within:bg-white transition-all shadow-2xs">
+                <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                <input
+                  type="text"
+                  placeholder="Search menu or bookings…"
+                  value={headerSearch}
+                  onChange={(e) => setHeaderSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && headerSearch.trim()) {
+                      const q = headerSearch.toLowerCase().trim();
+                      const match = PRIMARY_NAV_CARDS.find((card) =>
+                        card.label.toLowerCase().includes(q)
+                      );
+                      if (match) {
+                        go(match.defaultScreen);
+                      } else {
+                        go('reservations');
+                      }
+                    }
+                  }}
+                  className="bg-transparent text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none w-full font-medium"
+                />
+                <kbd className="hidden lg:inline-block text-[10px] font-bold bg-white text-slate-400 px-1 py-0.2 rounded border border-slate-200 shadow-2xs">
+                  ⌘K
+                </kbd>
+              </div>
+
+              {/* Business Date */}
+              <div className="hidden sm:flex flex-col items-end leading-tight px-3 py-1 rounded-xl bg-slate-50 border border-slate-200 shadow-2xs">
+                <span className="text-[9px] text-slate-400 uppercase tracking-wider font-extrabold">
+                  Business Date
+                </span>
+                <span className="text-xs font-black text-slate-800">{todayDisplay}</span>
+              </div>
+
+              {/* OTA Live Sync Badge */}
+              <button
+                type="button"
+                onClick={() => syncStatus.syncNow()}
+                disabled={syncStatus.isSyncing}
+                title={syncStatus.lastResult?.message || 'Sync OTA Reservations'}
+                className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition shadow-2xs cursor-pointer ${
+                  syncStatus.status === 'SYNCING'
+                    ? 'bg-sky-50 border-sky-200 text-sky-700'
+                    : syncStatus.status === 'SUCCESS'
+                    ? 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+                    : syncStatus.status === 'PARTIAL_SUCCESS'
+                    ? 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-700'
+                    : syncStatus.status === 'FAILED'
+                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    : syncStatus.status === 'NOT_AUTHORIZED'
+                    ? 'bg-rose-50 hover:bg-rose-100 border-rose-200 text-rose-700'
+                    : syncStatus.status === 'NOT_CONFIGURED'
+                    ? 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-500'
+                    : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
+                }`}
+              >
+                {syncStatus.isSyncing ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-sky-600" />
+                ) : syncStatus.status === 'SUCCESS' ? (
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                ) : syncStatus.status === 'PARTIAL_SUCCESS' ||
+                  syncStatus.status === 'FAILED' ||
+                  syncStatus.status === 'NOT_AUTHORIZED' ? (
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5 text-slate-400" />
+                )}
+                <span>
+                  {syncStatus.isSyncing
+                    ? 'Syncing OTAs…'
+                    : syncStatus.status === 'SUCCESS'
+                    ? 'OTA Live'
+                    : syncStatus.status === 'PARTIAL_SUCCESS'
+                    ? 'OTA Notice'
+                    : syncStatus.status === 'FAILED'
+                    ? 'OTA Sync Failed'
+                    : syncStatus.status === 'NOT_AUTHORIZED'
+                    ? 'OTA Unauthorized'
+                    : syncStatus.status === 'NOT_CONFIGURED'
+                    ? 'OTA Unconfigured'
+                    : 'Sync OTAs'}
+                </span>
+              </button>
+
+              {/* Notifications */}
+              <button
+                type="button"
+                className="relative p-2 text-slate-500 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition cursor-pointer"
+                aria-label="Notifications"
+              >
+                <Bell className="w-4.5 h-4.5" />
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-sky-500 shadow-soft-blue animate-pulse" />
+              </button>
+
+              {/* User Profile Menu */}
+              <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setProfileOpen((open) => !open)}
+                  aria-label="Open profile menu"
+                  aria-expanded={profileOpen}
+                  className="flex items-center gap-2 rounded-xl p-1 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500/30 cursor-pointer"
+                >
+                  <span className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-black shrink-0 bg-gradient-to-tr from-slate-900 via-blue-900 to-blue-600 shadow-md ring-2 ring-white">
+                    {userName.charAt(0).toUpperCase()}
+                  </span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 text-slate-500 hidden sm:block transition-transform ${
+                      profileOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {profileOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                    <div className="border-b border-slate-100 bg-gradient-to-r from-slate-900 via-slate-800 to-blue-950 px-4 py-3 text-white">
+                      <p className="truncate text-sm font-black text-white">
+                        {hotelName ?? 'Hotel Mantri'}
+                      </p>
+                      <p className="truncate text-xs font-medium text-slate-300">{userName}</p>
+                      <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-blue-500/20 border border-blue-400/30 px-2 py-0.5 text-[10px] font-extrabold text-blue-200">
+                        <ShieldCheck className="h-3 w-3" /> {roleLabel}
+                      </span>
+                    </div>
+                    <div className="p-2">
+                      {role === 'super_admin' && (
+                        <ProfileMenuButton
+                          icon={<ShieldCheck className="text-blue-600" />}
+                          label="Super Admin Panel"
+                          onClick={() => {
+                            setProfileOpen(false);
+                            onNavigate('super-admin-panel');
+                          }}
+                        />
+                      )}
+                      <ProfileMenuButton
+                        icon={<UserRound />}
+                        label="My Profile"
+                        onClick={openProfileDialog}
+                      />
+                      {canManageProperty && (
+                        <ProfileMenuButton
+                          icon={<Building2 />}
+                          label="Hotel / Property Settings"
+                          onClick={() => navigateFromProfile('property')}
+                        />
+                      )}
+                      <ProfileMenuButton
+                        icon={<KeyRound />}
+                        label="Change Password"
+                        onClick={openPasswordDialog}
+                      />
+                      <ProfileMenuButton
+                        icon={<HelpCircle />}
+                        label="Help & Support"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          setDialog('help');
+                        }}
+                      />
+                      <div className="my-1 border-t border-slate-100" />
+                      <ProfileMenuButton
+                        icon={<LogOut />}
+                        label="Sign Out"
+                        danger
+                        onClick={onSignOut}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </header>
 
         {/* Page Content */}

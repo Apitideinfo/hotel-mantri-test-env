@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   getReservationConfirmationData,
   sendReservationConfirmationEmail,
+  sendReservationConfirmationWhatsApp,
 } from '@/lib/api-reservations';
 import {
   downloadReservationConfirmationPdf,
@@ -32,7 +33,7 @@ export interface UseReservationDocumentsResult {
   handleDocPdf: () => Promise<void>;
   handleDocPrint: () => Promise<void>;
   handleDocEmail: () => Promise<void>;
-  handleDocWhatsApp: () => void;
+  handleDocWhatsApp: () => Promise<void>;
   clearDocMessages: () => void;
 }
 
@@ -119,16 +120,29 @@ export const useReservationDocuments = ({
     }
   };
 
-  const handleDocWhatsApp = () => {
-    const cleanPhone = (phone || '').replace(/\D/g, '');
-    if (!cleanPhone) {
-      setDocError('Guest has no valid phone number for WhatsApp.');
-      setTimeout(() => setDocError(null), 4000);
-      return;
+  const handleDocWhatsApp = async () => {
+    if (activeDocAction) return;
+    setActiveDocAction('whatsapp');
+    setDocError(null);
+    setDocSuccess(null);
+    try {
+      const res = await sendReservationConfirmationWhatsApp(targetResId, phone);
+      setDocSuccess(res.message || 'Confirmation dispatched via Whinta WhatsApp.');
+    } catch (err: any) {
+      // Fallback: If Whinta is unconfigured or failed, offer manual wa.me link
+      const cleanPhone = (phone || '').replace(/\D/g, '');
+      if (cleanPhone) {
+        const msg = `Dear ${guestName},\n\nYour reservation details at ${hotelName}:\n🏨 Room: ${roomNo} (${roomCategoryName || 'Room'})\n📅 Check-In: ${fmtDate(checkIn)}\n📅 Check-Out: ${fmtDate(checkOut)}\n🌙 Nights: ${nights}\n💰 Rate: ₹${fmtInt(rate)}/night\n💵 Total: ₹${fmtInt(rate * nights)}\n\nWe look forward to hosting you!`;
+        const waPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+        window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`, '_blank');
+        setDocSuccess('Opened WhatsApp Web/App as fallback.');
+      } else {
+        setDocError(err.message || 'Failed to send WhatsApp confirmation via Whinta.');
+      }
+    } finally {
+      setActiveDocAction(null);
+      setTimeout(() => setDocSuccess(null), 5000);
     }
-    const msg = `Dear ${guestName},\n\nYour reservation details at ${hotelName}:\n🏨 Room: ${roomNo} (${roomCategoryName || 'Room'})\n📅 Check-In: ${fmtDate(checkIn)}\n📅 Check-Out: ${fmtDate(checkOut)}\n🌙 Nights: ${nights}\n💰 Rate: ₹${fmtInt(rate)}/night\n💵 Total: ₹${fmtInt(rate * nights)}\n\nWe look forward to hosting you!`;
-    const waPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-    window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
   return {

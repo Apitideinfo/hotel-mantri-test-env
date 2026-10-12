@@ -295,8 +295,8 @@ export const buildOtaOwnerConfirmationEmail = ({
   const titlePrefix = isCancellation
     ? 'OTA Reservation Cancelled'
     : isModification
-    ? `OTA Reservation Modified (v${version})`
-    : 'New OTA Reservation';
+      ? `OTA Reservation Modified (v${version})`
+      : 'New OTA Reservation';
 
   const subject = `${titlePrefix} – ${hotelName} – Reservation #${confirmationNumber || `HM-${shortId}`}`;
 
@@ -678,8 +678,8 @@ export const buildReservationConfirmationWhatsAppText = ({
   const title = isCancellation
     ? 'RESERVATION CANCELLED'
     : isModification
-    ? `RESERVATION MODIFIED (v${version})`
-    : 'NEW RESERVATION CONFIRMED';
+      ? `RESERVATION MODIFIED (v${version})`
+      : 'NEW RESERVATION CONFIRMED';
 
   const lines = [
     `${icon} *${hotelName} — ${title}*`,
@@ -753,8 +753,8 @@ export const generateAndDeliverConfirmation = async ({
   const docType = isCancellation
     ? DOCUMENT_TYPES.RESERVATION_CANCELLATION
     : isModification
-    ? DOCUMENT_TYPES.RESERVATION_MODIFICATION
-    : DOCUMENT_TYPES.RESERVATION_CONFIRMATION;
+      ? DOCUMENT_TYPES.RESERVATION_MODIFICATION
+      : DOCUMENT_TYPES.RESERVATION_CONFIRMATION;
 
   // 2. Step 1: Generate & Store Confirmation PDF (Durable & Persistent)
   let genResult;
@@ -1152,9 +1152,8 @@ export const generateAndDeliverConfirmation = async ({
 
       const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);
 
-      const roomInfo = `${resRecord.rate_plan || resRecord.room_category || 'Standard'}${
-        resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${resRecord.room_no})` : ''
-      }`;
+      const roomInfo = `${resRecord.rate_plan || resRecord.room_category || 'Standard'}${resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${resRecord.room_no})` : ''
+        }`;
 
       const metaTemplate = buildMetaBookingConfirmationTemplate({
         guestName: resRecord.guest_name || 'Guest',
@@ -1245,7 +1244,7 @@ export const generateAndDeliverConfirmation = async ({
                 status: OUTBOX_STATUS.SENT,
                 provider_message_id: waSendResult.messageId,
               });
-            } catch (_) {}
+            } catch (_) { }
           }
         } else {
           console.warn(`[DELIVERY_SERVICE] WhatsApp send result=${waSendResult.status} code=${waSendResult.errorCode}`);
@@ -1270,7 +1269,7 @@ export const generateAndDeliverConfirmation = async ({
                 status: isNotConfigured ? 'not_configured' : OUTBOX_STATUS.FAILED,
                 last_error: waSendResult.errorCode || waSendResult.message,
               });
-            } catch (_) {}
+            } catch (_) { }
           }
         }
       }

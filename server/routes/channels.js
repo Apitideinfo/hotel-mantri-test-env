@@ -1,6 +1,6 @@
 import express from 'express';
 import { supabaseServiceRole } from '../supabaseClient.js';
-import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { requireHotelAccess as checkAuth, forbidRoles } from '../middleware/auth.js';
 import * as aiosellService from '../services/aiosellService.js';
 import { getChannelProviderConfig } from '../services/providerConfig.js';
 import { executeInventoryPush, executeRatePush } from './aiosell.js';
@@ -10,6 +10,10 @@ import { handlePmsEvent, syncRates, syncInventory, reconcileInventory } from '..
 import { processPendingRoomAllocations } from '../services/RoomAssignmentService.js';
 
 const router = express.Router();
+
+// Strict RBAC: Channel Manager forbidden for Housekeeping
+router.use(checkAuth);
+router.use(forbidRoles(['housekeeping']));
 
 /**
  * Normalizes channel connection object to provide BOTH snake_case and camelCase

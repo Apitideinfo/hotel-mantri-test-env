@@ -9,7 +9,12 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "test:housekeeping": "node scripts/test-housekeeping-security-suite.mjs",
+    "test:laundry": "node scripts/test_laundry_production_suite.mjs",
+    "test:whatsapp": "node scripts/test_whatsapp_direct_confirmation.mjs",
+    "test:whinta": "node scripts/test_whinta_integration.mjs",
+    "test": "npm run test:housekeeping && npm run test:whinta"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

@@ -47,6 +47,11 @@ export const apiFetch = async (
   } catch {
     // If hotel context is not yet loaded, do not crash here; backend will validate if route requires it
   }
+  if (!hotelId && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      hotelId = localStorage.getItem('hotel_mantri_selected_hotel_id');
+    } catch {}
+  }
   
   // Get Supabase session token for backend verification
   let token: string | undefined;

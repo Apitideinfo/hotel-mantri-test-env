@@ -375,6 +375,7 @@ export const BookingDetailPanel = ({
                 categories={categories}
                 groupReservations={groupReservations}
                 onWhatsApp={handleDocWhatsApp}
+                activeDocAction={activeDocAction}
               />
             )}
           </div>
@@ -444,10 +445,15 @@ export const BookingDetailPanel = ({
                     <button
                       type="button"
                       onClick={handleDocWhatsApp}
-                      className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 transition cursor-pointer"
-                      title="Send WhatsApp Confirmation"
+                      disabled={!!activeDocAction}
+                      className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+                      title="Send WhatsApp Confirmation via Whinta"
                     >
-                      <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      {activeDocAction === 'whatsapp' ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                      ) : (
+                        <MessageCircle className="w-3.5 h-3.5 text-emerald-600" />
+                      )}
                       <span>WhatsApp</span>
                     </button>
                   </div>
@@ -559,7 +565,7 @@ export const BookingDetailPanel = ({
 // ── View Fields Component (Rendered ONCE inside scrollable body) ──
 
 const ViewFields = ({
-  booking, settings, category, rooms = [], categories = [], groupReservations = [], onWhatsApp,
+  booking, settings, category, rooms = [], categories = [], groupReservations = [], onWhatsApp, activeDocAction,
 }: { 
   booking: BoardBooking; 
   settings: HotelSettings | null; 
@@ -568,6 +574,7 @@ const ViewFields = ({
   categories?: RoomCategory[];
   groupReservations?: Reservation[];
   onWhatsApp: () => void;
+  activeDocAction?: 'pdf' | 'print' | 'email' | 'whatsapp' | null;
 }) => {
   const entry = booking.type === 'entry' ? booking.raw as RoomChartEntry : null;
   const reservation = booking.type === 'reservation' ? booking.raw as Reservation : null;
@@ -701,9 +708,16 @@ const ViewFields = ({
             <button
               type="button"
               onClick={onWhatsApp}
-              className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1 transition cursor-pointer"
+              disabled={!!activeDocAction}
+              className="text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1 transition cursor-pointer disabled:opacity-50"
+              title="Send Confirmation via Whinta WhatsApp"
             >
-              <MessageCircle className="w-3 h-3" /> WhatsApp
+              {activeDocAction === 'whatsapp' ? (
+                <Loader2 className="w-3 h-3 animate-spin text-emerald-600" />
+              ) : (
+                <MessageCircle className="w-3 h-3" />
+              )}
+              <span>WhatsApp</span>
             </button>
           )}
         </div>

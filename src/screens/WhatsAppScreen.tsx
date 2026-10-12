@@ -24,6 +24,10 @@ import {
   IndianRupee,
   TrendingUp,
   Users,
+  Wifi,
+  Globe,
+  FileText,
+  ShieldCheck,
 } from 'lucide-react';
 import {
   fetchWhatsAppSummary,
@@ -31,10 +35,14 @@ import {
   sendTestWhatsApp,
   fetchWhatsAppHistory,
   saveWhatsAppSettings,
+  fetchWhatsAppSettings,
+  verifyWhintaConnection,
+  fetchWhatsAppConfig,
   retryWhatsAppSend,
   type WhatsAppReportType,
   type WhatsAppSummaryResponse,
   type WhatsAppHistoryItem,
+  type WhatsAppSettingsResponse,
 } from '@/lib/api-whatsapp';
 import { useClipboard } from '@/lib/useClipboard';
 
@@ -52,21 +60,47 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Server Provider Config & Whinta Verification
+  const [providerConfig, setProviderConfig] = useState<{
+    provider: string;
+    configured: boolean;
+    enabled: boolean;
+    active: boolean;
+    baseUrl: string;
+    defaultCountryCode: string;
+    hasWebhookSecret: boolean;
+  } | null>(null);
+  const [verifyingConn, setVerifyingConn] = useState(false);
+  const [connTestResult, setConnTestResult] = useState<{
+    success: boolean;
+    connected: boolean;
+    message: string;
+    templateCount?: number;
+  } | null>(null);
+
+  // Hotel settings state
+  const [hotelSettings, setHotelSettings] = useState<WhatsAppSettingsResponse | null>(null);
+
   // Sending state machine
-  type DeliveryStatus = 'Ready' | 'Sending...' | 'Sent' | 'Failed' | 'Provider Not Configured' | 'Invalid Recipient' | 'Retry Available';
+  type DeliveryStatus = 'Not Configured' | 'Configuration Error' | 'Ready' | 'Queued' | 'Submitted to Provider' | 'Delivered' | 'Failed' | 'Sending...';
   const [deliveryStatus, setDeliveryStatus] = useState<DeliveryStatus>('Ready');
   const [sending, setSending] = useState(false);
   const [sendSuccessMsg, setSendSuccessMsg] = useState<string | null>(null);
   const [sendErrorMsg, setSendErrorMsg] = useState<string | null>(null);
   const [fallbackDirectUrl, setFallbackDirectUrl] = useState<string | null>(null);
 
-  // Test state
+  // Test send state
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
-  // Settings modal / edit state
+  // Settings drawer form state
   const [showConfig, setShowConfig] = useState(false);
   const [editPhone, setEditPhone] = useState('');
+  const [editCountryCode, setEditCountryCode] = useState('91');
+  const [editDailyEnabled, setEditDailyEnabled] = useState(true);
+  const [editLaundryEnabled, setEditLaundryEnabled] = useState(true);
+  const [editPreferredTime, setEditPreferredTime] = useState('23:00');
+  const [editTimezone, setEditTimezone] = useState('Asia/Kolkata');
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ success: boolean; text: string } | null>(null);
 
@@ -79,25 +113,44 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     return `****${id.slice(-4)}`;
   };
 
-  // Load summary & history for selected date
+  // Load summary, history, provider config & settings
   const loadSummary = async (showLoadingSpinner = true) => {
     if (showLoadingSpinner) setLoading(true);
     else setRefreshing(true);
     setError(null);
     setSendSuccessMsg(null);
     setSendErrorMsg(null);
-    setDeliveryStatus('Ready');
 
     try {
-      const [summaryRes, historyRes] = await Promise.all([
+      const [summaryRes, historyRes, configRes, settingsRes] = await Promise.all([
         fetchWhatsAppSummary(selectedDate, activeTab),
-        fetchWhatsAppHistory(15).catch(() => []),
+        fetchWhatsAppHistory(20).catch(() => []),
+        fetchWhatsAppConfig().catch(() => null),
+        fetchWhatsAppSettings().catch(() => null),
       ]);
 
       setData(summaryRes);
       setHistory(historyRes);
-      if (summaryRes.ownerWhatsApp?.rawPhone) {
+      if (configRes) setProviderConfig(configRes);
+      if (settingsRes) {
+        setHotelSettings(settingsRes);
+        setEditPhone(settingsRes.reportRecipientPhone || settingsRes.whatsappNumber || '');
+        setEditCountryCode(settingsRes.countryCode || '91');
+        setEditDailyEnabled(settingsRes.dailyReportEnabled ?? true);
+        setEditLaundryEnabled(settingsRes.laundryStatementEnabled ?? true);
+        setEditPreferredTime(settingsRes.preferredDeliveryTime || '23:00');
+        setEditTimezone(settingsRes.timezone || 'Asia/Kolkata');
+      } else if (summaryRes.ownerWhatsApp?.rawPhone) {
         setEditPhone(summaryRes.ownerWhatsApp.rawPhone);
+      }
+
+      // Compute initial delivery status
+      if (!configRes?.configured) {
+        setDeliveryStatus('Not Configured');
+      } else if (!summaryRes.ownerWhatsApp?.valid) {
+        setDeliveryStatus('Configuration Error');
+      } else {
+        setDeliveryStatus('Ready');
       }
     } catch (err: any) {
       console.error('[WhatsAppScreen] Load error:', err);
@@ -154,21 +207,21 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
       });
 
       if (res.success) {
-        setDeliveryStatus('Sent');
-        const idSuffix = res.messageId ? ` (Message ID: ${maskMessageId(res.messageId)})` : '';
-        setSendSuccessMsg(`✓ WhatsApp accepted by provider${idSuffix}`);
-        fetchWhatsAppHistory(15).then(setHistory).catch(() => {});
+        setDeliveryStatus('Submitted to Provider');
+        const idSuffix = res.messageId ? ` (Provider ID: ${maskMessageId(res.messageId)})` : '';
+        setSendSuccessMsg(`✓ Summary submitted to ${res.provider || 'Whinta'} provider${idSuffix}. Delivery status will update upon provider confirmation.`);
+        fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
       } else if (res.status === 'provider_not_configured' || res.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED') {
-        setDeliveryStatus('Provider Not Configured');
-        setSendErrorMsg(res.message || 'Automated WhatsApp delivery is not configured on the server. Configure WHATSAPP_API_TOKEN or Twilio credentials in environment.');
+        setDeliveryStatus('Not Configured');
+        setSendErrorMsg(res.message || 'Whinta WhatsApp delivery is not configured on the server. Configure WHINTA_ACCESS_TOKEN in server environment.');
         if (res.whatsappDirectUrl) {
           setFallbackDirectUrl(res.whatsappDirectUrl);
         }
       } else if (res.status === 'invalid_recipient' || res.errorCode === 'WHATSAPP_RECIPIENT_INVALID') {
-        setDeliveryStatus('Invalid Recipient');
-        setSendErrorMsg(res.message || 'Owner WhatsApp number is missing or invalid. Please configure the phone in WhatsApp Settings.');
+        setDeliveryStatus('Configuration Error');
+        setSendErrorMsg(res.message || 'Owner WhatsApp recipient number is missing or invalid. Please configure it in settings.');
       } else {
-        setDeliveryStatus(res.notificationId ? 'Retry Available' : 'Failed');
+        setDeliveryStatus('Failed');
         setSendErrorMsg(res.message || 'Failed to dispatch WhatsApp summary.');
         if (res.whatsappDirectUrl) {
           setFallbackDirectUrl(res.whatsappDirectUrl);
@@ -186,6 +239,42 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     }
   };
 
+  // Handle Verify Whinta Connection (Phase 4)
+  const handleVerifyConnection = async () => {
+    if (verifyingConn) return;
+    setVerifyingConn(true);
+    setConnTestResult(null);
+
+    try {
+      const res = await verifyWhintaConnection();
+      if (res.connected) {
+        setConnTestResult({
+          success: true,
+          connected: true,
+          message: `✓ Connected to Whinta Web API successfully (${res.templateCount ?? 0} templates found).`,
+          templateCount: res.templateCount,
+        });
+        setDeliveryStatus(owner?.valid ? 'Ready' : 'Configuration Error');
+      } else {
+        setConnTestResult({
+          success: false,
+          connected: false,
+          message: res.message || `Connection failed: ${res.error || 'Check WHINTA_ACCESS_TOKEN'}`,
+        });
+        setDeliveryStatus('Configuration Error');
+      }
+    } catch (err: any) {
+      setConnTestResult({
+        success: false,
+        connected: false,
+        message: err.message || 'Failed to verify Whinta API connection.',
+      });
+      setDeliveryStatus('Configuration Error');
+    } finally {
+      setVerifyingConn(false);
+    }
+  };
+
   // Handle Send Test WhatsApp with complete state machine & double-click protection (Section 7)
   const handleSendTest = async () => {
     if (testing) return; // Prevent double-click duplicates
@@ -195,15 +284,15 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     try {
       const res = await sendTestWhatsApp();
       if (res.success) {
-        const idSuffix = res.messageId ? ` • Message ID: ${maskMessageId(res.messageId)}` : '';
+        const idSuffix = res.messageId ? ` • Provider ID: ${maskMessageId(res.messageId)}` : '';
         setTestResult({
           success: true,
-          message: `✓ WhatsApp test accepted by provider for ${res.recipient || 'owner number'}${idSuffix}`,
+          message: `✓ Test message submitted to provider for ${res.recipient || 'owner number'}${idSuffix}`,
         });
       } else if (res.status === 'provider_not_configured' || res.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED') {
         setTestResult({
           success: false,
-          message: 'Automated WhatsApp delivery is not configured. Configure WHATSAPP_API_TOKEN or Twilio credentials in environment.',
+          message: 'Automated WhatsApp delivery is not configured. Configure WHINTA_ACCESS_TOKEN in server environment.',
         });
         if (res.whatsappDirectUrl) {
           setFallbackDirectUrl(res.whatsappDirectUrl);
@@ -222,7 +311,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
           setFallbackDirectUrl(res.whatsappDirectUrl);
         }
       }
-      fetchWhatsAppHistory(15).then(setHistory).catch(() => {});
+      fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
     } catch (err: any) {
       setTestResult({
         success: false,
@@ -236,19 +325,28 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     }
   };
 
-  // Save WhatsApp settings
-  const handleSavePhone = async () => {
+  // Save WhatsApp settings (Phase 3 & 4: recipient, daily toggle, laundry toggle, timezone, time)
+  const handleSaveSettings = async () => {
     if (!editPhone.trim()) return;
     setSavingSettings(true);
     setSettingsMsg(null);
 
     try {
-      const res = await saveWhatsAppSettings(editPhone);
+      const res = await saveWhatsAppSettings({
+        reportRecipientPhone: editPhone,
+        whatsappNumber: editPhone,
+        countryCode: editCountryCode,
+        dailyReportEnabled: editDailyEnabled,
+        laundryStatementEnabled: editLaundryEnabled,
+        preferredDeliveryTime: editPreferredTime,
+        timezone: editTimezone,
+      });
+
       setSettingsMsg({
         success: true,
-        text: `Owner WhatsApp updated to ${res.whatsappNumber || editPhone}.`,
+        text: `Settings saved successfully for ${res.normalizedNumber || editPhone}.`,
       });
-      setShowConfig(false);
+      setTimeout(() => setShowConfig(false), 1200);
       loadSummary(false);
     } catch (err: any) {
       setSettingsMsg({
@@ -264,7 +362,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
   const handleRetry = async (notificationId: string) => {
     try {
       await retryWhatsAppSend(notificationId);
-      fetchWhatsAppHistory(15).then(setHistory).catch(() => {});
+      fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
     } catch (err: any) {
       alert(`Retry error: ${err.message}`);
     }
@@ -341,101 +439,272 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-4 space-y-4">
-        {/* ─── Recipient & Provider Status Banner ─────────────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
-              <Phone className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">Owner WhatsApp Recipient</div>
-              <div className="text-slate-900 font-semibold text-sm">
-                {owner?.valid ? (
-                  <span className="font-mono text-emerald-700">{owner.formattedPhone}</span>
-                ) : (
-                  <span className="text-red-600 flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5" /> Not configured
-                  </span>
-                )}
-                {owner?.ownerName && <span className="text-slate-500 font-normal ml-2">({owner.ownerName})</span>}
+        {/* ─── Recipient & Provider Status Banner (Phase 4) ─────────────────────── */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
+                <Phone className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">Owner WhatsApp Recipient</div>
+                <div className="text-slate-900 font-semibold text-sm flex items-center gap-2">
+                  {owner?.valid ? (
+                    <span className="font-mono text-emerald-700">{owner.formattedPhone}</span>
+                  ) : (
+                    <span className="text-red-600 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" /> Not configured
+                    </span>
+                  )}
+                  {owner?.ownerName && <span className="text-slate-500 font-normal text-xs">({owner.ownerName})</span>}
+                </div>
               </div>
             </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Provider Badge */}
+              <span
+                className={`px-2.5 py-1 rounded-full font-medium text-xs flex items-center gap-1.5 ${
+                  providerConfig?.active || data?.providerConfig?.configured
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}
+              >
+                <Wifi className="w-3 h-3" />
+                Provider: {providerConfig?.provider || data?.providerConfig?.provider || 'Whinta'}
+              </span>
+
+              {/* Status Indicator Badge */}
+              <span
+                className={`px-2.5 py-1 rounded-full font-semibold text-[11px] ${
+                  deliveryStatus === 'Delivered'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : deliveryStatus === 'Submitted to Provider'
+                    ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                    : deliveryStatus === 'Ready'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                    : deliveryStatus === 'Queued'
+                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                    : deliveryStatus === 'Configuration Error' || deliveryStatus === 'Failed'
+                    ? 'bg-red-100 text-red-800 border border-red-200'
+                    : 'bg-slate-100 text-slate-700 border border-slate-300'
+                }`}
+              >
+                Status: {deliveryStatus}
+              </span>
+
+              {/* Test Connection Button */}
+              <button
+                onClick={handleVerifyConnection}
+                disabled={verifyingConn}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition"
+                title="Verify connection to Whinta Web API"
+              >
+                {verifyingConn ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3 text-emerald-600" />}
+                Test Connection
+              </button>
+
+              {/* Send Test Button */}
+              <button
+                onClick={handleSendTest}
+                disabled={testing || !owner?.valid}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition"
+              >
+                {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3 h-3 text-slate-600" />}
+                Send Test Message
+              </button>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span
-              className={`px-2.5 py-1 rounded-full font-medium ${
-                data?.providerConfig?.configured
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : 'bg-amber-100 text-amber-800'
+          {/* Connection Test Live Result */}
+          {connTestResult && (
+            <div
+              className={`p-2.5 rounded-lg text-xs flex items-center justify-between border ${
+                connTestResult.connected
+                  ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                  : 'bg-red-50 text-red-900 border-red-200'
               }`}
             >
-              {data?.providerConfig?.configured
-                ? `Provider: ${data.providerConfig.provider}`
-                : 'Direct / Web WhatsApp'}
-            </span>
-
-            <button
-              onClick={handleSendTest}
-              disabled={testing || !owner?.valid}
-              className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium flex items-center gap-1 disabled:opacity-50"
-            >
-              {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3 h-3" />}
-              Send Test
-            </button>
-          </div>
+              <div className="flex items-center gap-2">
+                {connTestResult.connected ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                )}
+                <span>{connTestResult.message}</span>
+              </div>
+              <button
+                onClick={() => setConnTestResult(null)}
+                className="text-slate-400 hover:text-slate-600 text-xs px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ─── Provider Unconfigured Notice Banner (Section 5) ────────────────── */}
-        {data?.providerConfig && !data.providerConfig.configured && (
+        {providerConfig && !providerConfig.configured && (
           <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-3 shadow-sm">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <div className="font-semibold text-amber-950">Automated WhatsApp delivery is not configured.</div>
+              <div className="font-semibold text-amber-950">Whinta WhatsApp provider is not configured.</div>
               <div className="text-amber-800 text-[11px] leading-relaxed">
-                To enable direct background delivery, configure <code>WHATSAPP_API_TOKEN</code> &amp; <code>WHATSAPP_PHONE_NUMBER_ID</code> (Meta Cloud API) or Twilio credentials in your server environment variables.
-              </div>
-              <div className="text-emerald-800 text-[11px] font-medium pt-0.5 flex items-center gap-1">
-                <span>✓</span> Manual delivery is fully active: click <strong>Open in WhatsApp Web / App</strong> to send instantly.
+                To enable direct background delivery, configure Whinta credentials in your server environment variables.
               </div>
             </div>
           </div>
         )}
 
-        {/* ─── Settings Drawer / Modal ────────────────────────────────────────── */}
+        {/* ─── Settings Drawer / Modal (Phase 3 & 4) ────────────────────────────── */}
         {showConfig && (
-          <div className="bg-white rounded-xl border-2 border-emerald-500 p-4 shadow-md space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-1.5">
-                <Sliders className="w-4 h-4 text-emerald-600" /> WhatsApp Notifications Configuration
+          <div className="bg-white rounded-xl border-2 border-emerald-500 p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between border-b pb-2">
+              <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-emerald-600" /> WhatsApp Report &amp; Recipient Configuration
               </h3>
               <button
                 onClick={() => setShowConfig(false)}
-                className="text-slate-400 hover:text-slate-600 text-xs"
+                className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1 rounded"
               >
                 Close ✕
               </button>
             </div>
-            <p className="text-slate-500 text-xs">
-              Daily, morning, and closing summaries are sent to this WhatsApp number. Number is validated with country code.
-            </p>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={editPhone}
-                onChange={(e) => setEditPhone(e.target.value)}
-                placeholder="+91 9909442195"
-                className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              {/* Recipient Phone & Country Code */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <label className="font-medium text-slate-700 flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-slate-500" /> WhatsApp Recipient Phone Number
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="w-20">
+                    <input
+                      type="text"
+                      value={editCountryCode}
+                      onChange={(e) => setEditCountryCode(e.target.value)}
+                      placeholder="91"
+                      className="w-full border border-slate-300 rounded-lg px-2.5 py-2 text-xs font-mono text-center focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      title="Country code (e.g. 91)"
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="9909442195 or +919909442195"
+                    className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Reports will be sent exclusively to this authorized owner WhatsApp number.
+                </p>
+              </div>
+
+              {/* Daily Report Toggle */}
+              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                <input
+                  type="checkbox"
+                  id="toggleDailyReport"
+                  checked={editDailyEnabled}
+                  onChange={(e) => setEditDailyEnabled(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                />
+                <label htmlFor="toggleDailyReport" className="cursor-pointer space-y-0.5">
+                  <div className="font-semibold text-slate-800">Daily Business Report</div>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    Occupancy, revenue, cash &amp; bank collections, expenses, and operational KPIs.
+                  </p>
+                </label>
+              </div>
+
+              {/* Laundry Statement Toggle */}
+              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                <input
+                  type="checkbox"
+                  id="toggleLaundryStatement"
+                  checked={editLaundryEnabled}
+                  onChange={(e) => setEditLaundryEnabled(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                />
+                <label htmlFor="toggleLaundryStatement" className="cursor-pointer space-y-0.5">
+                  <div className="font-semibold text-slate-800">Daily Laundry &amp; Linen Statement</div>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    Linen sent, received, pending balance, and approved billable totals per vendor.
+                  </p>
+                </label>
+              </div>
+
+              {/* Preferred Delivery Time */}
+              <div className="space-y-1">
+                <label className="font-medium text-slate-700 flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" /> Preferred Delivery Time
+                </label>
+                <input
+                  type="time"
+                  value={editPreferredTime}
+                  onChange={(e) => setEditPreferredTime(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[11px] text-slate-500">Scheduled time for daily automated dispatches.</p>
+              </div>
+
+              {/* Timezone */}
+              <div className="space-y-1">
+                <label className="font-medium text-slate-700 flex items-center gap-1">
+                  <Globe className="w-3.5 h-3.5 text-slate-500" /> Hotel Timezone
+                </label>
+                <select
+                  value={editTimezone}
+                  onChange={(e) => setEditTimezone(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                >
+                  <option value="Asia/Kolkata">Asia/Kolkata (IST +05:30)</option>
+                  <option value="UTC">UTC (GMT +00:00)</option>
+                  <option value="Asia/Dubai">Asia/Dubai (GST +04:00)</option>
+                  <option value="Asia/Singapore">Asia/Singapore (SGT +08:00)</option>
+                </select>
+                <p className="text-[11px] text-slate-500">Business dates and midnight roll-overs follow this zone.</p>
+              </div>
+            </div>
+
+            {/* Audit / Last Send Metadata */}
+            {hotelSettings && (
+              <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 space-y-1">
+                <div className="flex justify-between">
+                  <span>Last Successful Send:</span>
+                  <span className="font-medium text-slate-800">
+                    {hotelSettings.lastSuccessfulSend ? new Date(hotelSettings.lastSuccessfulSend).toLocaleString() : 'None yet'}
+                  </span>
+                </div>
+                {hotelSettings.lastFailureReason && (
+                  <div className="flex justify-between text-red-600">
+                    <span>Recent Failure:</span>
+                    <span className="truncate max-w-[280px]" title={hotelSettings.lastFailureReason}>
+                      {hotelSettings.lastFailureReason}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3 pt-2 border-t">
               <button
-                onClick={handleSavePhone}
+                onClick={() => setShowConfig(false)}
+                className="px-3.5 py-2 text-xs text-slate-600 hover:text-slate-800 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveSettings}
                 disabled={savingSettings}
-                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-xs px-4 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
+                className="bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-medium text-xs px-5 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
               >
                 {savingSettings && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Save Number
+                Save Configuration
               </button>
             </div>
+
             {settingsMsg && (
               <div
                 className={`p-2.5 rounded-lg text-xs ${
@@ -467,16 +736,6 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               )}
               <span>{testResult.message}</span>
             </div>
-            {fallbackDirectUrl && (
-              <a
-                href={fallbackDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline font-semibold hover:text-emerald-900 flex items-center gap-1 shrink-0"
-              >
-                Open in WhatsApp <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
           </div>
         )}
 
@@ -494,25 +753,8 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <strong className="font-semibold block">{sendErrorMsg}</strong>
-                {fallbackDirectUrl && (
-                  <p className="mt-1 text-slate-700">
-                    You can instantly send this summary to the owner right now via WhatsApp Web or App using the direct link below:
-                  </p>
-                )}
               </div>
             </div>
-            {fallbackDirectUrl && (
-              <div className="pt-1 flex items-center gap-3">
-                <a
-                  href={fallbackDirectUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-3.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 shadow-sm transition"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" /> Open in WhatsApp Web / App
-                </a>
-              </div>
-            )}
           </div>
         )}
 
@@ -714,9 +956,21 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                             </span>
                           </td>
                           <td className="py-2">
-                            {item.status === 'sent' ? (
+                            {item.status === 'delivered' ? (
                               <span className="text-emerald-700 font-semibold flex items-center gap-1">
-                                ✓ Sent
+                                ✓ Delivered
+                              </span>
+                            ) : item.status === 'submitted' || item.status === 'sent' ? (
+                              <span className="text-indigo-700 font-medium flex items-center gap-1" title="Accepted by Whinta, awaiting delivery event">
+                                Submitted to Provider
+                              </span>
+                            ) : item.status === 'queued' ? (
+                              <span className="text-blue-700 font-medium flex items-center gap-1">
+                                Queued
+                              </span>
+                            ) : item.status === 'duplicate' ? (
+                              <span className="text-amber-700 font-medium flex items-center gap-1" title="Duplicate send prevented">
+                                Duplicate / Skipped
                               </span>
                             ) : (
                               <span
@@ -761,14 +1015,18 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
             </strong>
             {deliveryStatus !== 'Ready' && (
               <span
-                className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
-                  deliveryStatus === 'Sent'
-                    ? 'bg-emerald-100 text-emerald-800'
+                className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium ${
+                  deliveryStatus === 'Delivered'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : deliveryStatus === 'Submitted to Provider'
+                    ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                     : deliveryStatus === 'Sending...'
                     ? 'bg-blue-100 text-blue-800'
-                    : deliveryStatus === 'Provider Not Configured'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-red-100 text-red-800'
+                    : deliveryStatus === 'Queued'
+                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                    : deliveryStatus === 'Not Configured'
+                    ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                    : 'bg-red-100 text-red-800 border border-red-200'
                 }`}
               >
                 {deliveryStatus}
@@ -777,33 +1035,21 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
           </div>
 
           <div className="flex items-center gap-2.5 w-full sm:w-auto">
-            {activeDirectUrl && (
-              <a
-                href={activeDirectUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 active:bg-slate-300 text-slate-800 font-semibold px-4 py-3 rounded-xl border border-slate-300 text-xs transition"
-                title="Open directly in WhatsApp Web or WhatsApp Desktop/Mobile app"
-              >
-                <MessageCircle className="w-4 h-4 text-emerald-600" />
-                <span>Open in WhatsApp</span>
-              </a>
-            )}
-
             <button
               onClick={handleSendNow}
               disabled={sending || !owner?.valid}
-              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold px-6 py-3 rounded-xl text-xs shadow-md transition disabled:opacity-50"
+              className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold px-6 py-3 rounded-xl text-xs shadow-md transition disabled:opacity-50 cursor-pointer"
+              title="Dispatch report directly via Whinta WhatsApp API"
             >
               {sending ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Sending…</span>
+                  <span>Sending via Whinta…</span>
                 </>
               ) : (
                 <>
-                  <Send className="w-4 h-4" />
-                  <span>Send WhatsApp Summary</span>
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Send WhatsApp Summary (via Whinta)</span>
                 </>
               )}
             </button>

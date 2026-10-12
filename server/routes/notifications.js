@@ -15,7 +15,7 @@
  */
 
 import express from 'express';
-import { requireHotelAccess } from '../middleware/auth.js';
+import { requireHotelAccess, forbidRoles } from '../middleware/auth.js';
 import { requireCronAuth } from '../middleware/cronAuth.js';
 import { cronRateLimiter } from '../middleware/rateLimiter.js';
 import { sendEmail, validateSmtpConfig, verifySmtpConnection, isValidEmail } from '../services/emailService.js';
@@ -37,9 +37,12 @@ import {
   buildWhatsAppDirectUrl,
   normalizeWhatsAppPhone,
 } from '../services/whatsappService.js';
+import { WhintaProvider, getWhintaConfig } from '../services/whintaService.js';
 import {
   recordWhatsAppOutboxEvent,
   updateWhatsAppOutboxEvent,
+  updateDeliveryStatusByProviderMessageId,
+  generateIdempotencyKey,
   isScheduledReportAlreadySent,
   getWhatsAppHistory,
   REPORT_TYPES,
@@ -75,6 +78,17 @@ const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
     hotel_admin_email: h.admin_email || '',
   };
 };
+
+// Strict RBAC: All notification and report routes require hotel auth and forbid Housekeeping
+router.use((req, res, next) => {
+  if (req.path.includes('/cron') || req.path.includes('/webhook')) {
+    return next();
+  }
+  return requireHotelAccess(req, res, (err) => {
+    if (err) return next(err);
+    forbidRoles(['housekeeping'])(req, res, next);
+  });
+});
 
 // ─── POST /api/notifications/invoice/email ────────────────────────────────────
 
@@ -282,12 +296,15 @@ router.post('/invoice/whatsapp', requireHotelAccess, async (req, res) => {
 
     const whatsappUrl = `https://wa.me/${rawPhone}?text=${encodeURIComponent(waText)}`;
 
-    console.log(`[INVOICE_WHATSAPP] Generated URL for invoice=${invoiceNumber} phone=${rawPhone.slice(0, 4)}xxxx hotel=${hotelId}`);
+    // Dispatch via Whinta provider
+    const sendResult = await sendWhatsAppMessage({ to: rawPhone, text: waText });
+    console.log(`[INVOICE_WHATSAPP] Whinta send result for invoice=${invoiceNumber}: success=${sendResult.success}`);
 
     return res.json({
-      success: true,
+      success: sendResult.success,
+      messageId: sendResult.messageId,
       whatsappUrl,
-      message: 'WhatsApp URL generated. Open this URL to send the invoice via WhatsApp.',
+      message: sendResult.success ? 'Invoice sent via Whinta WhatsApp.' : (sendResult.message || 'Whinta dispatch failed.'),
       phoneNumber: rawPhone,
       invoiceNumber,
     });
@@ -381,6 +398,60 @@ router.post('/retry', requireHotelAccess, async (req, res) => {
   }
 });
 
+// ─── GET /api/notifications/whatsapp/config ──────────────────────────────────
+
+/**
+ * Returns safe server-side WhatsApp & Whinta configuration status WITHOUT credentials.
+ */
+router.get(['/whatsapp/config', '/config'], requireHotelAccess, (req, res) => {
+  const providerConfig = getWhatsAppProviderConfig();
+  const whintaConfig = getWhintaConfig();
+
+  return res.json({
+    success: true,
+    provider: providerConfig.provider,
+    configured: providerConfig.configured,
+    enabled: providerConfig.enabled ?? false,
+    active: providerConfig.active ?? false,
+    baseUrl: whintaConfig.baseUrl,
+    defaultCountryCode: whintaConfig.defaultCountryCode,
+    hasWebhookSecret: whintaConfig.hasWebhookSecret,
+  });
+});
+
+// ─── POST /api/notifications/whatsapp/verify-connection ───────────────────────
+
+/**
+ * Tests connection with Whinta Web API without sending any message.
+ */
+router.post(['/whatsapp/verify-connection', '/verify-connection'], requireHotelAccess, async (req, res) => {
+  try {
+    const whinta = new WhintaProvider();
+    if (!whinta.isConfigured()) {
+      return res.status(412).json({
+        success: false,
+        configured: false,
+        connected: false,
+        error: 'WHATSAPP_PROVIDER_NOT_CONFIGURED',
+        errorCode: 'WHATSAPP_PROVIDER_NOT_CONFIGURED',
+        message: 'Whinta Access Token is missing or not configured on the server.',
+      });
+    }
+
+    const result = await whinta.verifyConnection();
+    const httpStatus = result.success ? 200 : (result.statusCode === 401 || result.statusCode === 403 ? 401 : 400);
+    return res.status(httpStatus).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      configured: true,
+      connected: false,
+      error: 'SERVER_ERROR',
+      message: 'Failed to verify Whinta connection: ' + err.message,
+    });
+  }
+});
+
 // ─── GET /api/notifications/whatsapp/summary & /api/reports/whatsapp/summary ─
 
 /**
@@ -391,7 +462,7 @@ router.post('/retry', requireHotelAccess, async (req, res) => {
  *   date / businessDate: string (YYYY-MM-DD, defaults to current date)
  *   type / summaryType: 'daily' | 'morning' | 'evening' | 'ota'
  */
-router.get(['/whatsapp/summary', '/summary'], requireHotelAccess, async (req, res) => {
+router.get(['/whatsapp/summary', '/summary', '/whatsapp/preview', '/preview'], requireHotelAccess, async (req, res) => {
   const hotelId = req.query.hotelId || req.hotelId || req.auth?.hotelId;
   const businessDate = req.query.businessDate || req.query.date || new Date().toISOString().slice(0, 10);
   const typeParam = (req.query.summaryType || req.query.type || 'daily').toLowerCase();
@@ -721,22 +792,30 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
 
   try {
     const owner = await resolveHotelOwnerWhatsApp(hotelId);
-    const { data: settings } = await supabase
-      .from('hotel_settings')
-      .select('whatsapp_number')
-      .eq('id', hotelId)
-      .maybeSingle();
-
     const providerConfig = getWhatsAppProviderConfig();
 
     return res.json({
       success: true,
-      whatsappNumber: settings?.whatsapp_number || owner.rawPhone || '',
+      hotelId,
+      hotelName: owner.hotelName,
+      whatsappNumber: owner.rawPhone || '',
+      reportRecipientPhone: owner.rawPhone || '',
       normalizedNumber: owner.phone || '',
+      countryCode: owner.countryCode || '91',
+      dailyReportEnabled: owner.dailyReportEnabled ?? true,
+      laundryStatementEnabled: owner.laundryStatementEnabled ?? true,
+      preferredDeliveryTime: owner.preferredDeliveryTime || '22:00',
+      timezone: owner.timezone || 'Asia/Kolkata',
+      deliveryPreferences: owner.deliveryPreferences || { send_morning: false, send_evening: true, include_pdf: false },
+      consentStatus: owner.consentStatus || 'opted_in',
+      lastSuccessfulSend: owner.lastSuccessfulSend || null,
+      lastFailureReason: owner.lastFailureReason || null,
+      lastFailureAt: owner.lastFailureAt || null,
       isValid: owner.valid,
       source: owner.source || '',
       provider: providerConfig.provider,
       providerConfigured: providerConfig.configured,
+      providerEnabled: providerConfig.enabled ?? false,
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
@@ -745,29 +824,55 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
 
 router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, res) => {
   const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
-  const { whatsappNumber } = req.body;
+  const {
+    whatsappNumber,
+    reportRecipientPhone,
+    countryCode = '91',
+    dailyReportEnabled = true,
+    laundryStatementEnabled = true,
+    preferredDeliveryTime = '22:00',
+    timezone = 'Asia/Kolkata',
+    deliveryPreferences = {},
+    consentStatus = 'opted_in',
+  } = req.body;
 
-  if (typeof whatsappNumber !== 'string') {
-    return res.status(400).json({ success: false, message: 'whatsappNumber is required' });
+  const rawPhone = reportRecipientPhone || whatsappNumber || '';
+  if (typeof rawPhone !== 'string') {
+    return res.status(400).json({ success: false, message: 'Valid phone number string is required.' });
   }
 
-  const norm = normalizeWhatsAppPhone(whatsappNumber);
-  if (whatsappNumber.trim() && !norm.valid) {
-    return res.status(400).json({
-      success: false,
-      status: 'invalid_recipient',
-      error: 'WHATSAPP_INVALID_RECIPIENT',
-      message: norm.error,
-    });
+  const cleanCountryCode = String(countryCode).replace(/\D/g, '') || '91';
+  let norm = { valid: false, normalized: '' };
+
+  if (rawPhone.trim()) {
+    norm = normalizeWhatsAppPhone(rawPhone);
+    if (!norm.valid) {
+      return res.status(400).json({
+        success: false,
+        status: 'invalid_recipient',
+        error: 'WHATSAPP_INVALID_RECIPIENT',
+        message: norm.error,
+      });
+    }
   }
 
   try {
+    const updatePayload = {
+      whatsapp_number: rawPhone.trim(),
+      whatsapp_report_recipient_phone: rawPhone.trim(),
+      whatsapp_country_code: cleanCountryCode,
+      whatsapp_daily_report_enabled: Boolean(dailyReportEnabled),
+      whatsapp_laundry_statement_enabled: Boolean(laundryStatementEnabled),
+      whatsapp_preferred_delivery_time: String(preferredDeliveryTime || '22:00'),
+      whatsapp_timezone: String(timezone || 'Asia/Kolkata'),
+      whatsapp_delivery_preferences: typeof deliveryPreferences === 'object' ? deliveryPreferences : {},
+      whatsapp_consent_status: String(consentStatus || 'opted_in'),
+      updated_at: new Date().toISOString(),
+    };
+
     const { error } = await supabase
       .from('hotel_settings')
-      .update({
-        whatsapp_number: whatsappNumber.trim(),
-        updated_at: new Date().toISOString(),
-      })
+      .update(updatePayload)
       .eq('id', hotelId);
 
     if (error) {
@@ -776,12 +881,142 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
 
     return res.json({
       success: true,
-      whatsappNumber: whatsappNumber.trim(),
+      hotelId,
+      whatsappNumber: rawPhone.trim(),
       normalizedNumber: norm.valid ? norm.normalized : '',
-      message: 'WhatsApp settings updated successfully.',
+      countryCode: cleanCountryCode,
+      dailyReportEnabled: Boolean(dailyReportEnabled),
+      laundryStatementEnabled: Boolean(laundryStatementEnabled),
+      preferredDeliveryTime,
+      timezone,
+      deliveryPreferences: updatePayload.whatsapp_delivery_preferences,
+      consentStatus,
+      message: 'WhatsApp recipient and report delivery settings saved successfully.',
     });
   } catch (err) {
     return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ─── POST /api/notifications/whatsapp/webhook & /api/webhooks/whinta ───────────
+
+const handleWhintaWebhook = async (req, res) => {
+  const configuredSecret = (process.env.WHINTA_WEBHOOK_SECRET || '').trim();
+
+  // Validate webhook authorization if secret is configured
+  if (configuredSecret) {
+    const authHeader = req.headers['authorization'];
+    const sigHeader = req.headers['x-whinta-signature'] || req.headers['x-webhook-secret'];
+    const bearerMatch = authHeader && (authHeader === `Bearer ${configuredSecret}` || authHeader === configuredSecret);
+    const sigMatch = sigHeader && sigHeader === configuredSecret;
+
+    if (!bearerMatch && !sigMatch) {
+      return res.status(401).json({
+        success: false,
+        error: 'UNAUTHORIZED_WEBHOOK',
+        message: 'Invalid or missing webhook signature/secret.',
+      });
+    }
+  }
+
+  const { event, data } = req.body || {};
+  if (!event || !data) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_PAYLOAD',
+      message: 'Webhook payload missing required event or data fields.',
+    });
+  }
+
+  // Handle message status transitions
+  if (event === 'message.status.update') {
+    const messageId = data.id || data.message_id || data.messageId;
+    const rawStatus = (data.status || '').toLowerCase();
+
+    let status = OUTBOX_STATUS.SUBMITTED;
+    if (rawStatus === 'delivered' || rawStatus === 'read') {
+      status = OUTBOX_STATUS.DELIVERED;
+    } else if (rawStatus === 'failed') {
+      status = OUTBOX_STATUS.FAILED;
+    } else if (rawStatus === 'sent') {
+      status = OUTBOX_STATUS.SENT;
+    }
+
+    if (messageId) {
+      await updateDeliveryStatusByProviderMessageId({
+        providerMessageId: messageId,
+        status,
+        error: data.error || data.message || null,
+      });
+    }
+  }
+
+  // Return HTTP 200 within Whinta's 10-second SLA
+  return res.status(200).json({
+    success: true,
+    received: true,
+    event,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+router.post(['/whatsapp/webhook', '/webhook'], handleWhintaWebhook);
+
+// ─── POST /api/notifications/whatsapp/retry-send ──────────────────────────────
+
+router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (req, res) => {
+  const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
+  const { notificationId, messageId } = req.body;
+
+  if (!notificationId && !messageId) {
+    return res.status(400).json({ success: false, message: 'notificationId or messageId is required.' });
+  }
+
+  try {
+    const history = await getWhatsAppHistory(hotelId, 50);
+    const target = history.find((h) => h.id === notificationId || h.provider_message_id === messageId);
+
+    if (!target) {
+      return res.status(404).json({ success: false, message: 'Notification delivery record not found.' });
+    }
+
+    // Check permanent vs transient failure
+    const lastErr = (target.last_error || '').toLowerCase();
+    if (lastErr.includes('invalid_recipient') || lastErr.includes('unauthorized') || lastErr.includes('auth_failed')) {
+      return res.status(422).json({
+        success: false,
+        error: 'PERMANENT_FAILURE',
+        message: 'This message failed due to a permanent recipient or authentication error and cannot be auto-retried. Please verify settings.',
+      });
+    }
+
+    const businessDate = target.business_date || new Date().toISOString().slice(0, 10);
+    const summary = await calculateDailySummary({ hotelId, businessDate });
+    let text = buildDailySummaryText(summary);
+    if (target.report_type === REPORT_TYPES.MORNING_SUMMARY) text = buildMorningSummaryText(summary);
+    else if (target.report_type === REPORT_TYPES.EVENING_SUMMARY) text = buildEveningSummaryText(summary);
+    else if (target.report_type === REPORT_TYPES.OTA_SUMMARY) text = buildOtaSummaryText(summary);
+
+    const sendResult = await sendWhatsAppMessage({
+      to: target.recipient,
+      text,
+    });
+
+    await updateWhatsAppOutboxEvent(target.id, {
+      status: sendResult.success ? OUTBOX_STATUS.SENT : OUTBOX_STATUS.FAILED,
+      providerMessageId: sendResult.messageId || null,
+      lastError: sendResult.success ? null : (sendResult.errorCode || sendResult.error || sendResult.message),
+    });
+
+    return res.json({
+      success: sendResult.success,
+      status: sendResult.status,
+      messageId: sendResult.messageId,
+      message: sendResult.message,
+      whatsappDirectUrl: sendResult.whatsappDirectUrl,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Failed to retry notification: ' + err.message });
   }
 });
 
@@ -829,37 +1064,62 @@ const handleWhatsAppCron = async (req, res) => {
     for (const h of hotels) {
       const hotelId = h.id;
       const owner = await resolveHotelOwnerWhatsApp(hotelId);
+
+      // Check if hotel has enabled automated reports
+      if (!owner.dailyReportEnabled) {
+        results.push({ hotelId, hotelName: h.hotel_name, status: 'skipped_disabled_by_hotel' });
+        continue;
+      }
+
       if (!owner.valid) {
         results.push({ hotelId, hotelName: h.hotel_name, status: 'skipped_no_phone' });
         continue;
       }
 
-      // Check idempotency
+      // Compute correct business date according to hotel-local timezone
+      const tz = owner.timezone || 'Asia/Kolkata';
+      let hotelDateStr;
+      try {
+        hotelDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+      } catch {
+        hotelDateStr = new Date().toISOString().slice(0, 10);
+      }
+
+      // Check idempotency key: prevent duplicate sends if cron fires multiple times
       const alreadySent = await isScheduledReportAlreadySent({
         hotelId,
-        businessDate: todayStr,
+        businessDate: hotelDateStr,
         reportType,
         recipient: owner.phone,
       });
 
       if (alreadySent) {
-        results.push({ hotelId, hotelName: h.hotel_name, status: 'duplicate_prevented' });
+        results.push({ hotelId, hotelName: h.hotel_name, status: 'duplicate_prevented', businessDate: hotelDateStr });
         continue;
       }
 
-      const summary = await calculateDailySummary({ hotelId, businessDate: todayStr });
-      const text = reportType === REPORT_TYPES.EVENING_SUMMARY
+      const summary = await calculateDailySummary({ hotelId, businessDate: hotelDateStr });
+      const text = isEvening
         ? buildEveningSummaryText(summary)
         : buildMorningSummaryText(summary);
 
+      const idempotencyKey = generateIdempotencyKey({
+        hotelId,
+        reportType,
+        businessDate: hotelDateStr,
+        recipient: owner.phone,
+        deliveryType: DELIVERY_TYPES.SCHEDULED,
+      });
+
       const outboxRecord = await recordWhatsAppOutboxEvent({
         hotelId,
-        businessDate: todayStr,
+        businessDate: hotelDateStr,
         reportType,
         deliveryType: DELIVERY_TYPES.SCHEDULED,
         recipient: owner.phone,
+        idempotencyKey,
         status: OUTBOX_STATUS.SENDING,
-        metadata: { hotelName: summary.hotelName, totalRooms: summary.occupancy.totalRooms },
+        metadata: { hotelName: summary.hotelName, totalRooms: summary.occupancy.totalRooms, timezone: tz },
       });
 
       const sendResult = await sendWhatsAppMessage({
@@ -873,11 +1133,30 @@ const handleWhatsAppCron = async (req, res) => {
         lastError: sendResult.success ? null : (sendResult.errorCode || sendResult.error || sendResult.message),
       });
 
+      // Update hotel_settings audit tracking
+      if (sendResult.success) {
+        await supabase
+          .from('hotel_settings')
+          .update({
+            whatsapp_last_successful_send: new Date().toISOString(),
+          })
+          .eq('id', hotelId);
+      } else {
+        await supabase
+          .from('hotel_settings')
+          .update({
+            whatsapp_last_failure_reason: sendResult.message,
+            whatsapp_last_failure_at: new Date().toISOString(),
+          })
+          .eq('id', hotelId);
+      }
+
       results.push({
         hotelId,
         hotelName: h.hotel_name,
         recipient: owner.phone,
         reportType,
+        businessDate: hotelDateStr,
         success: sendResult.success,
         status: sendResult.status,
       });
@@ -885,7 +1164,6 @@ const handleWhatsAppCron = async (req, res) => {
 
     return res.json({
       success: true,
-      businessDate: todayStr,
       reportType,
       processed: results.length,
       results,

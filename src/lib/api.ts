@@ -25,6 +25,16 @@ export const setCurrentHotelId = (id: string | null) => {
 export const getCurrentHotelId = (): string => {
   if (_currentHotelId) return _currentHotelId;
 
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const stored = localStorage.getItem('hotel_mantri_selected_hotel_id');
+      if (stored) {
+        _currentHotelId = stored;
+        return stored;
+      }
+    } catch {}
+  }
+
   throw new Error('Hotel context is not initialized. Please ensure an active hotel is selected or assigned.');
 };
 

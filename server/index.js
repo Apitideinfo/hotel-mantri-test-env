@@ -123,6 +123,9 @@ import reservationRoutes from './routes/reservations.js';
 import hotelBrandingRoutes from './routes/hotelBranding.js';
 import notificationRoutes from './routes/notifications.js';
 import revenueRoutes from './routes/revenue.js';
+import laundryRoutes from './routes/laundry.js';
+import userRoutes from './routes/users.js';
+import housekeepingRoutes from './routes/housekeeping.js';
 import {
   paymentRateLimiter,
   validateAndDeriveOrderContext,
@@ -167,6 +170,9 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
       '/api/hotel-branding',
       '/api/notifications',
       '/api/aiosell',
+      '/api/laundry',
+      '/api/users',
+      '/api/housekeeping',
       '/api/create-order',
       '/api/verify-payment'
     ]
@@ -199,6 +205,17 @@ app.use('/api/reports/whatsapp', notificationRoutes);
 app.use('/reports/whatsapp', notificationRoutes);
 app.use('/api/reports', notificationRoutes);
 app.use('/reports', notificationRoutes);
+app.use('/api/webhooks/whinta', notificationRoutes);
+app.use('/webhooks/whinta', notificationRoutes);
+
+app.use('/api/laundry', laundryRoutes);
+app.use('/laundry', laundryRoutes);
+
+app.use('/api/users', userRoutes);
+app.use('/users', userRoutes);
+
+app.use('/api/housekeeping', housekeepingRoutes);
+app.use('/housekeeping', housekeepingRoutes);
 
 /**
  * STEP 1: Backend Endpoint to Create Order (SEC-03 Hardened)
@@ -208,6 +225,15 @@ app.post(['/api/create-order', '/create-order'], paymentRateLimiter, async (req,
   const requestId = req.requestId || `HM-ORDER-${Date.now().toString(36).toUpperCase()}`;
 
   try {
+    // If authenticated user is Housekeeping, strictly deny payment processing
+    if (req.headers.authorization) {
+      try {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success && authRes.role === 'housekeeping') {
+          return res.status(403).json({ success: false, error: 'ACCESS_DENIED', message: 'Housekeeping users are not authorized to collect or process payments.', requestId });
+        }
+      } catch { /* proceed */ }
+    }
     const gateway = getRazorpayClient();
     if (!gateway) {
       return res.status(503).json({
@@ -329,6 +355,15 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
   const requestId = req.requestId || `HM-VERIFY-${Date.now().toString(36).toUpperCase()}`;
 
   try {
+    // If authenticated user is Housekeeping, strictly deny payment processing
+    if (req.headers.authorization) {
+      try {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success && authRes.role === 'housekeeping') {
+          return res.status(403).json({ success: false, error: 'ACCESS_DENIED', message: 'Housekeeping users are not authorized to collect or process payments.', requestId });
+        }
+      } catch { /* proceed */ }
+    }
     const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
     if (!keySecret) {
       return res.status(503).json({

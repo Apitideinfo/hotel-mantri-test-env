@@ -3,7 +3,7 @@ import aiosellService from '../services/aiosellService.js';
 import { supabaseServiceRole } from '../supabaseClient.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
-import { resolveAuthorizedHotel, requireHotelAccess } from '../middleware/auth.js';
+import { resolveAuthorizedHotel, requireHotelAccess, forbidRoles } from '../middleware/auth.js';
 import { getChannelProviderConfig } from '../services/providerConfig.js';
 import { syncRates, syncInventory, getCleanDateList } from '../services/channelSyncEngine.js';
 
@@ -218,6 +218,7 @@ router.all(['/status', '/health', '/test-connection'], async (req, res) => {
 
 // Apply auth middleware to all remaining authenticated routes in this file
 router.use(requireHotelAccess);
+router.use(forbidRoles(['housekeeping']));
 
 // Helper to get dates array using deterministic UTC calendar arithmetic
 const getDates = (start, end) => getCleanDateList(start, end);

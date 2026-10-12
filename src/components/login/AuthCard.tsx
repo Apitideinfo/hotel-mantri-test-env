@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Mail, Lock, AlertCircle, ArrowLeft, Loader2, Eye, EyeOff, Check, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Mail, Lock, AlertCircle, ArrowLeft, Loader2, Eye, EyeOff, Check, ShieldCheck, ArrowRight, Sparkles, Building2, KeyRound } from 'lucide-react';
 import { Logo } from './Logo';
 
 interface AuthCardProps {
@@ -21,6 +21,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
   error,
   setError,
 }) => {
+  const [loginRoleTab, setLoginRoleTab] = useState<'admin' | 'staff'>('staff');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -31,20 +32,29 @@ export const AuthCard: React.FC<AuthCardProps> = ({
 
   useEffect(() => {
     emailRef.current?.focus();
-  }, [mode]);
+  }, [mode, loginRoleTab]);
 
   const handleSubmitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanEmail = email.trim().toLowerCase().replace(/,/g, '.');
-    if (!cleanEmail || !password) {
-      setError('Please enter your email address and password.');
+    const rawInput = email.trim();
+    if (!rawInput || !password) {
+      setError(loginRoleTab === 'staff' ? 'Please enter your staff username and password.' : 'Please enter your email or username and password.');
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    let resolvedEmail = rawInput.toLowerCase().replace(/,/g, '.');
+    // If username without @ is entered, resolve to internal authentication address
+    if (!resolvedEmail.includes('@')) {
+      const cleanUsername = resolvedEmail.replace(/[^a-z0-9._-]/g, '');
+      if (!cleanUsername) {
+        setError('Please enter a valid staff username.');
+        return;
+      }
+      resolvedEmail = `${cleanUsername}@hotel.hotelmantri.internal`;
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(resolvedEmail)) {
       setError('Please enter a valid email address (e.g. name@domain.com).');
       return;
     }
-    await onLogin(cleanEmail, password);
+    await onLogin(resolvedEmail, password);
   };
 
   const handleSubmitForgot = async (e: React.FormEvent) => {
@@ -64,20 +74,63 @@ export const AuthCard: React.FC<AuthCardProps> = ({
 
   return (
     <div className="w-full flex flex-col justify-center items-center relative select-none">
-      <div className="w-full max-w-[410px]">
+      <div className="w-full max-w-[420px]">
         {/* Main White Authentication Card */}
         <div className="bg-white rounded-[24px] shadow-[0_20px_50px_-12px_rgba(26,104,251,0.14)] p-6 sm:p-8 border border-blue-50/80 transition-all duration-300">
           {/* Centered Brand Logo */}
-          <div className="flex justify-center mb-5">
+          <div className="flex justify-center mb-4">
             <Logo />
           </div>
+
+          {/* Role Tab Switcher */}
+          {mode === 'login' && (
+            <div className="flex p-1 bg-slate-100 rounded-2xl mb-4 border border-slate-200/80">
+              <button
+                type="button"
+                onClick={() => { setLoginRoleTab('staff'); setError(null); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-black rounded-xl transition cursor-pointer ${
+                  loginRoleTab === 'staff'
+                    ? 'bg-white text-emerald-700 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Staff / Housekeeping</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setLoginRoleTab('admin'); setError(null); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-black rounded-xl transition cursor-pointer ${
+                  loginRoleTab === 'admin'
+                    ? 'bg-white text-blue-900 shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Building2 className="w-3.5 h-3.5 text-blue-600" />
+                <span>Owner / Admin</span>
+              </button>
+            </div>
+          )}
 
           {mode === 'login' ? (
             <>
               {/* Form Header */}
-              <div className="text-left mb-5">
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">Welcome back</h2>
-                <p className="text-slate-500 text-xs sm:text-sm mt-0.5 font-medium">Sign in to your dashboard</p>
+              <div className="text-left mb-4">
+                {loginRoleTab === 'staff' ? (
+                  <>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-wider mb-1">
+                      <Sparkles className="w-3 h-3 text-emerald-600" />
+                      Staff Workspace Login
+                    </div>
+                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">Staff Sign In</h2>
+                    <p className="text-slate-500 text-xs mt-0.5 font-medium">Housekeeping tasks & assigned rooms</p>
+                  </>
+                ) : (
+                  <>
+                    <h2 className="text-2xl font-black text-slate-900 tracking-tight">Welcome back</h2>
+                    <p className="text-slate-500 text-xs sm:text-sm mt-0.5 font-medium">Sign in to your administration dashboard</p>
+                  </>
+                )}
               </div>
 
               {/* Error Banner */}
@@ -89,27 +142,27 @@ export const AuthCard: React.FC<AuthCardProps> = ({
               )}
 
               <form onSubmit={handleSubmitLogin} className="space-y-3.5">
-                {/* 52px Email Input Container */}
+                {/* 52px Email / Username Input Container */}
                 <div className="bg-[#f4f8ff] border border-[#dce7fa] focus-within:border-[#1a68fb] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#1a68fb]/20 rounded-xl px-3.5 py-2 h-[52px] transition-all duration-200 flex items-center gap-3">
-                  <div className="text-[#1a68fb] shrink-0">
-                    <Mail className="w-4 h-4" />
+                  <div className={loginRoleTab === 'staff' ? 'text-emerald-600 shrink-0' : 'text-[#1a68fb] shrink-0'}>
+                    {loginRoleTab === 'staff' ? <KeyRound className="w-4 h-4" /> : <Mail className="w-4 h-4" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <label htmlFor="auth-email-input" className="block text-[10px] font-bold text-[#1a68fb] uppercase tracking-wider cursor-pointer">
-                      Email Address
+                    <label htmlFor="auth-email-input" className={`block text-[10px] font-bold uppercase tracking-wider cursor-pointer ${loginRoleTab === 'staff' ? 'text-emerald-700' : 'text-[#1a68fb]'}`}>
+                      {loginRoleTab === 'staff' ? 'Staff Username / Login ID' : 'Email or Username / Login ID'}
                     </label>
                     <input
                       id="auth-email-input"
                       ref={emailRef}
-                      type="email"
+                      type="text"
                       value={email}
                       onChange={(e) => {
                         setEmail(e.target.value.replace(/,/g, '.'));
                         if (error) setError(null);
                       }}
-                      placeholder="admin@gmail.com"
+                      placeholder={loginRoleTab === 'staff' ? 'e.g. hk_ramu' : 'name@domain.com or username'}
                       required
-                      autoComplete="email"
+                      autoComplete="username"
                       className="w-full bg-transparent text-slate-900 font-semibold text-xs sm:text-sm outline-none border-none p-0 placeholder:text-slate-400/70"
                     />
                   </div>
@@ -174,7 +227,11 @@ export const AuthCard: React.FC<AuthCardProps> = ({
                 <button
                   type="submit"
                   disabled={loading || success}
-                  className="group w-full mt-1 bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 disabled:opacity-70 text-white font-extrabold h-[50px] rounded-xl shadow-md shadow-blue-500/25 transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base cursor-pointer transform hover:-translate-y-0.5"
+                  className={`group w-full mt-1 ${
+                    loginRoleTab === 'staff'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 shadow-emerald-500/25'
+                      : 'bg-[#1a68fb] hover:bg-blue-600 active:bg-blue-700 shadow-blue-500/25'
+                  } disabled:opacity-70 text-white font-extrabold h-[50px] rounded-xl shadow-md transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base cursor-pointer transform hover:-translate-y-0.5`}
                 >
                   {success ? (
                     <>
@@ -186,7 +243,7 @@ export const AuthCard: React.FC<AuthCardProps> = ({
                     </>
                   ) : (
                     <>
-                      <span>Sign In</span>
+                      <span>{loginRoleTab === 'staff' ? 'Sign In to Staff Workspace' : 'Sign In'}</span>
                       <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-200" />
                     </>
                   )}

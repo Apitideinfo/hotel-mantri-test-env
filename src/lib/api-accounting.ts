@@ -337,6 +337,11 @@ export const saveVendor = async (input: VendorInput, id?: string): Promise<Vendo
   return data as Vendor;
 };
 
+export const deleteVendor = async (id: string): Promise<void> => {
+  const { error } = await supabase.from('vendors').delete().eq('id', id);
+  if (error) throw error;
+};
+
 // ── Opening Balances ──
 
 export const getOpeningBalances = async (): Promise<OpeningBalance[]> => {
