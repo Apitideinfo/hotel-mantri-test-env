@@ -10,7 +10,12 @@
 
 import express from 'express';
 import { supabaseServiceRole } from '../supabaseClient.js';
-import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { requireHotelAccess as checkAuth, resolveAuthorizedHotel } from '../middleware/auth.js';
+import { pdfRateLimiter } from '../middleware/rateLimiter.js';
+import {
+  generateGuestConfirmationToken,
+  verifyGuestReservationToken,
+} from '../services/paymentSecurityService.js';
 import {
   checkRoomAvailability,
   detectExistingConflicts,
@@ -53,6 +58,10 @@ import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
 
 const router = express.Router();
 
+// Cooldown tracker for non-blocking opportunistic allocation reconciliation per hotel (P4 Performance)
+const lastReconciliationMap = new Map();
+const RECONCILIATION_COOLDOWN_MS = 60 * 1000; // 60 seconds debounce
+
 /**
  * GET /api/reservations
  * Authoritative paginated list with search, date range, channel, and status filters.
@@ -65,10 +74,14 @@ router.get('/', checkAuth, async (req, res) => {
     }
 
     // Opportunistic automatic reconciliation for pending unassigned OTA reservations
-    try {
-      await processPendingRoomAllocations(hotelId);
-    } catch (allocErr) {
-      console.warn('[Reservations] Background reconciliation non-blocking warning:', allocErr.message);
+    // Non-blocking and cooldown-guarded (max once every 60s per hotel) to eliminate request blocking
+    const now = Date.now();
+    const lastRun = lastReconciliationMap.get(hotelId) || 0;
+    if (now - lastRun > RECONCILIATION_COOLDOWN_MS) {
+      lastReconciliationMap.set(hotelId, now);
+      processPendingRoomAllocations(hotelId).catch((allocErr) => {
+        console.warn('[Reservations] Background reconciliation non-blocking warning:', allocErr.message);
+      });
     }
 
     const {
@@ -355,10 +368,15 @@ router.post('/', checkAuth, async (req, res) => {
       cleanList.push(item);
     }
 
+    const headerIdemp = req.headers['idempotency-key'] || req.headers['x-idempotency-key'] || null;
+    const bodyIdemp = req.body?.idempotency_key || req.body?.idempotencyKey || req.body?.client_reference || null;
+    const idempotencyKey = (headerIdemp || bodyIdemp || '').trim() || null;
+
     const result = await createReservationsAtomically({
       hotelId,
       inputs: cleanList,
       userId,
+      idempotencyKey,
     });
 
     // Generate confirmation PDF and deliver confirmation email/notification
@@ -406,11 +424,24 @@ router.post('/', checkAuth, async (req, res) => {
       ? 'WHATSAPP_READY_MANUAL'
       : 'WHATSAPP_FAILED';
 
+    let confirmationToken = null;
+    if (result && result.length > 0 && result[0]?.id) {
+      try {
+        confirmationToken = generateGuestConfirmationToken({
+          reservationId: result[0].id,
+          hotelId,
+        });
+      } catch (tokErr) {
+        // non-fatal
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'Reservation created successfully.',
       reservations: result,
       reservation: result[0],
+      confirmationToken,
       emailStatus,
       emailDelivery: firstDelivery?.email || firstDelivery?.emailDelivery || null,
       whatsappStatus,
@@ -418,12 +449,23 @@ router.post('/', checkAuth, async (req, res) => {
       pdfDocument: firstDelivery?.pdf || firstDelivery?.document || null,
     });
   } catch (err) {
+    if (err.idempotentReplay && err.existingReservation) {
+      return res.status(200).json({
+        success: true,
+        idempotentReplay: true,
+        message: 'Reservation already exists for this idempotency key.',
+        reservation: err.existingReservation,
+        reservations: [err.existingReservation],
+      });
+    }
+
     const status = err.status || 500;
     res.status(status).json({
       success: false,
       code: err.code || 'RESERVATION_CREATE_FAILED',
       message: err.message || 'Failed to create reservation.',
       conflictingReservation: err.conflictingReservation || null,
+      existingReservation: err.existingReservation || null,
     });
   }
 });
@@ -847,9 +889,20 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
     const recipientResolution = await resolveReservationNotificationRecipient({ hotelId, reservation });
     const sourceInfo = normalizeBookingSource(reservation);
 
+    let confirmationToken = null;
+    try {
+      confirmationToken = generateGuestConfirmationToken({
+        reservationId: id,
+        hotelId,
+      });
+    } catch (tokErr) {
+      // non-fatal
+    }
+
     res.json({
       success: true,
       reservationId: id,
+      confirmationToken,
       document: latestDoc,
       versions: docs || [],
       recipient: recipientResolution,
@@ -871,40 +924,172 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
   }
 });
 
+// ─── Helper: PDF Access Authentication ───────────────────────────────────────
+/**
+ * Authorizes access to a reservation confirmation PDF.
+ * Accepts:
+ * 1. Authenticated Staff / Hotel Administrator / Super Admin via Bearer JWT or query token
+ * 2. Scoped, expiring Guest Access via HMAC-SHA256 guest token
+ * 
+ * Fails closed on missing, invalid, expired, or cross-tenant tokens.
+ */
+const authenticatePdfAccess = async (req, reservationId) => {
+  const authHeader = req.headers.authorization;
+  const rawToken = req.query.token || req.query.auth_token || req.query.auth || req.headers['x-guest-token'];
+
+  // 0. Prohibit Bearer JWTs in URL query parameters to eliminate credential leakage
+  // via browser navigation history, reverse proxy access logs, and Referer headers (CWE-598 / RFC 6750).
+  if (rawToken && typeof rawToken === 'string' && rawToken.trim().split('.').length === 3) {
+    return {
+      authorized: false,
+      status: 401,
+      code: 'QUERY_JWT_DISALLOWED',
+      message: 'Bearer JWT credentials in URL query parameters are disallowed to prevent credential exposure. Use Authorization header or scoped confirmation token.',
+    };
+  }
+
+  let bearerToken = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    bearerToken = authHeader.split(' ')[1]?.trim();
+  }
+
+  // 1. Staff / Admin Authentication (Supabase JWT)
+  if (bearerToken) {
+    const clonedReq = {
+      ...req,
+      headers: {
+        ...req.headers,
+        authorization: `Bearer ${bearerToken}`,
+      },
+      query: req.query || {},
+      body: req.body || {},
+    };
+
+    const authRes = await resolveAuthorizedHotel(clonedReq);
+    if (!authRes.success) {
+      return {
+        authorized: false,
+        status: authRes.status || 401,
+        code: authRes.code || 'INVALID_TOKEN',
+        message: authRes.message || 'Authentication token is invalid or expired.',
+      };
+    }
+
+    return {
+      authorized: true,
+      authType: 'STAFF',
+      user: authRes.user,
+      userId: authRes.userId,
+      role: authRes.role,
+      isSuperAdmin: authRes.isSuperAdmin,
+      hotelId: authRes.hotelId,
+      hotel: authRes.hotel,
+    };
+  }
+
+  // 2. Guest Token Authentication (HMAC-SHA256 signed 2-part token)
+  if (rawToken && typeof rawToken === 'string') {
+    const tokenStr = rawToken.trim();
+    if (tokenStr.split('.').length === 2) {
+      const guestRes = verifyGuestReservationToken(tokenStr, reservationId);
+      if (!guestRes.valid) {
+        const isMismatch = guestRes.code === 'TOKEN_RESERVATION_MISMATCH';
+        const isExpired = guestRes.code === 'TOKEN_EXPIRED';
+        return {
+          authorized: false,
+          status: isMismatch ? 403 : 401,
+          code: guestRes.code,
+          message: guestRes.message,
+        };
+      }
+
+      return {
+        authorized: true,
+        authType: 'GUEST',
+        reservationId: guestRes.payload.resv,
+        hotelId: guestRes.payload.hotel,
+        tokenPurpose: guestRes.payload.purpose,
+      };
+    }
+
+    return {
+      authorized: false,
+      status: 401,
+      code: 'INVALID_TOKEN',
+      message: 'Provided access token is malformed.',
+    };
+  }
+
+  // 3. Neither Bearer JWT nor Guest Token present -> Fail closed
+  return {
+    authorized: false,
+    status: 401,
+    code: 'AUTH_REQUIRED',
+    message: 'Authentication or valid guest access token is required to view reservation confirmation PDF.',
+  };
+};
+
 // ─── GET /api/reservations/:id/confirmation/pdf ──────────────────────────────
 /**
  * Streams or downloads the generated PDF document.
+ * Strictly protected: requires verified Staff Bearer token or scoped Guest token.
  */
-router.get('/:id/confirmation/pdf', async (req, res) => {
+router.get('/:id/confirmation/pdf', pdfRateLimiter, async (req, res) => {
   try {
     const { id } = req.params;
-    let hotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.hotelId || req.auth?.hotelId;
     const requestedVersion = req.query.version ? parseInt(req.query.version, 10) : null;
 
-    // Verify reservation exists and resolve hotelId
+    // 1. Authorize caller
+    const auth = await authenticatePdfAccess(req, id);
+    if (!auth.authorized) {
+      return res.status(auth.status).json({
+        success: false,
+        code: auth.code,
+        message: auth.message,
+      });
+    }
+
+    // 2. Fetch reservation with tenant boundaries enforced
     const query = supabaseServiceRole
       .from('reservations')
       .select('*')
       .eq('id', id);
 
-    if (hotelId) {
-      query.eq('hotel_id', hotelId);
+    if (auth.authType === 'GUEST') {
+      // Guest is strictly bound to the hotelId encoded in the cryptographically signed token
+      query.eq('hotel_id', auth.hotelId);
+    } else if (auth.authType === 'STAFF') {
+      if (!auth.isSuperAdmin) {
+        // Staff / Hotel Admin is strictly bound to their authorized hotel
+        query.eq('hotel_id', auth.hotelId);
+      } else {
+        // Super Admin may optionally narrow to a specific hotel
+        const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId;
+        if (requestedHotelId) {
+          query.eq('hotel_id', requestedHotelId);
+        }
+      }
     }
 
     const { data: reservation, error: resErr } = await query.maybeSingle();
 
     if (resErr || !reservation) {
-      return res.status(404).json({ success: false, code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found.' });
+      return res.status(404).json({
+        success: false,
+        code: 'RESERVATION_NOT_FOUND',
+        message: 'Reservation not found.',
+      });
     }
 
-    hotelId = reservation.hotel_id;
+    const hotelId = reservation.hotel_id;
 
+    // 3. Fetch or generate the confirmation document
     const docs = await getReservationDocuments(hotelId, id);
     let targetDoc = null;
     if (requestedVersion) {
       targetDoc = docs.find(d => d.version === requestedVersion);
     } else {
-      targetDoc = docs[0];
+      targetDoc = docs && docs.length > 0 ? docs[0] : null;
     }
 
     let pdfBuffer = null;
@@ -925,18 +1110,24 @@ router.get('/:id/confirmation/pdf', async (req, res) => {
 
     const fileName = targetDoc?.file_name || `Hotel-Mantri-Reservation-Confirmation-HM-${id.slice(0, 8).toUpperCase()}.pdf`;
 
+    // 4. Return PDF with strict privacy and cache-control headers
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
     res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
     res.end(pdfBuffer);
   } catch (err) {
-    console.error('Error streaming confirmation PDF:', err);
-    res.status(500).json({ success: false, code: 'PDF_FETCH_FAILED', message: err.message });
+    console.error('[RESERVATION_PDF] Error streaming confirmation PDF:', err?.stack || err);
+    res.status(500).json({ success: false, code: 'PDF_FETCH_FAILED', message: 'Failed to retrieve reservation confirmation document.' });
   }
 });
 
 // ─── POST /api/reservations/:id/confirmation/regenerate ──────────────────────
-router.post('/:id/confirmation/regenerate', checkAuth, async (req, res) => {
+router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
     const userId = req.user?.id || req.auth?.userId || 'STAFF';

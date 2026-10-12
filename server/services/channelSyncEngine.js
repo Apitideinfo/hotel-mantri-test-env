@@ -49,7 +49,7 @@ export const normalizeRateFetchResponse = (fetched) => {
       for (const r of item.rates) {
         if (!r) continue;
         const room = r.roomCode || r.room_code || r.roomId || r.room_id;
-        const plan = r.rateplanCode || r.rate_plan_code || r.ratePlanCode || r.rateplan_id || r.ratePlanId;
+        const plan = r.rateplanCode || r.rate_plan_code || r.ratePlanCode || r.rateplan_id || r.rate_plan_id || r.ratePlanId || r.rate_plan;
         const val = r.rate ?? r.price ?? r.amount;
         if (date && room && plan && val !== undefined && val !== null) {
           rateMap.set(`${date}_${room}_${plan}`, Number(val));
@@ -57,7 +57,7 @@ export const normalizeRateFetchResponse = (fetched) => {
       }
     } else {
       const room = item.roomCode || item.room_code || item.roomId || item.room_id;
-      const plan = item.rateplanCode || item.rate_plan_code || item.ratePlanCode || item.rateplan_id || item.ratePlanId;
+      const plan = item.rateplanCode || item.rate_plan_code || item.ratePlanCode || item.rateplan_id || item.rate_plan_id || item.ratePlanId || item.rate_plan;
       const val = item.rate ?? item.price ?? item.amount;
       if (date && room && plan && val !== undefined && val !== null) {
         rateMap.set(`${date}_${room}_${plan}`, Number(val));

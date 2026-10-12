@@ -5,12 +5,14 @@ const KEY_ID = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID |
 const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || '';
 
 const getRazorpayInstance = () => {
-  if (!KEY_ID || !KEY_SECRET) {
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET || KEY_SECRET;
+  if (!keyId || !keySecret) {
     throw new Error('Razorpay credentials (KEY_ID and KEY_SECRET) are not configured on server.');
   }
   return new Razorpay({
-    key_id: KEY_ID,
-    key_secret: KEY_SECRET,
+    key_id: keyId,
+    key_secret: keySecret,
   });
 };
 
@@ -56,7 +58,7 @@ export async function createRazorpayOrder(params: CreateOrderParams) {
 }
 
 /**
- * Verifies Razorpay payment HMAC-SHA256 signature securely on the backend.
+ * Verifies Razorpay payment HMAC-SHA256 signature securely on the backend using constant-time comparison.
  */
 export function verifyRazorpaySignature(params: VerifyPaymentParams) {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = params;
@@ -68,13 +70,45 @@ export function verifyRazorpaySignature(params: VerifyPaymentParams) {
     };
   }
 
+  if (
+    typeof razorpay_order_id !== 'string' ||
+    typeof razorpay_payment_id !== 'string' ||
+    typeof razorpay_signature !== 'string'
+  ) {
+    return {
+      isValid: false,
+      message: 'Verification parameters must be strings.',
+    };
+  }
+
+  const keySecret = process.env.RAZORPAY_KEY_SECRET || KEY_SECRET;
+  if (!keySecret) {
+    return {
+      isValid: false,
+      message: 'Razorpay secret key is not configured on server.',
+    };
+  }
+
   const body = razorpay_order_id + '|' + razorpay_payment_id;
   const expectedSignature = crypto
-    .createHmac('sha256', KEY_SECRET)
+    .createHmac('sha256', keySecret)
     .update(body.toString())
     .digest('hex');
 
-  const isValid = expectedSignature === razorpay_signature;
+  const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+  const actualBuf = Buffer.from(razorpay_signature, 'utf8');
+
+  // Verify byte length matches before calling timingSafeEqual to avoid RangeError
+  if (expectedBuf.length !== actualBuf.length) {
+    return {
+      isValid: false,
+      message: 'Invalid payment signature. Verification failed.',
+      order_id: razorpay_order_id,
+      payment_id: razorpay_payment_id,
+    };
+  }
+
+  const isValid = crypto.timingSafeEqual(expectedBuf, actualBuf);
 
   return {
     isValid,

@@ -32,19 +32,19 @@ const Field = ({ children }: { children: React.ReactNode }) => (
 );
 
 const input =
-  'w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-sky-500 focus:border-transparent transition placeholder:text-slate-400';
+  'w-full px-3.5 py-2.5 border border-slate-200/90 rounded-xl bg-white text-slate-900 text-sm focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all placeholder:text-slate-400 shadow-2xs font-medium';
 const inputDisabled =
-  'w-full px-3 py-2.5 border border-slate-200 rounded-lg bg-slate-50 text-slate-500 text-sm cursor-not-allowed';
+  'w-full px-3.5 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-slate-500 text-sm cursor-not-allowed font-medium';
 
 const SectionCard = ({
   title, icon, children, accent = 'bg-white',
 }: { title: string; icon: React.ReactNode; children: React.ReactNode; accent?: string }) => (
-  <div className={`rounded-2xl border border-slate-200 overflow-hidden shadow-sm ${accent}`}>
-    <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+  <div className={`rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs hover:border-slate-300/80 transition-all duration-200 ${accent}`}>
+    <div className="px-4 sm:px-5 py-3.5 bg-slate-50/80 border-b border-slate-200/60 flex items-center gap-2.5">
       <span className="text-sky-600">{icon}</span>
-      <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">{title}</h2>
+      <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{title}</h2>
     </div>
-    <div className="p-4 space-y-3">{children}</div>
+    <div className="p-4 sm:p-5 space-y-4">{children}</div>
   </div>
 );
 

@@ -1,23 +1,38 @@
 import express from 'express';
+import crypto from 'crypto';
 import { processAiosellReservation } from './AiosellReservationService.js';
 import { parseWebhookPayload } from './AiosellPayloadParser.js';
 import { getSupabase } from './HotelMantriReservationService.js';
+import { webhookRateLimiter } from '../../../middleware/rateLimiter.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
 const router = express.Router();
 
 /**
- * Basic Auth Middleware for Webhooks
+ * Constant-time string comparison for webhook credentials (SEC-09).
+ * Pre-hashes inputs using SHA-256 so buffers are strictly uniform in length (32 bytes),
+ * completely avoiding RangeError while neutralizing length-based timing leaks.
  */
-const webhookAuthMiddleware = (req, res, next) => {
+export const timingSafeWebhookCompare = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (!a || !b) return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+};
+
+/**
+ * Basic Auth Middleware for Webhooks (SEC-09 Hardened)
+ */
+export const webhookAuthMiddleware = (req, res, next) => {
   const enabled = process.env.AIOSELL_WEBHOOK_ENABLED === 'true';
   if (!enabled) {
     return res.status(403).json({ error: 'Webhooks are disabled' });
   }
 
   const authHeader = req.headers['authorization'];
-  if (!authHeader) {
+  if (!authHeader || typeof authHeader !== 'string') {
     return res.status(401).json({ error: 'Unauthorized: Missing Authorization header' });
   }
 
@@ -30,7 +45,7 @@ const webhookAuthMiddleware = (req, res, next) => {
 
   const expectedAuth = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
 
-  if (authHeader !== expectedAuth) {
+  if (!timingSafeWebhookCompare(authHeader, expectedAuth)) {
     return res.status(401).json({ error: 'Unauthorized: Invalid credentials' });
   }
 
@@ -70,7 +85,7 @@ router.get('/webhook-info', (req, res) => {
  * POST /reservations
  * The main Aiosell reservation webhook.
  */
-router.post('/reservations', webhookAuthMiddleware, async (req, res) => {
+router.post('/reservations', webhookRateLimiter, webhookAuthMiddleware, async (req, res) => {
   try {
     let parsedPayload = parseWebhookPayload(req.body);
     const supabase = getSupabase();

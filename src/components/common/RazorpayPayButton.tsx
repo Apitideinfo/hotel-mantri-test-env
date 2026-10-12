@@ -25,10 +25,13 @@ export const RazorpayPayButton: React.FC<RazorpayPayButtonProps> = ({
     setLoading(true);
     setErrorMessage(null);
 
+    const cleanPlanId = planName.toLowerCase().replace(/\s+plan$/i, '').trim();
+
     const result = await openRazorpayCheckout({
       amount, // in INR
       name: 'HotelMantri Platform',
       description: `${planName} Subscription Payment`,
+      planId: cleanPlanId,
       prefill: {
         name: 'Hotel Manager',
         email: 'manager@hotelmantri.com',

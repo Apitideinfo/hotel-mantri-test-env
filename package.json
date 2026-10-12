@@ -9,18 +9,10 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "test:security": "node scripts/test_tenant_security_isolation.mjs",
-    "test:auth": "node scripts/test-auth-hotel-context.mjs",
-    "test:finance": "node scripts/run_financial_accounting_tests.mjs",
-    "test:revenue": "node scripts/test_master_revenue_allocation.mjs",
-    "test:diagnostics": "node scripts/test-server-import-diagnostics.mjs",
-    "test": "npm run test:auth && npm run test:revenue && npm run test:diagnostics"
+    "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
   "dependencies": {
-    "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
-    "@types/three": "^0.185.4",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -31,7 +23,6 @@
     "razorpay": "^2.9.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.185.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

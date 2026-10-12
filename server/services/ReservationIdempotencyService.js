@@ -94,18 +94,77 @@ export const findExistingOtaBooking = async (hotelId, externalBookingId) => {
   return null;
 };
 
+// In-memory mutex map for manual booking idempotency: key = `${hotelId}::${bookingKey}`
+const bookingLocks = new Map();
+
+/**
+ * Runs a manual booking task holding an exclusive lock on the booking key.
+ * Prevents race conditions from simultaneous double-clicks or repeated requests.
+ */
+export const withBookingLock = async (hotelId, bookingKey, task) => {
+  if (!hotelId || !bookingKey) return task();
+
+  const cleanKey = String(bookingKey).trim().toLowerCase();
+  const key = `${hotelId}::book::${cleanKey}`;
+
+  const prevLock = bookingLocks.get(key) || Promise.resolve();
+
+  let release;
+  const currentLock = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  bookingLocks.set(key, prevLock.then(() => currentLock));
+
+  try {
+    await prevLock;
+    return await task();
+  } finally {
+    release();
+    if (bookingLocks.get(key) === currentLock) {
+      bookingLocks.delete(key);
+    }
+  }
+};
+
 /**
  * Checks for hard duplicate manual bookings.
- * Same hotel + same authoritative reference.
+ * Same hotel + same authoritative reference (payment_ref or idempotency_key).
+ * Also prevents rapid accidental double-clicks within 15 seconds.
  * Note: Legitimate multi-room bookings for the same guest on different rooms are allowed!
  */
 export const checkManualDuplicate = async (hotelId, payload, excludeId = null) => {
-  if (!hotelId) return { duplicate: false };
+  if (!hotelId || !payload) return { duplicate: false };
 
   const supabase = supabaseServiceRole;
   const paymentRef = (payload.payment_ref || '').trim();
+  const idempKey = (payload.idempotency_key || payload.idempotencyKey || payload.client_reference || '').trim();
 
-  // If a non-empty payment reference / UTR is provided, verify uniqueness
+  // 1. Check client idempotency key if supplied
+  if (idempKey) {
+    const marker = `[CLIENT_IDEMP: ${idempKey}]`;
+    let q = supabase
+      .from('reservations')
+      .select('id, guest_name, check_in_date, check_out_date, room_no, status, internal_note')
+      .eq('hotel_id', hotelId)
+      .or(`internal_note.ilike.%${marker}%,remarks.ilike.%${marker}%`)
+      .in('status', ['confirmed', 'checked_in'])
+      .limit(1);
+
+    if (excludeId) q = q.neq('id', excludeId);
+
+    const { data: existing } = await q;
+    if (existing && existing.length > 0) {
+      return {
+        duplicate: true,
+        code: 'RESERVATION_IDEMPOTENT_EXISTS',
+        message: `Reservation already created for reference '${idempKey}'.`,
+        existing: existing[0],
+      };
+    }
+  }
+
+  // 2. If a non-empty payment reference / UTR is provided, verify uniqueness
   if (paymentRef) {
     let q = supabase
       .from('reservations')
@@ -127,11 +186,45 @@ export const checkManualDuplicate = async (hotelId, payload, excludeId = null) =
     }
   }
 
+  // 3. Rapid double-click protection (identical guest, phone, dates, room within 15 seconds)
+  const phone = (payload.guest_phone || payload.phone || '').trim().replace(/\D/g, '');
+  const roomNo = (payload.room_no || '').trim().toLowerCase();
+  const checkIn = (payload.check_in_date || '').slice(0, 10);
+  const checkOut = (payload.check_out_date || '').slice(0, 10);
+
+  if (phone && phone.length >= 7 && checkIn && checkOut && roomNo && roomNo !== 'unassigned') {
+    const windowStart = new Date(Date.now() - 15000).toISOString();
+    let q = supabase
+      .from('reservations')
+      .select('id, guest_name, room_no, created_at')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', payload.room_no)
+      .eq('check_in_date', checkIn)
+      .eq('check_out_date', checkOut)
+      .gte('created_at', windowStart)
+      .in('status', ['confirmed', 'checked_in'])
+      .limit(1);
+
+    if (excludeId) q = q.neq('id', excludeId);
+
+    const { data: recent } = await q;
+    if (recent && recent.length > 0) {
+      return {
+        duplicate: true,
+        code: 'RESERVATION_DUPLICATE_RAPID',
+        message: `A booking for Room ${recent[0].room_no} with identical dates was just created (${recent[0].guest_name}).`,
+        existing: recent[0],
+      };
+    }
+  }
+
   return { duplicate: false };
 };
 
 export default {
   withOtaLock,
+  withBookingLock,
   findExistingOtaBooking,
   checkManualDuplicate,
 };
+

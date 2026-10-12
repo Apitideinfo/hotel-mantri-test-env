@@ -7,6 +7,7 @@ import {
 import type { Reservation } from '@/lib/types-reservations';
 import type { HotelSettings } from '@/lib/types';
 import { apiFetch } from '@/lib/api-fetch';
+import { supabase } from '@/lib/supabase';
 import {
   downloadReservationConfirmationPdf,
 } from '@/lib/pdf-reservation';
@@ -47,6 +48,7 @@ interface RecipientInfo {
 interface ConfirmationResponse {
   success: boolean;
   reservationId: string;
+  confirmationToken?: string | null;
   document: DocRecord | null;
   versions: DocRecord[];
   recipient?: RecipientInfo;
@@ -157,21 +159,74 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     fetchConfirmationInfo();
   }, [fetchConfirmationInfo]);
 
+  // ── Secure Authenticated PDF Fetcher (No credentials in URL query parameters) ──
+  const fetchPdfBlob = async (version?: number): Promise<string> => {
+    let token: string | undefined;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      token = session?.access_token;
+    } catch {
+      // ignore
+    }
+
+    const headers: HeadersInit = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    } else if (docData?.confirmationToken) {
+      headers['x-guest-token'] = docData.confirmationToken;
+    }
+
+    const params = new URLSearchParams();
+    if (version) params.set('version', String(version));
+    // If no header token could be attached, fallback to scoped HMAC confirmation token only (never JWT)
+    if (!token && docData?.confirmationToken) {
+      params.set('token', docData.confirmationToken);
+    }
+
+    const qs = params.toString();
+    const url = `/api/reservations/${reservation.id}/confirmation/pdf${qs ? `?${qs}` : ''}`;
+
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.message || `Failed to fetch PDF (${res.status})`);
+    }
+
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  };
+
   // ── Preview PDF ──
-  const handlePreviewPdf = () => {
-    window.open(`/api/reservations/${reservation.id}/confirmation/pdf`, '_blank');
+  const handlePreviewPdf = async () => {
+    try {
+      setActing(true);
+      const blobUrl = await fetchPdfBlob();
+      window.open(blobUrl, '_blank');
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to preview confirmation PDF.');
+    } finally {
+      setActing(false);
+    }
   };
 
   // ── Print PDF ──
-  const handlePrintPdf = () => {
-    const printWindow = window.open(`/api/reservations/${reservation.id}/confirmation/pdf`, '_blank');
-    if (printWindow) {
-      printWindow.focus();
+  const handlePrintPdf = async () => {
+    try {
+      setActing(true);
+      const blobUrl = await fetchPdfBlob();
+      const printWindow = window.open(blobUrl, '_blank');
+      if (printWindow) {
+        printWindow.focus();
+      }
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to print confirmation PDF.');
+    } finally {
+      setActing(false);
     }
   };
 
   // ── Download PDF ──
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     try {
       downloadReservationConfirmationPdf({
         reservation,
@@ -181,7 +236,23 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
       setActionSuccess('Confirmation PDF downloaded.');
       setTimeout(() => setActionSuccess(null), 3000);
     } catch {
-      window.open(`/api/reservations/${reservation.id}/confirmation/pdf`, '_blank');
+      try {
+        setActing(true);
+        const blobUrl = await fetchPdfBlob();
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = `Reservation-Confirmation-${(reservation as any).booking_id || shortId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+        setActionSuccess('Confirmation PDF downloaded.');
+        setTimeout(() => setActionSuccess(null), 3000);
+      } catch (err: any) {
+        setActionError(err?.message || 'Failed to download confirmation PDF.');
+      } finally {
+        setActing(false);
+      }
     }
   };
 
@@ -702,14 +773,23 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
                           </span>
                         </td>
                         <td className="py-1.5 px-3 text-right">
-                          <a
-                            href={`/api/reservations/${reservation.id}/confirmation/pdf?version=${ver.version}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sky-600 hover:text-sky-800 font-bold"
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                setActing(true);
+                                const blobUrl = await fetchPdfBlob(ver.version);
+                                window.open(blobUrl, '_blank');
+                              } catch (err: any) {
+                                setActionError(err?.message || 'Failed to view document version.');
+                              } finally {
+                                setActing(false);
+                              }
+                            }}
+                            className="text-sky-600 hover:text-sky-800 font-bold cursor-pointer"
                           >
                             View
-                          </a>
+                          </button>
                         </td>
                       </tr>
                     ))}

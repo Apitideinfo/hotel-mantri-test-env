@@ -24,3 +24,5 @@ dist-ssr
 server/data/
 scratch/
 .vercel
+vite.config.*.timestamp-*
+supabase/.temp/

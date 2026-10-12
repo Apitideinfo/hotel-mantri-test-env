@@ -5,13 +5,13 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
 function razorpayApiPlugin(env: Record<string, string>): Plugin {
-  const KEY_ID = env.RAZORPAY_KEY_ID || env.VITE_RAZORPAY_KEY_ID || 'rzp_test_TRihoeKVwQzktg';
-  const KEY_SECRET = env.RAZORPAY_KEY_SECRET || 'o8NGFcph9x0SBD03Jirx5bai';
+  const KEY_ID = env.RAZORPAY_KEY_ID || env.VITE_RAZORPAY_KEY_ID || '';
+  const KEY_SECRET = env.RAZORPAY_KEY_SECRET || '';
 
-  const razorpay = new Razorpay({
+  const razorpay = KEY_ID && KEY_SECRET ? new Razorpay({
     key_id: KEY_ID,
     key_secret: KEY_SECRET,
-  });
+  }) : null;
 
   return {
     name: 'razorpay-api-plugin',
@@ -21,6 +21,11 @@ function razorpayApiPlugin(env: Record<string, string>): Plugin {
 
         // 1. Create Order Endpoint
         if (req.url === '/api/create-order' && req.method === 'POST') {
+          if (!razorpay) {
+            res.statusCode = 503;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ error: 'Razorpay payment gateway is not configured in development environment.' }));
+          }
           let body = '';
           req.on('data', (chunk) => {
             body += chunk;
@@ -67,6 +72,11 @@ function razorpayApiPlugin(env: Record<string, string>): Plugin {
 
         // 2. Verify Payment Signature Endpoint
         if (req.url === '/api/verify-payment' && req.method === 'POST') {
+          if (!KEY_SECRET) {
+            res.statusCode = 503;
+            res.setHeader('Content-Type', 'application/json');
+            return res.end(JSON.stringify({ success: false, error: 'Razorpay secret is not configured in development environment.' }));
+          }
           let body = '';
           req.on('data', (chunk) => {
             body += chunk;
@@ -92,7 +102,10 @@ function razorpayApiPlugin(env: Record<string, string>): Plugin {
                 .update(data.toString())
                 .digest('hex');
 
-              const isMatch = expectedSignature === razorpay_signature;
+              const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+              const actualBuf = Buffer.from(razorpay_signature, 'utf8');
+
+              const isMatch = expectedBuf.length === actualBuf.length && crypto.timingSafeEqual(expectedBuf, actualBuf);
 
               if (isMatch) {
                 res.statusCode = 200;
@@ -159,18 +172,24 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            if (id.includes('vite/preload-helper') || id.includes('commonjsHelpers')) {
+              return 'vendor-core';
+            }
             if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
+                return 'vendor-core';
+              }
               if (id.includes('lucide-react')) {
                 return 'vendor-icons';
               }
-              if (id.includes('jspdf') || id.includes('xlsx')) {
-                return 'vendor-exports';
+              if (id.includes('jspdf') || id.includes('html2canvas') || id.includes('dompurify') || id.includes('canvg')) {
+                return 'vendor-pdf';
               }
-              if (id.includes('three')) {
-                return 'vendor-three';
+              if (id.includes('xlsx')) {
+                return 'vendor-excel';
               }
-              if (id.includes('react') || id.includes('react-dom')) {
-                return 'vendor-core';
+              if (id.includes('@supabase')) {
+                return 'vendor-supabase';
               }
               return 'vendor-others';
             }

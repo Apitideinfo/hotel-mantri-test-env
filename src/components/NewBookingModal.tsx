@@ -15,6 +15,8 @@ import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCatego
 import { isValidEmail, type ReservationInput } from '@/lib/types-reservations';
 import { fmtMoney, fmtInt, toNum, calcGstFull, addDays, calcStayNights } from '@/lib/calc';
 import { apiFetch } from '@/lib/api-fetch';
+import { supabase } from '@/lib/supabase';
+import { validateReservationForm, buildReservationInputs } from '@/lib/reservationFormHelpers';
 
 interface NewBookingModalProps {
   rooms: Room[];
@@ -86,6 +88,7 @@ export const NewBookingModal = ({
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<ReservationInput[] | null>(null);
   const [savedReservationId, setSavedReservationId] = useState<string | null>(null);
+  const [confirmationToken, setConfirmationToken] = useState<string | null>(null);
   const [emailStatus, setEmailStatus] = useState<'EMAIL_SENT' | 'EMAIL_FAILED' | 'EMAIL_NOT_CONFIGURED' | null>(null);
   const [emailDelivery, setEmailDelivery] = useState<{ recipientEmail?: string; error?: string } | null>(null);
 
@@ -157,103 +160,108 @@ export const NewBookingModal = ({
   }, [rooms, categories]);
 
   const validateForm = (): boolean => {
-    setError(null);
-    setEmailError(null);
-    if (!guestName.trim()) { setError('Please enter guest name.'); return false; }
-    // Mandatory email validation
-    const cleanEmail = email.trim();
-    if (!cleanEmail) {
-      const msg = 'Guest email is required.';
-      setEmailError(msg);
-      setError(msg);
-      return false;
-    }
-    if (!isValidEmail(cleanEmail)) {
-      const msg = 'Please enter a valid email address.';
-      setEmailError(msg);
-      setError(msg);
-      return false;
-    }
-    if (roomNos.length === 0) { setError('Please select at least one room.'); return false; }
-    if (!checkIn || !checkOut) { setError('Please select check-in and check-out dates.'); return false; }
-    if (new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
-      setError('Check-out date must be after check-in date.'); return false;
-    }
-    return true;
+    const res = validateReservationForm({
+      guestName,
+      email,
+      roomNos,
+      checkIn,
+      checkOut,
+    });
+    setError(res.error);
+    setEmailError(res.emailError);
+    return res.valid;
   };
 
   const buildInputs = (): ReservationInput[] => {
-    // Strictly deduplicate room numbers case-insensitively
-    const seen = new Set<string>();
-    const cleanRoomNos: string[] = [];
-    for (const no of roomNos) {
-      const trimmed = (no || '').trim();
-      const k = trimmed.toLowerCase();
-      if (trimmed && !seen.has(k)) {
-        seen.add(k);
-        cleanRoomNos.push(trimmed);
-      }
-    }
-
-    const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
-    const fullPhone = phone.trim() ? `${countryCode} ${phone.trim()}` : '';
-    
-    return cleanRoomNos.map((no, idx) => {
-      const room = rooms.find(r => (r.room_no || '').trim().toLowerCase() === no.toLowerCase());
-      const advancePaid = idx === 0 ? totalReceived : 0;
-      const rPayCash = idx === 0 ? toNum(payCash) : 0;
-      const rPayUpi = idx === 0 ? toNum(payUpi) : 0;
-      const rPayCard = idx === 0 ? toNum(payCard) : 0;
-      const rPayBank = idx === 0 ? toNum(payBank) : 0;
-      
-      const roomCat = categories.find(c => c.id === room?.category_id);
-      const fallbackTariff = toNum(rate) > 0 ? toNum(rate) : (roomCat?.default_tariff ?? room?.default_tariff ?? 0);
-      const individualRate = (roomRates[no] !== undefined && toNum(roomRates[no]) > 0) ? toNum(roomRates[no]) : fallbackTariff;
-      const roomSubtotal = individualRate * nights;
-      const roomDiscount = toNum(discount) / (cleanRoomNos.length || 1);
-      const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
-      const { taxable: rTaxable, gst: rGst, invoiceTotal: rInvoiceTotal } = calcGstFull(roomAfterDiscount, gstType, gstSlab);
-      
-      return {
-        room_id: room?.id ?? null,
-        room_no: room?.room_no?.trim() || no,
-        guest_name: guestName.trim(),
-        guest_phone: fullPhone,
-        guest_email: email.trim(),
-        guest_address: guestAddress.trim(),
-        guest_type: guestType.trim(),
-        company_gst: companyGst.trim(),
-        check_in_date: checkIn,
-        check_out_date: checkOut,
-        rate: individualRate,
-        source_category: sourceCat,
-        source_name: sourceName.trim(),
-        payment_mode: payMode,
-        advance_paid: advancePaid,
-        pay_cash: rPayCash,
-        pay_upi: rPayUpi,
-        pay_card: rPayCard,
-        pay_bank: rPayBank,
-        payment_ref: paymentRef.trim(),
-        discount: roomDiscount,
-        meal_plan: mealPlan,
-        gst_type: gstType,
-        gst_slab: gstSlab,
-        gst_amount: rGst,
-        taxable_amount: rTaxable,
-        invoice_total: rInvoiceTotal,
-        adults: toNum(adults),
-        children: toNum(children),
-        remarks: remarks.trim(),
-        internal_note: internalNote.trim(),
-        created_by: createdBy.trim(),
-        status: 'confirmed',
-        group_id: groupId,
-      };
+    return buildReservationInputs({
+      roomNos,
+      guestName,
+      phone,
+      countryCode,
+      email,
+      guestAddress,
+      guestType,
+      companyGst,
+      checkIn,
+      checkOut,
+      nights,
+      rate,
+      roomRates,
+      sourceCat,
+      sourceName,
+      payMode,
+      payCash,
+      payUpi,
+      payCard,
+      payBank,
+      totalReceived,
+      paymentRef,
+      discount,
+      mealPlan,
+      gstType,
+      gstSlab,
+      adults,
+      children,
+      remarks,
+      internalNote,
+      createdBy,
+      rooms,
+      categories,
     });
   };
 
   const [retryingEmail, setRetryingEmail] = useState(false);
+  const [downloadingVoucher, setDownloadingVoucher] = useState(false);
+
+  const handleDownloadVoucher = async () => {
+    if (!savedReservationId) return;
+    setDownloadingVoucher(true);
+    try {
+      let token: string | undefined;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        token = session?.access_token;
+      } catch {
+        // ignore
+      }
+
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else if (confirmationToken) {
+        headers['x-guest-token'] = confirmationToken;
+      }
+
+      const params = new URLSearchParams();
+      // If no header token could be attached, fallback to scoped HMAC confirmation token only (never JWT)
+      if (!token && confirmationToken && confirmationToken.split('.').length === 2) {
+        params.set('token', confirmationToken);
+      }
+
+      const qs = params.toString();
+      const url = `/api/reservations/${savedReservationId}/confirmation/pdf${qs ? `?${qs}` : ''}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || `Failed to fetch voucher (${res.status})`);
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      const downloadName = `Hotel-Mantri-Voucher-HM-${savedReservationId.slice(0, 8).toUpperCase()}.pdf`;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch (err: any) {
+      console.error('[NewBookingModal] Download voucher error:', err);
+      setError(err?.message || 'Failed to download reservation voucher.');
+    } finally {
+      setDownloadingVoucher(false);
+    }
+  };
 
   const handleRetryEmail = async () => {
     if (!savedReservationId) return;
@@ -290,6 +298,9 @@ export const NewBookingModal = ({
       const savedList = Array.isArray(result) ? result : [];
       const firstSaved = savedList[0];
       if (firstSaved?.id) setSavedReservationId(firstSaved.id);
+      if (firstSaved?.confirmation_token || firstSaved?.confirmationToken) {
+        setConfirmationToken(firstSaved.confirmation_token || firstSaved.confirmationToken);
+      }
       if (firstSaved?._emailStatus) {
         setEmailStatus(firstSaved._emailStatus as any);
         setEmailDelivery(firstSaved._emailDelivery || { recipientEmail: email.trim() });
@@ -386,14 +397,15 @@ export const NewBookingModal = ({
 
               <div className="mt-5 grid grid-cols-2 gap-2.5">
                 {savedReservationId && (
-                  <a
-                    href={`/api/reservations/${savedReservationId}/confirmation/pdf`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition shadow-xs active:scale-95"
+                  <button
+                    type="button"
+                    onClick={handleDownloadVoucher}
+                    disabled={downloadingVoucher}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition shadow-xs active:scale-95 cursor-pointer disabled:opacity-60"
                   >
-                    <FileText className="w-4 h-4 text-blue-600" /> Download Voucher
-                  </a>
+                    {downloadingVoucher ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <FileText className="w-4 h-4 text-blue-600" />}
+                    <span>Download Voucher</span>
+                  </button>
                 )}
                 {(emailStatus === 'EMAIL_FAILED' || emailStatus === 'EMAIL_NOT_CONFIGURED') && savedReservationId && (
                   <button

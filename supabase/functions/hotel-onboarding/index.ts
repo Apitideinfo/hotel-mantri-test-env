@@ -1,4 +1,12 @@
+// @ts-ignore: Deno npm module specifier
 import { createClient } from "npm:@supabase/supabase-js@2";
+
+declare const Deno: {
+  serve: (handler: (req: Request) => Promise<Response> | Response) => void;
+  env: {
+    get: (key: string) => string | undefined;
+  };
+};
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -56,6 +64,7 @@ Deno.serve(async (req: Request) => {
     // ── Auth Verification ──
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: `Bearer ${jwt}` } },
+      auth: { autoRefreshToken: false, persistSession: false },
     });
 
     const { data: { user }, error: authError } = await userClient.auth.getUser(jwt);
@@ -135,7 +144,7 @@ Deno.serve(async (req: Request) => {
         .from("subscription_plans")
         .select("id, name, trial_days")
         .order("sort_order", { ascending: true });
-      const trialPlan = (plans || []).find((p) => p.trial_days > 0) || (plans || [])[0];
+      const trialPlan = (plans || []).find((p: any) => p.trial_days > 0) || (plans || [])[0];
       selectedPlanId = trialPlan?.id || null;
     }
 
@@ -275,7 +284,7 @@ Deno.serve(async (req: Request) => {
         .select("id, room_no")
         .eq("hotel_id", hotelId);
 
-      const existingRoomNos = new Set((existingRooms || []).map((r) => r.room_no.trim()));
+      const existingRoomNos = new Set((existingRooms || []).map((r: any) => r.room_no.trim()));
 
       // 2. Ensure all total_rooms rooms exist
       const fullRoomList = generateMissingRooms(
@@ -305,7 +314,7 @@ Deno.serve(async (req: Request) => {
         const categoryId = catKey ? (catIdMap.get(catKey) ?? null) : null;
 
         roomsToInsert.push({
-          hotel_id: hotelId,
+          hotel_id: hotelId!,
           room_no: cleanRoomNo,
           category_id: categoryId,
           floor: room.floor?.trim() || null,
@@ -355,7 +364,7 @@ Deno.serve(async (req: Request) => {
           .select("id, hotel_id, role")
           .eq("user_id", existingAuthUser.id);
 
-        const isSuper = (adminLinks || []).some((l) => l.role === "super_admin");
+        const isSuper = (adminLinks || []).some((l: any) => l.role === "super_admin");
         if (isSuper) {
           return errorResponse(
             "owner_auth",
@@ -368,8 +377,8 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const sameHotelLink = (adminLinks || []).find((l) => l.hotel_id === hotelId);
-        const otherHotelLink = (adminLinks || []).find((l) => l.hotel_id && l.hotel_id !== hotelId);
+        const sameHotelLink = (adminLinks || []).find((l: any) => l.hotel_id === hotelId);
+        const otherHotelLink = (adminLinks || []).find((l: any) => l.hotel_id && l.hotel_id !== hotelId);
 
         if (otherHotelLink) {
           // CASE C: Belong to another hotel -> conflict!
@@ -552,7 +561,7 @@ Deno.serve(async (req: Request) => {
 // ── Helpers ──
 
 async function updateAttempt(
-  client: ReturnType<typeof createClient>,
+  client: any,
   attemptId: string,
   status: string,
   completedSteps: string[],

@@ -1,6 +1,5 @@
 import express from 'express';
 import aiosellService from '../services/aiosellService.js';
-import { createClient } from '@supabase/supabase-js';
 import { supabaseServiceRole } from '../supabaseClient.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
