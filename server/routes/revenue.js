@@ -7,10 +7,14 @@
  */
 
 import express from 'express';
-import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { requireHotelAccess as checkAuth, forbidRoles } from '../middleware/auth.js';
 import { calculateDayWiseRevenue } from '../services/RevenueCalculationService.js';
 
 const router = express.Router();
+
+// Strict RBAC: Commercial revenue data is forbidden for Housekeeping
+router.use(checkAuth);
+router.use(forbidRoles(['housekeeping']));
 
 /**
  * GET /api/revenue/day-wise

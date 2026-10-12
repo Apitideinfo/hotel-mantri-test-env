@@ -25,6 +25,30 @@ import laundryService from '../services/laundryService.js';
 
 const router = express.Router();
 
+router.use(checkAuth);
+
+// RBAC: Housekeeping users can only access laundry if explicitly granted laundry permission
+router.use((req, res, next) => {
+  const role = (req.userRole || req.auth?.role || '').toLowerCase();
+  if (role === 'housekeeping') {
+    const canLaundry = Boolean(
+      req.auth?.permissions?.canLaundry ||
+      req.user?.user_metadata?.can_laundry ||
+      req.auth?.userMetadata?.can_laundry
+    );
+    if (!canLaundry) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        code: 'LAUNDRY_PERMISSION_REQUIRED',
+        message: 'Laundry & Linen access is not enabled for your Housekeeping profile. Please contact your administrator.',
+        requestId: req.requestId,
+      });
+    }
+  }
+  next();
+});
+
 // ── 1. Composite Dashboard ───────────────────────────────────────────────────
 router.get('/dashboard', checkAuth, async (req, res) => {
   try {

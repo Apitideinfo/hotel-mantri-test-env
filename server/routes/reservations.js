@@ -10,7 +10,7 @@
 
 import express from 'express';
 import { supabaseServiceRole } from '../supabaseClient.js';
-import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { requireHotelAccess as checkAuth, forbidRoles } from '../middleware/auth.js';
 import {
   checkRoomAvailability,
   detectExistingConflicts,
@@ -52,6 +52,10 @@ import { resolveHotelOwnerEmail } from '../services/notificationService.js';
 import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
 
 const router = express.Router();
+
+// Strict RBAC: All reservation operations require valid hotel context and forbid Housekeeping role
+router.use(checkAuth);
+router.use(forbidRoles(['housekeeping']));
 
 const formatDateReadable = (iso) => {
   if (!iso) return '—';

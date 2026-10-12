@@ -3,6 +3,7 @@ import {
   ArrowLeft, Save, Lock, Plus, Trash2, Building2, Upload, X, Eye,
   Phone, Mail, Globe, MapPin, FileText, User, Landmark, CreditCard,
   CheckCircle2, AlertCircle, Pencil, ChevronUp, ChevronDown, UtensilsCrossed, Clock,
+  Users, Shield,
 } from 'lucide-react';
 import type { HotelSettings, CompanySource, SourceCategory, GstMode, GstType, GstSlab, RoomCategory } from '@/lib/types';
 import { SOURCE_CATEGORIES, GST_SLABS, GST_MODES, GST_TYPES } from '@/lib/types';
@@ -18,6 +19,7 @@ import type { HotSeason } from '@/lib/types';
 
 interface SettingsProps {
   onBack: () => void;
+  onNavigate?: (screen: string) => void;
 }
 
 /* ── tiny sub-components ─────────────────────────────────────── */
@@ -51,7 +53,7 @@ const SectionCard = ({
 const CURRENT_YEAR = new Date().getFullYear();
 
 /* ── main component ──────────────────────────────────────────── */
-export const Settings = ({ onBack }: SettingsProps) => {
+export const Settings = ({ onBack, onNavigate }: SettingsProps) => {
   /* core */
   const [settings, setSettings] = useState<HotelSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -809,6 +811,28 @@ export const Settings = ({ onBack }: SettingsProps) => {
                 <input className={input} value={adminName} onChange={(e) => setAdminName(e.target.value)}
                   placeholder="Full name" />
               </Field>
+            </SectionCard>
+
+            {/* ── 5b. STAFF & ROLE-BASED ACCESS CONTROL ── */}
+            <SectionCard title="Staff & Role-Based Access Control" icon={<Users className="w-4 h-4" />}>
+              <p className="text-xs text-slate-500 mb-2">
+                Manage staff logins and enforce strict workspace access permissions. Staff with role <strong>Housekeeping</strong> are restricted to cleaning boards, room statuses, and tasks.
+              </p>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">Housekeeping</span>
+                <span className="text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-md">Reception</span>
+                <span className="text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md">Accounts</span>
+                <span className="text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-md">Manager</span>
+                <span className="text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md">Owner</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate?.('users')}
+                className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl text-xs transition cursor-pointer shadow-sm"
+              >
+                <Shield className="w-4 h-4 text-blue-400" />
+                Manage Staff Accounts & Role Permissions
+              </button>
             </SectionCard>
 
             {/* ── 6. BANK DETAILS ── */}

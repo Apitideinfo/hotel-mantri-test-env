@@ -39,6 +39,8 @@ const addAudit = async (roomNo: string, oldStatus: string, newStatus: string, us
   } catch { /* non-critical */ }
 };
 
+import { apiFetch } from './api-fetch';
+
 // ── Core: update room housekeeping status with timeline + audit ──
 
 export const setRoomHousekeepingStatus = async (params: {
@@ -61,11 +63,20 @@ export const setRoomHousekeepingStatus = async (params: {
     .maybeSingle();
   const oldStatus = (room as { housekeeping_status?: string })?.housekeeping_status ?? '';
 
+  // Map to DB check constraint supported value ('Vacant Clean', 'Vacant Dirty', 'Occupied', 'Inspection', 'Out Of Order', 'Blocked')
+  const dbStatus = status === 'Ready for Inspection'
+    ? 'Inspection'
+    : status === 'Cleaning In Progress'
+      ? 'Vacant Dirty'
+      : status === 'Inspected / Ready'
+        ? 'Vacant Clean'
+        : status;
+
   const updatePayload: Record<string, unknown> = {
-    housekeeping_status: status,
+    housekeeping_status: dbStatus,
     housekeeping_updated_at: new Date().toISOString(),
   };
-  if (status === 'Vacant Clean') {
+  if (status === 'Vacant Clean' || status === 'Inspected / Ready') {
     updatePayload.last_cleaned_at = new Date().toISOString();
   }
   if (status === 'Inspected / Ready') {
@@ -87,12 +98,21 @@ export const setRoomHousekeepingStatus = async (params: {
 
 // ── Cleaning workflow ──
 
-export const startCleaning = async (roomNo: string, staffId: string | null, performedBy = ''): Promise<void> => {
+export const startCleaning = async (roomNo: string, staffId: string | null = null, performedBy = ''): Promise<void> => {
+  try {
+    const res = await apiFetch('/api/housekeeping/start-cleaning', {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, staffId, performedBy }),
+    });
+    if (res?.success) return;
+  } catch (err) {
+    console.warn('[startCleaning] Backend API fallback:', err);
+  }
+
   const hotelId = getCurrentHotelId();
   await setRoomHousekeepingStatus({ roomNo, status: 'Cleaning In Progress', performedBy });
 
   try {
-    // Update or create assignment
     const { data: existing } = await supabase
       .from('housekeeping_assignments')
       .select('id')
@@ -123,10 +143,19 @@ export const startCleaning = async (roomNo: string, staffId: string | null, perf
 };
 
 export const completeCleaning = async (roomNo: string, performedBy = ''): Promise<void> => {
+  try {
+    const res = await apiFetch('/api/housekeeping/complete-cleaning', {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, performedBy }),
+    });
+    if (res?.success) return;
+  } catch (err) {
+    console.warn('[completeCleaning] Backend API fallback:', err);
+  }
+
   const hotelId = getCurrentHotelId();
   await setRoomHousekeepingStatus({ roomNo, status: 'Ready for Inspection', performedBy });
 
-  // Update assignment
   await supabase
     .from('housekeeping_assignments')
     .update({ status: 'completed', cleaning_completed_at: new Date().toISOString() })
@@ -135,11 +164,24 @@ export const completeCleaning = async (roomNo: string, performedBy = ''): Promis
     .in('status', ['pending', 'in_progress']);
 };
 
+export const sendForInspection = async (roomNo: string, performedBy = ''): Promise<void> => {
+  return completeCleaning(roomNo, performedBy);
+};
+
 export const approveInspection = async (roomNo: string, inspectedBy = ''): Promise<void> => {
+  try {
+    const res = await apiFetch('/api/housekeeping/approve-inspection', {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, inspectedBy }),
+    });
+    if (res?.success) return;
+  } catch (err) {
+    console.warn('[approveInspection] Backend API fallback:', err);
+  }
+
   const hotelId = getCurrentHotelId();
   await setRoomHousekeepingStatus({ roomNo, status: 'Vacant Clean', performedBy: inspectedBy });
 
-  // Create inspection record
   await supabase.from('housekeeping_inspections').insert({
     hotel_id: hotelId,
     room_no: roomNo,
@@ -151,8 +193,17 @@ export const approveInspection = async (roomNo: string, inspectedBy = ''): Promi
 
 export const rejectInspection = async (roomNo: string, rejectionReason: string, inspectedBy = ''): Promise<void> => {
   if (!rejectionReason.trim()) throw new Error('Rejection reason is required.');
-  const hotelId = getCurrentHotelId();
+  try {
+    const res = await apiFetch('/api/housekeeping/reject-inspection', {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, rejectionReason, inspectedBy }),
+    });
+    if (res?.success) return;
+  } catch (err) {
+    console.warn('[rejectInspection] Backend API fallback:', err);
+  }
 
+  const hotelId = getCurrentHotelId();
   await setRoomHousekeepingStatus({
     roomNo,
     status: 'Cleaning In Progress',
@@ -162,7 +213,6 @@ export const rejectInspection = async (roomNo: string, rejectionReason: string, 
     audit: true,
   });
 
-  // Create inspection record
   await supabase.from('housekeeping_inspections').insert({
     hotel_id: hotelId,
     room_no: roomNo,
@@ -172,7 +222,6 @@ export const rejectInspection = async (roomNo: string, rejectionReason: string, 
     inspected_at: new Date().toISOString(),
   });
 
-  // Reset assignment to in_progress
   await supabase
     .from('housekeeping_assignments')
     .update({ status: 'in_progress', cleaning_completed_at: null })

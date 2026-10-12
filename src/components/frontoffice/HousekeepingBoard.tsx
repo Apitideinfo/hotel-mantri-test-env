@@ -15,6 +15,7 @@ import type {
 import {
   HK_STATUSES, CLEANING_PRIORITIES, STAYOVER_SERVICE_TYPES, MAINTENANCE_CATEGORIES,
 } from '@/lib/types-housekeeping';
+import { useAuth } from '@/lib/auth';
 import {
   setRoomHousekeepingStatus, startCleaning, completeCleaning, approveInspection,
   rejectInspection, markDirty, markOutOfOrder, blockRoom, overrideStatus,
@@ -23,6 +24,7 @@ import {
   getHousekeepingStaff, addHousekeepingStaff, getStaffProductivity,
   getRoomTimeline, getArrivalReadiness, updateRoomNote,
 } from '@/lib/api-housekeeping';
+import { CreateHousekeepingUserModal } from './CreateHousekeepingUserModal';
 
 interface HousekeepingBoardProps {
   onBack: () => void;
@@ -75,6 +77,24 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
   const [arrivalReadiness, setArrivalReadiness] = useState<ArrivalReadiness | null>(null);
   const [showStaffPanel, setShowStaffPanel] = useState(false);
   const [staffProductivity, setStaffProductivity] = useState<StaffProductivity[]>([]);
+  const [showCreateStaffModal, setShowCreateStaffModal] = useState(false);
+  const [staffCreatedToast, setStaffCreatedToast] = useState<string | null>(null);
+
+  const { user, role: authRole, permissions } = useAuth();
+  const isHousekeepingUser = authRole === 'housekeeping';
+  const canApprove = role === 'admin' || role === 'super_admin' || role === 'manager' || authRole === 'owner' || authRole === 'manager' || authRole === 'hotel_admin' || Boolean(permissions?.canApproveInspection);
+  const canReportMaint = Boolean(permissions?.canMaintenance !== false);
+
+  const [boardTab, setBoardTab] = useState<'assigned' | 'all'>(isHousekeepingUser ? 'assigned' : 'all');
+  const [quickMaintRoom, setQuickMaintRoom] = useState<Room | null>(null);
+  const [quickNoteRoom, setQuickNoteRoom] = useState<Room | null>(null);
+  const [quickMaintCategory, setQuickMaintCategory] = useState(MAINTENANCE_CATEGORIES[0]);
+  const [quickMaintDesc, setQuickMaintDesc] = useState('');
+  const [quickMaintPriority, setQuickMaintPriority] = useState<MaintenanceIssue['priority']>('medium');
+  const [quickMaintAffectsSale, setQuickMaintAffectsSale] = useState(false);
+  const [quickNoteText, setQuickNoteText] = useState('');
+  const [quickRejectRoom, setQuickRejectRoom] = useState<Room | null>(null);
+  const [quickRejectReason, setQuickRejectReason] = useState('');
 
   const today = date ?? new Date().toISOString().slice(0, 10);
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
@@ -103,6 +123,35 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
   useEffect(() => { load(); }, [load]);
 
   const activeRooms = useMemo(() => rooms.filter((r) => r.is_active), [rooms]);
+
+  // Match current staff profile
+  const currentStaffMember = useMemo(() => {
+    if (!user) return null;
+    const meta = (user.user_metadata || {}) as Record<string, any>;
+    const metaPhone = (meta.mobile || meta.phone || '').replace(/\D/g, '');
+    const metaName = (meta.full_name || meta.name || user.email?.split('@')[0] || '').toLowerCase().trim();
+    return staff.find((s) => {
+      const sPhone = (s.phone || '').replace(/\D/g, '');
+      const sName = (s.name || '').toLowerCase().trim();
+      return (metaPhone && sPhone === metaPhone) || (metaName && sName === metaName);
+    }) || null;
+  }, [user, staff]);
+
+  const assignedFloor = (user?.user_metadata as any)?.assigned_floor || '';
+
+  const myAssignedRooms = useMemo(() => {
+    const sorted = [...activeRooms].sort((a, b) => compareRoomNo(a.room_no, b.room_no));
+    if (currentStaffMember) {
+      const assigned = sorted.filter((r) => r.assigned_staff_id === currentStaffMember.id);
+      if (assigned.length > 0) return assigned;
+    }
+    if (assignedFloor) {
+      const onFloor = sorted.filter((r) => String(r.floor) === String(assignedFloor));
+      if (onFloor.length > 0) return onFloor;
+    }
+    // Fallback: actionable cleaning rooms
+    return sorted.filter((r) => ['Vacant Dirty', 'Cleaning In Progress', 'Ready for Inspection', 'Inspection'].includes(r.housekeeping_status));
+  }, [activeRooms, currentStaffMember, assignedFloor]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -216,77 +265,404 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
   return (
     <div className="flex flex-col h-full bg-slate-50">
       {/* Header */}
-      <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 flex-wrap">
-        <button onClick={onBack} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600">
-          <RefreshCw className="w-4 h-4 rotate-180" />
-        </button>
+      <div className="bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3 flex-wrap shadow-2xs">
+        {!isHousekeepingUser && (
+          <button onClick={onBack} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 cursor-pointer" title="Back">
+            <RefreshCw className="w-4 h-4 rotate-180" />
+          </button>
+        )}
         <div className="flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-brand-600" />
-          <h1 className="text-lg font-bold text-brand-navy-800">Housekeeping Board</h1>
+          <Sparkles className="w-5 h-5 text-sky-600" />
+          <h1 className="text-lg font-black text-slate-900 tracking-tight">Housekeeping Workspace</h1>
         </div>
         <div className="flex-1" />
-        <button
-          onClick={() => { setShowStaffPanel(true); loadStaffProductivity(); }}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-brand-navy-700 bg-brand-navy-50 hover:bg-brand-navy-100 rounded-lg transition"
-        >
-          <Users className="w-4 h-4" /> Staff
-        </button>
-        <button onClick={load} className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600" title="Refresh">
+        {!isHousekeepingUser && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowCreateStaffModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm rounded-xl transition cursor-pointer"
+              title="Create Housekeeping User Account"
+            >
+              <UserPlus className="w-4 h-4" /> Create Staff Account
+            </button>
+            <button
+              onClick={() => { setShowStaffPanel(true); loadStaffProductivity(); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition cursor-pointer"
+            >
+              <Users className="w-4 h-4" /> Staff Panel
+            </button>
+          </div>
+        )}
+        <button onClick={load} className="p-2 hover:bg-slate-100 rounded-xl text-slate-600 transition cursor-pointer" title="Refresh Board">
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
 
-      {/* Summary cards */}
-      <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        {SUMMARY_CARDS.map(({ status, icon: Icon }) => {
-          const config = STATUS_CONFIG[status];
-          const count = statusCounts[status] ?? 0;
-          return (
-            <button
-              key={status}
-              onClick={() => setFilterStatus(filterStatus === status ? '' : status)}
-              className={`rounded-xl p-2.5 border text-left transition hover:shadow-sm ${
-                filterStatus === status ? 'ring-2 ring-brand-500 ' : ''
-              }${config.border} ${config.bg}`}
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${config.bg} ${config.color}`}>
-                  <Icon className="w-3.5 h-3.5" />
-                </div>
-                <span className={`text-lg font-bold tabular-nums ${config.color}`}>{count}</span>
-              </div>
-              <p className="text-[9px] text-slate-500 uppercase tracking-wide font-medium truncate">{status}</p>
-            </button>
-          );
-        })}
+      {/* Primary Tab Switcher */}
+      <div className="px-4 py-2.5 bg-white border-b border-slate-200 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => setBoardTab('assigned')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-extrabold rounded-lg transition cursor-pointer ${
+              boardTab === 'assigned'
+                ? 'bg-white text-sky-700 shadow-xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 text-sky-600" />
+            <span>MY ASSIGNED ROOMS</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${boardTab === 'assigned' ? 'bg-sky-100 text-sky-800' : 'bg-slate-200 text-slate-700'}`}>
+              {myAssignedRooms.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setBoardTab('all')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 text-xs font-extrabold rounded-lg transition cursor-pointer ${
+              boardTab === 'all'
+                ? 'bg-white text-slate-900 shadow-xs ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <BedDouble className="w-3.5 h-3.5 text-slate-500" />
+            <span>ALL HOTEL ROOMS</span>
+            <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${boardTab === 'all' ? 'bg-slate-200 text-slate-800' : 'bg-slate-200 text-slate-700'}`}>
+              {activeRooms.length}
+            </span>
+          </button>
+        </div>
+
+        {isHousekeepingUser && (
+          <div className="hidden sm:flex items-center gap-2 text-xs font-medium text-slate-500">
+            <span>Logged in as: <strong className="text-slate-800 font-bold">{user?.user_metadata?.full_name || user?.user_metadata?.username || 'Staff'}</strong></span>
+            {user?.user_metadata?.assigned_floor && (
+              <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[11px]">
+                Floor {user.user_metadata.assigned_floor}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Arrival Readiness */}
-      {arrivalReadiness && arrivalReadiness.totalArrivals > 0 && (
-        <div className="px-4 pb-2">
-          <div className={`rounded-xl border p-3 ${
-            arrivalReadiness.warnings.length > 0
-              ? 'bg-amber-50 border-amber-200'
-              : 'bg-emerald-50 border-emerald-200'
-          }`}>
-            <div className="flex items-center gap-2 mb-2">
-              <AlertTriangle className={`w-4 h-4 ${arrivalReadiness.warnings.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
-              <h3 className="text-sm font-bold text-brand-navy-800">Arrival Readiness — {today}</h3>
+      {staffCreatedToast && (
+        <div className="mx-4 my-2 bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-semibold rounded-xl p-3 flex items-center gap-2 animate-fade-in shadow-xs">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+          <span>{staffCreatedToast}</span>
+          <button onClick={() => setStaffCreatedToast(null)} className="ml-auto cursor-pointer"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
+      {error && (
+        <div className="mx-4 my-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl p-3 flex items-center gap-2 animate-fade-in">
+          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="ml-auto cursor-pointer"><X className="w-4 h-4" /></button>
+        </div>
+      )}
+
+      {/* TAB 1: MY ASSIGNED ROOMS (Mobile-First Task Workspace) */}
+      {boardTab === 'assigned' && (
+        <div className="flex-1 overflow-auto p-4 space-y-4">
+          {/* Quick Header Strip */}
+          <div className="bg-gradient-to-r from-sky-900 via-blue-900 to-indigo-950 rounded-2xl p-4 text-white shadow-sm flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-xs font-bold text-sky-200 uppercase tracking-wider">Housekeeping Tasks</p>
+              <h2 className="text-lg font-black text-white">
+                {myAssignedRooms.length} {myAssignedRooms.length === 1 ? 'Room' : 'Rooms'} To Clean / Inspect
+              </h2>
             </div>
-            <div className="flex flex-wrap gap-4 text-xs">
-              <span className="text-slate-600"><b>{arrivalReadiness.totalArrivals}</b> arrivals</span>
-              <span className="text-emerald-600"><b>{arrivalReadiness.roomsReady}</b> ready</span>
-              <span className="text-amber-600"><b>{arrivalReadiness.roomsDirty}</b> dirty</span>
-              <span className="text-sky-600"><b>{arrivalReadiness.cleaningInProgress}</b> cleaning</span>
-              <span className="text-violet-600"><b>{arrivalReadiness.inspectionPending}</b> inspection</span>
-              <span className="text-red-600"><b>{arrivalReadiness.outOfOrderConflicts}</b> OOO/blocked</span>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="bg-amber-400/20 text-amber-300 border border-amber-400/30 px-2.5 py-1 rounded-lg font-bold">
+                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Vacant Dirty').length} Dirty
+              </span>
+              <span className="bg-sky-400/20 text-sky-300 border border-sky-400/30 px-2.5 py-1 rounded-lg font-bold">
+                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Cleaning In Progress').length} Cleaning
+              </span>
+              <span className="bg-violet-400/20 text-violet-300 border border-violet-400/30 px-2.5 py-1 rounded-lg font-bold">
+                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Ready for Inspection').length} Inspection
+              </span>
             </div>
-            {arrivalReadiness.warnings.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {arrivalReadiness.warnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-700 flex items-center gap-1.5">
-                    <AlertCircle className="w-3 h-3 shrink-0" /> {w}
-                  </p>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center h-48 text-slate-400">
+              <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading assigned rooms…
+            </div>
+          ) : myAssignedRooms.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+              <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-bold text-slate-800">All Rooms Cleaned!</h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                No rooms currently require cleaning for your assigned profile. You can view all property rooms in the "ALL HOTEL ROOMS" tab.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {myAssignedRooms.map((room) => {
+                const config = STATUS_CONFIG[room.housekeeping_status];
+                const Icon = config.icon;
+                const priorityColor = PRIORITY_COLORS[room.cleaning_priority] ?? PRIORITY_COLORS['Normal'];
+                const category = categories.find((c) => c.id === room.category_id)?.name ?? 'Room';
+
+                return (
+                  <div
+                    key={room.id}
+                    className={`bg-white rounded-2xl border-2 ${config.border} shadow-sm hover:shadow-md transition p-4 flex flex-col justify-between`}
+                  >
+                    <div>
+                      {/* Top Room Row */}
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl font-black text-slate-900 tracking-tight">Room {room.room_no}</span>
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                            {room.floor ? `Fl ${room.floor}` : ''} • {category}
+                          </span>
+                        </div>
+                        <div className={`w-3 h-3 rounded-full ${config.dot}`} />
+                      </div>
+
+                      {/* Status + Priority */}
+                      <div className="flex items-center justify-between gap-2 mb-3">
+                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold ${config.bg} ${config.color} border ${config.border}`}>
+                          <Icon className="w-3.5 h-3.5" />
+                          <span>{room.housekeeping_status}</span>
+                        </div>
+                        <span className={`text-[10px] px-2 py-0.5 rounded-lg font-bold ${priorityColor}`}>
+                          {room.cleaning_priority}
+                        </span>
+                      </div>
+
+                      {/* Housekeeping Note */}
+                      {room.housekeeping_note && (
+                        <div className="mb-3 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200/80 text-xs text-amber-900">
+                          <p className="font-bold flex items-center gap-1"><FileText className="w-3.5 h-3.5 text-amber-700" /> Note:</p>
+                          <p className="mt-0.5 italic">{room.housekeeping_note}</p>
+                        </div>
+                      )}
+
+                      {room.last_cleaned_at && (
+                        <p className="text-[11px] text-slate-400 mb-2">
+                          Last Cleaned: {fmtTime(room.last_cleaned_at)}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+                      {room.housekeeping_status === 'Vacant Dirty' && (
+                        <button
+                          type="button"
+                          onClick={() => handleQuickAction('startCleaning', room.room_no)}
+                          disabled={saving}
+                          className="w-full h-11 bg-sky-600 hover:bg-sky-700 active:scale-[0.98] text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition disabled:opacity-50 cursor-pointer"
+                        >
+                          <Play className="w-4 h-4 fill-current" /> Start Cleaning
+                        </button>
+                      )}
+
+                      {room.housekeeping_status === 'Cleaning In Progress' && (
+                        <button
+                          type="button"
+                          onClick={() => handleQuickAction('completeCleaning', room.room_no)}
+                          disabled={saving}
+                          className="w-full h-11 bg-violet-600 hover:bg-violet-700 active:scale-[0.98] text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-xs transition disabled:opacity-50 cursor-pointer"
+                        >
+                          <CheckCheck className="w-4 h-4" /> Mark Complete (Send for Inspection)
+                        </button>
+                      )}
+
+                      {room.housekeeping_status === 'Ready for Inspection' && (
+                        canApprove ? (
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleQuickAction('approve', room.room_no)}
+                              disabled={saving}
+                              className="h-11 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl flex items-center justify-center gap-1.5 shadow-xs transition disabled:opacity-50 cursor-pointer"
+                            >
+                              <ShieldCheck className="w-4 h-4" /> Approve Clean
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuickRejectRoom(room);
+                                setQuickRejectReason('');
+                              }}
+                              disabled={saving}
+                              className="h-11 bg-rose-50 hover:bg-rose-100 active:scale-[0.98] text-rose-700 border border-rose-200 font-bold rounded-xl flex items-center justify-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                            >
+                              <X className="w-4 h-4" /> Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="h-11 bg-violet-50 border border-violet-200 text-violet-800 font-bold rounded-xl flex items-center justify-center gap-2 text-xs">
+                            <Clock className="w-4 h-4 text-violet-600" /> Ready for Inspection (Awaiting Approval)
+                          </div>
+                        )
+                      )}
+
+                      {(room.housekeeping_status === 'Vacant Clean' || room.housekeeping_status === 'Inspected / Ready') && (
+                        <div className="h-11 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-xl flex items-center justify-center gap-2 text-xs">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Vacant Clean & Ready
+                        </div>
+                      )}
+
+                      {room.housekeeping_status === 'Occupied' && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRoom(room)}
+                          className="w-full h-11 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 text-xs transition cursor-pointer"
+                        >
+                          <BedDouble className="w-4 h-4" /> Stayover Service Details
+                        </button>
+                      )}
+
+                      {/* Secondary Actions */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-xs">
+                        {canReportMaint && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuickMaintRoom(room);
+                              setQuickMaintDesc('');
+                              setQuickMaintCategory(MAINTENANCE_CATEGORIES[0]);
+                              setQuickMaintPriority('medium');
+                              setQuickMaintAffectsSale(false);
+                            }}
+                            className="text-orange-600 hover:text-orange-700 font-bold flex items-center gap-1.5 p-1 rounded-lg hover:bg-orange-50 transition cursor-pointer"
+                          >
+                            <Wrench className="w-3.5 h-3.5" /> Report Issue
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setQuickNoteRoom(room);
+                            setQuickNoteText(room.housekeeping_note || '');
+                          }}
+                          className="text-blue-600 hover:text-blue-700 font-bold flex items-center gap-1.5 p-1 rounded-lg hover:bg-blue-50 transition cursor-pointer ml-auto"
+                        >
+                          <FileText className="w-3.5 h-3.5" /> {room.housekeeping_note ? 'Edit Note' : 'Add Note'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 2: ALL HOTEL ROOMS (Overview for Supervisors & Staff) */}
+      {boardTab === 'all' && (
+        <div className="flex-1 flex flex-col min-h-0">
+          {/* Summary cards */}
+          <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 shrink-0">
+            {SUMMARY_CARDS.map(({ status, icon: Icon }) => {
+              const config = STATUS_CONFIG[status];
+              const count = statusCounts[status] ?? 0;
+              return (
+                <button
+                  key={status}
+                  onClick={() => setFilterStatus(filterStatus === status ? '' : status)}
+                  className={`rounded-xl p-2.5 border text-left transition hover:shadow-sm cursor-pointer ${
+                    filterStatus === status ? 'ring-2 ring-brand-500 ' : ''
+                  }${config.border} ${config.bg}`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${config.bg} ${config.color}`}>
+                      <Icon className="w-3.5 h-3.5" />
+                    </div>
+                    <span className={`text-lg font-bold tabular-nums ${config.color}`}>{count}</span>
+                  </div>
+                  <p className="text-[9px] text-slate-500 uppercase tracking-wide font-medium truncate">{status}</p>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Arrival Readiness (Only visible if not housekeeping or if permitted) */}
+          {!isHousekeepingUser && arrivalReadiness && arrivalReadiness.totalArrivals > 0 && (
+            <div className="px-4 pb-2 shrink-0">
+              <div className={`rounded-xl border p-3 ${
+                arrivalReadiness.warnings.length > 0
+                  ? 'bg-amber-50 border-amber-200'
+                  : 'bg-emerald-50 border-emerald-200'
+              }`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className={`w-4 h-4 ${arrivalReadiness.warnings.length > 0 ? 'text-amber-600' : 'text-emerald-600'}`} />
+                  <h3 className="text-sm font-bold text-brand-navy-800">Arrival Readiness — {today}</h3>
+                </div>
+                <div className="flex flex-wrap gap-4 text-xs">
+                  <span className="text-slate-600"><b>{arrivalReadiness.totalArrivals}</b> arrivals</span>
+                  <span className="text-emerald-600"><b>{arrivalReadiness.roomsReady}</b> ready</span>
+                  <span className="text-amber-600"><b>{arrivalReadiness.roomsDirty}</b> dirty</span>
+                  <span className="text-sky-600"><b>{arrivalReadiness.cleaningInProgress}</b> cleaning</span>
+                  <span className="text-violet-600"><b>{arrivalReadiness.inspectionPending}</b> inspection</span>
+                  <span className="text-red-600"><b>{arrivalReadiness.outOfOrderConflicts}</b> OOO/blocked</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Search + filter + group */}
+          <div className="px-4 pb-2 flex items-center gap-2 flex-wrap shrink-0">
+            <div className="relative flex-1 min-w-[180px] max-w-xs">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input type="text" placeholder="Search room…" value={search} onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
+            </div>
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as HousekeepingStatus | '')}
+              className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
+              <option value="">All Statuses</option>
+              {HK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
+              {(['category', 'floor', 'status'] as GroupMode[]).map((m) => (
+                <button key={m} onClick={() => setGroupMode(m)}
+                  className={`px-2.5 py-1 text-xs rounded-md transition capitalize cursor-pointer ${groupMode === m ? 'bg-white text-brand-navy-800 shadow-sm font-medium' : 'text-slate-500'}`}>
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Room grid */}
+          <div className="flex-1 overflow-auto px-4 pb-4">
+            {loading ? (
+              <div className="flex items-center justify-center h-64 text-slate-400">
+                <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading…
+              </div>
+            ) : filteredRooms.length === 0 ? (
+              <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No rooms match the filter.</div>
+            ) : (
+              <div className="space-y-4">
+                {groupedRooms.map((group) => (
+                  <div key={group.key}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="h-4 w-1 rounded-full bg-brand-500" />
+                      <h2 className="text-sm font-bold text-brand-navy-700 uppercase tracking-wider">{group.label}</h2>
+                      <span className="text-xs text-slate-400">— {group.rooms.length} rooms</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5">
+                      {group.rooms.map((room) => (
+                        <RoomCard
+                          key={room.id}
+                          room={room}
+                          staff={staff}
+                          role={role}
+                          saving={saving}
+                          onClick={() => setSelectedRoom(room)}
+                          onQuickAction={handleQuickAction}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
@@ -294,70 +670,223 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
         </div>
       )}
 
-      {/* Search + filter + group */}
-      <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[180px] max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input type="text" placeholder="Search room…" value={search} onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
-        </div>
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as HousekeepingStatus | '')}
-          className="text-sm border border-slate-200 rounded-lg px-2 py-2 bg-white">
-          <option value="">All Statuses</option>
-          {HK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <div className="flex items-center gap-1 bg-slate-100 rounded-lg p-0.5">
-          {(['category', 'floor', 'status'] as GroupMode[]).map((m) => (
-            <button key={m} onClick={() => setGroupMode(m)}
-              className={`px-2.5 py-1 text-xs rounded-md transition capitalize ${groupMode === m ? 'bg-white text-brand-navy-800 shadow-sm font-medium' : 'text-slate-500'}`}>
-              {m}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* QUICK REPORT MAINTENANCE MODAL */}
+      {quickMaintRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <Wrench className="w-5 h-5 text-orange-600" />
+                <h3 className="font-bold text-slate-900">Report Issue — Room {quickMaintRoom.room_no}</h3>
+              </div>
+              <button onClick={() => setQuickMaintRoom(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-      {error && (
-        <div className="mx-4 mb-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2 animate-fade-in">
-          <AlertCircle className="w-4 h-4 shrink-0" /> {error}
-          <button onClick={() => setError(null)} className="ml-auto"><X className="w-4 h-4" /></button>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Issue Category</label>
+                <select
+                  value={quickMaintCategory}
+                  onChange={(e) => setQuickMaintCategory(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white"
+                >
+                  {MAINTENANCE_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Description</label>
+                <textarea
+                  value={quickMaintDesc}
+                  onChange={(e) => setQuickMaintDesc(e.target.value)}
+                  placeholder="Describe the issue (e.g. Tap leaking, AC not cooling)..."
+                  rows={3}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl resize-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 items-center">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Priority</label>
+                  <select
+                    value={quickMaintPriority}
+                    onChange={(e) => setQuickMaintPriority(e.target.value as any)}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white"
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs text-slate-700 font-bold mt-4">
+                  <input
+                    type="checkbox"
+                    checked={quickMaintAffectsSale}
+                    onChange={(e) => setQuickMaintAffectsSale(e.target.checked)}
+                    className="rounded text-orange-600"
+                  />
+                  Affects Room Sale
+                </label>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setQuickMaintRoom(null)}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!quickMaintDesc.trim() || saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await reportMaintenanceIssue({
+                      roomNo: quickMaintRoom.room_no,
+                      issueCategory: quickMaintCategory,
+                      description: quickMaintDesc.trim(),
+                      priority: quickMaintPriority,
+                      affectsRoomSale: quickMaintAffectsSale,
+                    });
+                    setQuickMaintRoom(null);
+                    await load();
+                  } catch (err: any) {
+                    setError(err?.message || 'Failed to submit issue');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 rounded-xl disabled:opacity-50"
+              >
+                Submit Report
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Room grid */}
-      <div className="flex-1 overflow-auto px-4 pb-4">
-        {loading ? (
-          <div className="flex items-center justify-center h-64 text-slate-400">
-            <Loader2 className="w-6 h-6 animate-spin mr-2" /> Loading…
-          </div>
-        ) : filteredRooms.length === 0 ? (
-          <div className="flex items-center justify-center h-64 text-slate-400 text-sm">No rooms match the filter.</div>
-        ) : (
-          <div className="space-y-4">
-            {groupedRooms.map((group) => (
-              <div key={group.key}>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="h-4 w-1 rounded-full bg-brand-500" />
-                  <h2 className="text-sm font-bold text-brand-navy-700 uppercase tracking-wider">{group.label}</h2>
-                  <span className="text-xs text-slate-400">— {group.rooms.length} rooms</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5">
-                  {group.rooms.map((room) => (
-                    <RoomCard
-                      key={room.id}
-                      room={room}
-                      staff={staff}
-                      role={role}
-                      saving={saving}
-                      onClick={() => setSelectedRoom(room)}
-                      onQuickAction={handleQuickAction}
-                    />
-                  ))}
-                </div>
+      {/* QUICK ADD NOTE MODAL */}
+      {quickNoteRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-blue-600" />
+                <h3 className="font-bold text-slate-900">Housekeeping Note — Room {quickNoteRoom.room_no}</h3>
               </div>
-            ))}
+              <button onClick={() => setQuickNoteRoom(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Room Instructions / Note</label>
+              <textarea
+                value={quickNoteText}
+                onChange={(e) => setQuickNoteText(e.target.value)}
+                placeholder="e.g. Extra pillows requested, cleaning completed by Ramu..."
+                rows={4}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl resize-none"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setQuickNoteRoom(null)}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await updateRoomNote(quickNoteRoom.room_no, quickNoteText.trim());
+                    setQuickNoteRoom(null);
+                    await load();
+                  } catch (err: any) {
+                    setError(err?.message || 'Failed to save note');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl disabled:opacity-50"
+              >
+                Save Note
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* QUICK REJECT INSPECTION MODAL */}
+      {quickRejectRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <X className="w-5 h-5 text-rose-600" />
+                <h3 className="font-bold text-slate-900">Reject Inspection — Room {quickRejectRoom.room_no}</h3>
+              </div>
+              <button onClick={() => setQuickRejectRoom(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-600 uppercase mb-1">Reason for Rejection (Required)</label>
+              <textarea
+                value={quickRejectReason}
+                onChange={(e) => setQuickRejectReason(e.target.value)}
+                placeholder="What was not cleaned properly? (e.g. Bathroom floor wet, dust on table)..."
+                rows={3}
+                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl resize-none"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setQuickRejectRoom(null)}
+                className="flex-1 py-2.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!quickRejectReason.trim() || saving}
+                onClick={async () => {
+                  setSaving(true);
+                  try {
+                    await rejectInspection(quickRejectRoom.room_no, quickRejectReason.trim());
+                    setQuickRejectRoom(null);
+                    await load();
+                  } catch (err: any) {
+                    setError(err?.message || 'Failed to reject inspection');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl disabled:opacity-50"
+              >
+                Reject to In-Progress
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Room detail bottom sheet */}
       {selectedRoom && (
@@ -428,6 +957,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
           staff={staff}
           productivity={staffProductivity}
           onClose={() => setShowStaffPanel(false)}
+          onCreateAccount={() => setShowCreateStaffModal(true)}
           onAddStaff={async (name, phone, r) => {
             setSaving(true);
             try { await addHousekeepingStaff(name, phone, r); await loadStaffProductivity(); } catch (e) { setError(e instanceof Error ? e.message : 'Failed'); }
@@ -436,6 +966,19 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
           saving={saving}
         />
       )}
+
+      {/* Create Housekeeping User Modal */}
+      <CreateHousekeepingUserModal
+        isOpen={showCreateStaffModal}
+        onClose={() => setShowCreateStaffModal(false)}
+        categories={categories}
+        onSuccess={(newUser) => {
+          setStaffCreatedToast(`Housekeeping user account created for "${newUser.name}"! Login ID: "${newUser.username}". They can now log in using this username.`);
+          load();
+          loadStaffProductivity();
+          setTimeout(() => setStaffCreatedToast(null), 8000);
+        }}
+      />
     </div>
   );
 
@@ -919,11 +1462,12 @@ const RoomDetailSheet = ({ room, staff, role, onClose, onAction, onAssignStaff, 
 };
 
 // ── Staff Panel ──
-const StaffPanel = ({ staff, productivity, onClose, onAddStaff, saving }: {
+const StaffPanel = ({ staff, productivity, onClose, onAddStaff, onCreateAccount, saving }: {
   staff: HousekeepingStaff[];
   productivity: StaffProductivity[];
   onClose: () => void;
   onAddStaff: (name: string, phone: string, role: 'housekeeper' | 'supervisor') => void;
+  onCreateAccount?: () => void;
   saving: boolean;
 }) => {
   const [showAdd, setShowAdd] = useState(false);
@@ -949,6 +1493,14 @@ const StaffPanel = ({ staff, productivity, onClose, onAddStaff, saving }: {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+          {onCreateAccount && (
+            <button
+              onClick={() => { onClose(); onCreateAccount(); }}
+              className="w-full flex items-center justify-center gap-2 py-3 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-sm transition cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" /> Create Staff Login Account (Username & Password)
+            </button>
+          )}
           {showAdd ? (
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
               <input type="text" placeholder="Staff name" value={name} onChange={(e) => setName(e.target.value)}

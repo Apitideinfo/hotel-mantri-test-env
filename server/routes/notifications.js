@@ -15,7 +15,7 @@
  */
 
 import express from 'express';
-import { requireHotelAccess } from '../middleware/auth.js';
+import { requireHotelAccess, forbidRoles } from '../middleware/auth.js';
 import { sendEmail, validateSmtpConfig, verifySmtpConnection, isValidEmail } from '../services/emailService.js';
 import { buildInvoiceEmail } from '../services/emailTemplates.js';
 import { retryFailedNotifications } from '../services/notificationService.js';
@@ -76,6 +76,17 @@ const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
     hotel_admin_email: h.admin_email || '',
   };
 };
+
+// Strict RBAC: All notification and report routes require hotel auth and forbid Housekeeping
+router.use((req, res, next) => {
+  if (req.path.includes('/cron')) {
+    return next();
+  }
+  return requireHotelAccess(req, res, (err) => {
+    if (err) return next(err);
+    forbidRoles(['housekeeping'])(req, res, next);
+  });
+});
 
 // ─── POST /api/notifications/invoice/email ────────────────────────────────────
 
