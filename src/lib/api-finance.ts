@@ -137,6 +137,18 @@ export const deleteExpenseEntry = async (id: string): Promise<void> => {
   if (error) throw error;
 };
 
+export const toggleExpensePaidStatus = async (id: string, isPaid: boolean, paidDate?: string | null): Promise<void> => {
+  const { error } = await supabase
+    .from('expense_entries')
+    .update({
+      is_paid: isPaid,
+      paid_date: isPaid ? (paidDate || new Date().toISOString().slice(0, 10)) : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', id);
+  if (error) throw error;
+};
+
 // ── DAILY REVENUE ENTRIES (Other Revenue from Daily Room Chart) ──────────────
 
 export const getRevenueEntries = async (

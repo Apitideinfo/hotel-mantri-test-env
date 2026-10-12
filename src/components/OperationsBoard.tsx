@@ -96,6 +96,8 @@ const HK_DOT_COLORS: Record<string, string> = {
   'Occupied Service Due': 'bg-orange-500',
   'Cleaning In Progress': 'bg-sky-500',
   'Ready for Inspection': 'bg-violet-500',
+  'Inspection': 'bg-violet-500',
+  'Assigned': 'bg-amber-500',
   'Inspected / Ready': 'bg-indigo-500',
   'Out Of Order': 'bg-red-500',
   'Blocked': 'bg-slate-500',

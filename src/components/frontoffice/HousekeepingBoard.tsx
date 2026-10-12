@@ -23,6 +23,7 @@ import {
   reportMaintenanceIssue, getMaintenanceIssues, updateMaintenanceIssueStatus,
   getHousekeepingStaff, addHousekeepingStaff, getStaffProductivity,
   getRoomTimeline, getArrivalReadiness, updateRoomNote,
+  getHousekeepingRooms, normalizeHousekeepingStatus,
 } from '@/lib/api-housekeeping';
 import { CreateHousekeepingUserModal } from './CreateHousekeepingUserModal';
 
@@ -34,7 +35,7 @@ interface HousekeepingBoardProps {
 
 type GroupMode = 'category' | 'floor' | 'status';
 
-const STATUS_CONFIG: Record<HousekeepingStatus, { color: string; bg: string; border: string; dot: string; icon: typeof BedDouble }> = {
+const STATUS_CONFIG: Record<string, { color: string; bg: string; border: string; dot: string; icon: typeof BedDouble }> = {
   'Vacant Clean':          { color: 'text-emerald-700',  bg: 'bg-emerald-50',  border: 'border-emerald-200',  dot: 'bg-emerald-500',  icon: Sparkles },
   'Vacant Dirty':          { color: 'text-amber-700',    bg: 'bg-amber-50',    border: 'border-amber-200',    dot: 'bg-amber-500',    icon: BedDouble },
   'Occupied':              { color: 'text-brand-700',   bg: 'bg-brand-50',    border: 'border-brand-200',    dot: 'bg-brand-500',    icon: BedDouble },
@@ -42,9 +43,18 @@ const STATUS_CONFIG: Record<HousekeepingStatus, { color: string; bg: string; bor
   'Occupied Service Due':  { color: 'text-orange-700',  bg: 'bg-orange-50',   border: 'border-orange-200',  dot: 'bg-orange-500',   icon: AlertCircle },
   'Cleaning In Progress': { color: 'text-sky-700',      bg: 'bg-sky-50',      border: 'border-sky-200',      dot: 'bg-sky-500',      icon: Play },
   'Ready for Inspection':  { color: 'text-violet-700',  bg: 'bg-violet-50',   border: 'border-violet-200',   dot: 'bg-violet-500',   icon: ClipboardCheck },
+  'Inspection':            { color: 'text-violet-700',  bg: 'bg-violet-50',   border: 'border-violet-200',   dot: 'bg-violet-500',   icon: ClipboardCheck },
   'Inspected / Ready':     { color: 'text-indigo-700',  bg: 'bg-indigo-50',   border: 'border-indigo-200',   dot: 'bg-indigo-500',   icon: ShieldCheck },
   'Out Of Order':          { color: 'text-red-700',     bg: 'bg-red-50',      border: 'border-red-200',      dot: 'bg-red-500',      icon: Wrench },
   'Blocked':               { color: 'text-slate-600',   bg: 'bg-slate-100',   border: 'border-slate-300',    dot: 'bg-slate-500',    icon: Ban },
+  'Assigned':              { color: 'text-amber-700',    bg: 'bg-amber-50',    border: 'border-amber-200',    dot: 'bg-amber-500',    icon: BedDouble },
+};
+
+const DEFAULT_STATUS_CONFIG = STATUS_CONFIG['Vacant Clean'];
+
+const getHousekeepingStatusConfig = (status?: string | null) => {
+  if (!status) return DEFAULT_STATUS_CONFIG;
+  return STATUS_CONFIG[status] ?? STATUS_CONFIG[normalizeHousekeepingStatus(status)] ?? DEFAULT_STATUS_CONFIG;
 };
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -103,7 +113,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
     setLoading(true);
     setError(null);
     try {
-      const [rms, cats, stf] = await Promise.all([getRooms(), getRoomCategories(), getHousekeepingStaff()]);
+      const [rms, cats, stf] = await Promise.all([getHousekeepingRooms(), getRoomCategories(), getHousekeepingStaff()]);
       setRooms(rms);
       setCategories(cats);
       setStaff(stf);
@@ -150,13 +160,17 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
       if (onFloor.length > 0) return onFloor;
     }
     // Fallback: actionable cleaning rooms
-    return sorted.filter((r) => ['Vacant Dirty', 'Cleaning In Progress', 'Ready for Inspection', 'Inspection'].includes(r.housekeeping_status));
+    return sorted.filter((r) => {
+      const norm = normalizeHousekeepingStatus(r.housekeeping_status);
+      return ['Vacant Dirty', 'Cleaning In Progress', 'Ready for Inspection'].includes(norm);
+    });
   }, [activeRooms, currentStaffMember, assignedFloor]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const r of activeRooms) {
-      counts[r.housekeeping_status] = (counts[r.housekeeping_status] ?? 0) + 1;
+      const norm = normalizeHousekeepingStatus(r.housekeeping_status);
+      counts[norm] = (counts[norm] ?? 0) + 1;
     }
     return counts;
   }, [activeRooms]);
@@ -168,7 +182,10 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
       result = result.filter((r) => r.room_no.toLowerCase().includes(q));
     }
     if (filterStatus) {
-      result = result.filter((r) => r.housekeeping_status === filterStatus);
+      result = result.filter((r) => {
+        const norm = normalizeHousekeepingStatus(r.housekeeping_status);
+        return norm === filterStatus;
+      });
     }
     return result;
   }, [activeRooms, search, filterStatus]);
@@ -194,7 +211,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
       const groups: { key: string; label: string; rooms: Room[] }[] = [];
       const statusMap = new Map<string, Room[]>();
       for (const r of sorted) {
-        const s = r.housekeeping_status;
+        const s = normalizeHousekeepingStatus(r.housekeeping_status);
         if (!statusMap.has(s)) statusMap.set(s, []);
         statusMap.get(s)!.push(r);
       }
@@ -375,13 +392,13 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
             </div>
             <div className="flex items-center gap-2 text-xs">
               <span className="bg-amber-400/20 text-amber-300 border border-amber-400/30 px-2.5 py-1 rounded-lg font-bold">
-                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Vacant Dirty').length} Dirty
+                {myAssignedRooms.filter((r) => normalizeHousekeepingStatus(r.housekeeping_status) === 'Vacant Dirty').length} Dirty
               </span>
               <span className="bg-sky-400/20 text-sky-300 border border-sky-400/30 px-2.5 py-1 rounded-lg font-bold">
-                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Cleaning In Progress').length} Cleaning
+                {myAssignedRooms.filter((r) => normalizeHousekeepingStatus(r.housekeeping_status) === 'Cleaning In Progress').length} Cleaning
               </span>
               <span className="bg-violet-400/20 text-violet-300 border border-violet-400/30 px-2.5 py-1 rounded-lg font-bold">
-                {myAssignedRooms.filter((r) => r.housekeeping_status === 'Ready for Inspection').length} Inspection
+                {myAssignedRooms.filter((r) => normalizeHousekeepingStatus(r.housekeeping_status) === 'Ready for Inspection').length} Inspection
               </span>
             </div>
           </div>
@@ -403,7 +420,8 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {myAssignedRooms.map((room) => {
-                const config = STATUS_CONFIG[room.housekeeping_status];
+                const normStatus = normalizeHousekeepingStatus(room.housekeeping_status);
+                const config = getHousekeepingStatusConfig(normStatus);
                 const Icon = config.icon;
                 const priorityColor = PRIORITY_COLORS[room.cleaning_priority] ?? PRIORITY_COLORS['Normal'];
                 const category = categories.find((c) => c.id === room.category_id)?.name ?? 'Room';
@@ -429,7 +447,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
                       <div className="flex items-center justify-between gap-2 mb-3">
                         <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold ${config.bg} ${config.color} border ${config.border}`}>
                           <Icon className="w-3.5 h-3.5" />
-                          <span>{room.housekeeping_status}</span>
+                          <span>{normStatus}</span>
                         </div>
                         <span className={`text-[10px] px-2 py-0.5 rounded-lg font-bold ${priorityColor}`}>
                           {room.cleaning_priority}
@@ -453,7 +471,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
 
                     {/* Action Buttons */}
                     <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
-                      {room.housekeeping_status === 'Vacant Dirty' && (
+                      {normStatus === 'Vacant Dirty' && (
                         <button
                           type="button"
                           onClick={() => handleQuickAction('startCleaning', room.room_no)}
@@ -464,7 +482,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
                         </button>
                       )}
 
-                      {room.housekeeping_status === 'Cleaning In Progress' && (
+                      {normStatus === 'Cleaning In Progress' && (
                         <button
                           type="button"
                           onClick={() => handleQuickAction('completeCleaning', room.room_no)}
@@ -475,7 +493,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
                         </button>
                       )}
 
-                      {room.housekeeping_status === 'Ready for Inspection' && (
+                      {normStatus === 'Ready for Inspection' && (
                         canApprove ? (
                           <div className="grid grid-cols-2 gap-2">
                             <button
@@ -505,7 +523,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
                         )
                       )}
 
-                      {(room.housekeeping_status === 'Vacant Clean' || room.housekeeping_status === 'Inspected / Ready') && (
+                      {(normStatus === 'Vacant Clean' || normStatus === 'Inspected / Ready') && (
                         <div className="h-11 bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold rounded-xl flex items-center justify-center gap-2 text-xs">
                           <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Vacant Clean & Ready
                         </div>
@@ -564,7 +582,7 @@ export const HousekeepingBoard = ({ onBack, role, date }: HousekeepingBoardProps
           {/* Summary cards */}
           <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 shrink-0">
             {SUMMARY_CARDS.map(({ status, icon: Icon }) => {
-              const config = STATUS_CONFIG[status];
+              const config = getHousekeepingStatusConfig(status);
               const count = statusCounts[status] ?? 0;
               return (
                 <button
@@ -995,10 +1013,12 @@ const RoomCard = ({ room, staff, role, saving, onClick, onQuickAction }: {
   room: Room; staff: HousekeepingStaff[]; role: FrontOfficeRole | null; saving: boolean;
   onClick: () => void; onQuickAction: (action: string, roomNo: string, extra?: string) => void;
 }) => {
-  const config = STATUS_CONFIG[room.housekeeping_status];
+  const normStatus = normalizeHousekeepingStatus(room.housekeeping_status);
+  const config = getHousekeepingStatusConfig(normStatus);
   const Icon = config.icon;
   const assignedStaff = staff.find((s) => s.id === room.assigned_staff_id);
   const priorityColor = PRIORITY_COLORS[room.cleaning_priority] ?? PRIORITY_COLORS['Normal'];
+  const canApprove = role === 'admin' || role === 'super_admin' || role === 'manager';
 
   return (
     <div
@@ -1011,9 +1031,9 @@ const RoomCard = ({ room, staff, role, saving, onClick, onQuickAction }: {
       </div>
       <div className="flex items-center gap-1.5 mb-2">
         <Icon className={`w-3.5 h-3.5 ${config.color}`} />
-        <span className={`text-xs font-semibold ${config.color} truncate`}>{room.housekeeping_status}</span>
+        <span className={`text-xs font-semibold ${config.color} truncate`}>{normStatus}</span>
       </div>
-      {room.last_guest_name && room.housekeeping_status === 'Occupied' && (
+      {room.last_guest_name && normStatus === 'Occupied' && (
         <p className="text-[10px] text-slate-600 truncate mb-1">Guest: {room.last_guest_name}</p>
       )}
       {assignedStaff && (
@@ -1032,7 +1052,7 @@ const RoomCard = ({ room, staff, role, saving, onClick, onQuickAction }: {
       </div>
       {/* Quick action button */}
       <div className="mt-2 pt-2 border-t border-slate-200/50">
-        {room.housekeeping_status === 'Vacant Dirty' && (
+        {normStatus === 'Vacant Dirty' && (
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('startCleaning', room.room_no); }}
             disabled={saving}
@@ -1041,7 +1061,7 @@ const RoomCard = ({ room, staff, role, saving, onClick, onQuickAction }: {
             <Play className="w-3 h-3" /> Start Cleaning
           </button>
         )}
-        {room.housekeeping_status === 'Cleaning In Progress' && (
+        {normStatus === 'Cleaning In Progress' && (
           <button
             onClick={(e) => { e.stopPropagation(); onQuickAction('completeCleaning', room.room_no); }}
             disabled={saving}
@@ -1050,16 +1070,20 @@ const RoomCard = ({ room, staff, role, saving, onClick, onQuickAction }: {
             <CheckCheck className="w-3 h-3" /> Complete
           </button>
         )}
-        {room.housekeeping_status === 'Ready for Inspection' && (role === 'admin' || role === 'super_admin' || role === 'manager') && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onQuickAction('approve', room.room_no); }}
-            disabled={saving}
-            className="w-full flex items-center justify-center gap-1 py-1.5 text-xs font-semibold text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition disabled:opacity-50"
-          >
-            <ShieldCheck className="w-3 h-3" /> Approve
-          </button>
+        {normStatus === 'Ready for Inspection' && (
+          canApprove ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); onQuickAction('approve', room.room_no); }}
+              disabled={saving}
+              className="w-full flex items-center justify-center gap-1 py-1.5 text-xs font-semibold text-white bg-emerald-500 hover:bg-emerald-600 rounded-lg transition disabled:opacity-50"
+            >
+              <ShieldCheck className="w-3 h-3" /> Approve
+            </button>
+          ) : (
+            <span className="text-[10px] text-violet-600 font-medium text-center block">Pending inspection</span>
+          )
         )}
-        {room.housekeeping_status === 'Occupied' && (
+        {normStatus === 'Occupied' && (
           <span className="text-[10px] text-slate-400 text-center block">Tap for stayover service</span>
         )}
       </div>
@@ -1121,7 +1145,8 @@ const RoomDetailSheet = ({ room, staff, role, onClose, onAction, onAssignStaff, 
     } catch { /* non-critical */ }
   };
 
-  const config = STATUS_CONFIG[room.housekeeping_status];
+  const normStatus = normalizeHousekeepingStatus(room.housekeeping_status);
+  const config = getHousekeepingStatusConfig(normStatus);
   const Icon = config.icon;
   const assignedStaff = staff.find((s) => s.id === room.assigned_staff_id);
   const canOverride = role === 'admin' || role === 'super_admin';
@@ -1145,7 +1170,7 @@ const RoomDetailSheet = ({ room, staff, role, onClose, onAction, onAssignStaff, 
               </div>
               <div>
                 <h2 className="text-lg font-bold text-brand-navy-800">Room {room.room_no}</h2>
-                <p className={`text-xs font-semibold ${config.color}`}>{room.housekeeping_status}</p>
+                <p className={`text-xs font-semibold ${config.color}`}>{normStatus}</p>
               </div>
             </div>
             <button onClick={onClose} className="p-1.5 hover:bg-white/50 rounded-lg text-slate-500">
@@ -1228,7 +1253,7 @@ const RoomDetailSheet = ({ room, staff, role, onClose, onAction, onAssignStaff, 
                 <ActionBtn icon={Play} label="Start Cleaning" color="bg-sky-500" onClick={() => onAction('startCleaning')} disabled={savingState} />
                 <ActionBtn icon={CheckCheck} label="Complete Cleaning" color="bg-violet-500" onClick={() => onAction('completeCleaning')} disabled={savingState} />
                 {canInspect && <ActionBtn icon={ShieldCheck} label="Approve Clean" color="bg-emerald-500" onClick={() => onAction('approve')} disabled={savingState} />}
-                {canInspect && room.housekeeping_status === 'Ready for Inspection' && (
+                {canInspect && normStatus === 'Ready for Inspection' && (
                   <ActionBtn icon={X} label="Reject Inspection" color="bg-red-500" onClick={() => setShowRejectBox(true)} disabled={savingState} />
                 )}
                 <ActionBtn icon={BedDouble} label="Mark Dirty" color="bg-amber-500" onClick={() => onAction('markDirty')} disabled={savingState} />
@@ -1238,7 +1263,7 @@ const RoomDetailSheet = ({ room, staff, role, onClose, onAction, onAssignStaff, 
               </div>
 
               {/* Stayover service (for occupied rooms) */}
-              {(room.housekeeping_status === 'Occupied' || room.housekeeping_status === 'Occupied Clean' || room.housekeeping_status === 'Occupied Service Due') && (
+              {(normStatus === 'Occupied' || normStatus === 'Occupied Clean' || normStatus === 'Occupied Service Due') && (
                 <div className="pt-2 border-t border-slate-200">
                   <label className="text-xs font-semibold text-slate-500 mb-1.5 block">Stayover Service</label>
                   <div className="flex gap-2">

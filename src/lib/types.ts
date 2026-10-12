@@ -369,7 +369,7 @@ export const groupRoomsByCategory = <T extends { category_id: string | null }>(
 export type HousekeepingStatus =
   | 'Vacant Clean' | 'Vacant Dirty' | 'Occupied'
   | 'Occupied Clean' | 'Occupied Service Due'
-  | 'Cleaning In Progress' | 'Ready for Inspection'
+  | 'Cleaning In Progress' | 'Ready for Inspection' | 'Inspection'
   | 'Inspected / Ready' | 'Out Of Order' | 'Blocked';
 
 export type CleaningPriority =
