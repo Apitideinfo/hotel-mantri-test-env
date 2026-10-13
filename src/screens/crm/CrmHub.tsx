@@ -59,17 +59,20 @@ export const CrmHub = ({ onNavigate, onBack }: CrmHubProps) => {
       )}
 
       {/* Menu cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
         {MENU_ITEMS.map((item) => (
-          <button key={item.key} onClick={() => onNavigate(item.key)}
-            className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 text-left hover:shadow-md hover:-translate-y-0.5 transition group">
+          <button
+            key={item.key}
+            onClick={() => onNavigate(item.key)}
+            className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5 text-left hover:shadow-card-hover hover:border-slate-300 hover:-translate-y-0.5 transition-all duration-200 group cursor-pointer"
+          >
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${item.color}`}>
               <item.icon className="w-5 h-5" />
             </div>
-            <p className="text-sm font-bold text-brand-navy-800">{item.label}</p>
-            <p className="text-xs text-slate-400">{item.desc}</p>
-            <div className="flex items-center gap-1 mt-2 text-xs font-semibold text-brand-600 opacity-0 group-hover:opacity-100 transition">
-              Open <ArrowRight className="w-3 h-3" />
+            <p className="text-sm font-bold text-slate-900 group-hover:text-sky-600 transition-colors">{item.label}</p>
+            <p className="text-xs text-slate-500 mt-0.5">{item.desc}</p>
+            <div className="flex items-center gap-1 mt-3 text-xs font-semibold text-sky-600 opacity-0 group-hover:opacity-100 transition-opacity">
+              Open Directory <ArrowRight className="w-3 h-3" />
             </div>
           </button>
         ))}
@@ -82,67 +85,67 @@ export const CrmHub = ({ onNavigate, onBack }: CrmHubProps) => {
         </div>
       ) : insights ? (
         <div className="space-y-4">
-          <h2 className="text-sm font-bold text-brand-navy-700 uppercase tracking-wider">Automatic Insights</h2>
+          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Automatic Guest Insights</h2>
 
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <InsightCard label="Total Guests" value={insights.totalGuests.toString()} icon={Users} color="text-brand-600 bg-brand-50" />
-            <InsightCard label="VIP Guests" value={insights.vipCount.toString()} icon={Star} color="text-brand-gold-600 bg-brand-gold-50" />
-            <InsightCard label="Repeat Guest %" value={`${insights.repeatGuestPercent}%`} icon={TrendingUp} color="text-emerald-600 bg-emerald-50" />
-            <InsightCard label="Corporate Revenue" value={`₹${Math.round(insights.corporateRevenue).toLocaleString('en-IN')}`} icon={Building2} color="text-blue-600 bg-blue-50" />
+            <InsightCard label="Total Guests" value={insights.totalGuests.toString()} icon={Users} color="text-sky-600 bg-sky-50 border-sky-100" />
+            <InsightCard label="VIP Guests" value={insights.vipCount.toString()} icon={Star} color="text-amber-600 bg-amber-50 border-amber-100" />
+            <InsightCard label="Repeat Guest %" value={`${insights.repeatGuestPercent}%`} icon={TrendingUp} color="text-emerald-600 bg-emerald-50 border-emerald-100" />
+            <InsightCard label="Corporate Revenue" value={`₹${Math.round(insights.corporateRevenue).toLocaleString('en-IN')}`} icon={Building2} color="text-blue-600 bg-blue-50 border-blue-100" />
           </div>
 
           {/* Top guests */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {insights.highestSpendingGuest && (
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-                <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Highest Spending Guest</p>
-                <p className="text-lg font-bold text-brand-navy-800">{insights.highestSpendingGuest.name}</p>
-                <p className="text-sm text-emerald-600 font-semibold">₹{Math.round(insights.highestSpendingGuest.revenue).toLocaleString('en-IN')}</p>
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Highest Spending Guest</p>
+                <p className="text-lg font-black text-slate-900 tracking-tight">{insights.highestSpendingGuest.name}</p>
+                <p className="text-sm text-emerald-600 font-bold mt-0.5">₹{Math.round(insights.highestSpendingGuest.revenue).toLocaleString('en-IN')} Lifetime</p>
               </div>
             )}
             {insights.mostFrequentGuest && (
-              <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-                <p className="text-xs text-slate-400 uppercase tracking-wide mb-1">Most Frequent Guest</p>
-                <p className="text-lg font-bold text-brand-navy-800">{insights.mostFrequentGuest.name}</p>
-                <p className="text-sm text-brand-600 font-semibold">{insights.mostFrequentGuest.stays} stays</p>
+              <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Most Frequent Guest</p>
+                <p className="text-lg font-black text-slate-900 tracking-tight">{insights.mostFrequentGuest.name}</p>
+                <p className="text-sm text-sky-600 font-bold mt-0.5">{insights.mostFrequentGuest.stays} stays completed</p>
               </div>
             )}
           </div>
 
           {/* Upcoming birthdays & anniversaries */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
+              <div className="flex items-center gap-2 mb-3">
                 <Cake className="w-4 h-4 text-rose-500" />
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Upcoming Birthdays</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Upcoming Birthdays</p>
               </div>
               {insights.upcomingBirthdays.length === 0 ? (
                 <p className="text-xs text-slate-400">None in the next 30 days</p>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {insights.upcomingBirthdays.map((b, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-700">{b.name}</span>
-                      <span className="text-xs text-slate-400">{new Date(b.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
+                    <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-slate-50 last:border-0">
+                      <span className="font-medium text-slate-700">{b.name}</span>
+                      <span className="text-xs font-semibold text-slate-500">{new Date(b.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Heart className="w-4 h-4 text-red-500" />
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Upcoming Anniversaries</p>
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Heart className="w-4 h-4 text-rose-500" />
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Upcoming Anniversaries</p>
               </div>
               {insights.upcomingAnniversaries.length === 0 ? (
                 <p className="text-xs text-slate-400">None in the next 30 days</p>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {insights.upcomingAnniversaries.map((a, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-slate-700">{a.name}</span>
-                      <span className="text-xs text-slate-400">{new Date(a.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
+                    <div key={i} className="flex items-center justify-between text-sm py-1 border-b border-slate-50 last:border-0">
+                      <span className="font-medium text-slate-700">{a.name}</span>
+                      <span className="text-xs font-semibold text-slate-500">{new Date(a.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</span>
                     </div>
                   ))}
                 </div>
@@ -152,16 +155,16 @@ export const CrmHub = ({ onNavigate, onBack }: CrmHubProps) => {
 
           {/* Guests not returned */}
           {insights.guestsNotReturned.length > 0 && (
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-2">
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5">
+              <div className="flex items-center gap-2 mb-3">
                 <AlertCircle className="w-4 h-4 text-amber-500" />
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Guests Not Returned (90+ days)</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Guests Not Returned (90+ days)</p>
               </div>
-              <div className="space-y-1.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 {insights.guestsNotReturned.map((g, i) => (
-                  <div key={i} className="flex items-center justify-between text-sm">
-                    <span className="text-slate-700">{g.name}</span>
-                    <span className="text-xs text-amber-600 font-medium">{g.daysSince} days ago</span>
+                  <div key={i} className="flex items-center justify-between text-sm p-2 rounded-xl bg-slate-50 border border-slate-100">
+                    <span className="font-medium text-slate-700 truncate">{g.name}</span>
+                    <span className="text-xs text-amber-600 font-bold shrink-0">{g.daysSince}d ago</span>
                   </div>
                 ))}
               </div>
@@ -173,12 +176,22 @@ export const CrmHub = ({ onNavigate, onBack }: CrmHubProps) => {
   );
 };
 
-const InsightCard = ({ label, value, icon: Icon, color }: { label: string; value: string; icon: typeof Users; color: string }) => (
-  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-    <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-2 ${color}`}>
+const InsightCard = ({
+  label,
+  value,
+  icon: Icon,
+  color,
+}: {
+  label: string;
+  value: string;
+  icon: typeof Users;
+  color: string;
+}) => (
+  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300 hover:shadow-card-hover transition-all duration-200 p-4">
+    <div className={`w-8 h-8 rounded-xl border flex items-center justify-center mb-2.5 ${color}`}>
       <Icon className="w-4 h-4" />
     </div>
-    <p className="text-lg font-bold text-brand-navy-800 tabular-nums">{value}</p>
-    <p className="text-[10px] text-slate-400 uppercase tracking-wide">{label}</p>
+    <p className="text-lg sm:text-xl font-black text-slate-900 tabular-nums tracking-tight">{value}</p>
+    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-0.5 truncate">{label}</p>
   </div>
 );

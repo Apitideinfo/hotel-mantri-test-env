@@ -16,6 +16,8 @@
 
 import express from 'express';
 import { requireHotelAccess, forbidRoles } from '../middleware/auth.js';
+import { requireCronAuth } from '../middleware/cronAuth.js';
+import { cronRateLimiter } from '../middleware/rateLimiter.js';
 import { sendEmail, validateSmtpConfig, verifySmtpConnection, isValidEmail } from '../services/emailService.js';
 import { buildInvoiceEmail } from '../services/emailTemplates.js';
 import { retryFailedNotifications } from '../services/notificationService.js';
@@ -79,7 +81,7 @@ const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
 
 // Strict RBAC: All notification and report routes require hotel auth and forbid Housekeeping
 router.use((req, res, next) => {
-  if (req.path.includes('/cron')) {
+  if (req.path.includes('/cron') || req.path.includes('/webhook')) {
     return next();
   }
   return requireHotelAccess(req, res, (err) => {
@@ -1018,20 +1020,28 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
   }
 });
 
-// ─── GET & POST /whatsapp/cron & /cron ────────────────────────────────────────
+// ─── GET & POST /whatsapp/cron & /cron (SEC-06 Hardened) ─────────────────────
+
+// In-memory active mutex to prevent concurrent duplicate execution of identical scheduled jobs
+const activeCronLocks = new Set();
 
 const handleWhatsAppCron = async (req, res) => {
-  const cronSecret = process.env.CRON_SECRET;
-  const authHeader = req.headers['authorization'];
-  if (cronSecret && authHeader !== `Bearer ${cronSecret}` && req.headers['x-cron-secret'] !== cronSecret) {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(401).json({ success: false, message: 'Unauthorized cron request.' });
-    }
+  const type = (req.query.type || req.body?.type || 'morning').toLowerCase();
+  const reportType = type === 'evening' ? REPORT_TYPES.EVENING_SUMMARY : REPORT_TYPES.MORNING_SUMMARY;
+  const rawDate = req.query.businessDate || req.query.date || req.body?.businessDate || req.body?.date || new Date().toISOString().slice(0, 10);
+  const todayStr = String(rawDate).trim().slice(0, 10);
+  const jobKey = `${reportType}_${todayStr}`;
+
+  // Concurrency guard: reject simultaneous duplicate processing
+  if (activeCronLocks.has(jobKey)) {
+    return res.status(409).json({
+      success: false,
+      code: 'CRON_JOB_IN_PROGRESS',
+      message: `A scheduled ${type} summary job is currently already running for ${todayStr}.`,
+    });
   }
 
-  const type = (req.query.type || 'morning').toLowerCase();
-  const isEvening = type === 'evening';
-  const reportType = isEvening ? REPORT_TYPES.EVENING_SUMMARY : REPORT_TYPES.MORNING_SUMMARY;
+  activeCronLocks.add(jobKey);
 
   try {
     const { data: hotels, error } = await supabase
@@ -1040,7 +1050,13 @@ const handleWhatsAppCron = async (req, res) => {
       .eq('is_active', true);
 
     if (error || !hotels || hotels.length === 0) {
-      return res.json({ success: true, message: 'No active hotels to process.', processed: 0 });
+      return res.json({
+        success: true,
+        businessDate: todayStr,
+        reportType,
+        message: 'No active hotels to process.',
+        processed: 0,
+      });
     }
 
     const results = [];
@@ -1153,13 +1169,21 @@ const handleWhatsAppCron = async (req, res) => {
       results,
     });
   } catch (err) {
-    console.error('[WHATSAPP_CRON] Error:', err.message);
-    return res.status(500).json({ success: false, message: 'Cron execution error: ' + err.message });
+    console.error('[WHATSAPP_CRON] Error:', err?.message || err);
+    return res.status(500).json({
+      success: false,
+      code: 'CRON_EXECUTION_ERROR',
+      message: 'Failed to process scheduled notifications.',
+    });
+  } finally {
+    activeCronLocks.delete(jobKey);
   }
 };
 
-router.get(['/whatsapp/cron', '/cron'], handleWhatsAppCron);
-router.post(['/whatsapp/cron', '/cron'], handleWhatsAppCron);
+router.get(['/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
+router.post(['/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
 
+export { handleWhatsAppCron, activeCronLocks };
 export default router;
+
 

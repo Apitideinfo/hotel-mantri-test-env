@@ -3,6 +3,9 @@ export interface RazorpayOptions {
   isAmountInPaise?: boolean;
   name?: string;
   description?: string;
+  planId?: string;
+  reservationId?: string;
+  guestToken?: string;
   prefill?: {
     name?: string;
     email?: string;
@@ -76,6 +79,9 @@ export async function openRazorpayCheckout(options: RazorpayOptions): Promise<{
         amount: amountInPaise,
         currency: 'INR',
         receipt: `rcpt_${Date.now()}`,
+        planId: options.planId,
+        reservationId: options.reservationId,
+        guestToken: options.guestToken,
         notes: options.notes || { app: 'HotelMantri' },
       }),
     });
@@ -124,6 +130,9 @@ export async function openRazorpayCheckout(options: RazorpayOptions): Promise<{
                 razorpay_order_id: response.razorpay_order_id,
                 razorpay_payment_id: response.razorpay_payment_id,
                 razorpay_signature: response.razorpay_signature,
+                reservationId: options.reservationId,
+                guestToken: options.guestToken,
+                planId: options.planId,
               }),
             });
 

@@ -18,7 +18,31 @@ const getSupabaseConfig = () => {
  *    from the database. Client-supplied hotel IDs cannot override authorization.
  *    Any mismatch is immediately rejected with 403 HOTEL_ACCESS_DENIED.
  */
+
+/**
+ * Constant-time string comparison to prevent timing attacks against secret tokens (SEC-09).
+ * Pre-hashes inputs using SHA-256 so buffers are strictly uniform in length (32 bytes),
+ * completely avoiding RangeError while neutralizing length-based timing leaks.
+ */
+export const timingSafeSecretEqual = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (!a || !b) return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+};
+
+let customHotelResolver = null;
+
+export const setHotelResolverForTesting = (resolverFn) => {
+  customHotelResolver = resolverFn;
+};
+
 export const resolveAuthorizedHotel = async (req) => {
+  if (customHotelResolver) {
+    return customHotelResolver(req);
+  }
+
   if (req.user && req.auth?.hotelId) {
     return {
       success: true,
@@ -55,8 +79,8 @@ export const resolveAuthorizedHotel = async (req) => {
   const supabaseConfig = getSupabaseConfig();
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  // Privileged internal server-to-server call with service role key ONLY
-  if (serviceKey && token === serviceKey) {
+  // Privileged internal server-to-server call with service role key ONLY (SEC-09 timing-safe)
+  if (serviceKey && timingSafeSecretEqual(token, serviceKey)) {
     const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
     if (!requestedHotelId) {
       return {
@@ -74,7 +98,12 @@ export const resolveAuthorizedHotel = async (req) => {
       isSuperAdmin: true,
       hotelId: requestedHotelId,
       hotel: { id: requestedHotelId },
-      scopedSupabase: createClient(supabaseConfig.url, serviceKey),
+      scopedSupabase: createClient(supabaseConfig.url, serviceKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }),
     };
   }
 

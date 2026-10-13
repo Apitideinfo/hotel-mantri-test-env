@@ -12,22 +12,13 @@ import type {
   CompanySource, RoomCategory, Room, SourceCategory, PayMode, MealPlan, GstType, GstSlab,
   FrontOfficeRole,
 } from '@/lib/types';
-import { supabase } from '@/lib/supabase';
 import { GST_TYPES, GST_SLABS, MEAL_PLANS, SOURCE_CATEGORIES, canCheckoutAnyway, canRoomShift, canDeleteBooking, normalizePayMode } from '@/lib/types';
 import type { Reservation, ReservationInput } from '@/lib/types-reservations';
 import { fmtMoney, fmtInt, toNum, calcGstFull, calcStayNights } from '@/lib/calc';
 import { classifyCompany } from '@/lib/api';
-import {
-  getReservationConfirmationData,
-  sendReservationConfirmationEmail,
-  sendReservationConfirmationWhatsApp,
-  openWhatsAppConfirmation,
-  extractUnassignedReason,
-} from '@/lib/api-reservations';
-import {
-  downloadReservationConfirmationPdf,
-  printReservationConfirmationPdf,
-} from '@/lib/pdf-reservation';
+import { extractUnassignedReason } from '@/lib/api-reservations';
+import { useGroupReservations } from '@/hooks/useGroupReservations';
+import { useReservationDocuments } from '@/hooks/useReservationDocuments';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
 
 export interface BoardBooking {
@@ -108,76 +99,11 @@ export const BookingDetailPanel = ({
 }: BookingDetailPanelProps) => {
   const [editMode, setEditMode] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [groupReservations, setGroupReservations] = useState<Reservation[]>([]);
-  const [loadingGroup, setLoadingGroup] = useState(false);
+  const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
+  const groupId = rawRes?.group_id;
+  const currentResId = rawRes?.id || booking.id;
 
-  useEffect(() => {
-    let active = true;
-    const rawRes = booking.rawReservation || (booking.type === 'reservation' ? booking.raw as Reservation : null);
-    const groupId = rawRes?.group_id;
-    const currentResId = rawRes?.id || booking.id;
-    if (groupId && groupId.trim() !== '') {
-      setLoadingGroup(true);
-      (async () => {
-        try {
-          const { data, error } = await supabase
-            .from('reservations')
-            .select('*')
-            .eq('group_id', groupId);
-          if (!active) return;
-          if (!error && data && data.length > 0) {
-            const isPhysical = (rm?: string | null) => {
-              const norm = (rm || '').trim().toLowerCase();
-              return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
-            };
-            const list = data as Reservation[];
-            const seenPhysical = new Set<string>();
-            const seenIds = new Set<string>();
-            const unique: Reservation[] = [];
-
-            // If currentResId exists in list, prioritize it
-            const currentItem = list.find((r) => r.id === currentResId);
-            if (currentItem) {
-              if (isPhysical(currentItem.room_no)) {
-                seenPhysical.add((currentItem.room_no || '').trim().toLowerCase());
-              }
-              seenIds.add(currentItem.id);
-              unique.push(currentItem);
-            }
-
-            for (const r of list) {
-              if (r.id === currentResId) continue;
-              const norm = (r.room_no || '').trim().toLowerCase();
-              if (isPhysical(r.room_no)) {
-                if (seenPhysical.has(norm)) continue;
-                seenPhysical.add(norm);
-              } else {
-                if (seenIds.has(r.id)) continue;
-                seenIds.add(r.id);
-              }
-              unique.push(r);
-            }
-
-            // Natural sort by room number
-            unique.sort((a, b) => (a.room_no || '').localeCompare(b.room_no || '', undefined, { numeric: true }));
-
-            setGroupReservations(unique.length > 1 ? unique : []);
-          } else {
-            setGroupReservations([]);
-          }
-        } catch {
-          if (active) setGroupReservations([]);
-        } finally {
-          if (active) setLoadingGroup(false);
-        }
-      })();
-    } else {
-      setGroupReservations([]);
-    }
-    return () => {
-      active = false;
-    };
-  }, [booking]);
+  const { groupReservations, loadingGroup } = useGroupReservations(groupId, currentResId);
 
   // Background body scroll lock while modal is open
   useEffect(() => {
@@ -200,86 +126,31 @@ export const BookingDetailPanel = ({
   const isReservation = booking.type === 'reservation';
   const reservation = isReservation ? booking.raw as Reservation : null;
   const entry = !isReservation ? booking.raw as RoomChartEntry : null;
-
-  // Document action state
-  const [activeDocAction, setActiveDocAction] = useState<'pdf' | 'print' | 'email' | 'whatsapp' | null>(null);
-  const [docSuccess, setDocSuccess] = useState<string | null>(null);
-  const [docError, setDocError] = useState<string | null>(null);
-
   const targetResId = reservation?.id || booking.id;
 
-  const handleDocPdf = async () => {
-    if (activeDocAction) return;
-    setActiveDocAction('pdf');
-    setDocError(null);
-    setDocSuccess(null);
-    try {
-      const data = await getReservationConfirmationData(targetResId);
-      downloadReservationConfirmationPdf({
-        reservation: data.reservation,
-        settings: data.hotel as any,
-      });
-      setDocSuccess('Confirmation PDF downloaded.');
-    } catch (err: any) {
-      setDocError(err.message || 'Failed to generate confirmation PDF.');
-    } finally {
-      setActiveDocAction(null);
-      setTimeout(() => setDocSuccess(null), 4000);
-    }
-  };
-
-  const handleDocPrint = async () => {
-    if (activeDocAction) return;
-    setActiveDocAction('print');
-    setDocError(null);
-    setDocSuccess(null);
-    try {
-      const data = await getReservationConfirmationData(targetResId);
-      printReservationConfirmationPdf({
-        reservation: data.reservation,
-        settings: data.hotel as any,
-      });
-      setDocSuccess('Print dialog opened.');
-    } catch (err: any) {
-      setDocError(err.message || 'Failed to print confirmation.');
-    } finally {
-      setActiveDocAction(null);
-      setTimeout(() => setDocSuccess(null), 4000);
-    }
-  };
-
-  const handleDocEmail = async () => {
-    if (activeDocAction) return;
-    setActiveDocAction('email');
-    setDocError(null);
-    setDocSuccess(null);
-    try {
-      const data = await getReservationConfirmationData(targetResId);
-      const res = await sendReservationConfirmationEmail(data);
-      setDocSuccess(res.message || 'Confirmation email dispatched.');
-    } catch (err: any) {
-      setDocError(err.message || 'Failed to send confirmation email.');
-    } finally {
-      setActiveDocAction(null);
-      setTimeout(() => setDocSuccess(null), 5000);
-    }
-  };
-
-  const handleDocWhatsApp = async () => {
-    if (activeDocAction) return;
-    setActiveDocAction('whatsapp');
-    setDocError(null);
-    setDocSuccess(null);
-    try {
-      const res = await sendReservationConfirmationWhatsApp(targetResId, booking.phone);
-      setDocSuccess(res.message || 'Confirmation dispatched via Whinta WhatsApp.');
-    } catch (err: any) {
-      setDocError(err.message || 'Failed to send WhatsApp confirmation via Whinta.');
-    } finally {
-      setActiveDocAction(null);
-      setTimeout(() => setDocSuccess(null), 5000);
-    }
-  };
+  const {
+    activeDocAction,
+    docSuccess,
+    docError,
+    setDocSuccess,
+    setDocError,
+    handleDocPdf,
+    handleDocPrint,
+    handleDocEmail,
+    handleDocWhatsApp,
+  } = useReservationDocuments({
+    targetResId,
+    guestName: booking.guestName,
+    phone: booking.phone,
+    roomNo: booking.roomNo,
+    roomCategoryName: category?.name,
+    checkIn: booking.checkIn,
+    checkOut: booking.checkOut,
+    nights: booking.nights,
+    rate: booking.rate,
+    hotelName: settings?.hotel_name,
+    fmtDate,
+  });
 
   const isUnassigned = useMemo(() => {
     const r = String(booking.roomNo || '').trim().toLowerCase();

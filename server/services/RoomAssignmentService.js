@@ -17,7 +17,7 @@ import {
   normalizePhysicalRoom,
   logBlockedConflict,
 } from './ReservationConflictService.js';
-import { checkManualDuplicate } from './ReservationIdempotencyService.js';
+import { checkManualDuplicate, withBookingLock } from './ReservationIdempotencyService.js';
 import { isValidEmail } from './emailService.js';
 
 /**
@@ -95,6 +95,7 @@ export const createReservationsAtomically = async ({
   inputs,
   userId = null,
   allowEmptyEmail = false,
+  idempotencyKey = null,
 }) => {
   if (!hotelId) {
     throw { status: 400, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' };
@@ -104,6 +105,11 @@ export const createReservationsAtomically = async ({
   if (rawList.length === 0) {
     throw { status: 400, code: 'EMPTY_INPUT', message: 'No reservation inputs provided.' };
   }
+
+  const firstItem = rawList[0] || {};
+  const derivedIdempKey = String(idempotencyKey || firstItem.idempotency_key || firstItem.idempotencyKey || firstItem.client_reference || '').trim();
+  const roomKeySummary = rawList.map((r) => r.room_no || 'any').join('-');
+  const bookingLockKey = derivedIdempKey || `${firstItem.guest_phone || firstItem.guest_name || 'guest'}_${firstItem.check_in_date}_${roomKeySummary}`;
 
   // 1. Date and Room Integrity Check
   const assignedPhysicalRooms = new Set();
@@ -214,17 +220,35 @@ export const createReservationsAtomically = async ({
       }
 
       // Check manual duplicate
-      const dupeCheck = await checkManualDuplicate(hotelId, item);
+      const dupeCheck = await checkManualDuplicate(hotelId, {
+        ...item,
+        idempotency_key: derivedIdempKey || item.idempotency_key,
+      });
       if (dupeCheck.duplicate) {
+        if (dupeCheck.code === 'RESERVATION_IDEMPOTENT_EXISTS' && dupeCheck.existing) {
+          throw {
+            status: 409,
+            code: dupeCheck.code,
+            message: dupeCheck.message,
+            existingReservation: dupeCheck.existing,
+            idempotentReplay: true,
+          };
+        }
         throw {
           status: 409,
           code: dupeCheck.code,
           message: dupeCheck.message,
+          existingReservation: dupeCheck.existing || null,
         };
       }
 
       // Sync guest profile
       const guestId = item.guest_id || (await upsertGuestMaster(hotelId, item));
+
+      let internalNote = item.internal_note || '';
+      if (derivedIdempKey && !internalNote.includes(`[CLIENT_IDEMP: ${derivedIdempKey}]`)) {
+        internalNote = internalNote ? `${internalNote} [CLIENT_IDEMP: ${derivedIdempKey}]` : `[CLIENT_IDEMP: ${derivedIdempKey}]`;
+      }
 
       const payload = {
         ...item,
@@ -234,6 +258,7 @@ export const createReservationsAtomically = async ({
         room_no: norm || 'Unassigned',
         room_id: norm ? item.room_id : null,
         guest_id: guestId || null,
+        internal_note: internalNote,
         status: item.status || 'confirmed',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -303,7 +328,9 @@ export const createReservationsAtomically = async ({
   };
 
   try {
-    return await lockAndExecute(0);
+    return await withBookingLock(hotelId, bookingLockKey, async () => {
+      return await lockAndExecute(0);
+    });
   } catch (err) {
     // If any item failed and some were already inserted, roll back inserted ones atomically
     if (createdRecords.length > 0) {

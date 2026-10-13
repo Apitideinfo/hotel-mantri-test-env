@@ -38,6 +38,7 @@ import {
   DOCUMENT_TYPES,
   DELIVERY_STATUS,
 } from './documentService.js';
+import { generateGuestCheckoutToken } from './paymentSecurityService.js';
 
 // ─── Event Types ──────────────────────────────────────────────────────────────
 
@@ -450,6 +451,7 @@ export const buildCustomerConfirmationEmail = ({
   isModification = false,
   isCancellation = false,
   version = 1,
+  paymentUrl = null,
 }) => {
   const shortId = (reservationId || '').slice(0, 8).toUpperCase();
   const bookingId = confirmationNumber || `HM-RES-${shortId}`;
@@ -481,7 +483,7 @@ Payment Summary
 Total Amount: ₹${Math.round(totalAmount).toLocaleString('en-IN')}
 Paid Amount: ₹${Math.round(advancePaid).toLocaleString('en-IN')}
 Due Amount: ₹${Math.round(balanceDue).toLocaleString('en-IN')}
-
+${paymentUrl && balanceDue > 0 ? `Pay Due Balance Online: ${paymentUrl}\n` : ''}
 The reservation confirmation PDF is attached to this email.
 
 We look forward to welcoming you.
@@ -603,7 +605,13 @@ Powered by HotelMantri
           </td>
         </tr>
       </table>
-
+${paymentUrl && balanceDue > 0 ? `
+      <div style="text-align: center; margin: 20px 0;">
+        <a href="${escapeHtml(paymentUrl)}" style="background-color: #1a68fb; color: #ffffff; padding: 12px 24px; font-weight: 700; font-size: 14px; text-decoration: none; border-radius: 8px; display: inline-block;">
+          💳 Pay Due Balance Online (₹${Math.round(balanceDue).toLocaleString('en-IN')})
+        </a>
+      </div>
+` : ''}
       <div style="background-color: #eff6ff; border: 1px dashed #3b82f6; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px;">
         <p style="margin: 0; font-size: 12px; color: #1e40af; font-weight: 600;">
           &#128196; Attached: <strong>${escapeHtml(pdfFilename || 'Reservation-Confirmation.pdf')}</strong>
@@ -663,6 +671,7 @@ export const buildReservationConfirmationWhatsAppText = ({
   isModification = false,
   isCancellation = false,
   version = 1,
+  paymentUrl = null,
 }) => {
   const shortId = (reservationId || '').slice(0, 8).toUpperCase();
   const icon = isCancellation ? '❌' : isModification ? '🔄' : '🏨';
@@ -682,9 +691,10 @@ export const buildReservationConfirmationWhatsAppText = ({
     `*Room:* ${roomNo || 'Not Assigned'} (${roomCategory || 'Standard'})`,
     `*Total:* ₹${Math.round(totalAmount).toLocaleString('en-IN')}`,
     `*Paid:* ₹${Math.round(advancePaid).toLocaleString('en-IN')} | *Due:* ₹${Math.round(balanceDue).toLocaleString('en-IN')}`,
+    paymentUrl && balanceDue > 0 ? `💳 *Pay Due Balance Online:* ${paymentUrl}` : null,
     '',
     '📄 *Reservation confirmation PDF generated & available on PMS dashboard.*',
-  ];
+  ].filter(Boolean);
 
   return lines.join('\n');
 };
@@ -914,6 +924,20 @@ export const generateAndDeliverConfirmation = async ({
             version,
           });
         } else {
+          let guestPaymentUrl = null;
+          if (dueVal > 0 && !isCancellation && targetType === 'CUSTOMER') {
+            try {
+              const guestToken = generateGuestCheckoutToken({
+                reservationId: resRecord.id,
+                hotelId,
+              });
+              const appUrl = (process.env.APP_URL || process.env.VITE_API_URL || 'https://hotelmantri.com').replace(/\/+$/, '');
+              guestPaymentUrl = `${appUrl}/pay?resv=${resRecord.id}&token=${guestToken}`;
+            } catch (tokenErr) {
+              console.warn('[DELIVERY_SERVICE] Non-fatal guest token issuance note:', tokenErr?.message || tokenErr);
+            }
+          }
+
           emailContent = buildCustomerConfirmationEmail({
             hotelName,
             hotelPhone,
@@ -942,6 +966,7 @@ export const generateAndDeliverConfirmation = async ({
             isModification,
             isCancellation,
             version,
+            paymentUrl: guestPaymentUrl,
           });
         }
 
@@ -1090,6 +1115,20 @@ export const generateAndDeliverConfirmation = async ({
     }
 
     if (targetPhone) {
+      let waPaymentUrl = null;
+      if (dueVal > 0 && !isCancellation && targetRecipientType === 'CUSTOMER') {
+        try {
+          const guestToken = generateGuestCheckoutToken({
+            reservationId: resRecord.id,
+            hotelId,
+          });
+          const appUrl = (process.env.APP_URL || process.env.VITE_API_URL || 'https://hotelmantri.com').replace(/\/+$/, '');
+          waPaymentUrl = `${appUrl}/pay?resv=${resRecord.id}&token=${guestToken}`;
+        } catch (tokenErr) {
+          console.warn('[DELIVERY_SERVICE] Non-fatal guest token issuance note:', tokenErr?.message || tokenErr);
+        }
+      }
+
       const waText = buildReservationConfirmationWhatsAppText({
         hotelName,
         reservationId: resRecord.id,
@@ -1108,6 +1147,7 @@ export const generateAndDeliverConfirmation = async ({
         isModification,
         isCancellation,
         version,
+        paymentUrl: waPaymentUrl,
       });
 
       const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);

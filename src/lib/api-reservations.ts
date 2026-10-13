@@ -449,6 +449,8 @@ export const saveReservations = async (
         ...r,
         _emailDelivery: idx === 0 ? res.emailDelivery : undefined,
         _emailStatus: idx === 0 ? res.emailStatus : undefined,
+        confirmationToken: idx === 0 ? res.confirmationToken : undefined,
+        _confirmationToken: idx === 0 ? res.confirmationToken : undefined,
       }));
     }
   } catch (err: any) {

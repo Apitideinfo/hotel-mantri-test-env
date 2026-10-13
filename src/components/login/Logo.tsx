@@ -16,9 +16,9 @@ export const Logo: React.FC<LogoProps> = ({ size = 'normal', className = '' }) =
     <div className={`inline-flex items-center justify-center select-none ${className}`}>
       <div className={`${circleSize} rounded-full bg-white shadow-xl border-2 border-slate-200/80 flex items-center justify-center shrink-0 transition-transform duration-200 hover:scale-105 overflow-hidden p-1`}>
         <img
-          src="/ChatGPT_Image_Aug_4,_2026,_04_24_46_AM.png"
+          src="/hotel-mantri-icon-clean.png"
           alt="HotelMantri"
-          className="w-full h-full object-contain scale-140"
+          className="w-full h-full object-contain p-2"
         />
       </div>
     </div>
