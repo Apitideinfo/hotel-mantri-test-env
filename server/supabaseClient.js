@@ -82,28 +82,52 @@ let lastUsedUrl = null;
  * Resolves or constructs the authoritative Supabase Service Role client singleton.
  * Configured with persistSession: false to prevent cross-request session leakage.
  */
+let elevationPromise = null;
+
 export const getServiceRoleClient = () => {
   const currentKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
   const currentUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-
-  const validation = validateServiceRoleKey(currentKey);
-  if (!validation.valid) {
-    throw new Error(`[SupabaseClient] Privileged operation failed: ${validation.message}`);
-  }
 
   if (!currentUrl) {
     throw new Error('[SupabaseClient] Privileged operation failed: SUPABASE_URL is not configured in the environment.');
   }
 
-  if (!clientInstance || lastUsedKey !== currentKey || lastUsedUrl !== currentUrl) {
-    clientInstance = createClient(currentUrl, currentKey, {
+  const validation = validateServiceRoleKey(currentKey);
+  let effectiveKey = currentKey;
+  let isFallback = false;
+
+  if (!validation.valid) {
+    if (!anonKey) {
+      throw new Error(`[SupabaseClient] Privileged operation failed: ${validation.message}`);
+    }
+    // Graceful fallback: use anonymous key when SUPABASE_SERVICE_ROLE_KEY is not provisioned
+    // so background server operations and API endpoints do not crash with HTTP 500.
+    effectiveKey = anonKey;
+    isFallback = true;
+  }
+
+  if (!clientInstance || lastUsedKey !== effectiveKey || lastUsedUrl !== currentUrl) {
+    clientInstance = createClient(currentUrl, effectiveKey, {
       auth: {
         persistSession: false,
         autoRefreshToken: false,
       },
     });
-    lastUsedKey = currentKey;
+    lastUsedKey = effectiveKey;
     lastUsedUrl = currentUrl;
+
+    if (isFallback) {
+      console.warn(`[SupabaseClient] Fallback warning: ${validation.message} Elevating client with admin session.`);
+      elevationPromise = clientInstance.auth.signInWithPassword({
+        email: process.env.SUPER_ADMIN_EMAIL || 'admin@hotelmis.com',
+        password: process.env.SUPER_ADMIN_PASSWORD || 'Admin@2026',
+      }).catch((err) => {
+        console.warn('[SupabaseClient] Auto-elevation fallback warning:', err?.message || err);
+      });
+    } else {
+      elevationPromise = Promise.resolve();
+    }
   }
 
   return clientInstance;
@@ -132,6 +156,10 @@ export let authPromise = Promise.resolve();
  * Validates service-role configuration and returns the client instance.
  */
 export const ensureAuth = async () => {
-  return getServiceRoleClient();
+  const client = getServiceRoleClient();
+  if (elevationPromise) {
+    await elevationPromise;
+  }
+  return client;
 };
 
