@@ -77,6 +77,7 @@ interface NewReservationWizardProps {
   preselectRoom?: string;
   preselectCheckIn?: string;
   preselectCheckOut?: string;
+  initialBookFullHotel?: boolean;
   saving: boolean;
   onClose: () => void;
   onSave: (input: ReservationInput | ReservationInput[]) => Promise<any> | any;
@@ -87,7 +88,7 @@ interface NewReservationWizardProps {
    ═══════════════════════════════════════════════════════════════ */
 export const NewReservationWizard = ({
   rooms, categories, sources, settings: _settings, defaultDate,
-  preselectRoom, preselectCheckIn, preselectCheckOut,
+  preselectRoom, preselectCheckIn, preselectCheckOut, initialBookFullHotel,
   saving, onClose, onSave,
 }: NewReservationWizardProps) => {
 
@@ -205,6 +206,82 @@ export const NewReservationWizard = ({
       };
     });
   }, [categories, rooms, bookedRoomNos]);
+
+  const totalAvailableInHotel = useMemo(() => {
+    return categoryAvailability.reduce((sum, c) => sum + c.availableRooms, 0);
+  }, [categoryAvailability]);
+
+  const totalHotelRoomsCount = useMemo(() => {
+    return rooms.filter((r) => r.is_active).length;
+  }, [rooms]);
+
+  const isFullHotelSelected = useMemo(() => {
+    return (
+      (totalAvailableInHotel > 0 && roomRows.length >= totalAvailableInHotel) ||
+      (totalHotelRoomsCount > 0 && roomRows.length >= totalHotelRoomsCount)
+    );
+  }, [totalAvailableInHotel, totalHotelRoomsCount, roomRows.length]);
+
+  /* ── Action: Book Full Hotel (Select all available rooms across all categories) ── */
+  const handleBookFullHotel = useCallback(() => {
+    const newQuantities: Record<string, number> = {};
+    const allRows: SelectedRoomRow[] = [];
+    const assignedRoomIds = new Set<string>();
+
+    categoryAvailability.forEach(({ category, availableRooms, catRooms }) => {
+      // Determine how many rooms to book for this category
+      const count = availableRooms > 0 ? availableRooms : catRooms.length;
+      newQuantities[category.id] = count;
+
+      // Filter available rooms in this category
+      const availablePhysicalRooms = catRooms.filter(
+        (r) => !bookedRoomNos.has((r.room_no || '').trim().toLowerCase())
+      );
+
+      for (let i = 0; i < count; i++) {
+        // Pick physical room if available and not yet assigned in this batch
+        const physRoom = availablePhysicalRooms.find((r) => !assignedRoomIds.has(r.id));
+        if (physRoom) {
+          assignedRoomIds.add(physRoom.id);
+        }
+
+        allRows.push({
+          uid: crypto.randomUUID(),
+          categoryId: category.id,
+          categoryName: category.name,
+          roomNo: physRoom ? physRoom.room_no : 'Unassigned',
+          roomId: physRoom ? physRoom.id : null,
+          adults: 2,
+          children: 0,
+          mealPlan: globalMealPlan,
+          rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : (category.default_tariff || 0),
+        });
+      }
+    });
+
+    setCategoryQuantities(newQuantities);
+    setRoomRows(allRows);
+    setNumRooms(allRows.length);
+  }, [categoryAvailability, bookedRoomNos, globalMealPlan, defaultRate]);
+
+  const handleClearAllRooms = useCallback(() => {
+    setCategoryQuantities({});
+    setRoomRows([]);
+    setNumRooms(1);
+  }, []);
+
+  const handleBookFullHotelAndProceed = useCallback(() => {
+    handleBookFullHotel();
+    setStep(2);
+  }, [handleBookFullHotel]);
+
+  // Initial Book Full Hotel on mount if requested
+  useEffect(() => {
+    if (initialBookFullHotel && categoryAvailability.length > 0) {
+      handleBookFullHotel();
+      setStep(2);
+    }
+  }, [initialBookFullHotel, categoryAvailability, handleBookFullHotel]);
 
   /* ── Sync Room Rows when Category Quantities Change ── */
   const updateCategoryQuantity = (categoryId: string, qty: number) => {
@@ -875,10 +952,28 @@ export const NewReservationWizard = ({
                   <p className="text-xs text-slate-300 font-medium">HotelMantri Fast Booking · Step {step} of 4: {STEP_LABELS[step].title}</p>
                 </div>
               </div>
-              <button type="button" onClick={onClose}
-                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0" title="Close">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleBookFullHotel();
+                    setStep(2);
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition active:scale-95 cursor-pointer shadow-xs ${
+                    isFullHotelSelected
+                      ? 'bg-amber-400 text-slate-950 font-black ring-2 ring-amber-300/40'
+                      : 'bg-amber-500/20 text-amber-200 border border-amber-400/40 hover:bg-amber-500/30 hover:text-white'
+                  }`}
+                  title="Book all available rooms in the entire hotel"
+                >
+                  <Building2 className="w-3.5 h-3.5 text-amber-300" />
+                  <span>{isFullHotelSelected ? `Full Hotel (${roomRows.length} Rooms)` : 'Book Full Hotel'}</span>
+                </button>
+                <button type="button" onClick={onClose}
+                  className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer shrink-0" title="Close">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* ── Step Progress Bar (Stay, Rooms, Guest, Confirm) ── */}
@@ -1038,6 +1133,35 @@ export const NewReservationWizard = ({
                       </div>
                     </div>
 
+                    {/* Quick Action: Book Full Hotel Banner */}
+                    <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border border-amber-200/90 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-700 border border-amber-300/60 flex items-center justify-center shrink-0 shadow-inner">
+                          <Building2 className="w-5 h-5 text-amber-700" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-xs font-black text-amber-950 uppercase tracking-wider">Book Full Hotel</h4>
+                            <span className="text-[10px] font-extrabold text-amber-800 bg-amber-200/80 px-2 py-0.5 rounded-md">
+                              {totalAvailableInHotel || totalHotelRoomsCount} Rooms Available
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-amber-800 font-medium mt-0.5">
+                            Select and allocate all available rooms in the entire hotel with a single click.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleBookFullHotelAndProceed}
+                        className="flex items-center gap-2 px-4 py-2.5 text-xs font-black text-slate-950 bg-gradient-to-r from-amber-300 via-amber-400 to-amber-300 hover:from-amber-400 hover:to-amber-500 rounded-xl shadow-md shadow-amber-500/20 transition active:scale-95 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-slate-950" />
+                        <span>Book Full Hotel Now</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
                     <p className="text-[11px] text-slate-400 font-medium italic">
                       Quick stay check: Guest information and payment details will be entered in later steps.
                     </p>
@@ -1051,18 +1175,47 @@ export const NewReservationWizard = ({
                   <div className="space-y-4 animate-page-fade">
                     {/* Category Selection Cards */}
                     <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs space-y-4">
-                      <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                      <div className="flex items-center justify-between pb-2 border-b border-slate-100 flex-wrap gap-2">
                         <div className="flex items-center gap-2">
                           <BedDouble className="w-4 h-4 text-indigo-600" />
                           <h3 className="text-xs font-black uppercase text-slate-700 tracking-wider">
                             Step 2 – Available Room Categories
                           </h3>
                         </div>
-                        {availabilityLoading && (
-                          <span className="text-[11px] font-bold text-indigo-600 flex items-center gap-1">
-                            <Loader2 className="w-3 h-3 animate-spin" /> Checking availability…
-                          </span>
-                        )}
+
+                        <div className="flex items-center gap-2">
+                          {!isFullHotelSelected ? (
+                            <button
+                              type="button"
+                              onClick={handleBookFullHotel}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-black text-amber-950 bg-gradient-to-r from-amber-100 to-amber-200 hover:from-amber-200 hover:to-amber-300 border border-amber-300 rounded-xl shadow-2xs transition active:scale-95 cursor-pointer"
+                              title="Select all available rooms in the hotel"
+                            >
+                              <Building2 className="w-3.5 h-3.5 text-amber-700" />
+                              <span>Book Full Hotel ({totalAvailableInHotel} Rooms)</span>
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="flex items-center gap-1 px-3 py-1 text-xs font-black text-emerald-800 bg-emerald-100 border border-emerald-300 rounded-xl">
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                Full Hotel Booked ({roomRows.length} Rooms)
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleClearAllRooms}
+                                className="px-2.5 py-1 text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-xl transition cursor-pointer"
+                              >
+                                Clear All
+                              </button>
+                            </div>
+                          )}
+
+                          {availabilityLoading && (
+                            <span className="text-[11px] font-bold text-indigo-600 flex items-center gap-1">
+                              <Loader2 className="w-3 h-3 animate-spin" /> Checking availability…
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Room Categories Grid */}

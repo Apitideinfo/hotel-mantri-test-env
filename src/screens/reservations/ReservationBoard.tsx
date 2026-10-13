@@ -139,6 +139,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [selectedForConfirmation, setSelectedForConfirmation] = useState<Reservation | null>(null);
   const [selectedForConfirmationGroup, setSelectedForConfirmationGroup] = useState<Reservation[] | null>(null);
   const [showNewBookingModal, setShowNewBookingModal] = useState(false);
+  const [bookFullHotelPreset, setBookFullHotelPreset] = useState(false);
   const [showQuickRes, setShowQuickRes] = useState<{ roomNo: string; date: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [showBulkBar, setShowBulkBar] = useState(false);
@@ -757,10 +758,26 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           </button>
 
           <button
-            onClick={() => setShowNewBookingModal(true)}
+            onClick={() => {
+              setBookFullHotelPreset(false);
+              setShowNewBookingModal(true);
+            }}
             className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-2xl shadow-lg shadow-indigo-500/25 transition active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4" /> New Reservation
+          </button>
+
+          <button
+            onClick={() => {
+              setBookFullHotelPreset(true);
+              setShowNewBookingModal(true);
+            }}
+            className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-amber-950 bg-gradient-to-r from-amber-200 via-amber-300 to-amber-200 hover:from-amber-300 hover:to-amber-400 border border-amber-400/80 rounded-2xl shadow-md shadow-amber-500/20 transition active:scale-95 cursor-pointer"
+            title="Book Entire Hotel (All Rooms)"
+          >
+            <Building2 className="w-4 h-4 text-amber-800" />
+            <span className="hidden sm:inline">Book Full Hotel</span>
+            <span className="sm:hidden">Full Hotel</span>
           </button>
 
           <button
@@ -1785,8 +1802,12 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           sources={sources}
           settings={settings}
           defaultDate={startDate}
+          initialBookFullHotel={bookFullHotelPreset}
           saving={busy}
-          onClose={() => setShowNewBookingModal(false)}
+          onClose={() => {
+            setShowNewBookingModal(false);
+            setBookFullHotelPreset(false);
+          }}
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
             const created = await saveReservations(list);

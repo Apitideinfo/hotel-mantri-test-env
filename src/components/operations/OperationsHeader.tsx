@@ -4,7 +4,7 @@ import {
   LayoutGrid, CalendarDays, ArrowLeft, Sparkles, Activity,
   Plus, LogIn, LogOut, Sliders, FileText, Wallet,
   ArrowRightLeft, CalendarPlus, X, User, Search, RotateCcw,
-  SlidersHorizontal, CheckCircle2, MoreVertical,
+  SlidersHorizontal, CheckCircle2, MoreVertical, Building2,
 } from 'lucide-react';
 import { BrandIcon } from '@/components/BrandLogo';
 import type { RoomCategory } from '@/lib/types';
@@ -29,6 +29,7 @@ interface OperationsHeaderProps {
   selectedBooking: BoardBooking | null;
   onClearSelection: () => void;
   onNewReservation: () => void;
+  onBookFullHotel?: () => void;
   onWalkIn: () => void;
   onAdjustAvailability: () => void;
   onDailyEntry: () => void;
@@ -83,6 +84,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
   selectedBooking,
   onClearSelection,
   onNewReservation,
+  onBookFullHotel,
   onWalkIn,
   onAdjustAvailability,
   onDailyEntry,
@@ -169,6 +171,20 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>New Reservation</span>
             </button>
+
+            {/* Book Full Hotel CTA */}
+            {onBookFullHotel && (
+              <button
+                type="button"
+                onClick={onBookFullHotel}
+                className="flex items-center gap-1.5 h-8.5 sm:h-9 px-3 sm:px-3.5 bg-gradient-to-r from-amber-200 via-amber-300 to-amber-200 hover:from-amber-300 hover:to-amber-400 text-amber-950 border border-amber-400/80 text-xs font-black rounded-xl shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                title="Book Entire Hotel (All Available Rooms)"
+              >
+                <Building2 className="w-3.5 h-3.5 text-amber-800" />
+                <span className="hidden sm:inline">Book Full Hotel</span>
+                <span className="sm:hidden">Full Hotel</span>
+              </button>
+            )}
 
             {/* Walk-In CTA */}
             <button
