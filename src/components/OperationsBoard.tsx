@@ -36,7 +36,7 @@ import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal, isStayOverlapping, calcGstFull } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
-import { NewBookingModal } from '@/components/NewBookingModal';
+import { NewReservationWizard } from '@/components/reservations/NewReservationWizard';
 import { CheckInModal } from '@/components/frontoffice/CheckInModal';
 import { WalkInModal } from '@/components/frontoffice/WalkInModal';
 import { CheckOutModal } from '@/components/frontoffice/CheckOutModal';
@@ -2133,7 +2133,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
       {/* New Booking Modal */}
       {showNewBooking && (
-        <NewBookingModal
+        <NewReservationWizard
           rooms={activeRooms}
           categories={categories}
           sources={sources}

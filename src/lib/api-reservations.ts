@@ -120,19 +120,18 @@ export const saveReservation = async (
 
   const isNew = !id || id.trim() === '';
   const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+  const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
   const cleanEmail = (input.guest_email ?? '').trim();
 
-  if (isNew && !isOta) {
+  if (isNew && !isOta && !allowEmptyEmail) {
     if (!cleanEmail) {
       throw new Error('Guest email is required.');
     }
     if (!isValidEmail(cleanEmail)) {
       throw new Error('Please enter a valid email address.');
     }
-  } else if (!isNew && !isOta && input.guest_email !== undefined && input.guest_email !== null) {
-    if (cleanEmail && !isValidEmail(cleanEmail)) {
-      throw new Error('Please enter a valid email address.');
-    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
   }
 
   const normRoom = (input.room_no || '').trim().toLowerCase();
@@ -211,13 +210,15 @@ export const saveReservation = async (
   delete (rawPayload as { id?: string }).id;
   delete (rawPayload as { nights?: number }).nights;
 
-  if (isNew && !isOta) {
+  if (isNew && !isOta && !allowEmptyEmail) {
     if (!cleanEmail) {
       throw new Error('Guest email is required.');
     }
     if (!isValidEmail(cleanEmail)) {
       throw new Error('Please enter a valid email address.');
     }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
   }
 
   // Sync guest into guests master table if name or phone provided
@@ -415,11 +416,12 @@ export const saveReservations = async (
     if (ci >= co) throw new Error('Check-out date must be strictly after check-in date.');
 
     const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+    const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
     const cleanEmail = (input.guest_email ?? '').trim();
-    if (!isOta) {
+    if (!isOta && !allowEmptyEmail) {
       if (!cleanEmail) throw new Error('Guest email is required.');
-      if (!isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
     }
+    if (cleanEmail && !isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
   }
 
   // Ensure all share the exact same group_id

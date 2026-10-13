@@ -23,7 +23,7 @@ import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
 import { AssignRoomModal, ExtendStayModal } from './ReservationModals';
 import { ReservationConflictsModal } from './ReservationConflictsModal';
-import { NewBookingModal } from '@/components/NewBookingModal';
+import { NewReservationWizard } from '@/components/reservations/NewReservationWizard';
 import { ReservationConfirmationModal } from '@/components/reservations/ReservationConfirmationModal';
 
 type ViewMode = 'list' | 'timeline' | 'calendar' | 'arrival' | 'departure';
@@ -1779,7 +1779,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
 
       {/* ── New Booking Modal ── */}
       {showNewBookingModal && (
-        <NewBookingModal
+        <NewReservationWizard
           rooms={allRooms}
           categories={categories}
           sources={sources}
