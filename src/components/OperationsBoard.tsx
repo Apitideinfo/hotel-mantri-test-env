@@ -36,7 +36,7 @@ import { getGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal, isStayOverlapping, calcGstFull } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
-import { NewBookingModal } from '@/components/NewBookingModal';
+import { NewReservationWizard } from '@/components/reservations/NewReservationWizard';
 import { CheckInModal } from '@/components/frontoffice/CheckInModal';
 import { WalkInModal } from '@/components/frontoffice/WalkInModal';
 import { CheckOutModal } from '@/components/frontoffice/CheckOutModal';
@@ -145,6 +145,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const [filterPayment, setFilterPayment] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<BoardBooking | null>(null);
   const [showNewBooking, setShowNewBooking] = useState(false);
+  const [bookFullHotelPreset, setBookFullHotelPreset] = useState(false);
   const [preselectRoom, setPreselectRoom] = useState<string | undefined>(undefined);
   const [preselectCheckIn, setPreselectCheckIn] = useState<string | undefined>(undefined);
   const [preselectCheckOut, setPreselectCheckOut] = useState<string | undefined>(undefined);
@@ -1348,6 +1349,14 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         selectedBooking={selectedBooking}
         onClearSelection={() => setSelectedBooking(null)}
         onNewReservation={() => {
+          setBookFullHotelPreset(false);
+          setPreselectRoom(undefined);
+          setPreselectCheckIn(undefined);
+          setPreselectCheckOut(undefined);
+          setShowNewBooking(true);
+        }}
+        onBookFullHotel={() => {
+          setBookFullHotelPreset(true);
           setPreselectRoom(undefined);
           setPreselectCheckIn(undefined);
           setPreselectCheckOut(undefined);
@@ -2133,7 +2142,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
       {/* New Booking Modal */}
       {showNewBooking && (
-        <NewBookingModal
+        <NewReservationWizard
           rooms={activeRooms}
           categories={categories}
           sources={sources}
@@ -2143,8 +2152,10 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
           preselectRoom={preselectRoom}
           preselectCheckIn={preselectCheckIn}
           preselectCheckOut={preselectCheckOut}
+          initialBookFullHotel={bookFullHotelPreset}
           onClose={() => {
             setShowNewBooking(false);
+            setBookFullHotelPreset(false);
             setPreselectRoom(undefined);
             setPreselectCheckIn(undefined);
             setPreselectCheckOut(undefined);

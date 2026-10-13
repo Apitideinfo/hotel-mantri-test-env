@@ -8,6 +8,7 @@ export interface ReservationValidationInput {
   roomNos: string[];
   checkIn: string;
   checkOut: string;
+  allowEmptyEmail?: boolean;
 }
 
 export interface ValidationResult {
@@ -18,7 +19,8 @@ export interface ValidationResult {
 
 /**
  * Validates reservation form fields authoritatively.
- * Enforces mandatory email, guest name, stay dates, and room selection.
+ * Enforces guest name, stay dates, and room selection.
+ * Email is enforced only when allowEmptyEmail is false.
  */
 export const validateReservationForm = (input: ReservationValidationInput): ValidationResult => {
   if (!input.guestName || !input.guestName.trim()) {
@@ -26,12 +28,16 @@ export const validateReservationForm = (input: ReservationValidationInput): Vali
   }
 
   const cleanEmail = (input.email || '').trim();
-  if (!cleanEmail) {
-    const msg = 'Guest email is required.';
-    return { valid: false, error: msg, emailError: msg };
-  }
-
-  if (!isValidEmail(cleanEmail)) {
+  if (!input.allowEmptyEmail) {
+    if (!cleanEmail) {
+      const msg = 'Guest email is required.';
+      return { valid: false, error: msg, emailError: msg };
+    }
+    if (!isValidEmail(cleanEmail)) {
+      const msg = 'Please enter a valid email address.';
+      return { valid: false, error: msg, emailError: msg };
+    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
     const msg = 'Please enter a valid email address.';
     return { valid: false, error: msg, emailError: msg };
   }
@@ -50,6 +56,17 @@ export const validateReservationForm = (input: ReservationValidationInput): Vali
 
   return { valid: true, error: null, emailError: null };
 };
+
+export interface RoomDetailConfig {
+  roomNo?: string;
+  roomId?: string | null;
+  categoryId?: string | null;
+  categoryName?: string;
+  rate?: number;
+  mealPlan?: MealPlan;
+  adults?: number;
+  children?: number;
+}
 
 export interface BuildReservationInputsParams {
   roomNos: string[];
@@ -83,53 +100,74 @@ export interface BuildReservationInputsParams {
   remarks: string;
   internalNote: string;
   createdBy: string;
+  status?: 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled' | 'no_show';
+  allowEmptyEmail?: boolean;
   rooms: Room[];
   categories: RoomCategory[];
+  roomDetails?: RoomDetailConfig[];
 }
 
 /**
  * Builds normalized ReservationInput array for single or multi-room reservations.
- * Deduplicates room numbers, handles group UUID linking, distributes advance payments,
- * and calculates authoritative tariff & GST amounts.
+ * Deduplicates physical room numbers, handles category-based unassigned holds, group UUID linking,
+ * distributes advance payments, and calculates authoritative tariff & GST amounts.
  */
 export const buildReservationInputs = (params: BuildReservationInputsParams): ReservationInput[] => {
-  // Deduplicate room numbers case-insensitively
-  const seen = new Set<string>();
-  const cleanRoomNos: string[] = [];
-  for (const no of params.roomNos) {
-    const trimmed = (no || '').trim();
-    const k = trimmed.toLowerCase();
-    if (trimmed && !seen.has(k)) {
-      seen.add(k);
-      cleanRoomNos.push(trimmed);
+  // If structured roomDetails are provided, prioritize them
+  const hasDetails = params.roomDetails && params.roomDetails.length > 0;
+  
+  // Deduplicate only physical rooms
+  const seenPhysical = new Set<string>();
+  const rawList: RoomDetailConfig[] = hasDetails
+    ? (params.roomDetails || [])
+    : params.roomNos.map(no => ({ roomNo: no }));
+
+  const validItems: RoomDetailConfig[] = [];
+  for (const item of rawList) {
+    const rawNo = (item.roomNo || '').trim();
+    const k = rawNo.toLowerCase();
+    const isPhysical = k && k !== 'unassigned' && k !== 'tbd';
+    if (isPhysical) {
+      if (seenPhysical.has(k)) continue;
+      seenPhysical.add(k);
     }
+    validItems.push(item);
   }
 
-  const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
+  const groupId = validItems.length > 1 ? crypto.randomUUID() : undefined;
   const fullPhone = params.phone.trim() ? `${params.countryCode} ${params.phone.trim()}` : '';
 
-  return cleanRoomNos.map((no, idx) => {
-    const room = params.rooms.find(
-      (r) => (r.room_no || '').trim().toLowerCase() === no.toLowerCase()
-    );
+  return validItems.map((item, idx) => {
+    const rawNo = (item.roomNo || '').trim();
+    const isPhysical = rawNo && rawNo.toLowerCase() !== 'unassigned' && rawNo.toLowerCase() !== 'tbd';
+    
+    const room = isPhysical
+      ? params.rooms.find((r) => (r.room_no || '').trim().toLowerCase() === rawNo.toLowerCase())
+      : (item.roomId ? params.rooms.find((r) => r.id === item.roomId) : undefined);
+
     const advancePaid = idx === 0 ? params.totalReceived : 0;
     const rPayCash = idx === 0 ? toNum(params.payCash) : 0;
     const rPayUpi = idx === 0 ? toNum(params.payUpi) : 0;
     const rPayCard = idx === 0 ? toNum(params.payCard) : 0;
     const rPayBank = idx === 0 ? toNum(params.payBank) : 0;
 
-    const roomCat = params.categories.find((c) => c.id === room?.category_id);
+    const catId = item.categoryId || room?.category_id;
+    const roomCat = params.categories.find((c) => c.id === catId);
+    
     const fallbackTariff =
       toNum(params.rate) > 0
         ? toNum(params.rate)
         : (roomCat?.default_tariff ?? room?.default_tariff ?? 0);
+
     const individualRate =
-      params.roomRates[no] !== undefined && toNum(params.roomRates[no]) > 0
-        ? toNum(params.roomRates[no])
+      item.rate !== undefined && toNum(item.rate) > 0
+        ? toNum(item.rate)
+        : rawNo && params.roomRates[rawNo] !== undefined && toNum(params.roomRates[rawNo]) > 0
+        ? toNum(params.roomRates[rawNo])
         : fallbackTariff;
 
     const roomSubtotal = individualRate * params.nights;
-    const roomDiscount = toNum(params.discount) / (cleanRoomNos.length || 1);
+    const roomDiscount = toNum(params.discount) / (validItems.length || 1);
     const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
     const {
       taxable: rTaxable,
@@ -139,7 +177,8 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
 
     return {
       room_id: room?.id ?? null,
-      room_no: room?.room_no?.trim() || no,
+      room_no: isPhysical ? (room?.room_no?.trim() || rawNo) : 'Unassigned',
+      room_category_id: catId ?? null,
       guest_name: params.guestName.trim(),
       guest_phone: fullPhone,
       guest_email: params.email.trim(),
@@ -159,19 +198,20 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
       pay_bank: rPayBank,
       payment_ref: params.paymentRef.trim(),
       discount: roomDiscount,
-      meal_plan: params.mealPlan,
+      meal_plan: item.mealPlan || params.mealPlan,
       gst_type: params.gstType,
       gst_slab: params.gstSlab,
       gst_amount: rGst,
       taxable_amount: rTaxable,
       invoice_total: rInvoiceTotal,
-      adults: toNum(params.adults),
-      children: toNum(params.children),
+      adults: item.adults !== undefined ? toNum(item.adults) : toNum(params.adults),
+      children: item.children !== undefined ? toNum(item.children) : toNum(params.children),
       remarks: params.remarks.trim(),
       internal_note: params.internalNote.trim(),
       created_by: params.createdBy.trim(),
-      status: 'confirmed',
+      status: params.status || 'confirmed',
       group_id: groupId,
+      allowEmptyEmail: params.allowEmptyEmail ?? true,
     };
   });
 };

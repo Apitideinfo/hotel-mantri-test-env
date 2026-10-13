@@ -372,8 +372,9 @@ router.post('/', checkAuth, async (req, res) => {
       }
 
       const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
+      const allowEmptyEmail = Boolean(req.body?.allowEmptyEmail || item.allowEmptyEmail);
       const cleanEmail = (item.guest_email || '').trim();
-      if (!isOta) {
+      if (!isOta && !allowEmptyEmail) {
         if (!cleanEmail) {
           return res.status(422).json({
             success: false,
@@ -381,13 +382,13 @@ router.post('/', checkAuth, async (req, res) => {
             message: 'Guest email is required to create a reservation.',
           });
         }
-        if (!isValidEmail(cleanEmail)) {
-          return res.status(422).json({
-            success: false,
-            code: 'INVALID_GUEST_EMAIL',
-            message: 'Please provide a valid guest email address.',
-          });
-        }
+      }
+      if (cleanEmail && !isValidEmail(cleanEmail)) {
+        return res.status(422).json({
+          success: false,
+          code: 'INVALID_GUEST_EMAIL',
+          message: 'Please provide a valid guest email address.',
+        });
       }
       cleanList.push(item);
     }
@@ -400,6 +401,7 @@ router.post('/', checkAuth, async (req, res) => {
       hotelId,
       inputs: cleanList,
       userId,
+      allowEmptyEmail: Boolean(req.body?.allowEmptyEmail || cleanList.some(i => i.allowEmptyEmail)),
       idempotencyKey,
     });
 

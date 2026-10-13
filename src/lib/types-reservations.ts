@@ -85,6 +85,8 @@ export interface ReservationInput {
   rate_plan?: string;
   parent_reservation_id?: string | null;
   guest_id?: string | null;
+  room_category_id?: string | null;
+  allowEmptyEmail?: boolean;
 }
 
 // ── Phase 9: Group Bookings ──
