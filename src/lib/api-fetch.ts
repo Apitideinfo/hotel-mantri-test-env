@@ -8,8 +8,7 @@ import { supabase } from './supabase';
  */
 
 // In production on Vercel, requests use same-origin relative paths (/api/...).
-// In development, Vite proxies /api to the local backend if configured.
-const rawApiBase = (import.meta.env.VITE_API_URL || '').trim();
+const rawApiBase = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL ? import.meta.env.VITE_API_URL : '').trim();
 
 // Normalize API_BASE:
 // Strip accidental '/Test', '/test', or /Test suffixes that cause 405 Method Not Allowed on static SPA fallback

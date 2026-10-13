@@ -14,7 +14,8 @@
     "test:laundry": "node scripts/test_laundry_production_suite.mjs",
     "test:whatsapp": "node scripts/test_whatsapp_direct_confirmation.mjs",
     "test:whinta": "node scripts/test_whinta_integration.mjs",
-    "test": "npm run test:housekeeping && npm run test:whinta"
+    "test:accounting": "node scripts/test_accounting_reconciliation.mjs",
+    "test": "npm run test:housekeeping && npm run test:whinta && npm run test:accounting"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

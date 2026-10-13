@@ -224,10 +224,29 @@ export const reconcilePaymentLedger = ({
     if (!isPaymentEvt || amt <= 0) continue;
 
     const data = evt.event_data || {};
-    const paymentDate = normalizeDateString(
+    let paymentDate = normalizeDateString(
       data.payment_date || data.business_date || evt.created_at
     );
-    const method = normalizePaymentMethod(data.payment_method || data.payment_mode || 'Cash');
+    const linkedRes = evt.reservation_id ? reservations.find((r) => r.id === evt.reservation_id) : null;
+    if (linkedRes && linkedRes.check_in_date) {
+      const createdDay = evt.created_at ? normalizeDateString(evt.created_at) : '';
+      if (!paymentDate || paymentDate === createdDay || paymentDate > normalizeDateString(linkedRes.check_in_date)) {
+        paymentDate = normalizeDateString(linkedRes.check_in_date);
+      }
+    }
+
+    let method = normalizePaymentMethod(data.payment_method || data.payment_mode || 'Cash');
+    if (toNum(data.pay_bank) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'Bank';
+    } else if (toNum(data.pay_upi) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'UPI';
+    } else if (toNum(data.pay_card) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'Card';
+    } else if (linkedRes) {
+      if (toNum(linkedRes.pay_bank) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'Bank';
+      else if (toNum(linkedRes.pay_upi) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'UPI';
+      else if (toNum(linkedRes.pay_card) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'Card';
+    }
 
     const key = `timeline::${evt.id}`;
     if (!processedKeys.has(key)) {
@@ -262,8 +281,11 @@ export const reconcilePaymentLedger = ({
     );
     if (timelineHasRes) continue;
 
-    // Advance payment occurred when booking was created, NOT at check-in
-    const bookingDate = normalizeDateString(res.created_at || res.check_in_date);
+    // Advance payment occurred when booking was created, or check-in if backdated
+    let bookingDate = normalizeDateString(res.created_at || res.check_in_date);
+    if (res.check_in_date && normalizeDateString(res.created_at) > normalizeDateString(res.check_in_date)) {
+      bookingDate = normalizeDateString(res.check_in_date);
+    }
     const method = normalizePaymentMethod(res.payment_mode || 'Cash');
 
     const key = `res_adv::${res.id}::${adv}`;
@@ -353,8 +375,16 @@ export const reconcilePaymentLedger = ({
   // 3. Process room chart entry payments
   for (const entry of roomChartEntries) {
     const entryDate = normalizeDateString(entry.business_date || entry.report_date || entry.arrival);
-    const hasTimeline = timelineEvents.some((te) => te.entry_id === entry.id);
+    const hasTimeline = timelineEvents.some(
+      (te) => (te.entry_id && te.entry_id === entry.id) ||
+              (te.reservation_id && (te.reservation_id === entry.reservation_id || te.reservation_id === entry.id))
+    );
     if (hasTimeline) continue;
+
+    const hasResv = reservations.some(
+      (r) => (r.id === entry.id || (entry.reservation_id && r.id === entry.reservation_id)) && toNum(r.advance_paid) > 0
+    );
+    if (hasResv) continue;
 
     const cash = toNum(entry.pay_cash);
     const upi = toNum(entry.pay_upi);

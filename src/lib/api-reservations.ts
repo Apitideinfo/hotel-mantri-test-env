@@ -299,7 +299,8 @@ export const saveReservation = async (
     }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
 
     if (toNum(res.advance_paid) > 0) {
-      const todayStr = (new Date()).toISOString().slice(0, 10);
+      const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+      const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
       Promise.resolve(supabase.from('booking_timeline').insert({
         hotel_id: hotelId,
         reservation_id: res.id,
@@ -307,9 +308,9 @@ export const saveReservation = async (
         event_description: `Advance payment for reservation: ${res.guest_name}`,
         event_amount: toNum(res.advance_paid),
         event_data: {
-          payment_date: todayStr,
-          business_date: todayStr,
-          payment_method: res.payment_mode || 'Cash',
+          payment_date: paymentDate,
+          business_date: paymentDate,
+          payment_method: paymentMethod,
           pay_cash: res.pay_cash ?? 0,
           pay_bank: res.pay_bank ?? 0,
           pay_upi: res.pay_upi ?? 0,
@@ -348,7 +349,8 @@ export const saveReservation = async (
   }
 
   if (toNum(res.advance_paid) > 0) {
-    const todayStr = (new Date()).toISOString().slice(0, 10);
+    const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+    const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
     Promise.resolve(supabase.from('booking_timeline').insert({
       hotel_id: hotelId,
       reservation_id: res.id,
@@ -356,9 +358,9 @@ export const saveReservation = async (
       event_description: `Advance payment for reservation: ${res.guest_name}`,
       event_amount: toNum(res.advance_paid),
       event_data: {
-        payment_date: todayStr,
-        business_date: todayStr,
-        payment_method: res.payment_mode || 'Cash',
+        payment_date: paymentDate,
+        business_date: paymentDate,
+        payment_method: paymentMethod,
         pay_cash: res.pay_cash ?? 0,
         pay_bank: res.pay_bank ?? 0,
         pay_upi: res.pay_upi ?? 0,
