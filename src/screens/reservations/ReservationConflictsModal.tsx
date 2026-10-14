@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, AlertTriangle, ArrowRight, BedDouble, Calendar, User, CheckCircle2, RefreshCw } from 'lucide-react';
+import { X, AlertTriangle, ArrowRight, BedDouble, Calendar, User, CheckCircle2, RefreshCw, RotateCcw } from 'lucide-react';
 import type { Reservation } from '@/lib/types-reservations';
-import { assignPhysicalRoom, updateReservationStatus, checkRoomAvailability, deleteReservation } from '@/lib/api-reservations';
+import { assignPhysicalRoom, updateReservationStatus, checkRoomAvailability, deleteReservation, restoreReservations } from '@/lib/api-reservations';
 
 interface ConflictItem {
   type: string;
@@ -35,20 +35,38 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [deletedConflict, setDeletedConflict] = useState<Reservation | null>(null);
 
   const getGuest = (r: any) => r.guest_name || r.guestName || 'Guest';
   const getDates = (r: any) => `${r.check_in_date || r.checkIn} → ${r.check_out_date || r.checkOut}`;
 
   const handleDeleteDuplicate = async (resId: string) => {
-    if (!window.confirm('Are you sure you want to delete this duplicate reservation entry?')) return;
+    if (!window.confirm('Are you sure you want to delete this duplicate reservation entry? (Undo will be available)')) return;
     setBusy(true);
     setError(null);
     try {
-      await deleteReservation(resId);
+      const deleted = await deleteReservation(resId);
+      if (deleted) setDeletedConflict(deleted);
       setSuccessMsg('Duplicate reservation removed successfully.');
       onResolved();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete duplicate.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUndoConflictDelete = async () => {
+    if (!deletedConflict) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await restoreReservations([deletedConflict]);
+      setDeletedConflict(null);
+      setSuccessMsg('Deleted duplicate reservation restored successfully.');
+      onResolved();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to restore reservation.');
     } finally {
       setBusy(false);
     }
@@ -140,9 +158,23 @@ export const ReservationConflictsModal: React.FC<ReservationConflictsModalProps>
           )}
 
           {successMsg && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-xl flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{successMsg}</span>
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium rounded-xl flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{successMsg}</span>
+              </div>
+              {deletedConflict && (
+                <button
+                  type="button"
+                  onClick={handleUndoConflictDelete}
+                  disabled={busy}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition shadow-xs cursor-pointer active:scale-95"
+                  title="Restore deleted duplicate"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Undo</span>
+                </button>
+              )}
             </div>
           )}
 
