@@ -778,8 +778,8 @@ export const generateAndDeliverConfirmation = async ({
     };
   }
 
-  const { document: docRecord, buffer: pdfBuffer, version, fileName } = genResult;
-  console.log(`[DELIVERY_SERVICE] PDF ready version=${version} file=${fileName} size=${pdfBuffer.length}`);
+  const { document: docRecord, buffer: pdfBuffer, version, fileName, signedUrl } = genResult;
+  console.log(`[DELIVERY_SERVICE] PDF ready version=${version} file=${fileName} size=${pdfBuffer?.length || 0} signedUrl=${Boolean(signedUrl)}`);
 
   // 3. Resolve Metrics & Hotel Details
   const checkIn = String(resRecord.check_in_date || '').slice(0, 10);
@@ -1155,14 +1155,25 @@ export const generateAndDeliverConfirmation = async ({
       const roomInfo = `${resRecord.rate_plan || resRecord.room_category || 'Standard'}${resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${resRecord.room_no})` : ''
         }`;
 
+      const guestCount = Math.max(1, (Number(resRecord.adults || 0) || Number(resRecord.guest_count || 0) || 1) + Number(resRecord.children || 0));
       const metaTemplate = buildMetaBookingConfirmationTemplate({
         guestName: resRecord.guest_name || 'Guest',
-        hotelName,
+        bookingId: confirmationNumber || (resRecord.id ? `HM-RES-${resRecord.id.slice(0, 8).toUpperCase()}` : 'HM-RES'),
         confirmationNumber,
+        reservationReference: confirmationNumber,
+        roomNo: resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? resRecord.room_no : 'Unassigned',
+        roomNumber: resRecord.room_no,
         roomDetails: roomInfo,
+        roomCategory: resRecord.rate_plan || resRecord.room_category || 'Standard',
         checkIn: formatDateReadable(checkIn),
         checkOut: formatDateReadable(checkOut),
         totalAmount: totalVal,
+        invoiceUrl: signedUrl || waPaymentUrl || '—',
+        hotelName,
+        guestCount,
+        currency: '₹',
+        documentUrl: signedUrl || null,
+        documentFilename: fileName,
       });
 
       const waEventKey = `${DELIVERY_EVENT_TYPES.RESERVATION_CONFIRMATION_WHATSAPP}_${targetRecipientType}_V${version}`;
@@ -1187,6 +1198,8 @@ export const generateAndDeliverConfirmation = async ({
             recipient: targetPhone,
             message: `Confirmation WhatsApp already sent to ${targetRecipientType === 'HOTEL_OWNER' ? 'hotel owner' : 'guest'} for this version.`,
             whatsappDirectUrl: directUrl,
+            pdfUrl: signedUrl || null,
+            fileName,
           };
           await updateDocumentDeliveryStatus(hotelId, reservationId, version, { whatsappStatus: DELIVERY_STATUS.SENT });
           isDuplicate = true;
@@ -1199,6 +1212,8 @@ export const generateAndDeliverConfirmation = async ({
             recipient: targetPhone,
             status: OUTBOX_STATUS.SENDING,
             reservationId,
+            templateName: metaTemplate.templateName,
+            mediaUrl: signedUrl || null,
             metadata: {
               version,
               fileName,
@@ -1208,6 +1223,7 @@ export const generateAndDeliverConfirmation = async ({
               sourceName: recipientResolution.sourceName,
               otaBookingId: recipientResolution.otaBookingId,
               templateName: metaTemplate.templateName,
+              mediaUrl: signedUrl || null,
             },
           });
           outboxId = outboxRec?.id;
@@ -1224,6 +1240,10 @@ export const generateAndDeliverConfirmation = async ({
           templateName: metaTemplate.templateName,
           templateComponents: metaTemplate.templateComponents,
           templateLanguage: metaTemplate.templateLanguage,
+          mediaUrl: signedUrl || null,
+          fileName,
+          caption: `Reservation Confirmation — ${hotelName} (#${confirmationNumber})`,
+          mediaType: 'document',
         });
 
         if (waSendResult.success) {
@@ -1296,10 +1316,6 @@ export const generateAndDeliverConfirmation = async ({
     whatsapp: whatsappDeliveryResult,
     whatsApp: whatsappDeliveryResult,
   };
-};
-
-export {
-  buildMetaBookingConfirmationTemplate,
 };
 
 export default {

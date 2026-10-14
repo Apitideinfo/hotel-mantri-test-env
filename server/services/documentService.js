@@ -131,35 +131,85 @@ export const savePdfToStorage = async ({
   version,
   buffer,
   filename,
+  folder = 'reservations',
 }) => {
   const fileBaseName = filename || `confirmation-v${version}.pdf`;
-  const logicalStoragePath = `reservations/${hotelId}/${reservationId}/${fileBaseName}`;
+  const logicalStoragePath = `${folder}/${hotelId}/${reservationId || 'general'}/${fileBaseName}`;
 
+  let diskPath = null;
   try {
-    const relativeDir = path.join('reservations', String(hotelId), String(reservationId));
+    const relativeDir = path.join(folder, String(hotelId), String(reservationId || 'general'));
     const fullDir = path.join(DOCS_DIR, relativeDir);
 
     if (!fs.existsSync(fullDir)) {
       fs.mkdirSync(fullDir, { recursive: true });
     }
 
-    const diskPath = path.join(fullDir, fileBaseName);
+    diskPath = path.join(fullDir, fileBaseName);
     fs.writeFileSync(diskPath, buffer);
     console.log(`[DOCUMENT_STORAGE] Saved PDF to ${diskPath} (${buffer.length} bytes)`);
-
-    return {
-      storagePath: logicalStoragePath,
-      diskPath,
-      fileSize: buffer.length,
-    };
   } catch (fsErr) {
     console.warn(`[DOCUMENT_STORAGE] Non-fatal: unable to write PDF to local disk (serverless mode):`, fsErr.message);
-    return {
-      storagePath: logicalStoragePath,
-      diskPath: null,
-      fileSize: buffer?.length || 0,
-    };
   }
+
+  // Upload to Supabase Storage bucket 'hotel-documents' & generate time-limited signed URL
+  let signedUrl = null;
+  try {
+    const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'hotel-documents';
+    const { error: uploadErr } = await supabaseServiceRole.storage
+      .from(bucketName)
+      .upload(logicalStoragePath, buffer, {
+        contentType: 'application/pdf',
+        upsert: true,
+      });
+
+    if (uploadErr) {
+      console.warn(`[DOCUMENT_STORAGE] Supabase Storage upload notification: ${uploadErr.message}`);
+    } else {
+      const { data: signData, error: signErr } = await supabaseServiceRole.storage
+        .from(bucketName)
+        .createSignedUrl(logicalStoragePath, 86400); // 24-hour expiration
+
+      if (!signErr && signData?.signedUrl) {
+        signedUrl = signData.signedUrl;
+      }
+    }
+  } catch (storageErr) {
+    console.warn(`[DOCUMENT_STORAGE] Non-fatal Supabase storage error:`, storageErr.message);
+  }
+
+  return {
+    storagePath: logicalStoragePath,
+    diskPath,
+    fileSize: buffer?.length || 0,
+    fileName: fileBaseName,
+    filename: fileBaseName,
+    signedUrl,
+  };
+};
+
+/**
+ * Generates an authoritative time-limited signed URL for a stored document.
+ *
+ * @param {string} storagePath
+ * @param {number} [expiresInSeconds=86400]
+ * @returns {Promise<string|null>}
+ */
+export const getSignedDocumentUrl = async (storagePath, expiresInSeconds = 86400) => {
+  if (!storagePath) return null;
+  try {
+    const bucketName = process.env.SUPABASE_STORAGE_BUCKET || 'hotel-documents';
+    const { data, error } = await supabaseServiceRole.storage
+      .from(bucketName)
+      .createSignedUrl(storagePath, expiresInSeconds);
+
+    if (!error && data?.signedUrl) {
+      return data.signedUrl;
+    }
+  } catch (err) {
+    console.warn('[DOCUMENT_STORAGE] Failed to generate signed URL:', err.message);
+  }
+  return null;
 };
 
 /**
@@ -388,7 +438,8 @@ export const generateAndStoreReservationConfirmation = async ({
 
   // 4. Generate Professional PDF
   const shortId = (resRecord.id || '').slice(0, 8).toUpperCase();
-  const fileName = `Hotel-Mantri-Reservation-Confirmation-HM-${shortId}-v${version}.pdf`;
+  const bookingRef = resRecord.booking_reference || resRecord.reservation_no || `HM-${shortId}`;
+  const fileName = `HotelMantri-Booking-${bookingRef}.pdf`;
 
   let pdfBuffer;
   try {
@@ -416,7 +467,7 @@ export const generateAndStoreReservationConfirmation = async ({
   }
 
   // 5. Save to Persistent Storage
-  const { storagePath } = await savePdfToStorage({
+  const { storagePath, signedUrl, diskPath } = await savePdfToStorage({
     hotelId,
     reservationId,
     version,
@@ -444,6 +495,7 @@ export const generateAndStoreReservationConfirmation = async ({
       room_no: resRecord.room_no,
       invoice_total: resRecord.invoice_total,
       generated_at: new Date().toISOString(),
+      signed_url: signedUrl || null,
     },
   });
 
@@ -454,6 +506,8 @@ export const generateAndStoreReservationConfirmation = async ({
     version,
     fileName,
     storagePath,
+    signedUrl,
+    diskPath,
   };
 };
 
@@ -464,6 +518,7 @@ export default {
   getReservationDocuments,
   getNextDocumentVersion,
   savePdfToStorage,
+  getSignedDocumentUrl,
   readPdfFromStorage,
   recordDocument,
   updateDocumentDeliveryStatus,

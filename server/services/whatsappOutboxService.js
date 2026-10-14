@@ -243,9 +243,13 @@ export const recordWhatsAppOutboxEvent = async ({
   lastError = null,
   metadata = {},
   reservationId = null,
+  templateName = null,
+  mediaUrl = null,
 }) => {
   const eventId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const resolvedTemplateName = templateName || metadata?.templateName || metadata?.template_name || null;
+  const resolvedMediaUrl = mediaUrl || metadata?.mediaUrl || metadata?.media_url || null;
   const resolvedIdempotencyKey =
     idempotencyKey ||
     generateIdempotencyKey({
@@ -262,6 +266,8 @@ export const recordWhatsAppOutboxEvent = async ({
     report_type: reportType,
     delivery_type: deliveryType,
     provider,
+    template_name: resolvedTemplateName,
+    media_url: resolvedMediaUrl,
     idempotency_key: resolvedIdempotencyKey,
   };
 
@@ -278,6 +284,8 @@ export const recordWhatsAppOutboxEvent = async ({
     recipient,
     status,
     provider,
+    template_name: resolvedTemplateName,
+    media_url: resolvedMediaUrl,
     idempotency_key: resolvedIdempotencyKey,
     attempt_count: isTerminalSuccess || status === OUTBOX_STATUS.FAILED || isSubmitted ? 1 : 0,
     provider_message_id: providerMessageId,
@@ -300,7 +308,7 @@ export const recordWhatsAppOutboxEvent = async ({
 
   // Also attempt Supabase notification_outbox
   try {
-    await supabaseServiceRole.from('notification_outbox').insert({
+    const insertPayload = {
       id: eventId,
       hotel_id: hotelId,
       reservation_id: reservationId,
@@ -309,6 +317,7 @@ export const recordWhatsAppOutboxEvent = async ({
       report_type: reportType,
       delivery_type: deliveryType,
       recipient,
+      template_name: resolvedTemplateName,
       status,
       provider,
       idempotency_key: resolvedIdempotencyKey,
@@ -322,7 +331,11 @@ export const recordWhatsAppOutboxEvent = async ({
       sent_at: record.sent_at,
       created_at: now,
       updated_at: now,
-    });
+    };
+    if (resolvedMediaUrl) {
+      insertPayload.media_url = resolvedMediaUrl;
+    }
+    await supabaseServiceRole.from('notification_outbox').insert(insertPayload);
   } catch (err) {
     // If Supabase fails (e.g. column not yet created), local record is already saved
     console.warn('[OUTBOX] Supabase notification_outbox insert skipped:', err.message);
@@ -339,6 +352,7 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
   const idx = localRecords.findIndex((r) => r.id === eventId);
   const lastError = updates.last_error !== undefined ? updates.last_error : (updates.lastError || null);
   const providerMessageId = updates.provider_message_id !== undefined ? updates.provider_message_id : (updates.providerMessageId || null);
+  const mediaUrl = updates.media_url !== undefined ? updates.media_url : (updates.mediaUrl || undefined);
 
   const status = updates.status;
   const isTerminalSuccess = status === OUTBOX_STATUS.SENT || status === OUTBOX_STATUS.DELIVERED;
@@ -350,6 +364,7 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
     localRecords[idx] = {
       ...localRecords[idx],
       ...updates,
+      media_url: mediaUrl !== undefined ? mediaUrl : localRecords[idx].media_url,
       last_error: lastError !== undefined ? lastError : localRecords[idx].last_error,
       provider_message_id: providerMessageId !== undefined ? providerMessageId : localRecords[idx].provider_message_id,
       submitted_at: isSubmitted || isTerminalSuccess ? (localRecords[idx].submitted_at || now) : localRecords[idx].submitted_at,
@@ -368,6 +383,7 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
       provider_message_id: providerMessageId,
       updated_at: now,
     };
+    if (mediaUrl !== undefined) dbUpdates.media_url = mediaUrl;
     if (isTerminalSuccess) dbUpdates.sent_at = now;
     if (isDelivered) dbUpdates.delivered_at = now;
     if (isFailed) dbUpdates.failed_at = now;
