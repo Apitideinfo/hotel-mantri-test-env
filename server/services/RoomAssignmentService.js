@@ -21,6 +21,67 @@ import { checkManualDuplicate, withBookingLock } from './ReservationIdempotencyS
 import { isValidEmail } from './emailService.js';
 
 /**
+ * Authoritative set of PostgreSQL columns in the 'reservations' table.
+ * Strips client-only flags (allowEmptyEmail), category hold markers (room_category_id),
+ * and virtual/generated properties before executing Supabase/PostgREST queries.
+ */
+export const RESERVATION_DB_COLUMNS = new Set([
+  'hotel_id',
+  'room_id',
+  'room_no',
+  'guest_name',
+  'guest_phone',
+  'guest_email',
+  'guest_address',
+  'guest_type',
+  'company_gst',
+  'check_in_date',
+  'check_out_date',
+  'rate',
+  'source_category',
+  'source_name',
+  'payment_mode',
+  'advance_paid',
+  'pay_cash',
+  'pay_upi',
+  'pay_card',
+  'pay_bank',
+  'payment_ref',
+  'discount',
+  'meal_plan',
+  'gst_type',
+  'gst_slab',
+  'gst_amount',
+  'taxable_amount',
+  'invoice_total',
+  'adults',
+  'children',
+  'remarks',
+  'internal_note',
+  'created_by',
+  'status',
+  'room_chart_entry_id',
+  'group_id',
+  'rate_plan',
+  'parent_reservation_id',
+  'guest_id',
+  'created_at',
+  'updated_at',
+]);
+
+export const sanitizeReservationPayload = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (RESERVATION_DB_COLUMNS.has(key) && val !== undefined) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
+
+/**
  * Upserts a guest in the PMS guests table.
  */
 export const upsertGuestMaster = async (hotelId, payload) => {
@@ -250,7 +311,7 @@ export const createReservationsAtomically = async ({
         internalNote = internalNote ? `${internalNote} [CLIENT_IDEMP: ${derivedIdempKey}]` : `[CLIENT_IDEMP: ${derivedIdempKey}]`;
       }
 
-      const payload = {
+      const rawPayload = {
         ...item,
         hotel_id: hotelId,
         guest_email: item.guest_email || '',
@@ -264,10 +325,8 @@ export const createReservationsAtomically = async ({
         updated_at: new Date().toISOString(),
       };
 
-      // Strip PostgreSQL virtual / generated columns
-      delete payload.id;
-      delete payload.nights;
-      delete payload.room_categories;
+      // Strip PostgreSQL virtual / non-column fields via authoritative whitelist
+      const payload = sanitizeReservationPayload(rawPayload);
 
       const { data: inserted, error: insertErr } = await supabaseServiceRole
         .from('reservations')
@@ -411,7 +470,7 @@ export const updateReservationAtomically = async ({
       }
     }
 
-    const payload = {
+    const rawPayload = {
       ...updates,
       room_no: normRoom || 'Unassigned',
       room_id: normRoom ? updates.room_id ?? current.room_id : null,
@@ -420,8 +479,7 @@ export const updateReservationAtomically = async ({
       updated_at: new Date().toISOString(),
     };
 
-    delete payload.id;
-    delete payload.nights;
+    const payload = sanitizeReservationPayload(rawPayload);
     delete payload.hotel_id;
 
     const { data: updated, error: updateErr } = await supabaseServiceRole

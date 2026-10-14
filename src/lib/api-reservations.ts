@@ -17,6 +17,66 @@ import { isValidEmail } from './types-reservations';
 export { getRoomChartForDateRange };
 
 /**
+ * Authoritative set of PostgreSQL columns in the 'reservations' table.
+ * Strips client-only flags (allowEmptyEmail), category hold markers (room_category_id),
+ * and virtual/generated properties before executing Supabase/PostgREST queries.
+ */
+export const RESERVATION_DB_COLUMNS = new Set<string>([
+  'hotel_id',
+  'room_id',
+  'room_no',
+  'guest_name',
+  'guest_phone',
+  'guest_email',
+  'guest_address',
+  'guest_type',
+  'company_gst',
+  'check_in_date',
+  'check_out_date',
+  'rate',
+  'source_category',
+  'source_name',
+  'payment_mode',
+  'advance_paid',
+  'pay_cash',
+  'pay_upi',
+  'pay_card',
+  'pay_bank',
+  'payment_ref',
+  'discount',
+  'meal_plan',
+  'gst_type',
+  'gst_slab',
+  'gst_amount',
+  'taxable_amount',
+  'invoice_total',
+  'adults',
+  'children',
+  'remarks',
+  'internal_note',
+  'created_by',
+  'status',
+  'room_chart_entry_id',
+  'group_id',
+  'rate_plan',
+  'parent_reservation_id',
+  'guest_id',
+  'created_at',
+  'updated_at',
+]);
+
+export const sanitizeReservationPayload = (raw: Record<string, any>): Record<string, any> => {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (RESERVATION_DB_COLUMNS.has(key) && val !== undefined) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
+/**
  * Definition of an active reservation status that blocks room inventory.
  * Confirmed and Checked-in block rooms.
  * Checked-out, Cancelled, and No-show do NOT block rooms.
@@ -206,9 +266,7 @@ export const saveReservation = async (
   }
 
   // Direct Supabase fallback
-  const rawPayload = { ...input, hotel_id: hotelId };
-  delete (rawPayload as { id?: string }).id;
-  delete (rawPayload as { nights?: number }).nights;
+  const rawPayload = sanitizeReservationPayload({ ...input, hotel_id: hotelId });
 
   if (isNew && !isOta && !allowEmptyEmail) {
     if (!cleanEmail) {
@@ -276,9 +334,10 @@ export const saveReservation = async (
   }
 
   if (id && id.trim() !== '') {
+    const updatePayload = sanitizeReservationPayload({ ...rawPayload, updated_at: new Date().toISOString() });
     const { data, error } = await supabase
       .from('reservations')
-      .update({ ...rawPayload, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', id)
       .select('*')
       .single();
@@ -488,12 +547,9 @@ export const saveReservations = async (
     }
   }
 
-  const rawPayloads = normalizedInputs.map((input) => {
-    const p = { ...input, hotel_id: hotelId };
-    delete (p as { id?: string }).id;
-    delete (p as { nights?: number }).nights;
-    return p;
-  });
+  const rawPayloads = normalizedInputs.map((input) =>
+    sanitizeReservationPayload({ ...input, hotel_id: hotelId })
+  );
 
   const { data, error } = await supabase
     .from('reservations')
