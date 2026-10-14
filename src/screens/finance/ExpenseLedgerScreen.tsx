@@ -15,6 +15,7 @@ import { buildExpenseLedgerPDF } from '@/lib/pdf-finance';
 import { fmtMoney } from '@/components/finance-ui';
 import type { HotelSettings } from '@/lib/types';
 import { getSettings } from '@/lib/api';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface ExpenseLedgerScreenProps {
   onBack: () => void;
@@ -95,6 +96,8 @@ export const ExpenseLedgerScreen = ({ onBack }: ExpenseLedgerScreenProps) => {
   const [showModal, setShowModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState<ExpenseEntry | null>(null);
   const [savingEntry, setSavingEntry] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; amount: number; head: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [modalForm, setModalForm] = useState<{
     entry_date: string;
     category_name: string;
@@ -280,16 +283,22 @@ export const ExpenseLedgerScreen = ({ onBack }: ExpenseLedgerScreenProps) => {
   };
 
   // Delete expense
-  const handleDeleteExpense = async (id: string, amount: number, head: string) => {
-    if (!window.confirm(`Are you sure you want to delete this expense of ₹${fmtMoney(amount)} for ${head}?`)) {
-      return;
-    }
+  const handleDeleteExpense = (id: string, amount: number, head: string) => {
+    setDeleteTarget({ id, amount, head });
+  };
+
+  const confirmDeleteExpense = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
     try {
-      await deleteExpenseEntry(id);
-      setEntries((prev) => prev.filter((e) => e.id !== id));
+      await deleteExpenseEntry(deleteTarget.id);
+      setEntries((prev) => prev.filter((e) => e.id !== deleteTarget.id));
       showToast('Expense entry deleted.');
+      setDeleteTarget(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete expense');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1208,6 +1217,26 @@ export const ExpenseLedgerScreen = ({ onBack }: ExpenseLedgerScreenProps) => {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDeleteExpense}
+        title="Delete Expense Entry?"
+        variant="danger"
+        confirmText="Yes, Delete Expense"
+        message={
+          deleteTarget ? (
+            <span>
+              Are you sure you want to permanently delete this expense of{' '}
+              <strong className="text-slate-900">₹{fmtMoney(deleteTarget.amount)}</strong> for{' '}
+              <strong className="text-slate-900">{deleteTarget.head}</strong>?
+            </span>
+          ) : ''
+        }
+        loading={isDeleting}
+      />
     </div>
   );
 };

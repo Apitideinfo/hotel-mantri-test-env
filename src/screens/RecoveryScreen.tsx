@@ -39,7 +39,7 @@ export const RecoveryScreen = () => {
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
       <div className="flex flex-col items-center gap-6 bg-slate-800/80 border border-slate-700 p-8 rounded-3xl shadow-2xl w-full max-w-md">
-        <BrandLogo variant="sidebar" />
+        <BrandLogo variant="sidebar" onDark />
         <div className="text-center w-full">
           <h2 className="text-xl font-bold text-white mb-2">Reset Password</h2>
           <p className="text-slate-400 text-sm">Please enter your new password below.</p>

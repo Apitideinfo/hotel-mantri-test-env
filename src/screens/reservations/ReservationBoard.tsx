@@ -25,6 +25,7 @@ import { AssignRoomModal, ExtendStayModal } from './ReservationModals';
 import { ReservationConflictsModal } from './ReservationConflictsModal';
 import { NewBookingModal } from '@/components/NewBookingModal';
 import { ReservationConfirmationModal } from '@/components/reservations/ReservationConfirmationModal';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 type ViewMode = 'list' | 'timeline' | 'calendar' | 'arrival' | 'departure';
 
@@ -145,6 +146,19 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [busy, setBusy] = useState(false);
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
   const [deletingAll, setDeletingAll] = useState(false);
+
+  // Custom action confirmation modal state
+  interface ConfirmModalState {
+    open: boolean;
+    title: string;
+    message: React.ReactNode;
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    badgeText?: string;
+    onConfirm: () => Promise<void> | void;
+  }
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
 
   // Undo deletion state
   interface UndoState {
@@ -505,41 +519,59 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   };
 
-  const handleCancel = async (res: Reservation) => {
-    if (!window.confirm(`Are you sure you want to cancel the reservation for ${res.guest_name}?`)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await updateReservationStatus(res.id, 'cancelled');
-      setSuccessMsg('Reservation cancelled successfully.');
-      refreshAll();
-    } catch (e: any) {
-      setError(e?.message || 'Cancellation failed.');
-    } finally {
-      setBusy(false);
-    }
+  const handleCancel = (res: Reservation) => {
+    setConfirmModal({
+      open: true,
+      title: 'Cancel Reservation?',
+      variant: 'warning',
+      confirmText: 'Yes, Cancel Reservation',
+      message: `Are you sure you want to cancel the confirmed reservation for ${res.guest_name}?`,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setBusy(true);
+        setError(null);
+        try {
+          await updateReservationStatus(res.id, 'cancelled');
+          setSuccessMsg('Reservation cancelled successfully.');
+          refreshAll();
+        } catch (e: any) {
+          setError(e?.message || 'Cancellation failed.');
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
-  const handleGroupCancel = async (group: GroupedReservation) => {
+  const handleGroupCancel = (group: GroupedReservation) => {
     const desc = group.isMultiRoom
       ? `all ${group.reservations.length} rooms (${group.roomNos.join(', ')}) for ${group.primaryReservation.guest_name}`
       : `Room ${group.primaryReservation.room_no || 'Unassigned'} for ${group.primaryReservation.guest_name}`;
-    if (!window.confirm(`Are you sure you want to cancel the reservation for ${desc}?`)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await Promise.all(
-        group.reservations
-          .filter((r) => r.status === 'confirmed')
-          .map((r) => updateReservationStatus(r.id, 'cancelled'))
-      );
-      setSuccessMsg(`Reservation cancelled successfully.`);
-      refreshAll();
-    } catch (e: any) {
-      setError(e?.message || 'Cancellation failed.');
-    } finally {
-      setBusy(false);
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Cancel Reservation?',
+      variant: 'warning',
+      confirmText: 'Yes, Cancel Reservation',
+      message: `Are you sure you want to cancel the reservation for ${desc}?`,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setBusy(true);
+        setError(null);
+        try {
+          await Promise.all(
+            group.reservations
+              .filter((r) => r.status === 'confirmed')
+              .map((r) => updateReservationStatus(r.id, 'cancelled'))
+          );
+          setSuccessMsg(`Reservation cancelled successfully.`);
+          refreshAll();
+        } catch (e: any) {
+          setError(e?.message || 'Cancellation failed.');
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
   const toggleSelect = (id: string) => {
@@ -651,43 +683,63 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   };
 
   // Delete individual group / reservation with Undo
-  const handleGroupDelete = async (group: GroupedReservation) => {
+  const handleGroupDelete = (group: GroupedReservation) => {
     const desc = group.isMultiRoom
       ? `all ${group.reservations.length} rooms (${group.roomNos.join(', ')}) for ${group.primaryReservation.guest_name}`
       : `Room ${group.primaryReservation.room_no || 'Unassigned'} for ${group.primaryReservation.guest_name}`;
-    if (!window.confirm(`Are you sure you want to permanently delete the reservation for ${desc}? (Undo will be available)`)) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const ids = group.reservations.map((r) => r.id);
-      const { count, deleted } = await bulkDeleteReservations(ids);
-      triggerUndoNotice(
-        `Deleted reservation for ${group.primaryReservation.guest_name}${group.isMultiRoom ? ` (${count} rooms)` : ''}.`,
-        deleted
-      );
-      refreshAll();
-    } catch (e: any) {
-      setError(e?.message || 'Delete failed.');
-    } finally {
-      setBusy(false);
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Delete Reservation?',
+      variant: 'danger',
+      badgeText: 'Undo Available (10s)',
+      confirmText: 'Yes, Delete Entry',
+      message: `Are you sure you want to permanently delete the reservation for ${desc}? You will have 10 seconds to undo this action.`,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setBusy(true);
+        setError(null);
+        try {
+          const ids = group.reservations.map((r) => r.id);
+          const { count, deleted } = await bulkDeleteReservations(ids);
+          triggerUndoNotice(
+            `Deleted reservation for ${group.primaryReservation.guest_name}${group.isMultiRoom ? ` (${count} rooms)` : ''}.`,
+            deleted
+          );
+          refreshAll();
+        } catch (e: any) {
+          setError(e?.message || 'Delete failed.');
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
-  const handleBulkDeleteAction = async () => {
+  const handleBulkDeleteAction = () => {
     if (!selected.size) return;
-    if (!window.confirm(`Are you sure you want to permanently delete the ${selected.size} selected reservation(s)? (Undo will be available)`)) return;
-    setBusy(true);
-    try {
-      const { count, deleted } = await bulkDeleteReservations([...selected]);
-      setSelected(new Set());
-      setShowBulkBar(false);
-      triggerUndoNotice(`Successfully deleted ${count} selected reservation(s).`, deleted);
-      refreshAll();
-    } catch (e: any) {
-      setError(e?.message || 'Bulk delete failed');
-    } finally {
-      setBusy(false);
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Delete Selected Reservations?',
+      variant: 'danger',
+      badgeText: 'Undo Available (10s)',
+      confirmText: `Delete ${selected.size} Selected`,
+      message: `Are you sure you want to permanently delete the ${selected.size} selected reservation(s)? You will have 10 seconds to undo this deletion.`,
+      onConfirm: async () => {
+        setConfirmModal(null);
+        setBusy(true);
+        try {
+          const { count, deleted } = await bulkDeleteReservations([...selected]);
+          setSelected(new Set());
+          setShowBulkBar(false);
+          triggerUndoNotice(`Successfully deleted ${count} selected reservation(s).`, deleted);
+          refreshAll();
+        } catch (e: any) {
+          setError(e?.message || 'Bulk delete failed');
+        } finally {
+          setBusy(false);
+        }
+      },
+    });
   };
 
   const handleDeleteAllAction = async () => {
@@ -2124,11 +2176,27 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         </div>
       )}
 
+      {/* ── Unified Action Confirmation Modal ── */}
+      {confirmModal && (
+        <ConfirmModal
+          open={confirmModal.open}
+          onClose={() => setConfirmModal(null)}
+          onConfirm={confirmModal.onConfirm}
+          title={confirmModal.title}
+          message={confirmModal.message}
+          confirmText={confirmModal.confirmText}
+          cancelText={confirmModal.cancelText}
+          variant={confirmModal.variant}
+          badgeText={confirmModal.badgeText}
+          loading={busy}
+        />
+      )}
+
       {/* ── Floating Undo Toast Notification ── */}
       {undoState && (
         <aside
           aria-label="Undo deletion banner"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4 pointer-events-none"
+          className={`fixed ${showBulkBar ? 'bottom-24' : 'bottom-6'} left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4 pointer-events-none transition-all duration-300`}
         >
           <div className="bg-slate-900/95 backdrop-blur-md text-white border border-slate-700/90 shadow-2xl rounded-2xl p-4 flex items-center justify-between gap-3 pointer-events-auto ring-1 ring-white/10 animate-in slide-in-from-bottom-4 duration-300">
             <div className="flex items-center gap-3 min-w-0">

@@ -6,3 +6,4 @@ export * from './EmptyState';
 export * from './PageHeader';
 export * from './CelebrationBurst';
 export * from './CongratulationsModal';
+export * from './ConfirmModal';

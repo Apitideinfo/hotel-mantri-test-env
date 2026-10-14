@@ -23,6 +23,7 @@ import type {
 import { fmtMoney, toNum } from '@/lib/calc';
 import { downloadLaundryStatementPdf, downloadVendorLedgerPdf } from '@/lib/pdf-laundry';
 import { useHotel } from '@/lib/hotel-context';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface LaundryLinenScreenProps {
   onBack: () => void;
@@ -929,6 +930,9 @@ const DispatchesTab = ({
 }) => {
   const [filterStatus, setFilterStatus] = useState('all');
   const [vendorFilter, setVendorFilter] = useState('all');
+  const [deletingDispatch, setDeletingDispatch] = useState<LaundryDispatch | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     return dispatches.filter((d) => {
@@ -1036,17 +1040,11 @@ const DispatchesTab = ({
                           </button>
                         )}
                         <button
-                          onClick={async () => {
-                            if (window.confirm(`Delete dispatch ${d.dispatch_no}? This is only allowed if no receipts exist.`)) {
-                              try {
-                                await deleteDispatch(d.id);
-                                onDeleted();
-                              } catch (err: any) {
-                                alert(err.message);
-                              }
-                            }
+                          onClick={() => {
+                            setDeleteError(null);
+                            setDeletingDispatch(d);
                           }}
-                          className="p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          className="p-1.5 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                           title="Delete Dispatch"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -1064,6 +1062,44 @@ const DispatchesTab = ({
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        open={Boolean(deletingDispatch)}
+        onClose={() => setDeletingDispatch(null)}
+        onConfirm={async () => {
+          if (!deletingDispatch) return;
+          setIsDeleting(true);
+          try {
+            await deleteDispatch(deletingDispatch.id);
+            setDeletingDispatch(null);
+            onDeleted();
+          } catch (err: any) {
+            setDeleteError(err?.message || 'Failed to delete dispatch.');
+          } finally {
+            setIsDeleting(false);
+          }
+        }}
+        title="Delete Dispatch?"
+        variant="danger"
+        confirmText="Yes, Delete Dispatch"
+        message={
+          deletingDispatch ? (
+            <div>
+              <p>
+                Are you sure you want to delete dispatch{' '}
+                <strong className="text-slate-900">{deletingDispatch.dispatch_no}</strong>?
+              </p>
+              <p className="text-xs text-slate-400 mt-1">This is only allowed if no receipts exist for this dispatch.</p>
+              {deleteError && (
+                <p className="text-xs font-semibold text-rose-600 mt-2 bg-rose-50 p-2 rounded-lg border border-rose-100">
+                  {deleteError}
+                </p>
+              )}
+            </div>
+          ) : ''
+        }
+        loading={isDeleting}
+      />
     </div>
   );
 };
@@ -3130,6 +3166,9 @@ const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved:
     }
   };
 
+  const [deletingVendor, setDeletingVendor] = useState<LaundryVendor | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
@@ -3152,14 +3191,9 @@ const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved:
                 <div className="text-[10px] text-slate-400">{v.mobile_number || 'No phone'}</div>
               </div>
               <button
-                onClick={async () => {
-                  if (window.confirm(`Delete ${v.vendor_name}?`)) {
-                    await deleteLaundryVendor(v.id);
-                    setVendors(await getLaundryVendors());
-                    onSaved();
-                  }
-                }}
-                className="text-rose-500 hover:text-rose-700 p-1"
+                onClick={() => setDeletingVendor(v)}
+                className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 transition cursor-pointer"
+                title="Delete vendor"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -3168,9 +3202,31 @@ const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved:
         </div>
 
         <div className="flex justify-end pt-2 border-t">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Close</button>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 transition cursor-pointer">Close</button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={Boolean(deletingVendor)}
+        onClose={() => setDeletingVendor(null)}
+        onConfirm={async () => {
+          if (!deletingVendor) return;
+          setIsDeleting(true);
+          try {
+            await deleteLaundryVendor(deletingVendor.id);
+            setVendors(await getLaundryVendors());
+            onSaved();
+            setDeletingVendor(null);
+          } finally {
+            setIsDeleting(false);
+          }
+        }}
+        title="Delete Vendor?"
+        variant="danger"
+        confirmText="Yes, Delete Vendor"
+        message={deletingVendor ? `Are you sure you want to delete vendor "${deletingVendor.vendor_name}"?` : ''}
+        loading={isDeleting}
+      />
     </div>
   );
 };
@@ -3208,6 +3264,9 @@ const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: 
     }
   };
 
+  const [deletingItem, setDeletingItem] = useState<LinenItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full p-5 shadow-2xl space-y-4">
@@ -3239,14 +3298,9 @@ const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: 
                 <div className="text-[10px] text-slate-400">{it.category} • Rs.{it.standard_rate}/pc</div>
               </div>
               <button
-                onClick={async () => {
-                  if (window.confirm(`Delete ${it.item_name}?`)) {
-                    await deleteLinenItem(it.id);
-                    setItems(await getLinenItems());
-                    onSaved();
-                  }
-                }}
-                className="text-rose-500 hover:text-rose-700 p-1"
+                onClick={() => setDeletingItem(it)}
+                className="text-rose-500 hover:text-rose-700 p-1 rounded hover:bg-rose-50 transition cursor-pointer"
+                title="Delete item"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -3255,9 +3309,31 @@ const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: 
         </div>
 
         <div className="flex justify-end pt-2 border-t">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500">Close</button>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 transition cursor-pointer">Close</button>
         </div>
       </div>
+
+      <ConfirmModal
+        open={Boolean(deletingItem)}
+        onClose={() => setDeletingItem(null)}
+        onConfirm={async () => {
+          if (!deletingItem) return;
+          setIsDeleting(true);
+          try {
+            await deleteLinenItem(deletingItem.id);
+            setItems(await getLinenItems());
+            onSaved();
+            setDeletingItem(null);
+          } finally {
+            setIsDeleting(false);
+          }
+        }}
+        title="Delete Linen Item?"
+        variant="danger"
+        confirmText="Yes, Delete Item"
+        message={deletingItem ? `Are you sure you want to delete item "${deletingItem.item_name}"?` : ''}
+        loading={isDeleting}
+      />
     </div>
   );
 };

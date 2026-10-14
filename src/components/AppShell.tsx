@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, ReactNode, useMemo } from 'react';
+import { useEffect, useRef, useState, ReactNode, useMemo, useCallback } from 'react';
 import {
   LayoutGrid,
   ClipboardList,
@@ -49,6 +49,8 @@ import { useAuth } from '@/lib/auth';
 import { getTodayLocal } from '@/lib/calc';
 import { getEnabledHotelFeatures } from '@/lib/api';
 import { useChannelSyncStatus } from '@/lib/externalChannelSyncService';
+import type { AppNotification } from '@/enterprise/types';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '@/enterprise/api';
 
 export interface NavItem {
   key: string;
@@ -800,6 +802,48 @@ export const AppShell = ({
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState('');
   const profileRef = useRef<HTMLDivElement>(null);
+  const notifRef = useRef<HTMLDivElement>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [notifOpen, setNotifOpen] = useState(false);
+
+  const loadNotifications = useCallback(async () => {
+    try {
+      const items = await getNotifications();
+      setNotifications(items || []);
+    } catch {
+      setNotifications([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+    const interval = setInterval(loadNotifications, 60000);
+    return () => clearInterval(interval);
+  }, [loadNotifications]);
+
+  const unreadCount = notifications.filter((n) => !n.is_read).length;
+
+  const handleMarkAllRead = async () => {
+    try {
+      await markAllNotificationsRead();
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    } catch {
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    }
+  };
+
+  const handleMarkSingleRead = async (id: string) => {
+    try {
+      await markNotificationRead(id);
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+      );
+    } catch {
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+      );
+    }
+  };
   const { user, role, permissions, changePassword, updateUserProfile } = useAuth();
 
   const metadata = (user?.user_metadata ?? {}) as Record<string, unknown>;
@@ -843,6 +887,9 @@ export const AppShell = ({
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (profileRef.current && !profileRef.current.contains(event.target as Node)) {
         setProfileOpen(false);
+      }
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+        setNotifOpen(false);
       }
     };
     document.addEventListener('mousedown', closeOnOutsideClick);
@@ -1234,14 +1281,97 @@ export const AppShell = ({
               </button>
 
               {/* Notifications */}
-              <button
-                type="button"
-                className="relative p-2 text-slate-500 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition cursor-pointer"
-                aria-label="Notifications"
-              >
-                <Bell className="w-4.5 h-4.5" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-sky-500 shadow-soft-blue animate-pulse" />
-              </button>
+              <div ref={notifRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen((open) => !open)}
+                  className={`relative p-2 rounded-xl transition cursor-pointer ${
+                    notifOpen
+                      ? 'text-sky-600 bg-sky-50'
+                      : 'text-slate-500 hover:text-sky-600 hover:bg-sky-50'
+                  }`}
+                  aria-label="Notifications"
+                  aria-expanded={notifOpen}
+                >
+                  <Bell className="w-5 h-5" />
+                  {unreadCount > 0 && (
+                    <span className="absolute top-1 right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-[10px] font-black text-white flex items-center justify-center shadow-xs">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 top-[calc(100%+10px)] z-50 w-80 sm:w-96 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-in">
+                    <div className="px-4 py-3 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Bell className="w-4 h-4 text-sky-400" />
+                        <span className="text-sm font-black tracking-tight">Notifications</span>
+                        {unreadCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/30">
+                            {unreadCount} new
+                          </span>
+                        )}
+                      </div>
+                      {unreadCount > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleMarkAllRead}
+                          className="text-xs text-sky-300 hover:text-white font-semibold transition cursor-pointer"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                      {notifications.length === 0 ? (
+                        <div className="p-8 text-center">
+                          <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-2">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                          </div>
+                          <p className="text-xs font-bold text-slate-700">All caught up!</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">No pending notifications at this moment.</p>
+                        </div>
+                      ) : (
+                        notifications.map((n) => (
+                          <div
+                            key={n.id}
+                            onClick={() => handleMarkSingleRead(n.id)}
+                            className={`p-3.5 transition cursor-pointer hover:bg-slate-50 flex items-start gap-3 ${
+                              !n.is_read ? 'bg-sky-50/50' : ''
+                            }`}
+                          >
+                            <span
+                              className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${
+                                !n.is_read ? 'bg-sky-500 shadow-xs' : 'bg-transparent'
+                              }`}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className={`text-xs font-bold truncate ${!n.is_read ? 'text-slate-900' : 'text-slate-700'}`}>
+                                  {n.title}
+                                </p>
+                                {n.priority === 'high' || n.priority === 'critical' ? (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 border border-rose-200 shrink-0">
+                                    High
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="text-xs text-slate-500 mt-0.5 line-clamp-2 leading-relaxed">
+                                {n.message}
+                              </p>
+                              <p className="text-[10px] text-slate-400 mt-1">
+                                {new Date(n.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* User Profile Menu */}
               <div ref={profileRef} className="relative flex items-center pl-2 sm:pl-3 border-l border-slate-200">
