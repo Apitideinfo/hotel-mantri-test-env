@@ -610,13 +610,31 @@ export const updateReservationStatus = async (
   return res;
 };
 
-export const deleteReservation = async (id: string): Promise<void> => {
+export interface DeleteReservationsResult {
+  count: number;
+  deleted: Reservation[];
+}
+
+export const deleteReservation = async (id: string): Promise<Reservation | null> => {
   const { data: existing } = await supabase
     .from('reservations')
-    .select('check_in_date, check_out_date, room_no')
+    .select('*')
     .eq('id', id)
     .maybeSingle();
 
+  // 1. Unlink room chart entry if pointing to this reservation
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('reservation_id', id);
+
+  // 2. Delete linked alerts
+  await supabase
+    .from('reservation_alerts')
+    .delete()
+    .eq('reservation_id', id);
+
+  // 3. Delete reservation
   const { error } = await supabase.from('reservations').delete().eq('id', id);
   if (error) throw error;
 
@@ -627,19 +645,26 @@ export const deleteReservation = async (id: string): Promise<void> => {
       room_no: existing.room_no,
     }).catch(e => console.warn('[deleteReservation] Auto-sync warning:', e));
   }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return existing as Reservation | null;
 };
 
-export const deleteAllReservations = async (): Promise<number> => {
+export const deleteAllReservations = async (): Promise<DeleteReservationsResult> => {
   const hotelId = getCurrentHotelId();
 
-  // 1. Fetch count and list of active reservations
+  // 1. Fetch count and list of active reservations before deletion (for undo restoration)
   const { data: list } = await supabase
     .from('reservations')
-    .select('id, check_in_date, check_out_date, room_no')
+    .select('*')
     .eq('hotel_id', hotelId);
 
   const count = list?.length || 0;
-  if (count === 0) return 0;
+  if (count === 0) return { count: 0, deleted: [] };
 
   // 2. Unlink any room chart entries pointing to reservations
   await supabase
@@ -664,28 +689,35 @@ export const deleteAllReservations = async (): Promise<number> => {
     window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
   }
 
-  return count;
+  return { count, deleted: (list as Reservation[]) || [] };
 };
 
-export const bulkDeleteReservations = async (ids: string[]): Promise<number> => {
-  if (!ids.length) return 0;
+export const bulkDeleteReservations = async (ids: string[]): Promise<DeleteReservationsResult> => {
+  if (!ids.length) return { count: 0, deleted: [] };
   const hotelId = getCurrentHotelId();
 
-  // 1. Unlink any room chart entries pointing to these reservations
+  // 1. Fetch records first so they can be restored via undo
+  const { data: existing } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('id', ids);
+
+  // 2. Unlink any room chart entries pointing to these reservations
   await supabase
     .from('room_chart_entries')
     .update({ reservation_id: null })
     .eq('hotel_id', hotelId)
     .in('reservation_id', ids);
 
-  // 2. Delete linked alerts
+  // 3. Delete linked alerts
   await supabase
     .from('reservation_alerts')
     .delete()
     .eq('hotel_id', hotelId)
     .in('reservation_id', ids);
 
-  // 3. Delete reservations
+  // 4. Delete reservations
   const { error } = await supabase
     .from('reservations')
     .delete()
@@ -698,7 +730,64 @@ export const bulkDeleteReservations = async (ids: string[]): Promise<number> => 
     window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
   }
 
-  return ids.length;
+  return { count: ids.length, deleted: (existing as Reservation[]) || [] };
+};
+
+export const restoreReservations = async (records: Reservation[]): Promise<Reservation[]> => {
+  if (!records || !records.length) return [];
+  const hotelId = getCurrentHotelId();
+
+  // Valid columns in PostgreSQL reservations table (nights is GENERATED ALWAYS so must be omitted)
+  const validDbFields = new Set([
+    'id', 'hotel_id', 'room_id', 'room_no', 'guest_name', 'guest_phone',
+    'guest_email', 'guest_address', 'guest_type', 'company_gst',
+    'check_in_date', 'check_out_date', 'rate', 'source_category',
+    'source_name', 'payment_mode', 'advance_paid', 'pay_cash',
+    'pay_upi', 'pay_card', 'pay_bank', 'payment_ref', 'discount',
+    'meal_plan', 'gst_type', 'gst_slab', 'gst_amount', 'taxable_amount',
+    'invoice_total', 'adults', 'children', 'remarks', 'internal_note',
+    'created_by', 'status', 'room_chart_entry_id', 'group_id',
+    'rate_plan', 'parent_reservation_id', 'guest_id', 'created_at', 'updated_at'
+  ]);
+
+  const payloads = records.map((r) => {
+    const raw: any = { ...r };
+    delete raw.nights;
+    const clean: any = {};
+    for (const key of Object.keys(raw)) {
+      if (validDbFields.has(key)) {
+        clean[key] = raw[key];
+      }
+    }
+    if (!clean.hotel_id) clean.hotel_id = hotelId;
+    return clean;
+  });
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .insert(payloads)
+    .select('*');
+
+  if (error) {
+    console.error('[restoreReservations] Supabase insert error:', error);
+    throw error;
+  }
+
+  for (const r of records) {
+    dispatchChannelEvent('RESERVATION_CREATED', {
+      startDate: r.check_in_date,
+      endDate: r.check_out_date,
+      room_no: r.room_no,
+      room_id: r.room_id,
+    }).catch(e => console.warn('[restoreReservations] Auto-sync warning:', e));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return (data as Reservation[]) || [];
 };
 
 export interface CategoryAvailabilityResult {

@@ -5,7 +5,7 @@ import {
   Smartphone, AlertCircle, Filter, RefreshCw, Loader2, CheckCircle2,
   Clock, Phone, Mail, IndianRupee, MessageCircle, Edit3, FileText,
   Sparkles, Play, ClipboardCheck, Wrench, Ban, Star,
-  ArrowRightLeft, CalendarPlus, AlertTriangle, Sliders, Check, Zap,
+  ArrowRightLeft, CalendarPlus, AlertTriangle, Sliders, Check, Zap, RotateCcw,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
@@ -189,11 +189,16 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const [roomMoveSaving, setRoomMoveSaving] = useState(false);
   const [roomMoveError, setRoomMoveError] = useState<string | null>(null);
 
-  const [actionToast, setActionToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [actionToast, setActionToast] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+    onUndo?: () => void | Promise<void>;
+  } | null>(null);
 
   useEffect(() => {
     if (actionToast) {
-      const timer = setTimeout(() => setActionToast(null), 5000);
+      const delay = actionToast.onUndo ? 12000 : 5000;
+      const timer = setTimeout(() => setActionToast(null), delay);
       return () => clearTimeout(timer);
     }
   }, [actionToast]);
@@ -709,9 +714,31 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const handleDeleteReservation = async (id: string) => {
     setSaving(true);
     try {
+      const prev = reservations.find((r) => r.id === id);
+      const guestName = prev?.guest_name || 'Guest';
       await updateReservationStatus(id, 'cancelled');
       await load();
       onSaved();
+
+      setActionToast({
+        type: 'info',
+        message: `Reservation for ${guestName} deleted / cancelled.`,
+        onUndo: async () => {
+          try {
+            await updateReservationStatus(id, prev?.status || 'confirmed');
+            await load();
+            onSaved();
+            setActionToast({
+              type: 'success',
+              message: `Reservation for ${guestName} restored!`,
+            });
+          } catch (e: any) {
+            setError(e?.message || 'Failed to restore reservation');
+          }
+        },
+      });
+    } catch (e: any) {
+      setError(e instanceof Error ? e.message : 'Delete failed');
     } finally {
       setSaving(false);
     }
@@ -1421,12 +1448,26 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
             {actionToast.type === 'info' && <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />}
             <span>{actionToast.message}</span>
           </div>
-          <button
-            onClick={() => setActionToast(null)}
-            className="p-1 hover:bg-black/5 rounded text-current opacity-70 hover:opacity-100 transition"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {actionToast.onUndo && (
+              <button
+                type="button"
+                onClick={actionToast.onUndo}
+                className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition shadow-xs active:scale-95 cursor-pointer"
+                title="Undo deletion"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Undo</span>
+              </button>
+            )}
+            <button
+              onClick={() => setActionToast(null)}
+              className="p-1 hover:bg-black/5 rounded text-current opacity-70 hover:opacity-100 transition cursor-pointer"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       )}
 

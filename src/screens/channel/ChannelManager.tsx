@@ -33,6 +33,7 @@ import type { BulkDraftItem, BulkDraftMap, BulkInventoryPatch } from '@/lib/bulk
 import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { ChannelsDashboard } from './components/ChannelsDashboard';
 import { useHotel } from '@/lib/hotel-context';
 import { HotelSelectorModal } from '@/components/HotelSelectorModal';
@@ -1561,6 +1562,8 @@ const BulkUpdateDrawer = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'configure' | 'review'>('configure');
+  const [confirmDiscard, setConfirmDiscard] = useState<(() => void) | null>(null);
+  const [confirmDiscardMsg, setConfirmDiscardMsg] = useState<string>('');
 
   const allDays = useMemo(() => daysBetween(fromDate, toDate), [fromDate, toDate]);
   const summary = useMemo(() => summarizeDraft(drafts), [drafts]);
@@ -1726,11 +1729,13 @@ const BulkUpdateDrawer = ({
   };
 
   const handleClearAll = () => {
-    if (window.confirm('Discard all unsaved updates in this draft?')) {
+    setConfirmDiscardMsg('Are you sure you want to discard all unsaved updates in this draft?');
+    setConfirmDiscard(() => () => {
       const empty = clearDraft();
       setDrafts(empty);
       if (hotelId) clearTenantDraft(hotelId);
-    }
+      setConfirmDiscard(null);
+    });
   };
 
   const handleSaveAll = async () => {
@@ -1789,9 +1794,11 @@ const BulkUpdateDrawer = ({
 
   const handleClose = () => {
     if (summary.hasUnsavedChanges) {
-      if (window.confirm(`You have ${summary.totalItems} unsaved updates in your draft. Are you sure you want to exit and discard them?`)) {
+      setConfirmDiscardMsg(`You have ${summary.totalItems} unsaved updates in your draft. Are you sure you want to exit and discard them?`);
+      setConfirmDiscard(() => () => {
+        setConfirmDiscard(null);
         onClose();
-      }
+      });
     } else {
       onClose();
     }
@@ -2328,6 +2335,19 @@ const BulkUpdateDrawer = ({
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        open={Boolean(confirmDiscard)}
+        onClose={() => setConfirmDiscard(null)}
+        onConfirm={() => {
+          if (confirmDiscard) confirmDiscard();
+        }}
+        title="Discard Draft Updates?"
+        variant="warning"
+        confirmText="Yes, Discard Updates"
+        cancelText="Keep Editing"
+        message={confirmDiscardMsg}
+      />
     </div>
   );
 };
