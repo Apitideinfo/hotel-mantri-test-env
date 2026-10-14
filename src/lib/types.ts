@@ -387,6 +387,7 @@ export interface Room {
   is_active: boolean;
   sort_order: number;
   created_at: string;
+  room_status?: string;
   housekeeping_status: HousekeepingStatus;
   housekeeping_note: string;
   housekeeping_updated_at: string | null;

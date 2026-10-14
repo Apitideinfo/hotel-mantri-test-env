@@ -701,6 +701,153 @@ export const bulkDeleteReservations = async (ids: string[]): Promise<number> => 
   return ids.length;
 };
 
+export interface CategoryAvailabilityResult {
+  available: boolean;
+  totalRooms: number;
+  availableRooms: number;
+  unavailableRooms: number;
+  availableRoomNos: string[];
+  availableRoomDetails?: Array<{
+    id: string;
+    roomNo: string;
+    categoryId: string;
+    floor?: number;
+    roomStatus?: string;
+    housekeepingStatus?: string;
+  }>;
+  unavailableRoomNos: string[];
+  message?: string;
+}
+
+export const getCategoryAvailability = async (params: {
+  hotelId?: string;
+  categoryId?: string | null;
+  checkIn: string;
+  checkOut: string;
+  excludeReservationId?: string | null;
+}): Promise<CategoryAvailabilityResult> => {
+  const hotelId = params.hotelId || getCurrentHotelId();
+  const ci = (params.checkIn || '').slice(0, 10);
+  const co = (params.checkOut || '').slice(0, 10);
+
+  if (!ci || !co || ci >= co) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      message: 'Check-out date must be strictly after check-in date.',
+    };
+  }
+
+  // 1. Try authoritative backend endpoint
+  try {
+    const res = await apiFetch('/api/reservations/category-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        categoryId: params.categoryId || null,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: params.excludeReservationId || null,
+      }),
+    });
+
+    if (res && res.success !== false && typeof res.availableRooms === 'number') {
+      return {
+        available: Boolean(res.available),
+        totalRooms: res.totalRooms ?? 0,
+        availableRooms: res.availableRooms ?? 0,
+        unavailableRooms: res.unavailableRooms ?? 0,
+        availableRoomNos: res.availableRoomNos || [],
+        availableRoomDetails: res.availableRoomDetails || [],
+        unavailableRoomNos: res.unavailableRoomNos || [],
+        message: res.message,
+      };
+    }
+  } catch (err) {
+    console.warn('[getCategoryAvailability] Backend call fallback to direct DB:', err);
+  }
+
+  // 2. Direct Supabase Fallback (strictly scoped to hotelId)
+  try {
+    let roomQ = supabase
+      .from('rooms')
+      .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+      .eq('hotel_id', hotelId)
+      .eq('is_active', true)
+      .order('room_no', { ascending: true });
+
+    if (params.categoryId) {
+      roomQ = roomQ.eq('category_id', params.categoryId);
+    }
+
+    const { data: rooms } = await roomQ;
+    if (!rooms || rooms.length === 0) {
+      return {
+        available: false,
+        totalRooms: 0,
+        availableRooms: 0,
+        unavailableRooms: 0,
+        availableRoomNos: [],
+        availableRoomDetails: [],
+        unavailableRoomNos: [],
+        message: 'No physical rooms found.',
+      };
+    }
+
+    const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+    const availableRoomNos: string[] = [];
+    const availableRoomDetails: any[] = [];
+    const unavailableRoomNos: string[] = [];
+
+    for (const r of rooms) {
+      if (nonAssignable.has(String(r.room_status || '').toLowerCase())) {
+        unavailableRoomNos.push(r.room_no);
+        continue;
+      }
+
+      const isAvail = await checkRoomAvailability(r.room_no, ci, co, params.excludeReservationId || undefined);
+      if (isAvail) {
+        availableRoomNos.push(r.room_no);
+        availableRoomDetails.push({
+          id: r.id,
+          roomNo: r.room_no,
+          categoryId: r.category_id,
+          floor: r.floor,
+          roomStatus: r.room_status,
+          housekeepingStatus: r.housekeeping_status,
+        });
+      } else {
+        unavailableRoomNos.push(r.room_no);
+      }
+    }
+
+    return {
+      available: availableRoomNos.length > 0,
+      totalRooms: rooms.length,
+      availableRooms: availableRoomNos.length,
+      unavailableRooms: unavailableRoomNos.length,
+      availableRoomNos,
+      availableRoomDetails,
+      unavailableRoomNos,
+      message: `${availableRoomNos.length} of ${rooms.length} rooms available.`,
+    };
+  } catch {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+    };
+  }
+};
+
 export const checkRoomAvailability = async (
   roomNo: string,
   checkIn: string,
@@ -716,6 +863,24 @@ export const checkRoomAvailability = async (
   const ci = checkIn.slice(0, 10);
   const co = checkOut.slice(0, 10);
   if (ci >= co) return false;
+
+  // Try backend authoritative check first
+  try {
+    const res = await apiFetch('/api/reservations/check-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        roomNo,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: Array.isArray(excludeId) ? excludeId[0] : excludeId || null,
+      }),
+    });
+    if (res && typeof res.available === 'boolean') {
+      return res.available;
+    }
+  } catch {
+    // Fall back to direct Supabase query
+  }
 
   try {
     const hotelId = getCurrentHotelId();

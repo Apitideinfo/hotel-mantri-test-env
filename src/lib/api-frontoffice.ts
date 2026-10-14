@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany } from './api';
-import { updateReservationStatus } from './api-reservations';
+import { updateReservationStatus, checkRoomAvailability } from './api-reservations';
 import { dispatchChannelEvent } from './api-channel';
 import { toNum, calcGstFull, calcStayNights, isStayOverlapping } from './calc';
 import { isValidEmail } from './types-reservations';
@@ -615,17 +615,39 @@ export const shiftRoom = async (params: {
 }): Promise<RoomChartEntry> => {
   const hotelId = getCurrentHotelId();
 
-  // Verify target room is not occupied
-  const { data: existing } = await supabase
+  // Fetch current stay dates and linked reservation
+  const { data: currentEntry } = await supabase
     .from('room_chart_entries')
-    .select('id')
-    .eq('hotel_id', hotelId)
-    .eq('room_no', params.toRoom)
-    .neq('id', params.entryId)
-    .is('checked_out_at', null)
+    .select('arrival, departure, report_date, reservation_id')
+    .eq('id', params.entryId)
     .maybeSingle();
-  if (existing) {
-    throw new Error('Target room is already occupied.');
+
+  const stayIn = (currentEntry?.arrival || currentEntry?.report_date || '').slice(0, 10);
+  const stayOut = (currentEntry?.departure || '').slice(0, 10);
+
+  if (stayIn && stayOut) {
+    const isAvail = await checkRoomAvailability(
+      params.toRoom,
+      stayIn,
+      stayOut,
+      currentEntry?.reservation_id ? [params.entryId, currentEntry.reservation_id] : params.entryId
+    );
+    if (!isAvail) {
+      throw new Error(`Target room ${params.toRoom} is not available for this stay (${stayIn} to ${stayOut}).`);
+    }
+  } else {
+    // Verify target room is not occupied
+    const { data: existing } = await supabase
+      .from('room_chart_entries')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', params.toRoom)
+      .neq('id', params.entryId)
+      .is('checked_out_at', null)
+      .maybeSingle();
+    if (existing) {
+      throw new Error('Target room is already occupied.');
+    }
   }
 
   // Update entry with new room
@@ -636,6 +658,25 @@ export const shiftRoom = async (params: {
     .select('*')
     .single();
   if (error) throw error;
+
+  // Sync linked reservation room assignment
+  if (currentEntry?.reservation_id) {
+    const { data: targetRoomObj } = await supabase
+      .from('rooms')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', params.toRoom)
+      .maybeSingle();
+
+    await supabase
+      .from('reservations')
+      .update({
+        room_no: params.toRoom,
+        room_id: targetRoomObj?.id ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', currentEntry.reservation_id);
+  }
 
   // Update housekeeping: old room → Vacant Dirty, new room → Occupied
   await updateRoomHousekeeping(params.fromRoom, 'Vacant Dirty');
