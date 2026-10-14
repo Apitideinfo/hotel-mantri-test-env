@@ -56,6 +56,8 @@ const formatDateReadable = (dateStr) => {
  *   3. hotel_settings.phone
  *   4. hotel_settings.manager_mobile
  */
+export { buildMetaDailyReportTemplate };
+
 export const resolveHotelOwnerWhatsApp = async (hotelId) => {
   if (!hotelId) return { valid: false, error: 'hotelId is required' };
 
@@ -64,13 +66,7 @@ export const resolveHotelOwnerWhatsApp = async (hotelId) => {
       supabase.from('hotels').select('id, hotel_name, mobile, owner_name').eq('id', hotelId).maybeSingle(),
       supabase
         .from('hotel_settings')
-        .select(`
-          id, hotel_name, whatsapp_report_recipient_phone, whatsapp_number, phone, manager_mobile,
-          whatsapp_country_code, whatsapp_daily_report_enabled, whatsapp_laundry_statement_enabled,
-          whatsapp_preferred_delivery_time, whatsapp_timezone, whatsapp_delivery_preferences,
-          whatsapp_consent_status, whatsapp_last_successful_send, whatsapp_last_failure_reason,
-          whatsapp_last_failure_at
-        `)
+        .select('*')
         .eq('id', hotelId)
         .maybeSingle(),
     ]);
@@ -89,10 +85,15 @@ export const resolveHotelOwnerWhatsApp = async (hotelId) => {
     const preferences = {
       countryCode: settings?.whatsapp_country_code || '91',
       dailyReportEnabled: settings?.whatsapp_daily_report_enabled ?? true,
+      reservationConfirmationEnabled: settings?.whatsapp_reservation_confirmation_enabled ?? true,
+      reservationTemplate: settings?.whatsapp_reservation_template || process.env.WHINTA_RESERVATION_TEMPLATE || 'booking_confirmation',
+      dailyReportTemplate: settings?.whatsapp_daily_report_template || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+      templateHasDocumentHeader: settings?.whatsapp_template_has_document_header ?? true,
+      templateLanguage: settings?.whatsapp_template_language || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
       laundryStatementEnabled: settings?.whatsapp_laundry_statement_enabled ?? true,
       preferredDeliveryTime: settings?.whatsapp_preferred_delivery_time || '22:00',
       timezone: settings?.whatsapp_timezone || 'Asia/Kolkata',
-      deliveryPreferences: settings?.whatsapp_delivery_preferences || { send_morning: false, send_evening: true, include_pdf: false },
+      deliveryPreferences: settings?.whatsapp_delivery_preferences || { send_morning: false, send_evening: true, include_pdf: true },
       consentStatus: settings?.whatsapp_consent_status || 'opted_in',
       lastSuccessfulSend: settings?.whatsapp_last_successful_send || null,
       lastFailureReason: settings?.whatsapp_last_failure_reason || null,

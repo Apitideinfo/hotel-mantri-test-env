@@ -778,8 +778,8 @@ export const generateAndDeliverConfirmation = async ({
     };
   }
 
-  const { document: docRecord, buffer: pdfBuffer, version, fileName } = genResult;
-  console.log(`[DELIVERY_SERVICE] PDF ready version=${version} file=${fileName} size=${pdfBuffer.length}`);
+  const { document: docRecord, buffer: pdfBuffer, version, fileName, signedUrl } = genResult;
+  console.log(`[DELIVERY_SERVICE] PDF ready version=${version} file=${fileName} size=${pdfBuffer?.length || 0} signedUrl=${Boolean(signedUrl)}`);
 
   // 3. Resolve Metrics & Hotel Details
   const checkIn = String(resRecord.check_in_date || '').slice(0, 10);
@@ -1169,6 +1169,8 @@ export const generateAndDeliverConfirmation = async ({
         totalAmount: totalVal,
         guestCount,
         currency: '₹',
+        documentUrl: signedUrl || null,
+        documentFilename: fileName,
       });
 
       const waEventKey = `${DELIVERY_EVENT_TYPES.RESERVATION_CONFIRMATION_WHATSAPP}_${targetRecipientType}_V${version}`;
@@ -1193,6 +1195,8 @@ export const generateAndDeliverConfirmation = async ({
             recipient: targetPhone,
             message: `Confirmation WhatsApp already sent to ${targetRecipientType === 'HOTEL_OWNER' ? 'hotel owner' : 'guest'} for this version.`,
             whatsappDirectUrl: directUrl,
+            pdfUrl: signedUrl || null,
+            fileName,
           };
           await updateDocumentDeliveryStatus(hotelId, reservationId, version, { whatsappStatus: DELIVERY_STATUS.SENT });
           isDuplicate = true;
@@ -1206,6 +1210,7 @@ export const generateAndDeliverConfirmation = async ({
             status: OUTBOX_STATUS.SENDING,
             reservationId,
             templateName: metaTemplate.templateName,
+            mediaUrl: signedUrl || null,
             metadata: {
               version,
               fileName,
@@ -1215,6 +1220,7 @@ export const generateAndDeliverConfirmation = async ({
               sourceName: recipientResolution.sourceName,
               otaBookingId: recipientResolution.otaBookingId,
               templateName: metaTemplate.templateName,
+              mediaUrl: signedUrl || null,
             },
           });
           outboxId = outboxRec?.id;
@@ -1231,6 +1237,10 @@ export const generateAndDeliverConfirmation = async ({
           templateName: metaTemplate.templateName,
           templateComponents: metaTemplate.templateComponents,
           templateLanguage: metaTemplate.templateLanguage,
+          mediaUrl: signedUrl || null,
+          fileName,
+          caption: `Reservation Confirmation — ${hotelName} (#${confirmationNumber})`,
+          mediaType: 'document',
         });
 
         if (waSendResult.success) {
@@ -1303,10 +1313,6 @@ export const generateAndDeliverConfirmation = async ({
     whatsapp: whatsappDeliveryResult,
     whatsApp: whatsappDeliveryResult,
   };
-};
-
-export {
-  buildMetaBookingConfirmationTemplate,
 };
 
 export default {

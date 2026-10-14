@@ -33,6 +33,9 @@ import {
   buildMetaDailyReportTemplate,
 } from '../services/dailySummaryService.js';
 import {
+  generateAndStoreDailyReportPdf,
+} from '../services/dailyReportPdfService.js';
+import {
   sendWhatsAppMessage,
   getWhatsAppProviderConfig,
   buildWhatsAppDirectUrl,
@@ -807,6 +810,18 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
     const summary = await calculateDailySummary({ hotelId, businessDate });
     const text = `🧪 *[TEST REPORT]*\n\n` + buildDailySummaryText(summary);
 
+    // Generate authoritative daily report PDF for test dispatch
+    let reportPdf = null;
+    try {
+      reportPdf = await generateAndStoreDailyReportPdf({
+        hotelId,
+        businessDate,
+        summary,
+      });
+    } catch (pdfErr) {
+      console.warn(`[WHATSAPP_TEST_REPORT] PDF generation note: ${pdfErr.message}`);
+    }
+
     const metaTemplate = buildMetaDailyReportTemplate({
       hotelName: `[TEST] ${summary.hotelName}`,
       reportDate: summary.businessDateReadable || businessDate,
@@ -818,6 +833,10 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
       checkOuts: summary.checkOuts || summary.frontOffice.departures || 0,
       dailyRevenue: summary.dailyRevenue || summary.revenue.grossRevenue,
       closingCash: summary.closingCash || summary.collection?.closingCash || 0,
+      templateName: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+      templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
+      documentUrl: reportPdf?.signedUrl || null,
+      documentFilename: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${businessDate}.pdf`,
     });
 
     const outboxRecord = await recordWhatsAppOutboxEvent({
@@ -828,11 +847,15 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
       recipient: targetPhone,
       templateName: metaTemplate.templateName,
       status: OUTBOX_STATUS.SENDING,
+      mediaUrl: reportPdf?.signedUrl || null,
       metadata: {
         isTest: true,
         hotelName: summary.hotelName,
         totalRooms: summary.occupancy.totalRooms,
         templateName: metaTemplate.templateName,
+        media_url: reportPdf?.signedUrl || null,
+        fileName: reportPdf?.fileName || null,
+        storagePath: reportPdf?.storagePath || null,
       },
     });
 
@@ -842,6 +865,9 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
       templateName: metaTemplate.templateName,
       templateComponents: metaTemplate.templateComponents,
       templateLanguage: metaTemplate.templateLanguage,
+      mediaUrl: reportPdf?.signedUrl || null,
+      fileName: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${businessDate}.pdf`,
+      mediaType: 'document',
     });
 
     await updateWhatsAppOutboxEvent(outboxRecord.id, {
@@ -874,6 +900,9 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
       recipient: `+${targetPhone}`,
       message: 'Test daily report dispatched successfully.',
       whatsappDirectUrl: sendResult.whatsappDirectUrl,
+      pdfUrl: reportPdf?.signedUrl || null,
+      pdfFilename: reportPdf?.fileName || null,
+      deliveryMode: sendResult.deliveryMode || 'TEMPLATE_WITH_DYNAMIC_HEADER',
       summary,
     });
   } catch (err) {
@@ -929,10 +958,15 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
       normalizedNumber: owner.phone || '',
       countryCode: owner.countryCode || '91',
       dailyReportEnabled: owner.dailyReportEnabled ?? true,
+      reservationConfirmationEnabled: owner.reservationConfirmationEnabled ?? true,
+      reservationTemplate: owner.reservationTemplate || process.env.WHINTA_RESERVATION_TEMPLATE || 'booking_confirmation',
+      dailyReportTemplate: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+      templateHasDocumentHeader: owner.templateHasDocumentHeader ?? true,
+      templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
       laundryStatementEnabled: owner.laundryStatementEnabled ?? true,
       preferredDeliveryTime: owner.preferredDeliveryTime || '22:00',
       timezone: owner.timezone || 'Asia/Kolkata',
-      deliveryPreferences: owner.deliveryPreferences || { send_morning: false, send_evening: true, include_pdf: false },
+      deliveryPreferences: owner.deliveryPreferences || { send_morning: false, send_evening: true, include_pdf: true },
       consentStatus: owner.consentStatus || 'opted_in',
       lastSuccessfulSend: owner.lastSuccessfulSend || null,
       lastFailureReason: owner.lastFailureReason || null,
@@ -955,6 +989,11 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
     reportRecipientPhone,
     countryCode = '91',
     dailyReportEnabled = true,
+    reservationConfirmationEnabled = true,
+    reservationTemplate = 'booking_confirmation',
+    dailyReportTemplate = 'daily_hotel_report',
+    templateHasDocumentHeader = true,
+    templateLanguage = 'en',
     laundryStatementEnabled = true,
     preferredDeliveryTime = '22:00',
     timezone = 'Asia/Kolkata',
@@ -988,6 +1027,11 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       whatsapp_report_recipient_phone: rawPhone.trim(),
       whatsapp_country_code: cleanCountryCode,
       whatsapp_daily_report_enabled: Boolean(dailyReportEnabled),
+      whatsapp_reservation_confirmation_enabled: Boolean(reservationConfirmationEnabled),
+      whatsapp_reservation_template: String(reservationTemplate || 'booking_confirmation').trim(),
+      whatsapp_daily_report_template: String(dailyReportTemplate || 'daily_hotel_report').trim(),
+      whatsapp_template_has_document_header: Boolean(templateHasDocumentHeader),
+      whatsapp_template_language: String(templateLanguage || 'en').trim(),
       whatsapp_laundry_statement_enabled: Boolean(laundryStatementEnabled),
       whatsapp_preferred_delivery_time: String(preferredDeliveryTime || '22:00'),
       whatsapp_timezone: String(timezone || 'Asia/Kolkata'),
@@ -996,13 +1040,34 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       updated_at: new Date().toISOString(),
     };
 
-    const { error } = await supabase
+    let { error } = await supabase
       .from('hotel_settings')
       .update(updatePayload)
       .eq('id', hotelId);
 
     if (error) {
-      return res.status(500).json({ success: false, message: error.message });
+      // In case optional columns are not yet present in target database schema, fallback gracefully to core columns
+      console.warn('[WHATSAPP_SETTINGS] Full settings update warning, trying core fields:', error.message);
+      const corePayload = {
+        whatsapp_number: rawPhone.trim(),
+        whatsapp_report_recipient_phone: rawPhone.trim(),
+        whatsapp_country_code: cleanCountryCode,
+        whatsapp_daily_report_enabled: Boolean(dailyReportEnabled),
+        whatsapp_laundry_statement_enabled: Boolean(laundryStatementEnabled),
+        whatsapp_preferred_delivery_time: String(preferredDeliveryTime || '22:00'),
+        whatsapp_timezone: String(timezone || 'Asia/Kolkata'),
+        whatsapp_delivery_preferences: typeof deliveryPreferences === 'object' ? deliveryPreferences : {},
+        whatsapp_consent_status: String(consentStatus || 'opted_in'),
+        updated_at: new Date().toISOString(),
+      };
+      const retryResult = await supabase
+        .from('hotel_settings')
+        .update(corePayload)
+        .eq('id', hotelId);
+
+      if (retryResult.error) {
+        return res.status(500).json({ success: false, message: retryResult.error.message });
+      }
     }
 
     return res.json({
@@ -1012,6 +1077,11 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       normalizedNumber: norm.valid ? norm.normalized : '',
       countryCode: cleanCountryCode,
       dailyReportEnabled: Boolean(dailyReportEnabled),
+      reservationConfirmationEnabled: Boolean(reservationConfirmationEnabled),
+      reservationTemplate: String(reservationTemplate || 'booking_confirmation').trim(),
+      dailyReportTemplate: String(dailyReportTemplate || 'daily_hotel_report').trim(),
+      templateHasDocumentHeader: Boolean(templateHasDocumentHeader),
+      templateLanguage: String(templateLanguage || 'en').trim(),
       laundryStatementEnabled: Boolean(laundryStatementEnabled),
       preferredDeliveryTime,
       timezone,
@@ -1234,7 +1304,19 @@ const handleWhatsAppCron = async (req, res) => {
       else if (typeParam === 'evening') text = buildEveningSummaryText(summary);
       else text = buildDailySummaryText(summary);
 
-      // Construct official Whinta template payload with 10 placeholders
+      // Generate daily hotel report PDF & store in Supabase Storage bucket hotel-documents
+      let reportPdf = null;
+      try {
+        reportPdf = await generateAndStoreDailyReportPdf({
+          hotelId,
+          businessDate: hotelDateStr,
+          summary,
+        });
+      } catch (pdfErr) {
+        console.warn(`[WHATSAPP_CRON] Failed to generate/store daily report PDF for hotel ${hotelId}:`, pdfErr.message);
+      }
+
+      // Construct official Whinta template payload with 10 placeholders and dynamic document header
       const metaTemplate = buildMetaDailyReportTemplate({
         hotelName: summary.hotelName,
         reportDate: summary.businessDateReadable || hotelDateStr,
@@ -1246,6 +1328,10 @@ const handleWhatsAppCron = async (req, res) => {
         checkOuts: summary.checkOuts || summary.frontOffice?.departures || 0,
         dailyRevenue: summary.dailyRevenue || summary.revenue?.grossRevenue || 0,
         closingCash: summary.closingCash || summary.collection?.closingCash || 0,
+        templateName: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+        templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
+        documentUrl: reportPdf?.signedUrl || null,
+        documentFilename: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${hotelDateStr}.pdf`,
       });
 
       const idempotencyKey = generateIdempotencyKey({
@@ -1264,6 +1350,7 @@ const handleWhatsAppCron = async (req, res) => {
         recipient: owner.phone,
         idempotencyKey,
         templateName: metaTemplate.templateName,
+        mediaUrl: reportPdf?.signedUrl || null,
         status: OUTBOX_STATUS.SENDING,
         metadata: {
           hotelName: summary.hotelName,
@@ -1273,6 +1360,9 @@ const handleWhatsAppCron = async (req, res) => {
           closingCash: summary.closingCash || 0,
           timezone: tz,
           templateName: metaTemplate.templateName,
+          media_url: reportPdf?.signedUrl || null,
+          fileName: reportPdf?.fileName || null,
+          pdfStoragePath: reportPdf?.storagePath || null,
         },
       });
 
@@ -1282,6 +1372,9 @@ const handleWhatsAppCron = async (req, res) => {
         templateName: metaTemplate.templateName,
         templateComponents: metaTemplate.templateComponents,
         templateLanguage: metaTemplate.templateLanguage,
+        mediaUrl: reportPdf?.signedUrl || null,
+        fileName: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${hotelDateStr}.pdf`,
+        mediaType: 'document',
       });
 
       await updateWhatsAppOutboxEvent(outboxRecord.id, {
@@ -1316,6 +1409,9 @@ const handleWhatsAppCron = async (req, res) => {
         businessDate: hotelDateStr,
         success: sendResult.success,
         status: sendResult.status,
+        documentUrl: reportPdf?.signedUrl || null,
+        fileName: reportPdf?.fileName || null,
+        deliveryMode: sendResult.deliveryMode || 'TEMPLATE_WITH_DYNAMIC_HEADER',
       });
     }
 

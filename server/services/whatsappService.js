@@ -163,6 +163,8 @@ export const buildMetaBookingConfirmationTemplate = ({
   currency = '₹',
   templateName = null,
   templateLanguage = null,
+  documentUrl = null,
+  documentFilename = null,
 } = {}) => {
   const name = templateName || process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation';
   const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
@@ -177,20 +179,37 @@ export const buildMetaBookingConfirmationTemplate = ({
     ? totalAmount
     : `${curr}${totalAmount}`;
 
-  const components = [
-    {
-      type: 'body',
+  const components = [];
+
+  // Dynamic Document Header Component (Whinta / Meta Cloud API format)
+  if (documentUrl) {
+    components.push({
+      type: 'header',
       parameters: [
-        { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
-        { type: 'text', text: String(hotelName || 'Hotel Mantri').slice(0, 60) },
-        { type: 'text', text: String(ref).slice(0, 30) },
-        { type: 'text', text: String(room).slice(0, 60) },
-        { type: 'text', text: String(checkIn || '—').slice(0, 30) },
-        { type: 'text', text: String(checkOut || '—').slice(0, 30) },
-        { type: 'text', text: formattedAmount.slice(0, 30) },
+        {
+          type: 'document',
+          document: {
+            link: documentUrl,
+            filename: documentFilename || `HotelMantri-Booking-${ref}.pdf`,
+          },
+        },
       ],
-    },
-  ];
+    });
+  }
+
+  // Standard 7 Body Parameters
+  components.push({
+    type: 'body',
+    parameters: [
+      { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
+      { type: 'text', text: String(hotelName || 'Hotel Mantri').slice(0, 60) },
+      { type: 'text', text: String(ref).slice(0, 30) },
+      { type: 'text', text: String(room).slice(0, 60) },
+      { type: 'text', text: String(checkIn || '—').slice(0, 30) },
+      { type: 'text', text: String(checkOut || '—').slice(0, 30) },
+      { type: 'text', text: formattedAmount.slice(0, 30) },
+    ],
+  });
 
   return {
     name,
@@ -201,6 +220,8 @@ export const buildMetaBookingConfirmationTemplate = ({
     templateComponents: components,
     guestCount,
     currency: curr,
+    documentUrl,
+    documentFilename: documentFilename || `HotelMantri-Booking-${ref}.pdf`,
   };
 };
 
@@ -211,6 +232,8 @@ export const buildMetaBookingConfirmationTemplate = ({
  * for automated daily hotel reports.
  *
  * Variable mapping for `daily_hotel_report`:
+ * Header (Optional Dynamic Document):
+ *   document: { link, filename }
  * Body parameters:
  *   {{1}}  = Hotel Name
  *   {{2}}  = Report Date
@@ -240,6 +263,8 @@ export const buildMetaDailyReportTemplate = ({
   currency = '₹',
   templateName = null,
   templateLanguage = null,
+  documentUrl = null,
+  documentFilename = null,
 } = {}) => {
   const name = templateName || process.env.WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report';
   const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
@@ -263,23 +288,40 @@ export const buildMetaDailyReportTemplate = ({
     ? occupancyPercentage
     : `${occupancyPercentage}%`;
 
-  const components = [
-    {
-      type: 'body',
+  const components = [];
+
+  // Dynamic Document Header Component (Whinta / Meta Cloud API format)
+  if (documentUrl) {
+    components.push({
+      type: 'header',
       parameters: [
-        { type: 'text', text: String(hotelName || 'Hotel Property').slice(0, 60) },
-        { type: 'text', text: String(reportDate || 'Today').slice(0, 30) },
-        { type: 'text', text: String(totalRooms || 0).slice(0, 10) },
-        { type: 'text', text: String(occupiedRooms || 0).slice(0, 10) },
-        { type: 'text', text: formattedOccPercent.slice(0, 15) },
-        { type: 'text', text: String(newReservations || 0).slice(0, 10) },
-        { type: 'text', text: String(checkIns || 0).slice(0, 10) },
-        { type: 'text', text: String(checkOuts || 0).slice(0, 10) },
-        { type: 'text', text: formattedRevenue.slice(0, 30) },
-        { type: 'text', text: formattedCash.slice(0, 30) },
+        {
+          type: 'document',
+          document: {
+            link: documentUrl,
+            filename: documentFilename || `HotelMantri-Daily-Report-${reportDate || 'Today'}.pdf`,
+          },
+        },
       ],
-    },
-  ];
+    });
+  }
+
+  // Standard 10 Body Parameters
+  components.push({
+    type: 'body',
+    parameters: [
+      { type: 'text', text: String(hotelName || 'Hotel Property').slice(0, 60) },
+      { type: 'text', text: String(reportDate || 'Today').slice(0, 30) },
+      { type: 'text', text: String(totalRooms || 0).slice(0, 10) },
+      { type: 'text', text: String(occupiedRooms || 0).slice(0, 10) },
+      { type: 'text', text: formattedOccPercent.slice(0, 15) },
+      { type: 'text', text: String(newReservations || 0).slice(0, 10) },
+      { type: 'text', text: String(checkIns || 0).slice(0, 10) },
+      { type: 'text', text: String(checkOuts || 0).slice(0, 10) },
+      { type: 'text', text: formattedRevenue.slice(0, 30) },
+      { type: 'text', text: formattedCash.slice(0, 30) },
+    ],
+  });
 
   return {
     name,
@@ -288,6 +330,8 @@ export const buildMetaDailyReportTemplate = ({
     templateName: name,
     templateLanguage: lang,
     templateComponents: components,
+    documentUrl,
+    documentFilename: documentFilename || `HotelMantri-Daily-Report-${reportDate || 'Today'}.pdf`,
   };
 };
 
