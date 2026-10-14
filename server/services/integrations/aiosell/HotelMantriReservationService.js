@@ -2,7 +2,7 @@ import { supabaseServiceRole } from '../../../supabaseClient.js';
 import dotenv from 'dotenv';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
 import { checkRoomAvailability, normalizePhysicalRoom, withRoomLock } from '../../ReservationConflictService.js';
-import { autoAssignPhysicalRoom, resolveHotelRoomCategory, isAutoAssignEnabled } from '../../RoomAssignmentService.js';
+import { autoAssignPhysicalRoom, resolveHotelRoomCategory, isAutoAssignEnabled, sanitizeReservationPayload } from '../../RoomAssignmentService.js';
 dotenv.config();
 
 export const getSupabase = () => supabaseServiceRole;
@@ -274,9 +274,12 @@ export const createOrUpdateReservation = async (
     payload.internal_note = internalNote;
     payload.updated_at = new Date().toISOString();
 
+    const cleanUpdatePayload = sanitizeReservationPayload(payload);
+    delete cleanUpdatePayload.hotel_id;
+
     const { data, error } = await supabase
       .from('reservations')
-      .update(payload)
+      .update(cleanUpdatePayload)
       .eq('id', existing.id)
       .select('*')
       .single();
@@ -316,9 +319,11 @@ export const createOrUpdateReservation = async (
     payload.created_at = new Date().toISOString();
     payload.updated_at = new Date().toISOString();
 
+    const cleanInsertPayload = sanitizeReservationPayload(payload);
+
     const { data, error } = await supabase
       .from('reservations')
-      .insert(payload)
+      .insert(cleanInsertPayload)
       .select('*')
       .single();
 

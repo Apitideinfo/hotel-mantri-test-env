@@ -294,6 +294,18 @@ export const checkCategoryCapacity = async ({
 
   const { data: resList } = await q;
 
+  // Filter active reservations to only those occupying rooms in this category
+  let relevantResList = resList || [];
+  if (categoryId) {
+    const targetRoomIds = new Set((rooms || []).map((r) => r.id).filter(Boolean));
+    const targetRoomNos = new Set((rooms || []).map((r) => (r.room_no || '').trim().toLowerCase()).filter(Boolean));
+    relevantResList = relevantResList.filter((r) => {
+      const idMatch = r.room_id && targetRoomIds.has(r.room_id);
+      const noMatch = r.room_no && targetRoomNos.has((r.room_no || '').trim().toLowerCase());
+      return idMatch || noMatch;
+    });
+  }
+
   // Check each night
   const inD = new Date(cleanCheckIn + 'T00:00:00');
   const outD = new Date(cleanCheckOut + 'T00:00:00');
@@ -302,7 +314,7 @@ export const checkCategoryCapacity = async ({
   let maxOccupiedOnAnyNight = 0;
   while (currentD < outD) {
     const nightStr = currentD.toISOString().slice(0, 10);
-    const nightOccupied = (resList || []).filter(
+    const nightOccupied = relevantResList.filter(
       (r) => r.check_in_date <= nightStr && r.check_out_date > nightStr
     ).length;
     if (nightOccupied > maxOccupiedOnAnyNight) {
