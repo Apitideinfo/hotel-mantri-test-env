@@ -30,6 +30,7 @@ import {
   buildEveningSummaryText,
   buildOtaSummaryText,
   buildTestWhatsAppText,
+  buildMetaDailyReportTemplate,
 } from '../services/dailySummaryService.js';
 import {
   sendWhatsAppMessage,
@@ -81,7 +82,7 @@ const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
 
 // Strict RBAC: All notification and report routes require hotel auth and forbid Housekeeping
 router.use((req, res, next) => {
-  if (req.path.includes('/cron') || req.path.includes('/webhook')) {
+  if (req.path.includes('/cron') || req.path.includes('/webhook') || req.path.includes('whinta-daily-report')) {
     return next();
   }
   return requireHotelAccess(req, res, (err) => {
@@ -763,6 +764,131 @@ router.post(['/whatsapp/test', '/test'], requireHotelAccess, async (req, res) =>
   }
 });
 
+// ─── POST /api/reports/whatsapp/send-test-report ──────────────────────────────
+
+/**
+ * Dispatches an explicit TEST daily report via Whinta template & text.
+ * Clearly identified with deliveryType: 'TEST', preserving scheduled idempotency records.
+ */
+router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report', '/send-test-report'], requireHotelAccess, async (req, res) => {
+  const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
+  const businessDate = req.body?.businessDate || req.body?.date || new Date().toISOString().slice(0, 10);
+  const explicitPhone = req.body?.recipientPhone || req.body?.testPhone || req.body?.phone || null;
+
+  try {
+    const owner = await resolveHotelOwnerWhatsApp(hotelId);
+    let targetPhone = null;
+
+    if (explicitPhone) {
+      const norm = normalizeWhatsAppPhone(explicitPhone);
+      if (!norm.valid) {
+        return res.status(400).json({
+          success: false,
+          status: 'invalid_recipient',
+          error: 'WHATSAPP_RECIPIENT_INVALID',
+          errorCode: 'WHATSAPP_RECIPIENT_INVALID',
+          message: norm.error || 'The test recipient phone number is invalid.',
+        });
+      }
+      targetPhone = norm.normalized;
+    } else {
+      if (!owner.valid) {
+        return res.status(400).json({
+          success: false,
+          status: 'invalid_recipient',
+          error: 'WHATSAPP_RECIPIENT_INVALID',
+          errorCode: 'WHATSAPP_RECIPIENT_INVALID',
+          message: 'No valid owner WhatsApp number is configured for this hotel.',
+        });
+      }
+      targetPhone = owner.phone;
+    }
+
+    const summary = await calculateDailySummary({ hotelId, businessDate });
+    const text = `🧪 *[TEST REPORT]*\n\n` + buildDailySummaryText(summary);
+
+    const metaTemplate = buildMetaDailyReportTemplate({
+      hotelName: `[TEST] ${summary.hotelName}`,
+      reportDate: summary.businessDateReadable || businessDate,
+      totalRooms: summary.totalActiveRooms || summary.occupancy.totalRooms,
+      occupiedRooms: summary.occupiedRooms || summary.occupancy.occupied,
+      occupancyPercentage: `${summary.occupancyPercentage || summary.occupancy.percentage}%`,
+      newReservations: summary.newReservations || 0,
+      checkIns: summary.checkIns || summary.frontOffice.arrivals || 0,
+      checkOuts: summary.checkOuts || summary.frontOffice.departures || 0,
+      dailyRevenue: summary.dailyRevenue || summary.revenue.grossRevenue,
+      closingCash: summary.closingCash || summary.collection?.closingCash || 0,
+    });
+
+    const outboxRecord = await recordWhatsAppOutboxEvent({
+      hotelId,
+      businessDate,
+      reportType: REPORT_TYPES.DAILY_SUMMARY,
+      deliveryType: DELIVERY_TYPES.TEST,
+      recipient: targetPhone,
+      templateName: metaTemplate.templateName,
+      status: OUTBOX_STATUS.SENDING,
+      metadata: {
+        isTest: true,
+        hotelName: summary.hotelName,
+        totalRooms: summary.occupancy.totalRooms,
+        templateName: metaTemplate.templateName,
+      },
+    });
+
+    const sendResult = await sendWhatsAppMessage({
+      to: targetPhone,
+      text,
+      templateName: metaTemplate.templateName,
+      templateComponents: metaTemplate.templateComponents,
+      templateLanguage: metaTemplate.templateLanguage,
+    });
+
+    await updateWhatsAppOutboxEvent(outboxRecord.id, {
+      status: sendResult.success ? OUTBOX_STATUS.SENT : OUTBOX_STATUS.FAILED,
+      providerMessageId: sendResult.messageId || null,
+      lastError: sendResult.success ? null : (sendResult.errorCode || sendResult.error || sendResult.message),
+    });
+
+    if (!sendResult.success) {
+      const httpCode = sendResult.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED' ? 422 : (sendResult.statusCode || 502);
+      return res.status(httpCode).json({
+        success: false,
+        status: sendResult.status || 'failed',
+        error: sendResult.error || sendResult.errorCode,
+        errorCode: sendResult.errorCode || sendResult.error,
+        notificationId: outboxRecord.id,
+        message: sendResult.message,
+        provider: sendResult.provider,
+        whatsappDirectUrl: sendResult.whatsappDirectUrl,
+      });
+    }
+
+    return res.json({
+      success: true,
+      status: 'sent',
+      isTest: true,
+      notificationId: outboxRecord.id,
+      messageId: sendResult.messageId,
+      provider: sendResult.provider,
+      recipient: `+${targetPhone}`,
+      message: 'Test daily report dispatched successfully.',
+      whatsappDirectUrl: sendResult.whatsappDirectUrl,
+      summary,
+    });
+  } catch (err) {
+    console.error('[WHATSAPP_TEST_REPORT] Error:', err.message);
+    return res.status(500).json({
+      success: false,
+      status: 'failed',
+      error: 'SERVER_ERROR',
+      errorCode: 'SERVER_ERROR',
+      message: 'Failed to send test daily report: ' + err.message,
+    });
+  }
+});
+
+
 // ─── GET /api/notifications/whatsapp/history & /api/reports/whatsapp/history ──
 
 router.get(['/whatsapp/history', '/history'], requireHotelAccess, async (req, res) => {
@@ -1026,8 +1152,11 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
 const activeCronLocks = new Set();
 
 const handleWhatsAppCron = async (req, res) => {
-  const type = (req.query.type || req.body?.type || 'morning').toLowerCase();
-  const reportType = type === 'evening' ? REPORT_TYPES.EVENING_SUMMARY : REPORT_TYPES.MORNING_SUMMARY;
+  const typeParam = (req.query.type || req.body?.type || 'daily').toLowerCase();
+  let reportType = REPORT_TYPES.DAILY_SUMMARY;
+  if (typeParam === 'morning') reportType = REPORT_TYPES.MORNING_SUMMARY;
+  else if (typeParam === 'evening') reportType = REPORT_TYPES.EVENING_SUMMARY;
+
   const rawDate = req.query.businessDate || req.query.date || req.body?.businessDate || req.body?.date || new Date().toISOString().slice(0, 10);
   const todayStr = String(rawDate).trim().slice(0, 10);
   const jobKey = `${reportType}_${todayStr}`;
@@ -1037,7 +1166,7 @@ const handleWhatsAppCron = async (req, res) => {
     return res.status(409).json({
       success: false,
       code: 'CRON_JOB_IN_PROGRESS',
-      message: `A scheduled ${type} summary job is currently already running for ${todayStr}.`,
+      message: `A scheduled ${typeParam} summary job is currently already running for ${todayStr}.`,
     });
   }
 
@@ -1099,9 +1228,25 @@ const handleWhatsAppCron = async (req, res) => {
       }
 
       const summary = await calculateDailySummary({ hotelId, businessDate: hotelDateStr });
-      const text = isEvening
-        ? buildEveningSummaryText(summary)
-        : buildMorningSummaryText(summary);
+
+      let text;
+      if (typeParam === 'morning') text = buildMorningSummaryText(summary);
+      else if (typeParam === 'evening') text = buildEveningSummaryText(summary);
+      else text = buildDailySummaryText(summary);
+
+      // Construct official Whinta template payload with 10 placeholders
+      const metaTemplate = buildMetaDailyReportTemplate({
+        hotelName: summary.hotelName,
+        reportDate: summary.businessDateReadable || hotelDateStr,
+        totalRooms: summary.totalActiveRooms || summary.occupancy?.totalRooms || 0,
+        occupiedRooms: summary.occupiedRooms || summary.occupancy?.occupied || 0,
+        occupancyPercentage: `${summary.occupancyPercentage || summary.occupancy?.percentage || 0}%`,
+        newReservations: summary.newReservations || 0,
+        checkIns: summary.checkIns || summary.frontOffice?.arrivals || 0,
+        checkOuts: summary.checkOuts || summary.frontOffice?.departures || 0,
+        dailyRevenue: summary.dailyRevenue || summary.revenue?.grossRevenue || 0,
+        closingCash: summary.closingCash || summary.collection?.closingCash || 0,
+      });
 
       const idempotencyKey = generateIdempotencyKey({
         hotelId,
@@ -1118,13 +1263,25 @@ const handleWhatsAppCron = async (req, res) => {
         deliveryType: DELIVERY_TYPES.SCHEDULED,
         recipient: owner.phone,
         idempotencyKey,
+        templateName: metaTemplate.templateName,
         status: OUTBOX_STATUS.SENDING,
-        metadata: { hotelName: summary.hotelName, totalRooms: summary.occupancy.totalRooms, timezone: tz },
+        metadata: {
+          hotelName: summary.hotelName,
+          totalRooms: summary.occupancy?.totalRooms || 0,
+          occupiedRooms: summary.occupiedRooms || 0,
+          dailyRevenue: summary.dailyRevenue || 0,
+          closingCash: summary.closingCash || 0,
+          timezone: tz,
+          templateName: metaTemplate.templateName,
+        },
       });
 
       const sendResult = await sendWhatsAppMessage({
         to: owner.phone,
         text,
+        templateName: metaTemplate.templateName,
+        templateComponents: metaTemplate.templateComponents,
+        templateLanguage: metaTemplate.templateLanguage,
       });
 
       await updateWhatsAppOutboxEvent(outboxRecord.id, {
@@ -1173,15 +1330,15 @@ const handleWhatsAppCron = async (req, res) => {
     return res.status(500).json({
       success: false,
       code: 'CRON_EXECUTION_ERROR',
-      message: 'Failed to process scheduled notifications.',
+      message: 'Failed to process scheduled notifications: ' + (err?.message || err),
     });
   } finally {
     activeCronLocks.delete(jobKey);
   }
 };
 
-router.get(['/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
-router.post(['/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
+router.get(['/whinta-daily-report', '/cron/whinta-daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
+router.post(['/whinta-daily-report', '/cron/whinta-daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
 
 export { handleWhatsAppCron, activeCronLocks };
 export default router;

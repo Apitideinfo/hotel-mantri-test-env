@@ -243,9 +243,11 @@ export const recordWhatsAppOutboxEvent = async ({
   lastError = null,
   metadata = {},
   reservationId = null,
+  templateName = null,
 }) => {
   const eventId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const resolvedTemplateName = templateName || metadata?.templateName || metadata?.template_name || null;
   const resolvedIdempotencyKey =
     idempotencyKey ||
     generateIdempotencyKey({
@@ -262,6 +264,7 @@ export const recordWhatsAppOutboxEvent = async ({
     report_type: reportType,
     delivery_type: deliveryType,
     provider,
+    template_name: resolvedTemplateName,
     idempotency_key: resolvedIdempotencyKey,
   };
 
@@ -278,6 +281,7 @@ export const recordWhatsAppOutboxEvent = async ({
     recipient,
     status,
     provider,
+    template_name: resolvedTemplateName,
     idempotency_key: resolvedIdempotencyKey,
     attempt_count: isTerminalSuccess || status === OUTBOX_STATUS.FAILED || isSubmitted ? 1 : 0,
     provider_message_id: providerMessageId,
@@ -309,6 +313,7 @@ export const recordWhatsAppOutboxEvent = async ({
       report_type: reportType,
       delivery_type: deliveryType,
       recipient,
+      template_name: resolvedTemplateName,
       status,
       provider,
       idempotency_key: resolvedIdempotencyKey,

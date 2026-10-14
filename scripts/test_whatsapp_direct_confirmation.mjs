@@ -121,9 +121,10 @@ async function runDirectWhatsAppTests() {
     guest_name: 'WhatsApp Direct Guest',
     guest_phone: guestPhone,
     guest_email: directGuestEmail,
-    check_in_date: '2026-11-10',
-    check_out_date: '2026-11-12',
+    check_in_date: '2028-06-10',
+    check_out_date: '2028-06-12',
     room_no: 'Unassigned',
+    allow_unassigned: true,
     rate: 3000,
     taxable_amount: 6000,
     gst_amount: 720,
@@ -260,9 +261,10 @@ async function runDirectWhatsAppTests() {
     guest_name: 'WhatsApp Fail Guest',
     guest_phone: '9911223344',
     guest_email: failGuestEmail,
-    check_in_date: '2026-11-25',
-    check_out_date: '2026-11-26',
+    check_in_date: '2028-06-25',
+    check_out_date: '2028-06-26',
     room_no: 'Unassigned',
+    allow_unassigned: true,
     rate: 2500,
     taxable_amount: 2500,
     gst_amount: 300,
@@ -319,18 +321,31 @@ async function runDirectWhatsAppTests() {
   // TEST 7 — Unconfigured Provider Resilience & wa.me Fallback
   // ──────────────────────────────────────────────────────────────────────────
   console.log('─── TEST 7: Unconfigured Provider Fallback ───');
-  const unconfiguredDeliveryResult = await generateAndDeliverConfirmation({
-    hotelId,
-    reservationId: failRes.id,
-    reservation: failRes,
-    eventType: 'RESERVATION_MODIFIED',
-    forceNewVersion: true,
-    // No whatsAppSenderFn passed -> uses real sendWhatsAppMessage which is currently unconfigured
-  });
+  const savedToken = process.env.WHINTA_ACCESS_TOKEN;
+  const savedApiToken = process.env.WHINTA_API_TOKEN;
+  const savedEnabled = process.env.WHINTA_ENABLED;
+  delete process.env.WHINTA_ACCESS_TOKEN;
+  delete process.env.WHINTA_API_TOKEN;
+  delete process.env.WHINTA_ENABLED;
 
-  assert(unconfiguredDeliveryResult.whatsApp?.status === 'not_configured', `WhatsApp reports status: 'not_configured' (got '${unconfiguredDeliveryResult.whatsApp?.status}')`);
-  assert(!!unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl, 'Fallback wa.me direct URL is generated');
-  assert(unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl.includes('https://wa.me/919911223344'), 'wa.me points to normalized guest mobile');
+  try {
+    const unconfiguredDeliveryResult = await generateAndDeliverConfirmation({
+      hotelId,
+      reservationId: failRes.id,
+      reservation: failRes,
+      eventType: 'RESERVATION_MODIFIED',
+      forceNewVersion: true,
+      // No whatsAppSenderFn passed -> uses real sendWhatsAppMessage which is now unconfigured
+    });
+
+    assert(unconfiguredDeliveryResult.whatsApp?.status === 'not_configured', `WhatsApp reports status: 'not_configured' (got '${unconfiguredDeliveryResult.whatsApp?.status}')`);
+    assert(!!unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl, 'Fallback wa.me direct URL is generated');
+    assert(unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl.includes('https://wa.me/919911223344'), 'wa.me points to normalized guest mobile');
+  } finally {
+    if (savedToken !== undefined) process.env.WHINTA_ACCESS_TOKEN = savedToken;
+    if (savedApiToken !== undefined) process.env.WHINTA_API_TOKEN = savedApiToken;
+    if (savedEnabled !== undefined) process.env.WHINTA_ENABLED = savedEnabled;
+  }
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────

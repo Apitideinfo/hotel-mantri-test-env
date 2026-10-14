@@ -1155,14 +1155,20 @@ export const generateAndDeliverConfirmation = async ({
       const roomInfo = `${resRecord.rate_plan || resRecord.room_category || 'Standard'}${resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${resRecord.room_no})` : ''
         }`;
 
+      const guestCount = Math.max(1, (Number(resRecord.adults || 0) || Number(resRecord.guest_count || 0) || 1) + Number(resRecord.children || 0));
       const metaTemplate = buildMetaBookingConfirmationTemplate({
         guestName: resRecord.guest_name || 'Guest',
         hotelName,
         confirmationNumber,
+        reservationReference: confirmationNumber,
         roomDetails: roomInfo,
+        roomCategory: resRecord.rate_plan || resRecord.room_category || 'Standard',
+        roomNo: resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? resRecord.room_no : '',
         checkIn: formatDateReadable(checkIn),
         checkOut: formatDateReadable(checkOut),
         totalAmount: totalVal,
+        guestCount,
+        currency: '₹',
       });
 
       const waEventKey = `${DELIVERY_EVENT_TYPES.RESERVATION_CONFIRMATION_WHATSAPP}_${targetRecipientType}_V${version}`;
@@ -1199,6 +1205,7 @@ export const generateAndDeliverConfirmation = async ({
             recipient: targetPhone,
             status: OUTBOX_STATUS.SENDING,
             reservationId,
+            templateName: metaTemplate.templateName,
             metadata: {
               version,
               fileName,

@@ -17,7 +17,7 @@
  */
 
 import { supabaseServiceRole } from '../supabaseClient.js';
-import { normalizeWhatsAppPhone } from './whatsappService.js';
+import { normalizeWhatsAppPhone, buildMetaDailyReportTemplate } from './whatsappService.js';
 import { generateAuthoritativeNightlyRevenue, reconcilePaymentLedger } from './authoritativeRevenue.js';
 
 const supabase = supabaseServiceRole;
@@ -260,7 +260,7 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
   const vacantCount = Math.max(0, totalRooms - occupiedCount);
   const occupancyPercent = totalRooms > 0 ? (occupiedCount / totalRooms) * 100 : 0;
 
-  // ─── 3. Arrivals & Departures ───────────────────────────────────────────────
+  // ─── 3. Arrivals, Departures & New Reservations ────────────────────────────
   const arrivalsList = resList.filter((r) => {
     const ci = (r.check_in_date || '').slice(0, 10);
     const status = (r.status || '').toLowerCase();
@@ -272,6 +272,26 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
     const status = (r.status || '').toLowerCase();
     return co === targetDate && status !== 'cancelled' && status !== 'no_show';
   });
+
+  const newReservationsList = resList.filter((r) => {
+    const createdDate = (r.created_at || '').slice(0, 10);
+    const status = (r.status || '').toLowerCase();
+    return createdDate === targetDate && status !== 'cancelled';
+  });
+
+  const newReservationsCount = newReservationsList.length;
+
+  const actualCheckins = arrivalsList.filter((r) => {
+    const status = (r.status || '').toLowerCase();
+    return status === 'checked_in' || status === 'checked_out';
+  }).length;
+  const checkinsCount = actualCheckins > 0 ? actualCheckins : arrivalsList.length;
+
+  const actualCheckouts = departuresList.filter((r) => {
+    const status = (r.status || '').toLowerCase();
+    return status === 'checked_out';
+  }).length;
+  const checkoutsCount = actualCheckouts > 0 ? actualCheckouts : departuresList.length;
 
   const pendingCheckins = arrivalsList.filter((r) => (r.status || '').toLowerCase() === 'confirmed').length;
   const pendingCheckouts = departuresList.filter((r) => (r.status || '').toLowerCase() === 'checked_in').length;
@@ -345,6 +365,43 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
 
   const totalCollection = cashCollection + digitalCollection + otaCollection;
 
+  // ─── Closing Cash Balance Calculation (Strict Physical Cash Flow) ───────────
+  let closingCashBalance = 0;
+  if (dayClose && dayClose.status === 'closed' && dayClose.cash_closing !== undefined) {
+    closingCashBalance = toNum(dayClose.cash_closing);
+  } else {
+    let openingCash = 0;
+    try {
+      const { data: prevDayClose } = await supabase
+        .from('day_close_records')
+        .select('cash_closing, opening_cash_next_day')
+        .eq('hotel_id', hotelId)
+        .lt('business_date', targetDate)
+        .eq('status', 'closed')
+        .order('business_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (prevDayClose) {
+        openingCash = toNum(prevDayClose.opening_cash_next_day || prevDayClose.cash_closing);
+      }
+    } catch (err) {
+      console.warn('[DAILY_SUMMARY] Non-fatal prevDayClose query error:', err.message);
+    }
+
+    const cashExpenses =
+      toNum(otherDaily?.housekeeping_supply) +
+      toNum(otherDaily?.other_expense) +
+      toNum(otherDaily?.maintenance_bill) +
+      toNum(otherDaily?.salary_advance);
+
+    const cashHandovers =
+      toNum(otherDaily?.cash_handover_md) +
+      toNum(otherDaily?.bank_cash_deposit);
+
+    closingCashBalance = openingCash + cashCollection + toNum(otherDaily?.other_income) - cashExpenses - cashHandovers;
+  }
+
   // ─── 7. Performance (ADR & RevPAR) ──────────────────────────────────────────
   const adr = occupiedCount > 0 ? roomRevenue / occupiedCount : 0;
   const revpar = totalRooms > 0 ? roomRevenue / totalRooms : 0;
@@ -409,6 +466,17 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
     hasData,
     dayStatus,
 
+    // Phase 3 & 4 Explicit Template Metrics (Authoritative 10 Placeholders)
+    reportDate: targetDate,
+    totalActiveRooms: totalRooms,
+    occupiedRooms: occupiedCount,
+    occupancyPercentage: Number(occupancyPercent.toFixed(1)),
+    newReservations: newReservationsCount,
+    checkIns: checkinsCount,
+    checkOuts: checkoutsCount,
+    dailyRevenue: grossRevenue,
+    closingCash: Math.round(closingCashBalance),
+
     // Inventory & Occupancy
     occupancy: {
       totalRooms,
@@ -424,6 +492,9 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
       inHouse: inHouseGuests,
       pendingCheckins,
       pendingCheckouts,
+      newReservations: newReservationsCount,
+      checkIns: checkinsCount,
+      checkOuts: checkoutsCount,
     },
 
     // Expenses
@@ -448,6 +519,7 @@ export const calculateDailySummary = async ({ hotelId, businessDate }) => {
       ota: otaCollection,
       total: totalCollection,
       pendingDue,
+      closingCash: Math.round(closingCashBalance),
     },
 
     // Room Status
@@ -553,8 +625,9 @@ export const buildDailySummaryText = (s) => {
     '━━━━━━━━━━━━━━━━',
     '',
     '🛎️ *FRONT OFFICE*',
-    `Arrivals: ${s.frontOffice.arrivals}`,
-    `Departures: ${s.frontOffice.departures}`,
+    `New Reservations: ${s.newReservations || s.frontOffice?.newReservations || 0}`,
+    `Check-ins: ${s.checkIns || s.frontOffice?.checkIns || s.frontOffice?.arrivals || 0}`,
+    `Check-outs: ${s.checkOuts || s.frontOffice?.checkOuts || s.frontOffice?.departures || 0}`,
     `In-House Guests: ${s.frontOffice.inHouse}`,
     `Pending Check-ins: ${s.frontOffice.pendingCheckins}`,
     `Pending Check-outs: ${s.frontOffice.pendingCheckouts}`,
@@ -569,7 +642,8 @@ export const buildDailySummaryText = (s) => {
     '━━━━━━━━━━━━━━━━',
     '',
     '💳 *COLLECTION & FINANCIALS*',
-    `Cash: ${fmtMoney(s.collection.cash)}`,
+    `Cash Collected: ${fmtMoney(s.collection.cash)}`,
+    `Closing Cash in Hand: *${fmtMoney(s.closingCash || s.collection?.closingCash || 0)}*`,
     `Digital/UPI/Bank: ${fmtMoney(s.collection.digital)}`,
     `OTA Collection: ${fmtMoney(s.collection.ota)}`,
     `Total Collection: *${fmtMoney(s.collection.total)}*`,
@@ -776,4 +850,5 @@ export default {
   buildOtaSummaryText,
   buildTestWhatsAppText,
   buildOtaReservationWhatsAppText,
+  buildMetaDailyReportTemplate,
 };

@@ -52,6 +52,10 @@ export const getWhintaConfig = () => {
   const defaultCountryCode = (process.env.WHINTA_DEFAULT_COUNTRY_CODE || DEFAULT_COUNTRY_CODE).replace(/\D/g, '');
   const hasWebhookSecret = Boolean((process.env.WHINTA_WEBHOOK_SECRET || '').trim());
 
+  const confirmationTemplate = (process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation').trim();
+  const dailyReportTemplate = (process.env.WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report').trim();
+  const templateLanguage = (process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en').trim();
+
   const configured = Boolean(token && token.length > 8);
 
   return {
@@ -62,6 +66,9 @@ export const getWhintaConfig = () => {
     baseUrl,
     defaultCountryCode: defaultCountryCode || '91',
     hasWebhookSecret,
+    confirmationTemplate,
+    dailyReportTemplate,
+    templateLanguage,
     // Never expose token or secret values
   };
 };
@@ -256,6 +263,62 @@ export class WhintaProvider {
       message: res.message,
       error: res.error,
     };
+  }
+
+  /**
+   * List approved templates from Whinta Web API.
+   * Endpoint: GET /api/templates
+   */
+  async listTemplates({ page = 1, perPage = 50 } = {}) {
+    if (!this.isConfigured()) {
+      return {
+        success: false,
+        configured: false,
+        error: WHATSAPP_ERRORS.PROVIDER_NOT_CONFIGURED,
+        message: 'Whinta Access Token is missing from server configuration.',
+        templates: [],
+      };
+    }
+
+    const res = await this._request(`/api/templates?page=${page}&per_page=${perPage}`);
+    if (!res.ok) {
+      return {
+        success: false,
+        status: res.status,
+        error: res.errorCode || WHATSAPP_ERRORS.PROVIDER_ERROR,
+        message: res.message || 'Failed to list Whinta templates.',
+        templates: [],
+      };
+    }
+
+    const templates = Array.isArray(res.data?.data)
+      ? res.data.data.map((t) => ({
+          uuid: t.uuid,
+          name: t.metadata?.name || t.name,
+          language: t.metadata?.language || t.language || 'en',
+          category: t.metadata?.category || t.category,
+          status: t.status || 'APPROVED',
+          components: t.metadata?.components || t.components || [],
+        }))
+      : [];
+
+    return {
+      success: true,
+      templates,
+      meta: res.data?.meta || { total: templates.length },
+    };
+  }
+
+  /**
+   * Retrieve single approved template metadata by name.
+   */
+  async getTemplate(templateName) {
+    if (!templateName) return null;
+    const listRes = await this.listTemplates({ perPage: 100 });
+    if (!listRes.success) return null;
+    return listRes.templates.find(
+      (t) => String(t.name || '').trim().toLowerCase() === String(templateName).trim().toLowerCase()
+    ) || null;
   }
 
   /**
@@ -589,12 +652,28 @@ export class WhintaProvider {
  * Verifies Whinta Webhook signature / token.
  * Supports HMAC-SHA256 signature, Bearer secret, and custom secret header.
  */
-export const verifyWhintaWebhookSignature = (payload, receivedSignatureOrSecret, secret) => {
-  if (!secret) return true; // If no secret configured, accept
-  if (!receivedSignatureOrSecret) return false;
+export const verifyWhintaWebhookSignature = (payloadOrOptions, receivedSignatureOrSecret, secret) => {
+  let payload = payloadOrOptions;
+  let signature = receivedSignatureOrSecret;
+  let sec = secret;
 
-  const cleanSecret = String(secret).trim();
-  const incoming = String(receivedSignatureOrSecret).trim();
+  if (
+    typeof payloadOrOptions === 'object' &&
+    payloadOrOptions !== null &&
+    !Buffer.isBuffer(payloadOrOptions) &&
+    receivedSignatureOrSecret === undefined &&
+    secret === undefined
+  ) {
+    payload = payloadOrOptions.payload;
+    signature = payloadOrOptions.signature || payloadOrOptions.receivedSignatureOrSecret;
+    sec = payloadOrOptions.secret;
+  }
+
+  if (!sec) return true; // If no secret configured, accept
+  if (!signature) return false;
+
+  const cleanSecret = String(sec).trim();
+  const incoming = String(signature).trim();
 
   // 1. Direct secret token or Bearer match
   if (incoming === cleanSecret || incoming === `Bearer ${cleanSecret}`) {

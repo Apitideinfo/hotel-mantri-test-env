@@ -159,6 +159,8 @@ export const buildMetaBookingConfirmationTemplate = ({
   checkIn = '',
   checkOut = '',
   totalAmount = '0',
+  guestCount = 1,
+  currency = '₹',
   templateName = null,
   templateLanguage = null,
 } = {}) => {
@@ -168,11 +170,12 @@ export const buildMetaBookingConfirmationTemplate = ({
   const ref = confirmationNumber || reservationReference || 'HM-RES';
   const room = roomDetails || (roomCategory ? `${roomCategory}${roomNo ? ` (Room ${roomNo})` : ''}` : 'Standard Room');
 
+  const curr = currency || '₹';
   const formattedAmount = typeof totalAmount === 'number'
-    ? `₹${Math.round(totalAmount).toLocaleString('en-IN')}`
-    : String(totalAmount).startsWith('₹')
+    ? `${curr}${Math.round(totalAmount).toLocaleString('en-IN')}`
+    : String(totalAmount).startsWith(curr)
     ? totalAmount
-    : `₹${totalAmount}`;
+    : `${curr}${totalAmount}`;
 
   const components = [
     {
@@ -185,6 +188,95 @@ export const buildMetaBookingConfirmationTemplate = ({
         { type: 'text', text: String(checkIn || '—').slice(0, 30) },
         { type: 'text', text: String(checkOut || '—').slice(0, 30) },
         { type: 'text', text: formattedAmount.slice(0, 30) },
+      ],
+    },
+  ];
+
+  return {
+    name,
+    language: { code: lang },
+    components,
+    templateName: name,
+    templateLanguage: lang,
+    templateComponents: components,
+    guestCount,
+    currency: curr,
+  };
+};
+
+// ─── Meta WhatsApp Daily Hotel Report Template Builder ────────────────────────
+
+/**
+ * Constructs standard WhatsApp Business Cloud API template payload components
+ * for automated daily hotel reports.
+ *
+ * Variable mapping for `daily_hotel_report`:
+ * Body parameters:
+ *   {{1}}  = Hotel Name
+ *   {{2}}  = Report Date
+ *   {{3}}  = Total Active Rooms
+ *   {{4}}  = Occupied Rooms
+ *   {{5}}  = Occupancy Percentage
+ *   {{6}}  = New Reservations
+ *   {{7}}  = Check-ins
+ *   {{8}}  = Check-outs
+ *   {{9}}  = Daily Revenue
+ *   {{10}} = Closing Cash Balance
+ *
+ * @param {Object} params
+ * @returns {{ templateName: string, templateLanguage: string, templateComponents: Array }}
+ */
+export const buildMetaDailyReportTemplate = ({
+  hotelName = 'Hotel Mantri',
+  reportDate = '',
+  totalRooms = 0,
+  occupiedRooms = 0,
+  occupancyPercentage = '0%',
+  newReservations = 0,
+  checkIns = 0,
+  checkOuts = 0,
+  dailyRevenue = '0',
+  closingCash = '0',
+  currency = '₹',
+  templateName = null,
+  templateLanguage = null,
+} = {}) => {
+  const name = templateName || process.env.WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report';
+  const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
+  const curr = currency || '₹';
+
+  const formattedRevenue = typeof dailyRevenue === 'number'
+    ? `${curr}${Math.round(dailyRevenue).toLocaleString('en-IN')}`
+    : String(dailyRevenue).startsWith(curr)
+    ? dailyRevenue
+    : `${curr}${dailyRevenue}`;
+
+  const formattedCash = typeof closingCash === 'number'
+    ? `${curr}${Math.round(closingCash).toLocaleString('en-IN')}`
+    : String(closingCash).startsWith(curr)
+    ? closingCash
+    : `${curr}${closingCash}`;
+
+  const formattedOccPercent = typeof occupancyPercentage === 'number'
+    ? `${occupancyPercentage.toFixed(1)}%`
+    : String(occupancyPercentage).includes('%')
+    ? occupancyPercentage
+    : `${occupancyPercentage}%`;
+
+  const components = [
+    {
+      type: 'body',
+      parameters: [
+        { type: 'text', text: String(hotelName || 'Hotel Property').slice(0, 60) },
+        { type: 'text', text: String(reportDate || 'Today').slice(0, 30) },
+        { type: 'text', text: String(totalRooms || 0).slice(0, 10) },
+        { type: 'text', text: String(occupiedRooms || 0).slice(0, 10) },
+        { type: 'text', text: formattedOccPercent.slice(0, 15) },
+        { type: 'text', text: String(newReservations || 0).slice(0, 10) },
+        { type: 'text', text: String(checkIns || 0).slice(0, 10) },
+        { type: 'text', text: String(checkOuts || 0).slice(0, 10) },
+        { type: 'text', text: formattedRevenue.slice(0, 30) },
+        { type: 'text', text: formattedCash.slice(0, 30) },
       ],
     },
   ];
@@ -343,6 +435,7 @@ export default {
   normalizeWhatsAppPhone,
   buildWhatsAppDirectUrl,
   buildMetaBookingConfirmationTemplate,
+  buildMetaDailyReportTemplate,
   getWhatsAppProviderConfig,
   sendWhatsAppMessage,
   WhintaProvider,
