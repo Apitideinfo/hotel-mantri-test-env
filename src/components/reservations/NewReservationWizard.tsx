@@ -15,9 +15,11 @@ import type {
 } from '@/lib/types';
 import { SOURCE_CATEGORIES, MEAL_PLANS, GST_TYPES, GST_SLABS, groupRoomsByCategory, compareRoomNo } from '@/lib/types';
 import { isValidEmail, type ReservationInput } from '@/lib/types-reservations';
-import { fmtMoney, fmtInt, toNum, calcGstFull, addDays, calcStayNights } from '@/lib/calc';
+import { fmtMoney, fmtInt, toNum, calcGstFull, addDays, calcStayNights, isStayOverlapping } from '@/lib/calc';
 import { apiFetch } from '@/lib/api-fetch';
 import { supabase } from '@/lib/supabase';
+import { getCurrentHotelId } from '@/lib/api';
+import { getCategoryAvailability } from '@/lib/api-reservations';
 import { buildReservationInputs, type RoomDetailConfig } from '@/lib/reservationFormHelpers';
 import { searchGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
@@ -160,23 +162,78 @@ export const NewReservationWizard = ({
     if (!checkIn || !checkOut || checkIn >= checkOut) return;
     setAvailabilityLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('reservations')
-        .select('room_no, status')
-        .not('status', 'in', '("cancelled","no_show")')
-        .lt('check_in_date', checkOut)
-        .gt('check_out_date', checkIn);
+      const hotelId = getCurrentHotelId();
 
-      if (!error && data) {
+      // 1. Authoritative category availability check via API
+      const catAvail = await getCategoryAvailability({
+        hotelId,
+        checkIn,
+        checkOut,
+      });
+
+      if (catAvail && Array.isArray(catAvail.unavailableRoomNos)) {
         const booked = new Set<string>();
-        for (const row of data) {
-          const no = (row.room_no || '').trim().toLowerCase();
-          if (no && no !== 'unassigned' && no !== 'tbd') {
-            booked.add(no);
+        for (const no of catAvail.unavailableRoomNos) {
+          const clean = (no || '').trim().toLowerCase();
+          if (clean && clean !== 'unassigned' && clean !== 'tbd') {
+            booked.add(clean);
           }
         }
         setBookedRoomNos(booked);
+        return;
       }
+
+      // 2. Direct Scoped Fallback: active reservations + in-house chart + blocks
+      const booked = new Set<string>();
+
+      // Active reservations
+      const { data: resData } = await supabase
+        .from('reservations')
+        .select('room_no, status')
+        .eq('hotel_id', hotelId)
+        .in('status', ['confirmed', 'checked_in'])
+        .lt('check_in_date', checkOut)
+        .gt('check_out_date', checkIn);
+
+      for (const row of (resData || [])) {
+        const no = (row.room_no || '').trim().toLowerCase();
+        if (no && no !== 'unassigned' && no !== 'tbd') {
+          booked.add(no);
+        }
+      }
+
+      // In-house active room chart entries
+      const { data: chartData } = await supabase
+        .from('room_chart_entries')
+        .select('room_no, arrival, departure, report_date')
+        .eq('hotel_id', hotelId)
+        .is('checked_out_at', null);
+
+      for (const row of (chartData || [])) {
+        const a = (row.arrival || row.report_date || '').slice(0, 10);
+        const d = (row.departure || row.report_date || '').slice(0, 10);
+        if (a && d && isStayOverlapping(checkIn, checkOut, a, d)) {
+          const no = (row.room_no || '').trim().toLowerCase();
+          if (no) booked.add(no);
+        }
+      }
+
+      // Active room blocks
+      const { data: blockData } = await supabase
+        .from('room_blocks')
+        .select('room_no, start_date, end_date')
+        .eq('hotel_id', hotelId);
+
+      for (const row of (blockData || [])) {
+        const s = (row.start_date || '').slice(0, 10);
+        const e = (row.end_date || '').slice(0, 10);
+        if (s && e && isStayOverlapping(checkIn, checkOut, s, e)) {
+          const no = (row.room_no || '').trim().toLowerCase();
+          if (no) booked.add(no);
+        }
+      }
+
+      setBookedRoomNos(booked);
     } catch (e) {
       console.warn('[NewReservationWizard] Availability fetch warning:', e);
     } finally {
@@ -299,16 +356,60 @@ export const NewReservationWizard = ({
       const otherRows = prevRows.filter((r) => r.categoryId !== categoryId);
 
       if (cleanQty > currentRowsForCat.length) {
-        // Add additional rows
+        // Collect already allocated physical room numbers/ids in all rows
+        const alreadyAllocated = new Set<string>();
+        for (const row of prevRows) {
+          const k = (row.roomNo || '').trim().toLowerCase();
+          if (k && k !== 'unassigned' && k !== 'tbd') {
+            alreadyAllocated.add(k);
+          }
+          if (row.roomId) {
+            alreadyAllocated.add(String(row.roomId).toLowerCase());
+          }
+        }
+
+        // Available candidate physical rooms in this category (deterministic sort: vacant clean first, room_no ascending)
+        const catRooms = rooms.filter((r) => r.category_id === categoryId && r.is_active);
+        const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+        const eligibleRooms = catRooms
+          .filter((r) => {
+            const st = String(r.room_status || '').toLowerCase();
+            if (nonAssignable.has(st)) return false;
+            const k = (r.room_no || '').trim().toLowerCase();
+            if (bookedRoomNos.has(k)) return false;
+            return true;
+          })
+          .sort((a, b) => {
+            const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+            const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+            if (aVacant && !bVacant) return -1;
+            if (!aVacant && bVacant) return 1;
+            const numA = parseInt(a.room_no, 10);
+            const numB = parseInt(b.room_no, 10);
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+            return (a.room_no || '').localeCompare(b.room_no || '');
+          });
+
+        // Add additional rows with automatically assigned physical rooms
         const needed = cleanQty - currentRowsForCat.length;
         const newRows: SelectedRoomRow[] = [];
         for (let i = 0; i < needed; i++) {
+          const candidate = eligibleRooms.find((r) => {
+            const k = (r.room_no || '').trim().toLowerCase();
+            return !alreadyAllocated.has(k) && !alreadyAllocated.has(String(r.id).toLowerCase());
+          });
+
+          if (candidate) {
+            alreadyAllocated.add((candidate.room_no || '').trim().toLowerCase());
+            alreadyAllocated.add(String(candidate.id).toLowerCase());
+          }
+
           newRows.push({
             uid: crypto.randomUUID(),
             categoryId,
             categoryName: catName,
-            roomNo: 'Unassigned',
-            roomId: null,
+            roomNo: candidate ? candidate.room_no : 'Unassigned',
+            roomId: candidate ? candidate.id : null,
             adults: Math.max(1, adults),
             children: Math.max(0, children),
             mealPlan: globalMealPlan,
@@ -517,19 +618,45 @@ export const NewReservationWizard = ({
         setError('Check-out date must be strictly after check-in date.');
         return false;
       }
-      // If no rooms have been selected yet, prepare default rows according to numRooms
+      // If no rooms have been selected yet, prepare default rows according to numRooms with auto-assigned physical rooms
       if (roomRows.length === 0 && categories.length > 0) {
         const firstCat = categories[0];
         const catId = firstCat.id;
         setCategoryQuantities({ [catId]: numRooms });
+
+        const catRooms = rooms.filter((r) => r.category_id === catId && r.is_active);
+        const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+        const eligibleRooms = catRooms
+          .filter((r) => {
+            const st = String(r.room_status || '').toLowerCase();
+            if (nonAssignable.has(st)) return false;
+            const k = (r.room_no || '').trim().toLowerCase();
+            if (bookedRoomNos.has(k)) return false;
+            return true;
+          })
+          .sort((a, b) => {
+            const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+            const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+            if (aVacant && !bVacant) return -1;
+            if (!aVacant && bVacant) return 1;
+            const numA = parseInt(a.room_no, 10);
+            const numB = parseInt(b.room_no, 10);
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+            return (a.room_no || '').localeCompare(b.room_no || '');
+          });
+
         const rows: SelectedRoomRow[] = [];
+        const assignedIds = new Set<string>();
         for (let i = 0; i < numRooms; i++) {
+          const candidate = eligibleRooms.find((r) => !assignedIds.has(r.id));
+          if (candidate) assignedIds.add(candidate.id);
+
           rows.push({
             uid: crypto.randomUUID(),
             categoryId: catId,
             categoryName: firstCat.name,
-            roomNo: 'Unassigned',
-            roomId: null,
+            roomNo: candidate ? candidate.room_no : 'Unassigned',
+            roomId: candidate ? candidate.id : null,
             adults: Math.max(1, adults),
             children: Math.max(0, children),
             mealPlan: 'EP',
@@ -671,6 +798,21 @@ export const NewReservationWizard = ({
       const inputs = buildInputs();
       const result = await onSave(inputs);
       const savedList = Array.isArray(result) ? result : [];
+      if (savedList.length > 0) {
+        setRoomRows((prev) =>
+          prev.map((r, idx) => {
+            const saved = savedList[idx];
+            if (saved?.room_no && saved.room_no !== 'Unassigned') {
+              return {
+                ...r,
+                roomNo: saved.room_no,
+                roomId: saved.room_id || r.roomId,
+              };
+            }
+            return r;
+          })
+        );
+      }
       const firstSaved = savedList[0];
       if (firstSaved?.id) setSavedReservationId(firstSaved.id);
       if (firstSaved?.confirmation_token || firstSaved?.confirmationToken) {
@@ -680,6 +822,13 @@ export const NewReservationWizard = ({
         setEmailStatus(firstSaved._emailStatus as any);
         setEmailDelivery(firstSaved._emailDelivery || { recipientEmail: email.trim() });
       }
+
+      // Dispatch real-time availability and reservation updates
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+        window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+      }
+
       setSuccess(inputs);
     } catch (err: any) {
       console.error('[NewReservationWizard] Save error:', err);
@@ -1337,9 +1486,16 @@ export const NewReservationWizard = ({
                                   </div>
                                 </div>
 
-                                {/* Physical Room (Optional) */}
-                                <div className="min-w-[130px]">
-                                  <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Physical Room</label>
+                                {/* Physical Room */}
+                                <div className="min-w-[155px]">
+                                  <div className="flex items-center justify-between mb-0.5">
+                                    <label className="text-[10px] font-bold text-slate-500">Assigned Room</label>
+                                    {row.roomNo && row.roomNo !== 'Unassigned' && (
+                                      <span className="text-[9px] font-extrabold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200">
+                                        Auto-Assigned
+                                      </span>
+                                    )}
+                                  </div>
                                   <select
                                     value={row.roomNo}
                                     onChange={(e) => {
@@ -1350,11 +1506,21 @@ export const NewReservationWizard = ({
                                         roomId: matchingRoom?.id ?? null,
                                       });
                                     }}
-                                    className="w-full px-2 py-1 text-xs font-semibold bg-white border border-slate-200 rounded-lg">
-                                    <option value="Unassigned">Unassigned (Category Hold)</option>
-                                    {catRooms.map((r) => (
-                                      <option key={r.id} value={r.room_no}>Room {r.room_no}</option>
-                                    ))}
+                                    className="w-full px-2 py-1 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-lg">
+                                    {row.roomNo && row.roomNo !== 'Unassigned' ? (
+                                      <option value={row.roomNo}>Room {row.roomNo} (Auto-Assigned)</option>
+                                    ) : (
+                                      <option value="Unassigned">Auto-Assign on Save</option>
+                                    )}
+                                    {catRooms.filter(r => r.room_no !== row.roomNo).map((r) => {
+                                      const isBooked = bookedRoomNos.has((r.room_no || '').trim().toLowerCase());
+                                      return (
+                                        <option key={r.id} value={r.room_no} disabled={isBooked}>
+                                          Room {r.room_no} {isBooked ? '(Occupied)' : '(Available)'}
+                                        </option>
+                                      );
+                                    })}
+                                    <option value="Unassigned">Unassigned (Hold/Waitlist)</option>
                                   </select>
                                 </div>
 

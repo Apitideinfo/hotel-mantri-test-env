@@ -31,10 +31,13 @@ export const withOtaLock = async (hotelId, channel, externalBookingId, task) => 
     release = resolve;
   });
 
-  otaLocks.set(key, prevLock.then(() => currentLock));
+  otaLocks.set(
+    key,
+    prevLock.catch(() => {}).then(() => currentLock)
+  );
 
   try {
-    await prevLock;
+    await prevLock.catch(() => {});
     return await task();
   } finally {
     release();
@@ -114,10 +117,13 @@ export const withBookingLock = async (hotelId, bookingKey, task) => {
     release = resolve;
   });
 
-  bookingLocks.set(key, prevLock.then(() => currentLock));
+  bookingLocks.set(
+    key,
+    prevLock.catch(() => {}).then(() => currentLock)
+  );
 
   try {
-    await prevLock;
+    await prevLock.catch(() => {});
     return await task();
   } finally {
     release();
