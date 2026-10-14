@@ -137,8 +137,13 @@ async function runSuite() {
 
     const body = tpl.components.find((c) => c.type === 'body');
     assert.strictEqual(body.parameters.length, 7, 'Body must have exactly 7 parameters');
-    assert.strictEqual(body.parameters[0].text, 'Rohan Sharma');
-    assert.strictEqual(body.parameters[2].text, 'HM-RES-7788');
+    assert.strictEqual(body.parameters[0].text, 'Rohan Sharma', '{{1}} Guest name');
+    assert.strictEqual(body.parameters[1].text, 'HM-RES-7788', '{{2}} Booking ID');
+    assert.strictEqual(body.parameters[2].text, '204', '{{3}} Room number');
+    assert.strictEqual(body.parameters[3].text, '2026-10-15', '{{4}} Check-in date');
+    assert.strictEqual(body.parameters[4].text, '2026-10-17', '{{5}} Check-out date');
+    assert.strictEqual(body.parameters[5].text, '₹9,500', '{{6}} Total amount');
+    assert.strictEqual(body.parameters[6].text, 'https://example.com/HotelMantri-Booking-HM-RES-7788.pdf', '{{7}} Invoice URL');
   });
 
   it('Daily report template includes dynamic document header component', () => {

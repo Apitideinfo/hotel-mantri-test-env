@@ -1509,11 +1509,16 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     const metaTemplate = buildMetaBookingConfirmationTemplate({
       guestName: reservation.guest_name || 'Guest',
       hotelName,
+      bookingId: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
       confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      roomNo: reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? reservation.room_no : 'Unassigned',
       roomDetails: roomInfo,
       checkIn: formatDateReadable(checkIn),
       checkOut: formatDateReadable(checkOut),
       totalAmount: totalVal,
+      invoiceUrl: pdfUrl || '—',
+      documentUrl: pdfUrl || null,
+      documentFilename: fileName,
     });
 
     // Send via Whinta provider with PDF attachment

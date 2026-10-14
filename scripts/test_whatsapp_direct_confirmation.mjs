@@ -103,12 +103,12 @@ async function runDirectWhatsAppTests() {
   assert(bodyComponent?.parameters?.length === 7, `Body has exactly 7 parameters (got ${bodyComponent?.parameters?.length})`);
 
   assert(bodyComponent?.parameters[0]?.text === 'Rajesh Kumar', 'Param 1 (Guest Name) is "Rajesh Kumar"');
-  assert(bodyComponent?.parameters[1]?.text === 'Hotel Gopal', 'Param 2 (Hotel Name) is "Hotel Gopal"');
-  assert(bodyComponent?.parameters[2]?.text === 'HM-RES-ABC12345', 'Param 3 (Reference) is "HM-RES-ABC12345"');
-  assert(bodyComponent?.parameters[3]?.text?.includes('Deluxe AC'), 'Param 4 (Room) includes "Deluxe AC"');
-  assert(bodyComponent?.parameters[4]?.text?.includes('Nov 2026') || bodyComponent?.parameters[4]?.text?.includes('2026'), 'Param 5 (Check-in) is formatted date');
-  assert(bodyComponent?.parameters[5]?.text?.includes('Nov 2026') || bodyComponent?.parameters[5]?.text?.includes('2026'), 'Param 6 (Check-out) is formatted date');
-  assert(bodyComponent?.parameters[6]?.text?.includes('9,408') || bodyComponent?.parameters[6]?.text?.includes('9408'), 'Param 7 (Total Amount) formatted as currency');
+  assert(bodyComponent?.parameters[1]?.text === 'HM-RES-ABC12345', 'Param 2 (Booking ID) is "HM-RES-ABC12345"');
+  assert(bodyComponent?.parameters[2]?.text === '204', 'Param 3 (Room number) is "204"');
+  assert(bodyComponent?.parameters[3]?.text?.includes('Nov 2026') || bodyComponent?.parameters[3]?.text?.includes('2026'), 'Param 4 (Check-in) is formatted date');
+  assert(bodyComponent?.parameters[4]?.text?.includes('Nov 2026') || bodyComponent?.parameters[4]?.text?.includes('2026'), 'Param 5 (Check-out) is formatted date');
+  assert(bodyComponent?.parameters[5]?.text?.includes('9,408') || bodyComponent?.parameters[5]?.text?.includes('9408'), 'Param 6 (Total Amount) formatted as currency');
+  assert(bodyComponent?.parameters[6]?.text !== undefined, 'Param 7 (Invoice URL) is present');
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────

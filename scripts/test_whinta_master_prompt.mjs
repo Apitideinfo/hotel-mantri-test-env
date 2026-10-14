@@ -263,12 +263,12 @@ async function runMasterTestSuite() {
   const bodyComp = bookingTpl.components.find((c) => c.type === 'body');
   assert(bodyComp?.parameters?.length === 7, 'Template body has exactly 7 parameter mappings');
   assert(bodyComp?.parameters[0]?.text === 'Ananya Sharma', 'Param {{1}} = Guest name');
-  assert(bodyComp?.parameters[1]?.text === hotelB.hotel_name, 'Param {{2}} = Hotel name');
-  assert(bodyComp?.parameters[2]?.text === 'HM-RES-77889900', 'Param {{3}} = Reservation reference');
-  assert(bodyComp?.parameters[3]?.text?.includes('Super Deluxe'), 'Param {{4}} = Room type & number');
-  assert(bodyComp?.parameters[4]?.text?.includes('2028'), 'Param {{5}} = Check-in date');
-  assert(bodyComp?.parameters[5]?.text?.includes('2028'), 'Param {{6}} = Check-out date');
-  assert(bodyComp?.parameters[6]?.text?.includes('12,500'), 'Param {{7}} = Total booking amount');
+  assert(bodyComp?.parameters[1]?.text === 'HM-RES-77889900', 'Param {{2}} = Booking ID');
+  assert(bodyComp?.parameters[2]?.text?.includes('101') || bodyComp?.parameters[2]?.text?.includes('Super Deluxe'), 'Param {{3}} = Room number');
+  assert(bodyComp?.parameters[3]?.text?.includes('2028'), 'Param {{4}} = Check-in date');
+  assert(bodyComp?.parameters[4]?.text?.includes('2028'), 'Param {{5}} = Check-out date');
+  assert(bodyComp?.parameters[5]?.text?.includes('12,500'), 'Param {{6}} = Total booking amount');
+  assert(bodyComp?.parameters[6]?.text !== undefined, 'Param {{7}} = Invoice URL');
 
   // Create actual reservation in database
   const resEmail = `master.test.${Date.now()}@example.com`;

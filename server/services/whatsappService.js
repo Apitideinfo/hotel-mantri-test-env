@@ -148,17 +148,41 @@ export const getWhatsAppProviderConfig = () => {
  * @param {string} [params.templateLanguage]
  * @returns {{ templateName: string, templateLanguage: string, templateComponents: Array }}
  */
+/**
+ * Constructs standard WhatsApp Business Cloud API template payload components
+ * for Hotel Mantri reservation confirmations.
+ *
+ * Official Approved HotelMantri Template Variable Mapping:
+ *   {{1}} = Guest name
+ *   {{2}} = Booking ID
+ *   {{3}} = Room number
+ *   {{4}} = Check-in date
+ *   {{5}} = Check-out date
+ *   {{6}} = Total amount
+ *   {{7}} = Invoice URL
+ *
+ * Header (Optional Dynamic Document):
+ *   document: { link, filename }
+ *
+ * @param {Object} params
+ * @returns {{ name: string, language: { code: string }, components: Array }}
+ */
 export const buildMetaBookingConfirmationTemplate = ({
   guestName = 'Guest',
-  hotelName = 'Hotel Mantri',
+  bookingId = '',
   confirmationNumber = '',
   reservationReference = '',
+  roomNo = '',
+  roomNumber = '',
   roomDetails = '',
   roomCategory = '',
-  roomNo = '',
   checkIn = '',
+  checkInDate = '',
   checkOut = '',
+  checkOutDate = '',
   totalAmount = '0',
+  invoiceUrl = '',
+  hotelName = 'Hotel Mantri',
   guestCount = 1,
   currency = '₹',
   templateName = null,
@@ -166,11 +190,11 @@ export const buildMetaBookingConfirmationTemplate = ({
   documentUrl = null,
   documentFilename = null,
 } = {}) => {
-  const name = templateName || process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation';
+  const name = templateName || process.env.WHINTA_RESERVATION_TEMPLATE || process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation';
   const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
 
-  const ref = confirmationNumber || reservationReference || 'HM-RES';
-  const room = roomDetails || (roomCategory ? `${roomCategory}${roomNo ? ` (Room ${roomNo})` : ''}` : 'Standard Room');
+  const ref = bookingId || confirmationNumber || reservationReference || 'HM-RES';
+  const cleanRoom = roomNo || roomNumber || (roomDetails ? String(roomDetails).replace(/^.*Room\s*([0-9A-Za-z-]+).*$/i, '$1') : '') || roomCategory || 'Unassigned';
 
   const curr = currency || '₹';
   const formattedAmount = typeof totalAmount === 'number'
@@ -178,6 +202,8 @@ export const buildMetaBookingConfirmationTemplate = ({
     : String(totalAmount).startsWith(curr)
     ? totalAmount
     : `${curr}${totalAmount}`;
+
+  const resolvedInvoiceUrl = invoiceUrl || documentUrl || '—';
 
   const components = [];
 
@@ -197,17 +223,24 @@ export const buildMetaBookingConfirmationTemplate = ({
     });
   }
 
-  // Standard 7 Body Parameters
+  // Official Approved HotelMantri 7 Body Parameters:
+  // {{1}} = Guest name
+  // {{2}} = Booking ID
+  // {{3}} = Room number
+  // {{4}} = Check-in date
+  // {{5}} = Check-out date
+  // {{6}} = Total amount
+  // {{7}} = Invoice URL
   components.push({
     type: 'body',
     parameters: [
       { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
-      { type: 'text', text: String(hotelName || 'Hotel Mantri').slice(0, 60) },
-      { type: 'text', text: String(ref).slice(0, 30) },
-      { type: 'text', text: String(room).slice(0, 60) },
-      { type: 'text', text: String(checkIn || '—').slice(0, 30) },
-      { type: 'text', text: String(checkOut || '—').slice(0, 30) },
+      { type: 'text', text: String(ref).slice(0, 40) },
+      { type: 'text', text: String(cleanRoom).slice(0, 30) },
+      { type: 'text', text: String(checkIn || checkInDate || '—').slice(0, 30) },
+      { type: 'text', text: String(checkOut || checkOutDate || '—').slice(0, 30) },
       { type: 'text', text: formattedAmount.slice(0, 30) },
+      { type: 'text', text: String(resolvedInvoiceUrl).slice(0, 500) },
     ],
   });
 
@@ -218,6 +251,14 @@ export const buildMetaBookingConfirmationTemplate = ({
     templateName: name,
     templateLanguage: lang,
     templateComponents: components,
+    guestName,
+    bookingId: ref,
+    roomNo: cleanRoom,
+    checkIn: checkIn || checkInDate,
+    checkOut: checkOut || checkOutDate,
+    totalAmount: formattedAmount,
+    invoiceUrl: resolvedInvoiceUrl,
+    hotelName,
     guestCount,
     currency: curr,
     documentUrl,
