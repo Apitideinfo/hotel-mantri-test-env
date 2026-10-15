@@ -1442,11 +1442,17 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
     }
 
     const activeRooms = allRooms.filter((r: Room) => r.is_active);
-    const occupiedRoomNos = new Set(todayEntries.map((e: RoomChartEntry) => e.room_no.trim().toLowerCase()));
+    const activeTodayEntries = todayEntries.filter((e: RoomChartEntry) => !e.checked_out_at);
+    const occupiedRoomNos = new Set(
+      activeTodayEntries
+        .map((e: RoomChartEntry) => e.room_no.trim().toLowerCase())
+        .filter((rn: string) => rn && rn !== 'tbd' && rn !== 'unassigned')
+    );
     const reservedRoomNos = new Set(todayReservations.filter((r: { status: string; room_no: string }) => r.status === 'confirmed').map((r: { room_no: string }) => r.room_no.trim().toLowerCase()));
     const blockedRoomNos = new Set(todayBlocks.filter((b: { block_type: string; room_no: string }) => b.block_type === 'Blocked').map((b: { room_no: string }) => b.room_no.trim().toLowerCase()));
     const maintenanceRoomNos = new Set(todayBlocks.filter((b: { block_type: string; room_no: string }) => b.block_type === 'HouseUse').map((b: { room_no: string }) => b.room_no.trim().toLowerCase()));
     const oooRoomNos = new Set(todayBlocks.filter((b: { block_type: string; room_no: string }) => b.block_type === 'OutOfOrder').map((b: { room_no: string }) => b.room_no.trim().toLowerCase()));
+    
     const roomPreview = {
       categories: allCategories.map((cat: RoomCategory) => {
         const catRooms = activeRooms.filter((r: Room) => r.category_id === cat.id);
@@ -1474,12 +1480,16 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
     };
 
     const arrivals = todayReservations.filter((r: { check_in_date: string; status: string }) => r.check_in_date === todayStr && r.status === 'confirmed').length;
-    const departures = todayReservations.filter((r: { check_out_date: string; status: string }) => r.check_out_date === todayStr && r.status !== 'cancelled' && r.status !== 'no_show').length;
-    const inHouse = todayEntries.length;
+    const todayCheckins = activeTodayEntries.filter((e: RoomChartEntry) => (e.arrival && e.arrival.slice(0, 10) === todayStr) || e.report_date === todayStr).length;
+    const resDepartures = todayReservations.filter((r: { check_out_date: string; status: string }) => r.check_out_date === todayStr && r.status !== 'cancelled' && r.status !== 'no_show').length;
+    const entryDepartures = todayEntries.filter((e: RoomChartEntry) => e.departure && e.departure.slice(0, 10) === todayStr).length;
+    const departures = Math.max(resDepartures, entryDepartures);
+    const dueCheckouts = activeTodayEntries.filter((e: RoomChartEntry) => e.departure && e.departure.slice(0, 10) === todayStr).length;
+    const inHouse = occupiedRoomNos.size;
     const totalAuthoritativeAvailable = roomPreview.categories.reduce((sum: number, c: { available?: number }) => sum + (c.available ?? 0), 0);
     const available = roomPreview.categories.length > 0 && todayRestrictions.length > 0
       ? totalAuthoritativeAvailable
-      : Math.max(0, activeRooms.length - inHouse);
+      : Math.max(0, activeRooms.length - inHouse - blockedRoomNos.size - maintenanceRoomNos.size - oooRoomNos.size);
 
     // Live in-house folio due across currently active reservations & in-house room chart entries
     const inHouseResvDue = todayReservations.reduce((sum: number, r: { invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number }) => {
@@ -1498,8 +1508,8 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
       inHouse,
       available,
       occupied: inHouse,
-      dueCheckouts: departures,
-      todayCheckins: arrivals,
+      dueCheckouts: dueCheckouts > 0 ? dueCheckouts : departures,
+      todayCheckins: todayCheckins > 0 ? todayCheckins : arrivals,
       inHouseDue: currentInHouseDue,
     };
 
@@ -1524,7 +1534,7 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
         occ: mtdAgg.occ,
         arr: mtdAgg.arr,
         revpar: mtdAgg.revpar,
-        roomNights: mtdAgg.roomsSold,
+        roomNights: mtdAgg.roomsSold + mtdAgg.complimentary,
         cash: mtdAgg.cash,
         bank: mtdAgg.bank,
         totalExpenses: mtdAgg.totalExpenses,
@@ -1556,7 +1566,7 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
         occ: ytdAgg.occ,
         arr: ytdAgg.arr,
         revpar: ytdAgg.revpar,
-        roomNights: ytdAgg.roomsSold,
+        roomNights: ytdAgg.roomsSold + ytdAgg.complimentary,
         cash: ytdAgg.cash,
         bank: ytdAgg.bank,
         totalExpenses: ytdAgg.totalExpenses,
