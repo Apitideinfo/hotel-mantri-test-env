@@ -41,26 +41,66 @@ const STEP_LABELS: Record<WizardStep, { title: string; subtitle: string; icon: t
 };
 
 /* ─── Standard Booking Sources & Source Types ─── */
+export const ALL_LISTED_OTAS = [
+  'Booking.com',
+  'MakeMyTrip',
+  'Agoda',
+  'Goibibo',
+  'Cleartrip',
+  'Airbnb',
+  'Expedia',
+  'Yatra',
+  'EaseMyTrip',
+  'Trip.com',
+  'Travelguru',
+  'HappyEasyGo',
+  'Ixigo',
+  'Hostelworld',
+];
+
 const STANDARD_BOOKING_SOURCES = [
   'Direct',
   'Walk-In',
-  'Booking.com',
-  'MakeMyTrip',
-  'Goibibo',
-  'Agoda',
+  ...ALL_LISTED_OTAS,
   'Agent',
   'Corporate',
 ];
 
 const SOURCE_TYPES = [
+  'OTA',
   'Walk-In',
   'Phone',
   'Website',
   'WhatsApp',
   'Agent',
-  'OTA',
   'Corporate',
 ];
+
+const getSourcesForType = (type: string, hotelSources: CompanySource[]): string[] => {
+  const otaDb = hotelSources.filter(s => s.source_category === 'OTA').map(s => s.name);
+  const corpDb = hotelSources.filter(s => s.source_category === 'Corporate/Agent').map(s => s.name);
+  const directDb = hotelSources.filter(s => s.source_category === 'Direct/Walking').map(s => s.name);
+
+  if (type === 'OTA') {
+    return Array.from(new Set([...ALL_LISTED_OTAS, ...otaDb]));
+  }
+  if (type === 'Corporate') {
+    return Array.from(new Set(['Corporate Direct', 'Company Tie-up', 'Business Booking', ...corpDb]));
+  }
+  if (type === 'Agent') {
+    return Array.from(new Set(['Travel Agent', 'Offline Agent', 'Tour Operator', ...corpDb]));
+  }
+  if (type === 'Phone') {
+    return Array.from(new Set(['Phone Reservation', 'Call Inquiry', 'Direct Phone']));
+  }
+  if (type === 'Website') {
+    return Array.from(new Set(['Direct Website', 'HotelMantri Engine', ...directDb]));
+  }
+  if (type === 'WhatsApp') {
+    return Array.from(new Set(['WhatsApp Direct', 'WhatsApp Business', ...directDb]));
+  }
+  return Array.from(new Set(['Walk-In', 'Front Desk', 'Direct Walking', ...directDb]));
+};
 
 /* ─── Room Item in Selection ─── */
 export interface SelectedRoomRow {
@@ -95,7 +135,7 @@ interface NewReservationWizardProps {
    MAIN WIZARD COMPONENT
    ═══════════════════════════════════════════════════════════════ */
 export const NewReservationWizard = ({
-  rooms, categories, sources, settings: _settings, defaultDate,
+  rooms, categories, sources, settings, defaultDate,
   preselectRoom, preselectCheckIn, preselectCheckOut, initialBookFullHotel,
   saving, onClose, onSave,
 }: NewReservationWizardProps) => {
@@ -115,8 +155,8 @@ export const NewReservationWizard = ({
   /* ── State: Step 1 – Stay Details ── */
   const [checkIn, setCheckIn] = useState(preselectCheckIn ?? defaultDate);
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
-  const [numRooms, setNumRooms] = useState<number>(1);
-  const [adults, setAdults] = useState<number>(2);
+  const [numRooms, setNumRooms] = useState<number>(0);
+  const [adults, setAdults] = useState<number>(0);
   const [children, setChildren] = useState<number>(0);
 
   const nights = useMemo(() => calcStayNights(checkIn, checkOut), [checkIn, checkOut]);
@@ -148,13 +188,14 @@ export const NewReservationWizard = ({
       const catRate = cat?.default_tariff ?? r?.default_tariff ?? 0;
 
       setCategoryQuantities({ [catId]: 1 });
+      setNumRooms(1);
       setRoomRows([{
         uid: crypto.randomUUID(),
         categoryId: catId,
         categoryName: catName,
         roomNo: cleanNo,
         roomId: r?.id ?? null,
-        adults: 2,
+        adults: 0,
         children: 0,
         mealPlan: 'EP',
         rate: catRate,
@@ -330,7 +371,7 @@ export const NewReservationWizard = ({
   const handleClearAllRooms = useCallback(() => {
     setCategoryQuantities({});
     setRoomRows([]);
-    setNumRooms(1);
+    setNumRooms(0);
   }, []);
 
   const handleBookFullHotelAndProceed = useCallback(() => {
@@ -410,16 +451,24 @@ export const NewReservationWizard = ({
             alreadyAllocated.add(String(candidate.id).toLowerCase());
           }
 
+          const candidateTariff = toNum(candidate?.default_tariff) > 0
+            ? toNum(candidate?.default_tariff)
+            : toNum(cat?.default_tariff) > 0
+            ? toNum(cat?.default_tariff)
+            : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
+            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+            : (toNum((settings as any)?.default_room_tariff) || 0);
+
           newRows.push({
             uid: crypto.randomUUID(),
             categoryId,
             categoryName: catName,
             roomNo: candidate ? candidate.room_no : 'Unassigned',
             roomId: candidate ? candidate.id : null,
-            adults: Math.max(1, adults),
+            adults: Math.max(0, adults),
             children: Math.max(0, children),
             mealPlan: globalMealPlan,
-            rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : catTariff,
+            rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : candidateTariff,
           });
         }
         return [...otherRows, ...currentRowsForCat, ...newRows];
@@ -468,6 +517,8 @@ export const NewReservationWizard = ({
   const [bookingSource, setBookingSource] = useState('Direct');
   const [sourceType, setSourceType] = useState<SourceType>('Direct');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
+  const [isCustomSource, setIsCustomSource] = useState(false);
+  const [customSourceName, setCustomSourceName] = useState('');
 
   // Bidirectional source/type synchronization ensuring valid compatible state
   const handleBookingSourceChange = useCallback((newSource: string) => {
@@ -653,8 +704,8 @@ export const NewReservationWizard = ({
         setError('Check-out date must be strictly after check-in date.');
         return false;
       }
-      // If no rooms have been selected yet, prepare default rows according to numRooms with auto-assigned physical rooms
-      if (roomRows.length === 0 && categories.length > 0) {
+      // If no rooms have been selected yet and numRooms > 0, prepare default rows according to numRooms with auto-assigned physical rooms
+      if (numRooms > 0 && roomRows.length === 0 && categories.length > 0) {
         const firstCat = categories[0];
         const catId = firstCat.id;
         setCategoryQuantities({ [catId]: numRooms });
@@ -686,20 +737,28 @@ export const NewReservationWizard = ({
           const candidate = eligibleRooms.find((r) => !assignedIds.has(r.id));
           if (candidate) assignedIds.add(candidate.id);
 
+          const tariff = toNum(candidate?.default_tariff) > 0
+            ? toNum(candidate?.default_tariff)
+            : toNum(firstCat.default_tariff) > 0
+            ? toNum(firstCat.default_tariff)
+            : toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff) > 0
+            ? toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff)
+            : (toNum((settings as any)?.default_room_tariff) || 0);
+
           rows.push({
             uid: crypto.randomUUID(),
             categoryId: catId,
             categoryName: firstCat.name,
             roomNo: candidate ? candidate.room_no : 'Unassigned',
             roomId: candidate ? candidate.id : null,
-            adults: Math.max(1, adults),
+            adults: Math.max(0, adults),
             children: Math.max(0, children),
             mealPlan: 'EP',
-            rate: firstCat.default_tariff || 0,
+            rate: tariff,
           });
         }
         setRoomRows(rows);
-        setDefaultRate(firstCat.default_tariff || 0);
+        if (rows[0]?.rate) setDefaultRate(rows[0].rate);
       }
       return true;
     }
@@ -707,6 +766,11 @@ export const NewReservationWizard = ({
     if (s === 2) {
       if (roomRows.length === 0) {
         setError('Please select at least 1 room from available categories.');
+        return false;
+      }
+      const hasZeroRate = roomRows.some((r) => toNum(r.rate) <= 0);
+      if (hasZeroRate) {
+        setError('Please enter a valid room rate greater than ₹0 for all selected rooms before proceeding.');
         return false;
       }
       return true;
@@ -785,10 +849,15 @@ export const NewReservationWizard = ({
       checkIn,
       checkOut,
       nights,
-      rate: defaultRate,
-      roomRates: {},
+      rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : (roomRows[0]?.rate || ''),
+      roomRates: roomRows.reduce((acc, r) => {
+        if (r.roomNo && r.roomNo !== 'Unassigned') {
+          acc[r.roomNo] = toNum(r.rate);
+        }
+        return acc;
+      }, {} as Record<string, number>),
       sourceCat,
-      sourceName: bookingSource.trim(),
+      sourceName: (bookingSource || 'Direct').trim(),
       payMode,
       payCash: isCash ? adv : 0,
       payUpi: isUpi ? adv : 0,
@@ -809,7 +878,15 @@ export const NewReservationWizard = ({
       allowEmptyEmail: true,
       rooms,
       categories,
-      roomDetails,
+      roomDetails: roomRows.map((r) => ({
+        roomNo: r.roomNo || 'Unassigned',
+        roomId: r.roomId || null,
+        categoryId: r.categoryId,
+        rate: toNum(r.rate),
+        adults: r.adults,
+        children: r.children,
+        mealPlan: r.mealPlan,
+      })),
     });
 
     if (selectedGuest?.id) {
@@ -1006,6 +1083,20 @@ export const NewReservationWizard = ({
     const recipientEmail = emailDelivery?.recipientEmail || email.trim();
     const isMultiRoom = success.length > 1;
 
+    // Authoritative totals from success / created reservation objects
+    const successTotalAmount = success.reduce((sum, s) => {
+      const inv = toNum((s as any).invoice_total);
+      if (inv > 0) return sum + inv;
+      const r = toNum((s as any).rate);
+      return sum + (r > 0 ? r * nights : 0);
+    }, 0) || grandTotal;
+
+    const successAdvancePaid = success.reduce((sum, s) => {
+      return sum + toNum((s as any).advance_paid);
+    }, 0) || effectiveAdvancePaid;
+
+    const successBalanceDue = Math.max(0, successTotalAmount - successAdvancePaid);
+
     return (
       <>
         <CelebrationBurst active={true} durationMs={5000} />
@@ -1063,9 +1154,9 @@ export const NewReservationWizard = ({
                 <SRow label="Mobile" value={phone ? `${countryCode} ${phone}` : '—'} />
                 <SRow label="Dates" value={`${checkIn} → ${checkOut} (${nights} Night${nights > 1 ? 's' : ''})`} />
                 <SRow label="Allocated Rooms" value={roomRows.map((r, i) => `${r.categoryName}${r.roomNo !== 'Unassigned' ? ` (#${r.roomNo})` : ''}`).join(', ')} bold color="blue" />
-                <SRow label="Total Amount" value={`₹${fmtInt(grandTotal)}`} bold />
-                <SRow label="Advance Paid" value={`₹${fmtInt(effectiveAdvancePaid)}`} color="emerald" bold />
-                <SRow label="Balance Due" value={`₹${fmtInt(balanceDue)}`} color={balanceDue > 0 ? 'amber' : 'slate'} bold />
+                <SRow label="Total Amount" value={`₹${fmtInt(successTotalAmount)}`} bold />
+                <SRow label="Advance Paid" value={`₹${fmtInt(successAdvancePaid)}`} color="emerald" bold />
+                <SRow label="Balance Due" value={`₹${fmtInt(successBalanceDue)}`} color={successBalanceDue > 0 ? 'amber' : 'slate'} bold />
               </div>
 
               {/* Required 6 Action Buttons */}
@@ -1272,8 +1363,9 @@ export const NewReservationWizard = ({
                       <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3">
                         <label className="block text-xs font-bold text-slate-700 mb-2">Number of Rooms</label>
                         <div className="flex items-center justify-between">
-                          <button type="button" onClick={() => setNumRooms(Math.max(1, numRooms - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                          <button type="button" onClick={() => setNumRooms(Math.max(0, numRooms - 1))}
+                            disabled={numRooms <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{numRooms}</span>
@@ -1288,8 +1380,9 @@ export const NewReservationWizard = ({
                       <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3">
                         <label className="block text-xs font-bold text-slate-700 mb-2">Adults</label>
                         <div className="flex items-center justify-between">
-                          <button type="button" onClick={() => setAdults(Math.max(1, adults - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                          <button type="button" onClick={() => setAdults(Math.max(0, adults - 1))}
+                            disabled={adults <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{adults}</span>
@@ -1305,7 +1398,8 @@ export const NewReservationWizard = ({
                         <label className="block text-xs font-bold text-slate-700 mb-2">Children</label>
                         <div className="flex items-center justify-between">
                           <button type="button" onClick={() => setChildren(Math.max(0, children - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                            disabled={children <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{children}</span>
@@ -1404,8 +1498,14 @@ export const NewReservationWizard = ({
 
                       {/* Room Categories Grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {categoryAvailability.map(({ category, availableRooms }) => {
+                        {categoryAvailability.map(({ category, availableRooms, catRooms }) => {
                           const selectedCount = categoryQuantities[category.id] || 0;
+                          const displayTariff = toNum(category.default_tariff) > 0
+                            ? toNum(category.default_tariff)
+                            : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
+                            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+                            : (toNum((settings as any)?.default_room_tariff) || 0);
+
                           return (
                             <div key={category.id}
                               className={`p-4 rounded-2xl border transition-all ${
@@ -1427,7 +1527,7 @@ export const NewReservationWizard = ({
                                   </div>
                                 </div>
                                 <div className="text-right">
-                                  <span className="text-xs font-black text-indigo-700">₹{fmtInt(category.default_tariff)}</span>
+                                  <span className="text-xs font-black text-indigo-700">₹{fmtInt(displayTariff)}</span>
                                   <span className="block text-[10px] text-slate-400 font-medium">/ night</span>
                                 </div>
                               </div>
@@ -1445,7 +1545,8 @@ export const NewReservationWizard = ({
                                   <span className="w-6 text-center text-xs font-black text-slate-900">{selectedCount}</span>
                                   <button type="button"
                                     onClick={() => updateCategoryQuantity(category.id, selectedCount + 1)}
-                                    className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center hover:bg-indigo-100 transition cursor-pointer">
+                                    disabled={availableRooms > 0 && selectedCount >= availableRooms}
+                                    className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center hover:bg-indigo-100 disabled:opacity-40 transition cursor-pointer">
                                     <Plus className="w-3.5 h-3.5 text-indigo-700" />
                                   </button>
                                 </div>
@@ -1564,8 +1665,8 @@ export const NewReservationWizard = ({
                                   <div>
                                     <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Adults</label>
                                     <input
-                                      type="number" min={1} max={10} value={row.adults}
-                                      onChange={(e) => updateRoomRow(row.uid, { adults: Math.max(1, Number(e.target.value)) })}
+                                      type="number" min={0} max={10} value={row.adults}
+                                      onChange={(e) => updateRoomRow(row.uid, { adults: Math.max(0, Number(e.target.value)) })}
                                       className="w-12 px-2 py-1 text-xs font-bold text-center bg-white border border-slate-200 rounded-lg"
                                     />
                                   </div>
@@ -1774,27 +1875,55 @@ export const NewReservationWizard = ({
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="block text-xs font-bold text-slate-700">Booking Source</label>
-                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
                             Category: {sourceCat}
                           </span>
                         </div>
-                        <input
-                          list="wiz-sources-list"
-                          value={bookingSource}
-                          onChange={(e) => handleBookingSourceChange(e.target.value)}
-                          placeholder="e.g. Direct, MakeMyTrip, Agoda"
+                        <select
+                          value={isCustomSource ? '__CUSTOM__' : bookingSource}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val === '__CUSTOM__') {
+                              setIsCustomSource(true);
+                            } else {
+                              setIsCustomSource(false);
+                              handleBookingSourceChange(val);
+                            }
+                          }}
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
-                        />
-                        <datalist id="wiz-sources-list">
-                          {compatibleSources.map((s) => <option key={s} value={s} />)}
-                        </datalist>
+                        >
+                          {compatibleSources.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                          <option value="__CUSTOM__">+ Other / Custom Source...</option>
+                        </select>
+
+                        {isCustomSource && (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={customSourceName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomSourceName(val);
+                              handleBookingSourceChange(val);
+                            }}
+                            placeholder="Type custom booking source..."
+                            className="mt-2 w-full px-3.5 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+                          />
+                        )}
                       </div>
 
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Source Type</label>
                         <select
                           value={sourceType}
-                          onChange={(e) => handleSourceTypeChange(e.target.value as SourceType)}
+                          onChange={(e) => {
+                            const newType = e.target.value as SourceType;
+                            handleSourceTypeChange(newType);
+                            setIsCustomSource(false);
+                            setCustomSourceName('');
+                          }}
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                         >
                           {ALL_SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}

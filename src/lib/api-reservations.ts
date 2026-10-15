@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
-import { toNum, calcStayNights, isStayOverlapping } from './calc';
+import { toNum, calcStayNights, isStayOverlapping, calcGstFull } from './calc';
 import { dispatchChannelEvent } from './api-channel';
 import { apiFetch } from './api-fetch';
 import type { RoomChartEntry } from './types';
@@ -1240,11 +1240,25 @@ export const extendReservation = async (params: {
     throw new Error('Room is not available for the extended date range (conflict detected).');
   }
 
+  const newNights = calcStayNights(res.check_in_date, newCheckOut);
+  const rate = toNum(res.rate);
+  const newSubtotal = rate * newNights;
+  const discount = toNum(res.discount);
+  const netAmount = Math.max(0, newSubtotal - discount);
+  const { taxable: newTaxable, gst: newGst, invoiceTotal: newInvoiceTotal } = calcGstFull(
+    netAmount,
+    (res.gst_type as any) || 'No Scope',
+    (res.gst_slab as any) || 0
+  );
+
   // Update reservations (do NOT pass 'nights' because it is PostgreSQL GENERATED ALWAYS AS STORED column)
   const { data: updated, error } = await supabase
     .from('reservations')
     .update({
       check_out_date: newCheckOut,
+      taxable_amount: newTaxable,
+      gst_amount: newGst,
+      invoice_total: newInvoiceTotal,
       updated_at: new Date().toISOString(),
     })
     .eq('id', reservationId)
@@ -1255,13 +1269,13 @@ export const extendReservation = async (params: {
   if (res.status === 'checked_in') {
     try {
       const hotelId = getCurrentHotelId();
-      const newNights = calcStayNights(res.check_in_date, newCheckOut);
 
       await supabase
         .from('room_chart_entries')
         .update({
           departure: newCheckOut,
           nights: newNights,
+          total: newInvoiceTotal,
         })
         .eq('hotel_id', hotelId)
         .eq('room_no', res.room_no)

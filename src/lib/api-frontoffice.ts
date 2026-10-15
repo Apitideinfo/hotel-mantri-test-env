@@ -520,7 +520,8 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
   }
 
   // Calculate balance
-  const totalReceived = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const splitReceived = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const totalReceived = Math.max(toNum(entry.pay_advance), splitReceived);
   const extraCharges = await getFolioCharges(params.entryId);
   const extraTotal = extraCharges.reduce((s, c) => s + toNum(c.amount) * toNum(c.quantity), 0);
   const grandTotal = toNum(entry.invoice_total) + extraTotal;
@@ -784,7 +785,8 @@ export const extendStay = async (params: {
   const afterDiscount = Math.max(0, newSubtotal - 0);
   const { taxable, gst, invoiceTotal } = calcGstFull(afterDiscount, entry.gst_type, entry.gst_slab);
 
-  const totalReceived = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const splitReceived = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const totalReceived = Math.max(toNum(entry.pay_advance), splitReceived);
   const newBalance = Math.max(0, invoiceTotal - totalReceived);
 
   const { data: updated, error } = await supabase

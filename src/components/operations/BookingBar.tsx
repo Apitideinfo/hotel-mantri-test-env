@@ -15,6 +15,13 @@ interface BookingBarProps {
   onClick: () => void;
   isStart?: boolean;
   isEnd?: boolean;
+  isFirstVisibleCol?: boolean;
+  isLastVisibleCol?: boolean;
+  isGroup?: boolean;
+  isGroupPrimary?: boolean;
+  primaryRoomNo?: string;
+  groupTotalDue?: number;
+  groupTotalTariff?: number;
   isStretching?: boolean;
   isMoving?: boolean;
   onMouseDownMove?: (e: React.MouseEvent) => void;
@@ -174,6 +181,13 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   onClick,
   isStart = false,
   isEnd = false,
+  isFirstVisibleCol = false,
+  isLastVisibleCol = false,
+  isGroup = false,
+  isGroupPrimary = false,
+  primaryRoomNo,
+  groupTotalDue,
+  groupTotalTariff,
   isStretching = false,
   isMoving = false,
   onMouseDownMove,
@@ -197,27 +211,60 @@ export const BookingBar: React.FC<BookingBarProps> = ({
 
   const sourceBadge = getSourceBadge(booking.sourceName, booking.sourceCategory);
   const statusCfg = STATUS_CONFIG[booking.status] ?? STATUS_CONFIG.confirmed;
-  const payInfo = PAY_INDICATOR[booking.paymentMode];
   
-  const total = booking.rate * booking.nights;
-  const advance = booking.type === 'reservation' ? toNum((booking.raw as Reservation).advance_paid) : toNum((booking.raw as any).pay_advance);
-  const balance = Math.max(0, total - advance);
+  // Total tariff calculation: dynamically account for stay extension and nights changes
+  const stayRateTotal = booking.rate * booking.nights;
+  const rawInvoiceTotal = booking.type === 'reservation'
+    ? toNum((booking.raw as Reservation).invoice_total)
+    : (toNum((booking.raw as any).invoice_total) || toNum((booking.raw as any).total));
+  const rawNights = toNum((booking.raw as any).nights) || booking.nights;
+
+  // Authoritative total: If nights match raw.nights and rawInvoiceTotal > 0, use rawInvoiceTotal.
+  // If stay was extended (booking.nights > rawNights) or rawInvoiceTotal is 0 or outdated, recalculate dynamically
+  const total = (rawInvoiceTotal > 0 && (rawNights === booking.nights || rawInvoiceTotal >= stayRateTotal))
+    ? rawInvoiceTotal
+    : (stayRateTotal > 0 ? stayRateTotal : rawInvoiceTotal);
+
+  // Advance paid: check advance_paid and all split payment buckets
+  const advance = booking.type === 'reservation'
+    ? Math.max(
+        toNum((booking.raw as Reservation).advance_paid),
+        toNum((booking.raw as any).pay_cash) + toNum((booking.raw as any).pay_upi) + toNum((booking.raw as any).pay_card) + toNum((booking.raw as any).pay_bank)
+      )
+    : Math.max(
+        toNum((booking.raw as any).pay_advance),
+        toNum((booking.raw as any).pay_cash) + toNum((booking.raw as any).pay_upi) + toNum((booking.raw as any).pay_card) + toNum((booking.raw as any).pay_bank)
+      );
+
+  const singleBalance = Math.max(0, total - advance);
+
+  // Group-aware balance: If it's a multi-room booking, evaluate against group total
+  const effectiveDue = isGroup
+    ? (groupTotalDue !== undefined ? groupTotalDue : singleBalance)
+    : singleBalance;
+  const isPaid = effectiveDue < 1.0;
 
   const canEdit = booking.status !== 'cancelled' && booking.status !== 'no_show';
   const canExtend = canEdit && booking.status !== 'checked_out';
 
   const isSingleDay = Boolean(isStart && isEnd);
-  const isMultiDay = !isSingleDay;
   const initials = getInitials(booking.guestName);
 
-  // Determine seamless multi-day spanning styles
-  const cardShapeClasses = isSingleDay
+  // Boundary calculations: prevent horizontal margin bleed under sticky room column or beyond table right boundary
+  const hasLeftOverlap = !isStart && !isFirstVisibleCol;
+  const hasRightOverlap = !isEnd && !isLastVisibleCol;
+
+  const cardShapeClasses = (!hasLeftOverlap && !hasRightOverlap)
     ? 'rounded-xl p-1.5'
-    : isStart && !isEnd
+    : (!hasLeftOverlap && hasRightOverlap)
     ? 'rounded-l-xl rounded-r-none border-r-0 -mr-[9px] z-[2] p-1.5 pr-2'
-    : !isStart && !isEnd
-    ? 'rounded-none border-x-0 -mx-[9px] z-[2] p-1.5 px-2'
-    : 'rounded-r-xl rounded-l-none border-l-0 -ml-[9px] z-[2] p-1.5 pl-2';
+    : (hasLeftOverlap && !hasRightOverlap)
+    ? 'rounded-r-xl rounded-l-none border-l-0 -ml-[9px] z-[2] p-1.5 pl-2'
+    : 'rounded-none border-x-0 -mx-[9px] z-[2] p-1.5 px-2';
+
+  const tooltipTitle = isGroup
+    ? `${booking.guestName || 'Guest'} · Room ${booking.roomNo} · Group Booking · Total ₹${fmtInt(groupTotalTariff || total)} · ${isPaid ? 'Fully Paid' : isGroupPrimary ? `Group Due ₹${fmtInt(effectiveDue)}` : `Due ₹${fmtInt(effectiveDue)} on Rm ${primaryRoomNo || booking.roomNo}`}`
+    : `${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ${booking.nights} Night${booking.nights > 1 ? 's' : ''} (₹${fmtInt(total)}) · ${statusCfg.statusLabel}${isPaid ? ' · Fully Settled' : ` · Due ₹${fmtInt(effectiveDue)}`}`;
 
   return (
     <div
@@ -225,7 +272,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
         isMoving
           ? 'opacity-40 scale-95 ring-2 ring-indigo-500 rounded-xl'
           : isStretching
-          ? 'opacity-50 ring-2 ring-emerald-500 rounded-xl'
+          ? 'opacity-70'
           : ''
       }`}
     >
@@ -236,11 +283,11 @@ export const BookingBar: React.FC<BookingBarProps> = ({
             onMouseDownMove(e);
           }
         }}
-        title={`${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ${booking.nights} Night${booking.nights > 1 ? 's' : ''} (₹${fmtInt(total)}) · ${statusCfg.statusLabel}${balance >= 1.0 ? ` · Due ₹${fmtInt(balance)}` : ' · Fully Settled'}\n(Drag card to move room/dates, drag right edge to extend stay)`}
-        className={`w-full min-h-[56px] flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
+        title={`${tooltipTitle}\n(Drag card to move room/dates, drag right edge to extend stay)`}
+        className={`w-full h-[56px] min-h-[56px] max-h-[56px] overflow-hidden flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
       >
-        {/* Source / Status Left Ribbon (Only on Start or Single Day) */}
-        {(isStart || isSingleDay) && (
+        {/* Source / Status Left Ribbon (On Start, Single Day, or Left Boundary of continuing stay) */}
+        {(isStart || isFirstVisibleCol || isSingleDay) && (
           <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-xl ${sourceBadge.railColor}`} />
         )}
 
@@ -288,34 +335,54 @@ export const BookingBar: React.FC<BookingBarProps> = ({
                   <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded border border-purple-300 text-[8.5px] shadow-2xs">
                     COMP
                   </span>
-                ) : balance >= 1.0 ? (
-                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
-                    Due ₹{fmtInt(balance)}
+                ) : isGroup ? (
+                  isPaid ? (
+                    <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                      <CheckCircle2 className="w-2 h-2" /> Paid
+                    </span>
+                  ) : isGroupPrimary ? (
+                    <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                      Due ₹{fmtInt(effectiveDue)}
+                    </span>
+                  ) : (
+                    <span className="text-indigo-700 font-black bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[8px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group payment tracked on Room ${primaryRoomNo || 'primary'}`}>
+                      Grp · Rm {primaryRoomNo || '1'}
+                    </span>
+                  )
+                ) : isPaid ? (
+                  <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                    <CheckCircle2 className="w-2 h-2" /> Paid
                   </span>
                 ) : (
-                  <span className="text-slate-900 font-black text-[10.5px] tracking-tight whitespace-nowrap">
-                    ₹{fmtInt(booking.rate)}
+                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                    Due ₹{fmtInt(effectiveDue)}
                   </span>
                 )}
               </div>
             </div>
           </div>
-        ) : isStart && !isEnd ? (
-          /* ── CASE B: Multi-Day Start Day (Spacious & Clean) ── */
+        ) : (isStart || isFirstVisibleCol) && !isEnd ? (
+          /* ── CASE B: Multi-Day Start Day or First Visible Segment ── */
           <div className="pl-1 pr-1.5 flex flex-col justify-between h-full gap-1">
-            {/* Top Row: Avatar Initial + Full Guest Name + Stay Length Badge */}
+            {/* Top Row: Avatar Initial + Full Guest Name + Stay Length Badge / In-House */}
             <div className="flex items-center gap-1.5 min-w-0">
               <div className={`w-4 h-4 rounded-md flex items-center justify-center text-[8.5px] font-black shrink-0 shadow-2xs ${statusCfg.avatarBg}`}>
                 {initials}
               </div>
 
-              <span className={`font-black text-[11.5px] truncate tracking-tight flex-1 min-w-0 group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
+              <span className={`font-black text-[11px] truncate tracking-tight flex-1 min-w-0 group-hover/bar:text-brand-700 transition-colors ${statusCfg.text}`}>
                 {booking.guestName || 'Guest'}
               </span>
 
-              <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded shrink-0 shadow-2xs" title={`${booking.nights} Nights Stay`}>
-                {booking.nights}N
-              </span>
+              {isStart ? (
+                <span className="text-[8px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded shrink-0 shadow-2xs" title={`${booking.nights} Nights Stay`}>
+                  {booking.nights}N
+                </span>
+              ) : (
+                <span className="text-[7.5px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded shrink-0 shadow-2xs" title={`In-House since ${booking.checkIn}`}>
+                  In-House
+                </span>
+              )}
 
               <button
                 type="button"
@@ -351,18 +418,18 @@ export const BookingBar: React.FC<BookingBarProps> = ({
           </div>
         ) : !isStart && !isEnd ? (
           /* ── CASE C: Multi-Day Intermediate Bridge ── */
-          <div className="flex flex-col justify-between h-full gap-1 px-1.5">
-            <div className="flex items-center justify-between gap-1 pt-0.5">
-              <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider">
+          <div className="flex flex-col justify-between h-full gap-1 px-1.5 overflow-hidden">
+            <div className="flex items-center justify-between gap-1 pt-0.5 min-w-0">
+              <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap truncate">
                 Stay Active
               </span>
-              <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/80 shrink-0 shadow-2xs">
+              <span className="text-[7.5px] font-black text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/80 shrink-0 shadow-2xs whitespace-nowrap">
                 In-House
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400 pb-0.5">
+            <div className="flex items-center gap-1 text-[8.5px] font-bold text-slate-400 pb-0.5 min-w-0">
               <div className="h-px flex-1 bg-slate-300/70" />
-              <span className="text-[8.5px] tracking-widest text-slate-400 font-black">••••</span>
+              <span className="text-[8px] tracking-widest text-slate-400 font-black shrink-0">••••</span>
               <div className="h-px flex-1 bg-slate-300/70" />
             </div>
           </div>
@@ -389,13 +456,27 @@ export const BookingBar: React.FC<BookingBarProps> = ({
                 <span className="text-purple-900 font-black bg-purple-100 px-1.5 py-0.2 rounded border border-purple-300 text-[8px] shadow-2xs">
                   COMP
                 </span>
-              ) : balance >= 1.0 ? (
-                <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
-                  Due ₹{fmtInt(balance)}
-                </span>
-              ) : (
+              ) : isGroup ? (
+                isPaid ? (
+                  <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                    <CheckCircle2 className="w-2 h-2" /> Paid
+                  </span>
+                ) : isGroupPrimary ? (
+                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                    Due ₹{fmtInt(effectiveDue)}
+                  </span>
+                ) : (
+                  <span className="text-indigo-700 font-black bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[8px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group payment due ₹${fmtInt(effectiveDue)} tracked on Room ${primaryRoomNo || 'primary'}`}>
+                    Grp · Rm {primaryRoomNo || '1'}
+                  </span>
+                )
+              ) : isPaid ? (
                 <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
                   <CheckCircle2 className="w-2 h-2" /> Paid
+                </span>
+              ) : (
+                <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
+                  Due ₹{fmtInt(effectiveDue)}
                 </span>
               )}
             </div>
@@ -515,7 +596,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
       )}
 
       {/* Right interactive handle for stay extension / check-out date */}
-      {isEnd && onMouseDownStretchRight && canExtend && (
+      {(isEnd || isLastVisibleCol) && onMouseDownStretchRight && canExtend && (
         <div
           onMouseDown={(e) => {
             e.stopPropagation();
