@@ -112,9 +112,15 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
   totalFilteredCount,
   totalBookingsCount,
 }) => {
-  const total = selectedBooking ? selectedBooking.rate * selectedBooking.nights : 0;
-  const advance = selectedBooking && selectedBooking.type === 'reservation'
-    ? toNum((selectedBooking.raw as any).advance_paid)
+  const total = selectedBooking
+    ? (toNum((selectedBooking.raw as any)?.invoice_total) || toNum((selectedBooking.raw as any)?.total) || (selectedBooking.rate * selectedBooking.nights))
+    : 0;
+  const advance = selectedBooking
+    ? Math.max(
+        toNum((selectedBooking.raw as any)?.advance_paid),
+        toNum((selectedBooking.raw as any)?.pay_advance),
+        toNum((selectedBooking.raw as any)?.pay_cash) + toNum((selectedBooking.raw as any)?.pay_upi) + toNum((selectedBooking.raw as any)?.pay_card) + toNum((selectedBooking.raw as any)?.pay_bank)
+      )
     : 0;
   const balance = Math.max(0, total - advance);
 

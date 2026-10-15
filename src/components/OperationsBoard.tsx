@@ -215,7 +215,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     [timelineStart, daysToShow],
   );
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (overrideCenterDate?: string) => {
     if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
     try {
       setLoading(true);
@@ -233,14 +233,16 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       setRooms(rms);
       setHotSeasons(hs);
 
-      const rangeStart = timelineDates[0];
-      const rangeEnd = timelineDates[timelineDates.length - 1];
+      const effectiveCenter = overrideCenterDate || centerDate;
+      const effectiveDates = Array.from({ length: daysToShow }, (_, i) => addDays(effectiveCenter, i));
+      const rangeStart = effectiveDates[0];
+      const rangeEnd = effectiveDates[effectiveDates.length - 1];
       const rangeEndInclusive = addDays(rangeEnd, 1);
 
       const [es, resvs, futCount, matrixData] = await Promise.all([
         getRoomChartForDateRange(rangeStart, rangeEndInclusive),
         getReservationsForDateRange(rangeStart, rangeEndInclusive),
-        getFutureReservationsCount(centerDate).catch(() => 0),
+        getFutureReservationsCount(effectiveCenter).catch(() => 0),
         getAuthoritativeAvailabilityMatrix(rangeStart, rangeEnd).catch((err) => {
           console.warn('[OperationsBoard] matrix fetch failed:', err);
           return { matrix: [] as AuthoritativeMatrixItem[], source: 'supabase' as const };
@@ -570,6 +572,73 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     return map;
   }, [filteredBookings]);
 
+  // Multi-room group aggregation for accurate collective due/balance display
+  const groupInfoMap = useMemo(() => {
+    const map = new Map<string, {
+      isGroup: boolean;
+      isGroupPrimary: boolean;
+      primaryRoomNo: string;
+      groupTotalDue: number;
+      groupTotalTariff: number;
+      groupRoomsCount: number;
+    }>();
+
+    const groups = new Map<string, BoardBooking[]>();
+    for (const b of allBookings) {
+      if (b.status === 'cancelled' || b.status === 'no_show') continue;
+      const gid = (b.rawReservation?.group_id || (b.raw as any)?.group_id || (b.rawEntry as any)?.group_id || null);
+      if (gid && gid.trim() !== '') {
+        const list = groups.get(gid) || [];
+        list.push(b);
+        groups.set(gid, list);
+      }
+    }
+
+    for (const [, bList] of groups.entries()) {
+      if (bList.length <= 1) continue;
+
+      const sorted = [...bList].sort((a, b) => compareRoomNo(a.roomNo, b.roomNo));
+      const primary = sorted[0];
+
+      let totalTariff = 0;
+      let totalPaid = 0;
+
+      for (const b of sorted) {
+        const bTariff = b.type === 'reservation'
+          ? (toNum((b.raw as Reservation).invoice_total) || (b.rate * b.nights))
+          : (toNum((b.raw as RoomChartEntry).invoice_total) || toNum((b.raw as RoomChartEntry).total) || (b.rate * b.nights));
+
+        const bPaid = b.type === 'reservation'
+          ? Math.max(
+              toNum((b.raw as Reservation).advance_paid),
+              toNum((b.raw as any).pay_cash) + toNum((b.raw as any).pay_upi) + toNum((b.raw as any).pay_card) + toNum((b.raw as any).pay_bank)
+            )
+          : Math.max(
+              toNum((b.raw as RoomChartEntry).pay_advance),
+              toNum((b.raw as RoomChartEntry).pay_cash) + toNum((b.raw as RoomChartEntry).pay_upi) + toNum((b.raw as RoomChartEntry).pay_card) + toNum((b.raw as RoomChartEntry).pay_bank)
+            );
+
+        totalTariff += bTariff;
+        totalPaid += bPaid;
+      }
+
+      const totalDue = Math.max(0, totalTariff - totalPaid);
+
+      for (const b of sorted) {
+        map.set(b.id, {
+          isGroup: true,
+          isGroupPrimary: b.id === primary.id,
+          primaryRoomNo: primary.roomNo,
+          groupTotalDue: totalDue,
+          groupTotalTariff: totalTariff,
+          groupRoomsCount: sorted.length,
+        });
+      }
+    }
+
+    return map;
+  }, [allBookings]);
+
   const todayStats: TodayStats = useMemo(() => {
     const selectedDate = centerDate;
     const occupiedRoomNos = new Set<string>();
@@ -695,6 +764,9 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         const visibleEnd = timelineDates[timelineDates.length - 1];
         if (firstCheckIn < visibleStart || firstCheckIn > visibleEnd) {
           setCenterDate(firstCheckIn);
+          await load(firstCheckIn);
+          onSaved();
+          return created;
         }
       }
       
@@ -1005,7 +1077,10 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         const entry = (booking.rawEntry || booking.raw) as RoomChartEntry;
         const subtotal = booking.rate * newNights;
         const { taxable, gst, invoiceTotal } = calcGstFull(subtotal, entry.gst_type, entry.gst_slab);
-        const totalRec = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+        const totalRec = Math.max(
+          toNum(entry.pay_advance),
+          toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
+        );
         await supabase
           .from('room_chart_entries')
           .update({
@@ -1095,7 +1170,10 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
         const entry = (booking.rawEntry || booking.raw) as RoomChartEntry;
         const subtotal = effectiveRate * nights;
         const { taxable, gst, invoiceTotal } = calcGstFull(subtotal, entry.gst_type, entry.gst_slab);
-        const totalRec = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+        const totalRec = Math.max(
+          toNum(entry.pay_advance),
+          toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
+        );
 
         if (entry.room_no.trim().toLowerCase() !== targetRoomNo.trim().toLowerCase()) {
           await shiftRoom({
@@ -1572,7 +1650,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
             {/* Unassigned / Pending Allocation Row */}
             {unassignedBookings.length > 0 && (
               <div className="border-b-2 border-amber-300 bg-amber-50/20">
-                <div className="flex border-b border-amber-200 bg-amber-100/70 sticky left-0 z-[6]">
+                <div className="flex border-b border-amber-200 bg-amber-100/70">
                   <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-amber-200 bg-amber-100/90 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                     <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
                       UNASSIGNED
@@ -1616,20 +1694,30 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                           isToday ? 'bg-amber-50/50' : ''
                         }`}
                       >
-                        {uniqueUnassignedBookings.map((b) => (
-                          <BookingBar
-                            key={`${b.type}_${b.id}_unassigned_${d}`}
-                            booking={b}
-                            onClick={() => setSelectedBooking(b)}
-                            isStart={b.checkIn === d}
-                            isEnd={addDays(b.checkOut, -1) === d}
-                            isMoving={movingBooking?.id === b.id}
-                            onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
-                            onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
-                            onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
-                            onQuickAction={handleBookingQuickAction}
-                          />
-                        ))}
+                        {uniqueUnassignedBookings.map((b) => {
+                          const groupInfo = groupInfoMap.get(b.id);
+                          return (
+                            <BookingBar
+                              key={`${b.type}_${b.id}_unassigned_${d}`}
+                              booking={b}
+                              onClick={() => setSelectedBooking(b)}
+                              isStart={b.checkIn === d}
+                              isEnd={addDays(b.checkOut, -1) === d}
+                              isFirstVisibleCol={d === timelineDates[0]}
+                              isLastVisibleCol={d === timelineDates[timelineDates.length - 1]}
+                              isGroup={groupInfo?.isGroup}
+                              isGroupPrimary={groupInfo?.isGroupPrimary}
+                              primaryRoomNo={groupInfo?.primaryRoomNo}
+                              groupTotalDue={groupInfo?.groupTotalDue}
+                              groupTotalTariff={groupInfo?.groupTotalTariff}
+                              isMoving={movingBooking?.id === b.id}
+                              onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
+                              onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
+                              onMouseDownStretchLeft={(e) => handleMouseDownStretchLeft(b, d, e)}
+                              onQuickAction={handleBookingQuickAction}
+                            />
+                          );
+                        })}
                       </div>
                     );
                   })}
@@ -1644,7 +1732,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
               return grouped.map((group) => (
                 <div key={group.cat?.id ?? '__uncategorized'}>
                   {/* Category Header Row with Authoritative Availability & Click-to-Edit */}
-                  <div className="flex border-b border-slate-800 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white sticky left-0 z-[6]">
+                  <div className="flex border-b border-slate-800 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white">
                     <div className="w-28 sm:w-36 flex-shrink-0 px-3 py-2 border-r border-slate-800 bg-slate-900 flex items-center justify-between sticky left-0 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.25)]">
                       <span className="text-[11px] font-black text-slate-100 uppercase tracking-wider truncate" title={group.cat?.name ?? 'Uncategorized'}>
                         {group.cat?.name ?? 'Uncategorized'}
@@ -1889,6 +1977,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                     const isEnd = addDays(effectiveCheckOut, -1) === d;
                                     const isStretching = (stretchingBooking?.id === b.id) || (adjustingCheckInBooking?.id === b.id);
                                     const isMoving = movingBooking?.id === b.id;
+                                    const groupInfo = groupInfoMap.get(b.id);
 
                                     return (
                                       <BookingBar 
@@ -1897,6 +1986,13 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                         onClick={() => setSelectedBooking(b)} 
                                         isStart={isStart}
                                         isEnd={isEnd}
+                                        isFirstVisibleCol={d === timelineDates[0]}
+                                        isLastVisibleCol={d === timelineDates[timelineDates.length - 1]}
+                                        isGroup={groupInfo?.isGroup}
+                                        isGroupPrimary={groupInfo?.isGroupPrimary}
+                                        primaryRoomNo={groupInfo?.primaryRoomNo}
+                                        groupTotalDue={groupInfo?.groupTotalDue}
+                                        groupTotalTariff={groupInfo?.groupTotalTariff}
                                         isStretching={isStretching}
                                         isMoving={isMoving}
                                         onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}

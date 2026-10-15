@@ -45,7 +45,8 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
 
   const newSubtotal = toNum(entry.room_rate) * newNights;
   const { invoiceTotal, gst } = calcGstFull(newSubtotal, entry.gst_type, entry.gst_slab);
-  const alreadyReceived = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const splitSum = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const alreadyReceived = Math.max(toNum(entry.pay_advance), splitSum);
   const newBalance = Math.max(0, invoiceTotal - alreadyReceived);
   const extraNights = newNights - currentNights;
   const extraCost = Math.max(0, invoiceTotal - toNum(entry.invoice_total));

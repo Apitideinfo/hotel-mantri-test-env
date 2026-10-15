@@ -86,7 +86,8 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
   const extraTotal = charges.reduce((s, c) => s + toNum(c.amount) * toNum(c.quantity), 0);
   const gstAmount = toNum(entry.gst_amount);
   const grandTotal = toNum(entry.invoice_total) + extraTotal;
-  const received = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const splitSum = toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank);
+  const received = Math.max(toNum(entry.pay_advance), splitSum);
   const balance = Math.max(0, grandTotal - received);
 
   const handlePdf = async () => {

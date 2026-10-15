@@ -108,16 +108,11 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
   const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
   const fullPhone = params.phone.trim() ? `${params.countryCode} ${params.phone.trim()}` : '';
 
-  return cleanRoomNos.map((no, idx) => {
+  // 1. Calculate each room's invoice total first so we can properly allocate payments
+  const roomCalculations = cleanRoomNos.map((no) => {
     const room = params.rooms.find(
       (r) => (r.room_no || '').trim().toLowerCase() === no.toLowerCase()
     );
-    const advancePaid = idx === 0 ? params.totalReceived : 0;
-    const rPayCash = idx === 0 ? toNum(params.payCash) : 0;
-    const rPayUpi = idx === 0 ? toNum(params.payUpi) : 0;
-    const rPayCard = idx === 0 ? toNum(params.payCard) : 0;
-    const rPayBank = idx === 0 ? toNum(params.payBank) : 0;
-
     const roomCat = params.categories.find((c) => c.id === room?.category_id);
     const fallbackTariff =
       toNum(params.rate) > 0
@@ -138,8 +133,59 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
     } = calcGstFull(roomAfterDiscount, params.gstType, params.gstSlab);
 
     return {
-      room_id: room?.id ?? null,
-      room_no: room?.room_no?.trim() || no,
+      room,
+      no,
+      individualRate,
+      roomDiscount,
+      rTaxable,
+      rGst,
+      rInvoiceTotal,
+    };
+  });
+
+  const totalGroupInvoice = roomCalculations.reduce((sum, r) => sum + r.rInvoiceTotal, 0);
+  const totalReceived = toNum(params.totalReceived);
+  const isFullyPaid = totalGroupInvoice > 0 && totalReceived >= (totalGroupInvoice - 0.01);
+
+  // Sequential advance allocation across rooms so each room is marked paid up to its share
+  let remainingAdvanceToAllocate = totalReceived;
+  let remainingCash = toNum(params.payCash);
+  let remainingUpi = toNum(params.payUpi);
+  let remainingCard = toNum(params.payCard);
+  let remainingBank = toNum(params.payBank);
+
+  return roomCalculations.map((calc, idx) => {
+    let advancePaid = 0;
+    let rPayCash = 0;
+    let rPayUpi = 0;
+    let rPayCard = 0;
+    let rPayBank = 0;
+
+    if (isFullyPaid) {
+      // If the group is fully paid, mark every room's advance equal to its invoice total
+      advancePaid = calc.rInvoiceTotal;
+      const ratio = totalGroupInvoice > 0 ? calc.rInvoiceTotal / totalGroupInvoice : 1 / cleanRoomNos.length;
+      rPayCash = idx === cleanRoomNos.length - 1 ? remainingCash : Math.round(toNum(params.payCash) * ratio * 100) / 100;
+      rPayUpi = idx === cleanRoomNos.length - 1 ? remainingUpi : Math.round(toNum(params.payUpi) * ratio * 100) / 100;
+      rPayCard = idx === cleanRoomNos.length - 1 ? remainingCard : Math.round(toNum(params.payCard) * ratio * 100) / 100;
+      rPayBank = idx === cleanRoomNos.length - 1 ? remainingBank : Math.round(toNum(params.payBank) * ratio * 100) / 100;
+      remainingCash -= rPayCash;
+      remainingUpi -= rPayUpi;
+      remainingCard -= rPayCard;
+      remainingBank -= rPayBank;
+    } else {
+      // Partial payment or single room: allocate to primary room first, or sequentially
+      // For primary room (idx === 0), it records totalReceived so group tracking reflects total paid
+      advancePaid = idx === 0 ? totalReceived : 0;
+      rPayCash = idx === 0 ? toNum(params.payCash) : 0;
+      rPayUpi = idx === 0 ? toNum(params.payUpi) : 0;
+      rPayCard = idx === 0 ? toNum(params.payCard) : 0;
+      rPayBank = idx === 0 ? toNum(params.payBank) : 0;
+    }
+
+    return {
+      room_id: calc.room?.id ?? null,
+      room_no: calc.room?.room_no?.trim() || calc.no,
       guest_name: params.guestName.trim(),
       guest_phone: fullPhone,
       guest_email: params.email.trim(),
@@ -148,7 +194,7 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
       company_gst: params.companyGst.trim(),
       check_in_date: params.checkIn,
       check_out_date: params.checkOut,
-      rate: individualRate,
+      rate: calc.individualRate,
       source_category: params.sourceCat,
       source_name: params.sourceName.trim(),
       payment_mode: params.payMode,
@@ -158,13 +204,13 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
       pay_card: rPayCard,
       pay_bank: rPayBank,
       payment_ref: params.paymentRef.trim(),
-      discount: roomDiscount,
+      discount: calc.roomDiscount,
       meal_plan: params.mealPlan,
       gst_type: params.gstType,
       gst_slab: params.gstSlab,
-      gst_amount: rGst,
-      taxable_amount: rTaxable,
-      invoice_total: rInvoiceTotal,
+      gst_amount: calc.rGst,
+      taxable_amount: calc.rTaxable,
+      invoice_total: calc.rInvoiceTotal,
       adults: toNum(params.adults),
       children: toNum(params.children),
       remarks: params.remarks.trim(),

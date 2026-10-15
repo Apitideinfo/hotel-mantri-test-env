@@ -385,7 +385,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         return sum + val;
       }, 0);
 
-      const totalAdvance = resList.reduce((sum, r) => sum + (r.advance_paid || 0), 0);
+      const totalAdvance = resList.reduce((sum, r) => {
+        const adv = Math.max(
+          toNum(r.advance_paid),
+          toNum((r as any).pay_cash) + toNum((r as any).pay_upi) + toNum((r as any).pay_card) + toNum((r as any).pay_bank)
+        );
+        return sum + adv;
+      }, 0);
       const totalBalance = Math.max(0, totalTariff - totalAdvance);
 
       let compositeStatus: ReservationStatus = primary.status;

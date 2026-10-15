@@ -170,9 +170,12 @@ export const BookingDetailPanel = ({
   const [editSource, setEditSource] = useState(booking.sourceName);
   const [editSourceCat, setEditSourceCat] = useState(booking.sourceCategory);
   const [editPayMode, setEditPayMode] = useState(booking.paymentMode);
-  const [editRemarks, setEditRemarks] = useState(booking.remarks);
+  const entryPaid = entry ? Math.max(
+    toNum(entry.pay_advance),
+    toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
+  ) : 0;
   const [editAdvance, setEditAdvance] = useState(
-    isReservation ? toNum(reservation?.advance_paid) : 0,
+    isReservation ? toNum(reservation?.advance_paid) : entryPaid,
   );
 
   const editNights = useMemo(() => {
@@ -180,7 +183,7 @@ export const BookingDetailPanel = ({
   }, [editCheckIn, editCheckOut]);
 
   const editTotal = editRate * editNights;
-  const editBalance = isReservation ? editTotal - toNum(editAdvance) : Math.max(0, editTotal - 0);
+  const editBalance = Math.max(0, editTotal - toNum(editAdvance));
 
   const handleSave = () => {
     if (isReservation && reservation) {
@@ -602,17 +605,26 @@ const ViewFields = ({
       }, 0)
     : total;
 
+  const entryAdvance = entry
+    ? Math.max(
+        toNum(entry.pay_advance),
+        toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
+      )
+    : 0;
+
   const groupTotalAdvance = isGroup
-    ? groupReservations.reduce((sum, r) => sum + toNum(r.advance_paid), 0)
-    : (entry
-      ? toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
-      : reservation ? toNum(reservation.advance_paid) : 0);
+    ? groupReservations.reduce((sum, r) => {
+        const rAdv = Math.max(
+          toNum(r.advance_paid),
+          toNum((r as any).pay_cash) + toNum((r as any).pay_upi) + toNum((r as any).pay_card) + toNum((r as any).pay_bank)
+        );
+        return sum + rAdv;
+      }, 0)
+    : (entry ? entryAdvance : reservation ? toNum(reservation.advance_paid) : 0);
 
   const groupTotalBalance = Math.max(0, groupTotalTariff - groupTotalAdvance);
 
-  const advance = entry
-    ? toNum(entry.pay_cash) + toNum(entry.pay_upi) + toNum(entry.pay_card) + toNum(entry.pay_bank)
-    : reservation ? toNum(reservation.advance_paid) : 0;
+  const advance = entry ? entryAdvance : reservation ? toNum(reservation.advance_paid) : 0;
   const balance = Math.max(0, total - advance);
 
   const gstAmount = entry ? toNum(entry.gst_amount) : reservation ? toNum(reservation.gst_amount) : 0;
