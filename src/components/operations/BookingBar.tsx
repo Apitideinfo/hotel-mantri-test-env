@@ -212,10 +212,18 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   const sourceBadge = getSourceBadge(booking.sourceName, booking.sourceCategory);
   const statusCfg = STATUS_CONFIG[booking.status] ?? STATUS_CONFIG.confirmed;
   
-  // Total tariff calculation: check invoice_total first to include taxes/discounts if present
-  const total = booking.type === 'reservation'
-    ? (toNum((booking.raw as Reservation).invoice_total) || (booking.rate * booking.nights))
-    : (toNum((booking.raw as any).invoice_total) || toNum((booking.raw as any).total) || (booking.rate * booking.nights));
+  // Total tariff calculation: dynamically account for stay extension and nights changes
+  const stayRateTotal = booking.rate * booking.nights;
+  const rawInvoiceTotal = booking.type === 'reservation'
+    ? toNum((booking.raw as Reservation).invoice_total)
+    : (toNum((booking.raw as any).invoice_total) || toNum((booking.raw as any).total));
+  const rawNights = toNum((booking.raw as any).nights) || booking.nights;
+
+  // Authoritative total: If nights match raw.nights and rawInvoiceTotal > 0, use rawInvoiceTotal.
+  // If stay was extended (booking.nights > rawNights) or rawInvoiceTotal is 0 or outdated, recalculate dynamically
+  const total = (rawInvoiceTotal > 0 && (rawNights === booking.nights || rawInvoiceTotal >= stayRateTotal))
+    ? rawInvoiceTotal
+    : (stayRateTotal > 0 ? stayRateTotal : rawInvoiceTotal);
 
   // Advance paid: check advance_paid and all split payment buckets
   const advance = booking.type === 'reservation'
@@ -276,7 +284,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
           }
         }}
         title={`${tooltipTitle}\n(Drag card to move room/dates, drag right edge to extend stay)`}
-        className={`w-full min-h-[56px] flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
+        className={`w-full h-[56px] min-h-[56px] max-h-[56px] overflow-hidden flex flex-col justify-between text-left transition-all duration-200 relative group border ${statusCfg.cardBg} cursor-grab active:cursor-grabbing shadow-2xs hover:shadow-md ${statusCfg.border} ${statusCfg.hoverBorder} ${cardShapeClasses}`}
       >
         {/* Source / Status Left Ribbon (On Start, Single Day, or Left Boundary of continuing stay) */}
         {(isStart || isFirstVisibleCol || isSingleDay) && (
@@ -410,18 +418,18 @@ export const BookingBar: React.FC<BookingBarProps> = ({
           </div>
         ) : !isStart && !isEnd ? (
           /* ── CASE C: Multi-Day Intermediate Bridge ── */
-          <div className="flex flex-col justify-between h-full gap-1 px-1.5">
-            <div className="flex items-center justify-between gap-1 pt-0.5">
-              <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider">
+          <div className="flex flex-col justify-between h-full gap-1 px-1.5 overflow-hidden">
+            <div className="flex items-center justify-between gap-1 pt-0.5 min-w-0">
+              <span className="text-[8.5px] font-black text-slate-400 uppercase tracking-wider whitespace-nowrap truncate">
                 Stay Active
               </span>
-              <span className="text-[8px] font-black text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200/80 shrink-0 shadow-2xs">
+              <span className="text-[7.5px] font-black text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/80 shrink-0 shadow-2xs whitespace-nowrap">
                 In-House
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-[8.5px] font-bold text-slate-400 pb-0.5">
+            <div className="flex items-center gap-1 text-[8.5px] font-bold text-slate-400 pb-0.5 min-w-0">
               <div className="h-px flex-1 bg-slate-300/70" />
-              <span className="text-[8.5px] tracking-widest text-slate-400 font-black">••••</span>
+              <span className="text-[8px] tracking-widest text-slate-400 font-black shrink-0">••••</span>
               <div className="h-px flex-1 bg-slate-300/70" />
             </div>
           </div>

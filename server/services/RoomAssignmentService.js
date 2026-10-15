@@ -701,6 +701,34 @@ export const extendReservationStay = async ({
     throw { status: 400, code: 'INVALID_STAY_DATES', message: 'New check-out date must be after check-in date.' };
   }
 
+  // Calculate new stay duration and recalculate invoice total
+  const inD = new Date(current.check_in_date + 'T00:00:00');
+  const outD = new Date(cleanOut + 'T00:00:00');
+  const newNights = Math.max(1, Math.round((outD - inD) / 86400000));
+  const rate = Number(current.rate) || 0;
+  const newSubtotal = rate * newNights;
+  const discount = Number(current.discount) || 0;
+  const netAmount = Math.max(0, newSubtotal - discount);
+
+  let newTaxable = netAmount;
+  let newGst = 0;
+  let newInvoiceTotal = netAmount;
+
+  if (current.gst_type && current.gst_type !== 'No Scope') {
+    const slab = Number(current.gst_slab) || 0;
+    if (slab > 0) {
+      if (current.gst_type === 'Inclusive') {
+        newTaxable = Math.round((netAmount / (1 + slab / 100)) * 100) / 100;
+        newGst = Math.round((netAmount - newTaxable) * 100) / 100;
+        newInvoiceTotal = netAmount;
+      } else {
+        newTaxable = netAmount;
+        newGst = Math.round((netAmount * (slab / 100)) * 100) / 100;
+        newInvoiceTotal = Math.round((newTaxable + newGst) * 100) / 100;
+      }
+    }
+  }
+
   const updated = await updateReservationAtomically({
     hotelId,
     reservationId,
@@ -708,6 +736,9 @@ export const extendReservationStay = async ({
       check_out_date: cleanOut,
       room_no: current.room_no,
       room_id: current.room_id,
+      taxable_amount: newTaxable,
+      gst_amount: newGst,
+      invoice_total: newInvoiceTotal,
     },
     userId,
   });
@@ -715,15 +746,12 @@ export const extendReservationStay = async ({
   // If in-house, also update room_chart_entries
   if (current.status === 'checked_in') {
     try {
-      const inD = new Date(current.check_in_date + 'T00:00:00');
-      const outD = new Date(cleanOut + 'T00:00:00');
-      const newNights = Math.max(1, Math.round((outD - inD) / 86400000));
-
       await supabaseServiceRole
         .from('room_chart_entries')
         .update({
           departure: cleanOut,
           nights: newNights,
+          total: newInvoiceTotal,
           updated_at: new Date().toISOString(),
         })
         .eq('hotel_id', hotelId)

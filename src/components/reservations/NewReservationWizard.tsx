@@ -35,26 +35,66 @@ const STEP_LABELS: Record<WizardStep, { title: string; subtitle: string; icon: t
 };
 
 /* ─── Standard Booking Sources & Source Types ─── */
+export const ALL_LISTED_OTAS = [
+  'Booking.com',
+  'MakeMyTrip',
+  'Agoda',
+  'Goibibo',
+  'Cleartrip',
+  'Airbnb',
+  'Expedia',
+  'Yatra',
+  'EaseMyTrip',
+  'Trip.com',
+  'Travelguru',
+  'HappyEasyGo',
+  'Ixigo',
+  'Hostelworld',
+];
+
 const STANDARD_BOOKING_SOURCES = [
   'Direct',
   'Walk-In',
-  'Booking.com',
-  'MakeMyTrip',
-  'Goibibo',
-  'Agoda',
+  ...ALL_LISTED_OTAS,
   'Agent',
   'Corporate',
 ];
 
 const SOURCE_TYPES = [
+  'OTA',
   'Walk-In',
   'Phone',
   'Website',
   'WhatsApp',
   'Agent',
-  'OTA',
   'Corporate',
 ];
+
+const getSourcesForType = (type: string, hotelSources: CompanySource[]): string[] => {
+  const otaDb = hotelSources.filter(s => s.source_category === 'OTA').map(s => s.name);
+  const corpDb = hotelSources.filter(s => s.source_category === 'Corporate/Agent').map(s => s.name);
+  const directDb = hotelSources.filter(s => s.source_category === 'Direct/Walking').map(s => s.name);
+
+  if (type === 'OTA') {
+    return Array.from(new Set([...ALL_LISTED_OTAS, ...otaDb]));
+  }
+  if (type === 'Corporate') {
+    return Array.from(new Set(['Corporate Direct', 'Company Tie-up', 'Business Booking', ...corpDb]));
+  }
+  if (type === 'Agent') {
+    return Array.from(new Set(['Travel Agent', 'Offline Agent', 'Tour Operator', ...corpDb]));
+  }
+  if (type === 'Phone') {
+    return Array.from(new Set(['Phone Reservation', 'Call Inquiry', 'Direct Phone']));
+  }
+  if (type === 'Website') {
+    return Array.from(new Set(['Direct Website', 'HotelMantri Engine', ...directDb]));
+  }
+  if (type === 'WhatsApp') {
+    return Array.from(new Set(['WhatsApp Direct', 'WhatsApp Business', ...directDb]));
+  }
+  return Array.from(new Set(['Walk-In', 'Front Desk', 'Direct Walking', ...directDb]));
+};
 
 /* ─── Room Item in Selection ─── */
 export interface SelectedRoomRow {
@@ -89,7 +129,7 @@ interface NewReservationWizardProps {
    MAIN WIZARD COMPONENT
    ═══════════════════════════════════════════════════════════════ */
 export const NewReservationWizard = ({
-  rooms, categories, sources, settings: _settings, defaultDate,
+  rooms, categories, sources, settings, defaultDate,
   preselectRoom, preselectCheckIn, preselectCheckOut, initialBookFullHotel,
   saving, onClose, onSave,
 }: NewReservationWizardProps) => {
@@ -404,6 +444,14 @@ export const NewReservationWizard = ({
             alreadyAllocated.add(String(candidate.id).toLowerCase());
           }
 
+          const candidateTariff = toNum(candidate?.default_tariff) > 0
+            ? toNum(candidate?.default_tariff)
+            : toNum(cat?.default_tariff) > 0
+            ? toNum(cat?.default_tariff)
+            : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
+            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+            : (toNum((settings as any)?.default_room_tariff) || 0);
+
           newRows.push({
             uid: crypto.randomUUID(),
             categoryId,
@@ -413,7 +461,7 @@ export const NewReservationWizard = ({
             adults: Math.max(1, adults),
             children: Math.max(0, children),
             mealPlan: globalMealPlan,
-            rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : catTariff,
+            rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : candidateTariff,
           });
         }
         return [...otherRows, ...currentRowsForCat, ...newRows];
@@ -462,6 +510,33 @@ export const NewReservationWizard = ({
   const [bookingSource, setBookingSource] = useState('Direct');
   const [sourceType, setSourceType] = useState('Walk-In');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
+  const [isCustomSource, setIsCustomSource] = useState(false);
+  const [customSourceName, setCustomSourceName] = useState('');
+
+  const activeSourcesList = useMemo(() => {
+    return getSourcesForType(sourceType, sources);
+  }, [sourceType, sources]);
+
+  const handleSourceTypeChange = (newType: string) => {
+    setSourceType(newType);
+    let newCat: SourceCategory = 'Direct/Walking';
+    if (newType === 'OTA') newCat = 'OTA';
+    else if (newType === 'Corporate' || newType === 'Agent') newCat = 'Corporate/Agent';
+    else newCat = 'Direct/Walking';
+    setSourceCat(newCat);
+
+    const available = getSourcesForType(newType, sources);
+    setIsCustomSource(false);
+    setCustomSourceName('');
+    if (newType === 'OTA') {
+      setBookingSource('Booking.com');
+    } else if (available.length > 0) {
+      setBookingSource(available[0]);
+    } else {
+      setBookingSource(newType === 'Corporate' ? 'Corporate Direct' : newType === 'Agent' ? 'Travel Agent' : 'Direct');
+    }
+  };
+
   const [guestType, setGuestType] = useState('');
   const [companyGst, setCompanyGst] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -651,6 +726,14 @@ export const NewReservationWizard = ({
           const candidate = eligibleRooms.find((r) => !assignedIds.has(r.id));
           if (candidate) assignedIds.add(candidate.id);
 
+          const tariff = toNum(candidate?.default_tariff) > 0
+            ? toNum(candidate?.default_tariff)
+            : toNum(firstCat.default_tariff) > 0
+            ? toNum(firstCat.default_tariff)
+            : toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff) > 0
+            ? toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff)
+            : (toNum((settings as any)?.default_room_tariff) || 0);
+
           rows.push({
             uid: crypto.randomUUID(),
             categoryId: catId,
@@ -660,11 +743,11 @@ export const NewReservationWizard = ({
             adults: Math.max(1, adults),
             children: Math.max(0, children),
             mealPlan: 'EP',
-            rate: firstCat.default_tariff || 0,
+            rate: tariff,
           });
         }
         setRoomRows(rows);
-        setDefaultRate(firstCat.default_tariff || 0);
+        if (rows[0]?.rate) setDefaultRate(rows[0].rate);
       }
       return true;
     }
@@ -672,6 +755,11 @@ export const NewReservationWizard = ({
     if (s === 2) {
       if (roomRows.length === 0) {
         setError('Please select at least 1 room from available categories.');
+        return false;
+      }
+      const hasZeroRate = roomRows.some((r) => toNum(r.rate) <= 0);
+      if (hasZeroRate) {
+        setError('Please enter a valid room rate greater than ₹0 for all selected rooms before proceeding.');
         return false;
       }
       return true;
@@ -750,10 +838,15 @@ export const NewReservationWizard = ({
       checkIn,
       checkOut,
       nights,
-      rate: defaultRate,
-      roomRates: {},
+      rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : (roomRows[0]?.rate || ''),
+      roomRates: roomRows.reduce((acc, r) => {
+        if (r.roomNo && r.roomNo !== 'Unassigned') {
+          acc[r.roomNo] = toNum(r.rate);
+        }
+        return acc;
+      }, {} as Record<string, number>),
       sourceCat,
-      sourceName: bookingSource.trim(),
+      sourceName: (bookingSource || 'Direct').trim(),
       payMode,
       payCash: isCash ? adv : 0,
       payUpi: isUpi ? adv : 0,
@@ -774,7 +867,15 @@ export const NewReservationWizard = ({
       allowEmptyEmail: true,
       rooms,
       categories,
-      roomDetails,
+      roomDetails: roomRows.map((r) => ({
+        roomNo: r.roomNo || 'Unassigned',
+        roomId: r.roomId || null,
+        categoryId: r.categoryId,
+        rate: toNum(r.rate),
+        adults: r.adults,
+        children: r.children,
+        mealPlan: r.mealPlan,
+      })),
     });
 
     if (selectedGuest?.id) {
@@ -971,6 +1072,20 @@ export const NewReservationWizard = ({
     const recipientEmail = emailDelivery?.recipientEmail || email.trim();
     const isMultiRoom = success.length > 1;
 
+    // Authoritative totals from success / created reservation objects
+    const successTotalAmount = success.reduce((sum, s) => {
+      const inv = toNum((s as any).invoice_total);
+      if (inv > 0) return sum + inv;
+      const r = toNum((s as any).rate);
+      return sum + (r > 0 ? r * nights : 0);
+    }, 0) || grandTotal;
+
+    const successAdvancePaid = success.reduce((sum, s) => {
+      return sum + toNum((s as any).advance_paid);
+    }, 0) || effectiveAdvancePaid;
+
+    const successBalanceDue = Math.max(0, successTotalAmount - successAdvancePaid);
+
     return (
       <>
         <CelebrationBurst active={true} durationMs={5000} />
@@ -1028,9 +1143,9 @@ export const NewReservationWizard = ({
                 <SRow label="Mobile" value={phone ? `${countryCode} ${phone}` : '—'} />
                 <SRow label="Dates" value={`${checkIn} → ${checkOut} (${nights} Night${nights > 1 ? 's' : ''})`} />
                 <SRow label="Allocated Rooms" value={roomRows.map((r, i) => `${r.categoryName}${r.roomNo !== 'Unassigned' ? ` (#${r.roomNo})` : ''}`).join(', ')} bold color="blue" />
-                <SRow label="Total Amount" value={`₹${fmtInt(grandTotal)}`} bold />
-                <SRow label="Advance Paid" value={`₹${fmtInt(effectiveAdvancePaid)}`} color="emerald" bold />
-                <SRow label="Balance Due" value={`₹${fmtInt(balanceDue)}`} color={balanceDue > 0 ? 'amber' : 'slate'} bold />
+                <SRow label="Total Amount" value={`₹${fmtInt(successTotalAmount)}`} bold />
+                <SRow label="Advance Paid" value={`₹${fmtInt(successAdvancePaid)}`} color="emerald" bold />
+                <SRow label="Balance Due" value={`₹${fmtInt(successBalanceDue)}`} color={successBalanceDue > 0 ? 'amber' : 'slate'} bold />
               </div>
 
               {/* Required 6 Action Buttons */}
@@ -1737,36 +1852,63 @@ export const NewReservationWizard = ({
                     {/* Booking Source & Source Type */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">Booking Source</label>
-                        <input list="wiz-sources-list"
-                          value={bookingSource}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700">Booking Source</label>
+                          <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            Category: {sourceCat}
+                          </span>
+                        </div>
+                        <select
+                          value={isCustomSource ? '__CUSTOM__' : bookingSource}
                           onChange={(e) => {
                             const val = e.target.value;
-                            setBookingSource(val);
-                            if (val.toLowerCase().includes('ota') || val.toLowerCase().includes('booking') || val.toLowerCase().includes('makemytrip')) {
-                              setSourceCat('OTA');
-                            } else if (val.toLowerCase().includes('agent')) {
-                              setSourceCat('Corporate/Agent');
+                            if (val === '__CUSTOM__') {
+                              setIsCustomSource(true);
                             } else {
-                              setSourceCat('Direct/Walking');
+                              setIsCustomSource(false);
+                              setBookingSource(val);
+                              if (ALL_LISTED_OTAS.includes(val) || val.toLowerCase().includes('ota')) {
+                                setSourceCat('OTA');
+                                setSourceType('OTA');
+                              } else if (val.toLowerCase().includes('corporate') || val.toLowerCase().includes('agent')) {
+                                setSourceCat('Corporate/Agent');
+                              }
                             }
                           }}
-                          placeholder="e.g. Direct, MakeMyTrip, Agoda"
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
-                        />
-                        <datalist id="wiz-sources-list">
-                          {STANDARD_BOOKING_SOURCES.map((s) => <option key={s} value={s} />)}
-                          {sources.map((s) => <option key={s.id} value={s.name} />)}
-                        </datalist>
+                        >
+                          {activeSourcesList.map((s) => (
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                          <option value="__CUSTOM__">+ Other / Custom Source...</option>
+                        </select>
+
+                        {isCustomSource && (
+                          <input
+                            type="text"
+                            autoFocus
+                            value={customSourceName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setCustomSourceName(val);
+                              setBookingSource(val);
+                            }}
+                            placeholder="Type custom booking source..."
+                            className="mt-2 w-full px-3.5 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+                          />
+                        )}
                       </div>
 
                       <div>
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Source Type</label>
                         <select
                           value={sourceType}
-                          onChange={(e) => setSourceType(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold">
-                          {SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                          onChange={(e) => handleSourceTypeChange(e.target.value)}
+                          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+                        >
+                          {SOURCE_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
                         </select>
                       </div>
                     </div>

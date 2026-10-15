@@ -17,6 +17,7 @@ import { fmtMoney, fmtInt, toNum, calcGstFull, addDays, calcStayNights } from '@
 import { apiFetch } from '@/lib/api-fetch';
 import { supabase } from '@/lib/supabase';
 import { validateReservationForm, buildReservationInputs } from '@/lib/reservationFormHelpers';
+import { ALL_LISTED_OTAS } from './reservations/NewReservationWizard';
 
 interface NewBookingModalProps {
   rooms: Room[];
@@ -737,11 +738,18 @@ export const NewBookingModal = ({
                   <input
                     list="booking-sources-list"
                     value={sourceName}
-                    onChange={(e) => setSourceName(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSourceName(val);
+                      if (ALL_LISTED_OTAS.includes(val) || val.toLowerCase().includes('ota') || val.toLowerCase().includes('booking') || val.toLowerCase().includes('trip')) {
+                        setSourceCat('OTA');
+                      }
+                    }}
                     placeholder="e.g. MakeMyTrip, Walk-In"
                     className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                   />
                   <datalist id="booking-sources-list">
+                    {ALL_LISTED_OTAS.map((s) => <option key={s} value={s} />)}
                     {sources.map((s) => <option key={s.id} value={s.name} />)}
                   </datalist>
                 </div>
