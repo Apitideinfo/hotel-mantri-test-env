@@ -92,8 +92,9 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
       ['Payment Summary', ''],
       ['Cash', fmtMoney(toNum(report.pay_cash))],
       ['UPI', fmtMoney(toNum(report.pay_upi))],
-      ['Card', fmtMoney(toNum(report.pay_card))],
+      ['Card POS', fmtMoney(toNum(report.pay_card))],
       ['Bank', fmtMoney(toNum(report.pay_bank))],
+      ['Total Collection', fmtMoney(toNum(report.pay_cash) + toNum(report.pay_upi) + toNum(report.pay_card) + toNum(report.pay_bank))],
       ['Advance', fmtMoney(toNum(report.pay_advance))],
       ['Balance', fmtMoney(toNum(report.pay_balance))],
       ['', ''],
@@ -193,11 +194,13 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
       ['Corporate/Agent', `Rs. ${fmtMoney(report.corporate_agent)}`],
       ['Phonebook', `Rs. ${fmtMoney(report.phonebook)}`],
     ]);
+    const totalColl = toNum(report.pay_cash) + toNum(report.pay_upi) + toNum(report.pay_card) + toNum(report.pay_bank);
     addSection('Payment Summary', [
       ['Cash', `Rs. ${fmtMoney(toNum(report.pay_cash))}`],
       ['UPI', `Rs. ${fmtMoney(toNum(report.pay_upi))}`],
-      ['Card', `Rs. ${fmtMoney(toNum(report.pay_card))}`],
+      ['Card POS', `Rs. ${fmtMoney(toNum(report.pay_card))}`],
       ['Bank', `Rs. ${fmtMoney(toNum(report.pay_bank))}`],
+      ['Total Collection', `Rs. ${fmtMoney(totalColl)}`],
       ['Pending Balance', `Rs. ${fmtMoney(toNum(report.pay_balance))}`],
     ]);
     const gst = splitGst(toNum(report.gst_collected));
@@ -215,10 +218,19 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
       ['Finance Expenses', `Rs. ${fmtMoney(toNum(report.finance_expenses))}`],
       ['Total Expenses', `Rs. ${fmtMoney(calcTotalExpenses(report))}`],
     ]);
-    addSection('Cash Summary', [
-      ['Cash Closing', `Rs. ${fmtMoney(toNum(report.cash_closing))}`],
-      ['Cash Handover MD', `Rs. ${fmtMoney(toNum(report.cash_handover_md))}`],
-      ['Bank Cash Deposit', `Rs. ${fmtMoney(toNum(report.bank_cash_deposit))}`],
+    const cashColl = toNum(report.pay_cash);
+    const cashExp = toNum(report.cash_expenses) > 0 ? toNum(report.cash_expenses) : (toNum(report.housekeeping_supply) + toNum(report.maintenance_bill) + toNum(report.other_expense));
+    const cashHandover = toNum(report.cash_handover_md);
+    const bankDep = toNum(report.bank_cash_deposit);
+    const closing = toNum(report.cash_closing);
+    const opening = closing - cashColl + cashExp + cashHandover + bankDep;
+    addSection('Cash Drawer Reconciliation', [
+      ['Opening Cash', `Rs. ${fmtMoney(opening)}`],
+      ['(+) Cash Receipts', `Rs. ${fmtMoney(cashColl)}`],
+      ['(-) Cash Expenses', `Rs. ${fmtMoney(cashExp)}`],
+      ['(-) Cash Handover MD', `Rs. ${fmtMoney(cashHandover)}`],
+      ['(-) Bank Cash Deposit', `Rs. ${fmtMoney(bankDep)}`],
+      ['(=) Closing Cash Balance', `Rs. ${fmtMoney(closing)}`],
     ]);
     addSection('MTD Summary', [
       ['MTD Revenue', `Rs. ${fmtMoney(mtdData?.mtd_data?.total_revenue ?? 0)}`],
@@ -298,8 +310,9 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
             <SectionCard title="Payment Summary" icon={<Wallet className="w-4 h-4 text-teal-600" />}>
               <Row label="Cash" value={`₹${fmtMoney(toNum(report.pay_cash))}`} />
               <Row label="UPI" value={`₹${fmtMoney(toNum(report.pay_upi))}`} />
-              <Row label="Card" value={`₹${fmtMoney(toNum(report.pay_card))}`} />
+              <Row label="Card POS" value={`₹${fmtMoney(toNum(report.pay_card))}`} />
               <Row label="Bank" value={`₹${fmtMoney(toNum(report.pay_bank))}`} />
+              <Row label="Total Collection" value={`₹${fmtMoney(toNum(report.pay_cash) + toNum(report.pay_upi) + toNum(report.pay_card) + toNum(report.pay_bank))}`} strong />
               <Row label="Advance" value={`₹${fmtMoney(toNum(report.pay_advance))}`} />
               <Row label="Pending Balance" value={`₹${fmtMoney(toNum(report.pay_balance))}`} />
             </SectionCard>
@@ -329,10 +342,25 @@ export const DailyMisReport = ({ onBack }: { onBack: () => void }) => {
             </SectionCard>
 
             {/* Cash Summary */}
-            <SectionCard title="Cash Summary" icon={<Wallet className="w-4 h-4 text-emerald-600" />}>
-              <Row label="Cash Closing" value={`₹${fmtMoney(toNum(report.cash_closing))}`} />
-              <Row label="Cash Handover MD" value={`₹${fmtMoney(toNum(report.cash_handover_md))}`} />
-              <Row label="Bank Cash Deposit" value={`₹${fmtMoney(toNum(report.bank_cash_deposit))}`} />
+            <SectionCard title="Cash Drawer Reconciliation" icon={<Wallet className="w-4 h-4 text-emerald-600" />}>
+              {(() => {
+                const cashColl = toNum(report.pay_cash);
+                const cashExp = toNum(report.cash_expenses) > 0 ? toNum(report.cash_expenses) : (toNum(report.housekeeping_supply) + toNum(report.maintenance_bill) + toNum(report.other_expense));
+                const cashHandover = toNum(report.cash_handover_md);
+                const bankDep = toNum(report.bank_cash_deposit);
+                const closing = toNum(report.cash_closing);
+                const opening = closing - cashColl + cashExp + cashHandover + bankDep;
+                return (
+                  <>
+                    <Row label="Opening Cash" value={`₹${fmtMoney(opening)}`} />
+                    <Row label="(+) Cash Receipts" value={`₹${fmtMoney(cashColl)}`} />
+                    <Row label="(-) Cash Expenses" value={`₹${fmtMoney(cashExp)}`} />
+                    <Row label="(-) Cash Handover MD" value={`₹${fmtMoney(cashHandover)}`} />
+                    <Row label="(-) Bank Cash Deposit" value={`₹${fmtMoney(bankDep)}`} />
+                    <Row label="(=) Closing Cash Balance" value={`₹${fmtMoney(closing)}`} strong />
+                  </>
+                );
+              })()}
             </SectionCard>
 
             {/* KPI Summary */}

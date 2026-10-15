@@ -11,6 +11,7 @@ interface KpiSectionProps {
   periodSub?: string;
   periodCash?: number;
   periodBank?: number;
+  periodTotalCollections?: number;
   periodArr?: number;
   periodRevpar?: number;
   periodOcc?: number;
@@ -123,6 +124,7 @@ export const KpiSection = ({
   periodSub,
   periodCash,
   periodBank,
+  periodTotalCollections,
   periodArr,
   periodRevpar,
   periodOcc,
@@ -176,7 +178,9 @@ export const KpiSection = ({
     : isDaily ? dailyOcc : (mtd?.occ ?? 0);
 
   const displayRoomRev = isDaily ? dailyRoomRev : (mtd?.roomRevenue ?? 0);
-  const displayTotalCollections = displayCash + displayBank > 0
+  const displayTotalCollections = periodTotalCollections !== undefined
+    ? periodTotalCollections
+    : displayCash + displayBank > 0
     ? displayCash + displayBank
     : isDaily ? dailyTotalCollections : (mtd?.totalCollections ?? 0);
 

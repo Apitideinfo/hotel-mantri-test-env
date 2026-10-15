@@ -601,6 +601,15 @@ export const updateReservationAtomically = async ({
       updated_at: new Date().toISOString(),
     };
 
+    if (updates.payment_mode && updates.pay_cash === undefined && updates.pay_bank === undefined && updates.pay_upi === undefined && updates.pay_card === undefined) {
+      const adv = Number(updates.advance_paid !== undefined ? updates.advance_paid : current.advance_paid) || 0;
+      const m = updates.payment_mode;
+      rawPayload.pay_cash = m === 'Cash' ? adv : 0;
+      rawPayload.pay_bank = m === 'Bank' ? adv : 0;
+      rawPayload.pay_upi = m === 'UPI' ? adv : 0;
+      rawPayload.pay_card = m === 'Card' ? adv : 0;
+    }
+
     const payload = sanitizeReservationPayload(rawPayload);
     delete payload.hotel_id;
 

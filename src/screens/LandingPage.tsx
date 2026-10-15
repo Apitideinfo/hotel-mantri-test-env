@@ -18,9 +18,17 @@ import { Footer } from '../components/landing/Footer';
 interface LandingPageProps {
   onNavigateLogin: () => void;
   onNavigateSignup?: (planId?: string) => void;
+  onNavigatePrivacy?: () => void;
+  onNavigateDeletion?: () => void;
+  onNavigateTerms?: () => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onNavigateLogin }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({
+  onNavigateLogin,
+  onNavigatePrivacy,
+  onNavigateDeletion,
+  onNavigateTerms,
+}) => {
   const handleScrollToFeatures = () => {
     const el = document.getElementById('features');
     if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -77,7 +85,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigateLogin }) => 
       <TalkToCeoBanner onLogin={onNavigateLogin} />
 
       {/* 15. Footer */}
-      <Footer onNavigateLogin={onNavigateLogin} />
+      <Footer
+        onNavigateLogin={onNavigateLogin}
+        onNavigatePrivacy={onNavigatePrivacy}
+        onNavigateDeletion={onNavigateDeletion}
+        onNavigateTerms={onNavigateTerms}
+      />
     </div>
   );
 };

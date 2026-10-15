@@ -100,7 +100,10 @@ async function runTests() {
     const report = buildDerivedReport('2026-10-02', [], {}, 0, 22, [], [], txs);
     assert.strictEqual(report.pay_cash, 0);
     assert.strictEqual(report.cash, 0);
-    assert.strictEqual(report.bank, 17000);
+    assert.strictEqual(report.bank, 10000);
+    assert.strictEqual(report.pay_bank, 10000);
+    assert.strictEqual(report.pay_upi, 5000);
+    assert.strictEqual(report.pay_card, 2000);
     assert.strictEqual(report.pay_bank + report.pay_upi + report.pay_card, 17000);
   });
 

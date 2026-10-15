@@ -1,0 +1,49 @@
+# HotelMantri Robots Configuration
+# Allow all legitimate search engines, social media crawlers, and Meta Platform review bots
+
+User-agent: *
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+Disallow: /api/
+Disallow: /superadmin
+
+# Explicitly ensure Meta Platform Review Bot & Open Graph scrapers have full unrestricted access
+User-agent: facebookexternalhit
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+User-agent: Facebot
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+User-agent: Googlebot
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+User-agent: Twitterbot
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+User-agent: LinkedInBot
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+User-agent: WhatsApp
+Allow: /
+Allow: /privacy-policy
+Allow: /data-deletion
+Allow: /terms
+
+Sitemap: https://www.hotelmantri.com/sitemap.xml

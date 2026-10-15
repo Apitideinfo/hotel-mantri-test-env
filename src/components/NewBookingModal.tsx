@@ -17,6 +17,13 @@ import { fmtMoney, fmtInt, toNum, calcGstFull, addDays, calcStayNights } from '@
 import { apiFetch } from '@/lib/api-fetch';
 import { supabase } from '@/lib/supabase';
 import { validateReservationForm, buildReservationInputs } from '@/lib/reservationFormHelpers';
+import {
+  ALL_SOURCE_TYPES,
+  synchronizeSourceAndType,
+  getCompatibleSourcesForType,
+  getSourceTypeFromCategory,
+  type SourceType,
+} from '@/lib/sourceClassification';
 
 interface NewBookingModalProps {
   rooms: Room[];
@@ -61,8 +68,51 @@ export const NewBookingModal = ({
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
   const [rate, setRate] = useState<number | ''>('');
   const [roomRates, setRoomRates] = useState<Record<string, number>>({});
-  const [sourceName, setSourceName] = useState('');
+  const [sourceName, setSourceName] = useState('Direct');
+  const [sourceType, setSourceType] = useState<SourceType>('Direct');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
+
+  // Synchronized source/type handlers ensuring immediate bidirectional consistency
+  const handleSourceNameChange = (newSource: string) => {
+    const sync = synchronizeSourceAndType({
+      source: newSource,
+      type: sourceType,
+      hotelSources: sources,
+      changedField: 'source',
+    });
+    setSourceName(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
+  };
+
+  const handleSourceTypeChange = (newType: SourceType) => {
+    const sync = synchronizeSourceAndType({
+      source: sourceName,
+      type: newType,
+      hotelSources: sources,
+      changedField: 'type',
+    });
+    setSourceName(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
+  };
+
+  const handleSourceCatChange = (newCat: SourceCategory) => {
+    const compType = getSourceTypeFromCategory(newCat);
+    const sync = synchronizeSourceAndType({
+      source: sourceName,
+      type: compType,
+      hotelSources: sources,
+      changedField: 'type',
+    });
+    setSourceName(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(newCat);
+  };
+
+  const compatibleSources = useMemo(() => {
+    return getCompatibleSourcesForType(sourceType, sources);
+  }, [sourceType, sources]);
   const [payMode, setPayMode] = useState('Cash');
   const [payCash, setPayCash] = useState<number | ''>('');
   const [payUpi, setPayUpi] = useState<number | ''>('');
@@ -729,7 +779,7 @@ export const NewBookingModal = ({
               </div>
 
               {/* Row 1: Source & Meal Plan */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Booking Source <span className="text-rose-500">*</span>
@@ -737,13 +787,28 @@ export const NewBookingModal = ({
                   <input
                     list="booking-sources-list"
                     value={sourceName}
-                    onChange={(e) => setSourceName(e.target.value)}
+                    onChange={(e) => handleSourceNameChange(e.target.value)}
                     placeholder="e.g. MakeMyTrip, Walk-In"
                     className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                   />
                   <datalist id="booking-sources-list">
-                    {sources.map((s) => <option key={s.id} value={s.name} />)}
+                    {compatibleSources.map((s) => <option key={s} value={s} />)}
                   </datalist>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Source Type <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={sourceType}
+                    onChange={(e) => handleSourceTypeChange(e.target.value as SourceType)}
+                    className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+                  >
+                    {ALL_SOURCE_TYPES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -752,7 +817,7 @@ export const NewBookingModal = ({
                   </label>
                   <select
                     value={sourceCat}
-                    onChange={(e) => setSourceCat(e.target.value as SourceCategory)}
+                    onChange={(e) => handleSourceCatChange(e.target.value as SourceCategory)}
                     className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                   >
                     {SOURCE_CATEGORIES.map((s) => (

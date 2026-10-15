@@ -4,9 +4,17 @@ import { RevealOnScroll } from './RevealOnScroll';
 
 interface FooterProps {
   onNavigateLogin?: () => void;
+  onNavigatePrivacy?: () => void;
+  onNavigateDeletion?: () => void;
+  onNavigateTerms?: () => void;
 }
 
-export const Footer: React.FC<FooterProps> = ({ onNavigateLogin }) => {
+export const Footer: React.FC<FooterProps> = ({
+  onNavigateLogin,
+  onNavigatePrivacy,
+  onNavigateDeletion,
+  onNavigateTerms,
+}) => {
   const [email, setEmail] = useState('');
   const [subscribed, setSubscribed] = useState(false);
 
@@ -16,6 +24,18 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLogin }) => {
       setSubscribed(true);
       setTimeout(() => setSubscribed(false), 4000);
       setEmail('');
+    }
+  };
+
+  const navigateTo = (path: string, callback?: () => void) => {
+    if (callback) {
+      callback();
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.history.pushState(null, '', path);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -198,18 +218,45 @@ export const Footer: React.FC<FooterProps> = ({ onNavigateLogin }) => {
         {/* ── Sub-Footer Bottom Bar ── */}
         <div className="pt-8 flex flex-col md:flex-row items-center justify-between text-[11px] text-gray-500 gap-4 text-center md:text-left">
           {/* Left: Policy links */}
-          <div className="flex flex-wrap items-center justify-center gap-5">
-            <button onClick={() => handleNav('privacy')} className="hover:text-gray-300 transition-colors cursor-pointer">
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-5">
+            <a
+              href="/privacy-policy"
+              onClick={(e) => {
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                  e.preventDefault();
+                  navigateTo('/privacy-policy', onNavigatePrivacy);
+                }
+              }}
+              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+            >
               Privacy Policy
-            </button>
+            </a>
             <span className="text-neutral-700">|</span>
-            <button onClick={() => handleNav('terms')} className="hover:text-gray-300 transition-colors cursor-pointer">
-              Terms & Conditions
-            </button>
+            <a
+              href="/data-deletion"
+              onClick={(e) => {
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                  e.preventDefault();
+                  navigateTo('/data-deletion', onNavigateDeletion);
+                }
+              }}
+              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+            >
+              Data Deletion
+            </a>
             <span className="text-neutral-700">|</span>
-            <button onClick={() => handleNav('docs')} className="hover:text-gray-300 transition-colors cursor-pointer">
-              Developer Docs
-            </button>
+            <a
+              href="/terms"
+              onClick={(e) => {
+                if (!e.ctrlKey && !e.metaKey && !e.shiftKey) {
+                  e.preventDefault();
+                  navigateTo('/terms', onNavigateTerms);
+                }
+              }}
+              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+            >
+              Terms of Service
+            </a>
           </div>
 
           {/* Center: Attribution */}

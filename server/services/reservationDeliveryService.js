@@ -22,6 +22,7 @@ import {
   normalizeWhatsAppPhone,
   WHATSAPP_ERRORS,
 } from './whatsappService.js';
+export { buildMetaBookingConfirmationTemplate };
 import {
   isReservationConfirmationWhatsAppSent,
   recordWhatsAppOutboxEvent,

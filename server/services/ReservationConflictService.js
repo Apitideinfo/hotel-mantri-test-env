@@ -118,25 +118,58 @@ export const checkRoomAvailability = async ({
   }
 
   const supabase = supabaseServiceRole;
+  const roomKey = normRoom.toLowerCase();
 
-  // 1. Query active reservations for this hotel and physical room
+  // Parallelize independent availability checks across reservations, chart entries, blocks, and physical room
   let resQuery = supabase
     .from('reservations')
     .select('id, guest_name, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
     .eq('hotel_id', hotelId)
-    .in('status', ['confirmed', 'checked_in']);
+    .in('status', ['confirmed', 'checked_in'])
+    .lt('check_in_date', cleanCheckOut)
+    .gt('check_out_date', cleanCheckIn);
 
   if (excludeReservationId) {
     resQuery = resQuery.neq('id', excludeReservationId);
   }
 
-  const { data: activeRes, error: resErr } = await resQuery;
+  const chartQuery = supabase
+    .from('room_chart_entries')
+    .select('id, guest_name, room_no, arrival, departure, report_date, reservation_id, checked_out_at')
+    .eq('hotel_id', hotelId)
+    .is('checked_out_at', null);
+
+  const blocksQuery = supabase
+    .from('room_blocks')
+    .select('id, room_no, block_type, start_date, end_date, reason')
+    .eq('hotel_id', hotelId);
+
+  const physicalRoomQuery = supabase
+    .from('rooms')
+    .select('id, room_no, is_active, room_status, block_reason')
+    .eq('hotel_id', hotelId)
+    .eq('room_no', normRoom)
+    .maybeSingle();
+
+  const [resResult, chartResult, blocksResult, roomResult] = await Promise.all([
+    resQuery,
+    chartQuery,
+    Promise.resolve(blocksQuery).catch((bErr) => {
+      console.warn('[ReservationConflictService] Room block check warning:', bErr.message);
+      return { data: [] };
+    }),
+    Promise.resolve(physicalRoomQuery).catch((rErr) => {
+      console.warn('[ReservationConflictService] Physical room status check warning:', rErr.message);
+      return { data: null };
+    }),
+  ]);
+
+  const { data: activeRes, error: resErr } = resResult;
   if (resErr) {
     console.error('[ReservationConflictService] Error querying reservations:', resErr);
     throw new Error(`Failed to check reservation availability: ${resErr.message}`);
   }
 
-  const roomKey = normRoom.toLowerCase();
   const conflictingRes = (activeRes || []).find((r) => {
     const rRoom = (r.room_no || '').trim().toLowerCase();
     if (rRoom !== roomKey) return false;
@@ -152,13 +185,7 @@ export const checkRoomAvailability = async ({
     };
   }
 
-  // 2. Query in-house active room chart entries
-  const { data: chartEntries, error: chartErr } = await supabase
-    .from('room_chart_entries')
-    .select('id, guest_name, room_no, arrival, departure, report_date, reservation_id, checked_out_at')
-    .eq('hotel_id', hotelId)
-    .is('checked_out_at', null);
-
+  const { data: chartEntries, error: chartErr } = chartResult;
   if (chartErr) {
     console.error('[ReservationConflictService] Error querying room chart entries:', chartErr);
     throw new Error(`Failed to check in-house availability: ${chartErr.message}`);
@@ -185,64 +212,44 @@ export const checkRoomAvailability = async ({
     };
   }
 
-  // 3. Query room blocks / maintenance for this room
-  try {
-    const { data: blocks } = await supabase
-      .from('room_blocks')
-      .select('id, room_no, block_type, start_date, end_date, reason')
-      .eq('hotel_id', hotelId);
+  const blocks = blocksResult?.data;
+  if (blocks && blocks.length > 0) {
+    const conflictingBlock = blocks.find((b) => {
+      const bRoom = (b.room_no || '').trim().toLowerCase();
+      if (bRoom !== roomKey) return false;
+      const bIn = String(b.start_date || '').slice(0, 10);
+      const bOut = String(b.end_date || '').slice(0, 10);
+      return isStayOverlapping(cleanCheckIn, cleanCheckOut, bIn, bOut);
+    });
 
-    if (blocks && blocks.length > 0) {
-      const conflictingBlock = blocks.find((b) => {
-        const bRoom = (b.room_no || '').trim().toLowerCase();
-        if (bRoom !== roomKey) return false;
-        const bIn = String(b.start_date || '').slice(0, 10);
-        const bOut = String(b.end_date || '').slice(0, 10);
-        return isStayOverlapping(cleanCheckIn, cleanCheckOut, bIn, bOut);
-      });
-
-      if (conflictingBlock) {
-        return {
-          available: false,
-          code: 'ROOM_BLOCKED',
-          message: `Room ${normRoom} is blocked for ${conflictingBlock.block_type || 'maintenance'} (${conflictingBlock.start_date} to ${conflictingBlock.end_date}): ${conflictingBlock.reason || 'Blocked'}.`,
-          block: conflictingBlock,
-        };
-      }
+    if (conflictingBlock) {
+      return {
+        available: false,
+        code: 'ROOM_BLOCKED',
+        message: `Room ${normRoom} is blocked for ${conflictingBlock.block_type || 'maintenance'} (${conflictingBlock.start_date} to ${conflictingBlock.end_date}): ${conflictingBlock.reason || 'Blocked'}.`,
+        block: conflictingBlock,
+      };
     }
-  } catch (bErr) {
-    console.warn('[ReservationConflictService] Room block check warning:', bErr.message);
   }
 
-  // 4. Query physical room active and maintenance status in rooms table
-  try {
-    const { data: physicalRoom } = await supabase
-      .from('rooms')
-      .select('id, room_no, is_active, room_status, block_reason')
-      .eq('hotel_id', hotelId)
-      .eq('room_no', normRoom)
-      .maybeSingle();
-
-    if (physicalRoom) {
-      if (physicalRoom.is_active === false) {
-        return {
-          available: false,
-          code: 'ROOM_INACTIVE',
-          message: `Room ${normRoom} is deactivated and cannot be assigned.`,
-        };
-      }
-
-      const st = String(physicalRoom.room_status || '').toLowerCase();
-      if (st === 'blocked' || st === 'maintenance' || st === 'out of service' || st === 'out of order') {
-        return {
-          available: false,
-          code: 'ROOM_UNAVAILABLE',
-          message: `Room ${normRoom} is currently marked as ${physicalRoom.room_status}${physicalRoom.block_reason ? ` (${physicalRoom.block_reason})` : ''}.`,
-        };
-      }
+  const physicalRoom = roomResult?.data;
+  if (physicalRoom) {
+    if (physicalRoom.is_active === false) {
+      return {
+        available: false,
+        code: 'ROOM_INACTIVE',
+        message: `Room ${normRoom} is deactivated and cannot be assigned.`,
+      };
     }
-  } catch (rErr) {
-    console.warn('[ReservationConflictService] Physical room status check warning:', rErr.message);
+
+    const st = String(physicalRoom.room_status || '').toLowerCase();
+    if (st === 'blocked' || st === 'maintenance' || st === 'out of service' || st === 'out of order') {
+      return {
+        available: false,
+        code: 'ROOM_UNAVAILABLE',
+        message: `Room ${normRoom} is currently marked as ${physicalRoom.room_status}${physicalRoom.block_reason ? ` (${physicalRoom.block_reason})` : ''}.`,
+      };
+    }
   }
 
   return { available: true };
@@ -489,7 +496,7 @@ export const getCategoryPhysicalRoomAvailability = async ({
 
   const supabase = supabaseServiceRole;
 
-  // 1. Fetch active physical rooms for this hotel and (optional) category
+  // 1. Prepare parallel queries for physical rooms, active reservations, chart stays, and blocks
   let roomQ = supabase
     .from('rooms')
     .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
@@ -501,8 +508,42 @@ export const getCategoryPhysicalRoomAvailability = async ({
     roomQ = roomQ.eq('category_id', categoryId);
   }
 
-  const { data: physicalRooms, error: roomsErr } = await roomQ;
-  if (roomsErr || !physicalRooms || physicalRooms.length === 0) {
+  let resQ = supabase
+    .from('reservations')
+    .select('id, guest_name, room_no, check_in_date, check_out_date, status')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .lt('check_in_date', cleanCheckOut)
+    .gt('check_out_date', cleanCheckIn);
+
+  if (excludeReservationId) {
+    resQ = resQ.neq('id', excludeReservationId);
+  }
+
+  const chartQ = supabase
+    .from('room_chart_entries')
+    .select('id, guest_name, room_no, arrival, departure, report_date, reservation_id, checked_out_at')
+    .eq('hotel_id', hotelId)
+    .is('checked_out_at', null);
+
+  const blocksQ = supabase
+    .from('room_blocks')
+    .select('id, room_no, block_type, start_date, end_date, reason')
+    .eq('hotel_id', hotelId);
+
+  // Execute all 4 queries concurrently in a single network round trip
+  const [roomsResult, resResult, chartResult, blocksResult] = await Promise.all([
+    roomQ,
+    resQ,
+    chartQ,
+    Promise.resolve(blocksQ).catch((err) => {
+      console.warn('[ReservationConflictService] Category blocks warning:', err.message);
+      return { data: [] };
+    }),
+  ]);
+
+  const physicalRooms = roomsResult.data;
+  if (roomsResult.error || !physicalRooms || physicalRooms.length === 0) {
     return {
       available: false,
       totalRooms: 0,
@@ -514,6 +555,39 @@ export const getCategoryPhysicalRoomAvailability = async ({
       code: 'NO_ROOMS_IN_CATEGORY',
       message: 'No active physical rooms configured for this category.',
     };
+  }
+
+  // Pre-index conflicts by room number for O(1) in-memory evaluation
+  const conflictingResByRoom = new Map();
+  for (const r of (resResult.data || [])) {
+    const rRoom = (r.room_no || '').trim().toLowerCase();
+    if (!rRoom) continue;
+    if (isStayOverlapping(cleanCheckIn, cleanCheckOut, r.check_in_date, r.check_out_date)) {
+      conflictingResByRoom.set(rRoom, r);
+    }
+  }
+
+  const conflictingChartByRoom = new Map();
+  for (const e of (chartResult.data || [])) {
+    if (excludeReservationId && e.reservation_id === excludeReservationId) continue;
+    const eRoom = (e.room_no || '').trim().toLowerCase();
+    if (!eRoom) continue;
+    const eIn = (e.arrival || e.report_date || '').slice(0, 10);
+    const eOut = (e.departure || e.report_date || '').slice(0, 10);
+    if (isStayOverlapping(cleanCheckIn, cleanCheckOut, eIn, eOut)) {
+      conflictingChartByRoom.set(eRoom, e);
+    }
+  }
+
+  const conflictingBlocksByRoom = new Map();
+  for (const b of (blocksResult.data || [])) {
+    const bRoom = (b.room_no || '').trim().toLowerCase();
+    if (!bRoom) continue;
+    const bIn = String(b.start_date || '').slice(0, 10);
+    const bOut = String(b.end_date || '').slice(0, 10);
+    if (isStayOverlapping(cleanCheckIn, cleanCheckOut, bIn, bOut)) {
+      conflictingBlocksByRoom.set(bRoom, b);
+    }
   }
 
   const totalRooms = physicalRooms.length;
@@ -553,27 +627,20 @@ export const getCategoryPhysicalRoomAvailability = async ({
       continue;
     }
 
-    const availCheck = await checkRoomAvailability({
-      hotelId,
-      roomNo: room.room_no,
-      checkIn: cleanCheckIn,
-      checkOut: cleanCheckOut,
-      excludeReservationId,
-    });
-
-    if (availCheck.available) {
-      availableRoomNos.push(room.room_no);
-      availableRoomDetails.push({
-        id: room.id,
-        roomNo: room.room_no,
-        categoryId: room.category_id,
-        floor: room.floor,
-        roomStatus: room.room_status,
-        housekeepingStatus: room.housekeeping_status,
-      });
-    } else {
+    if (conflictingResByRoom.has(roomKey) || conflictingChartByRoom.has(roomKey) || conflictingBlocksByRoom.has(roomKey)) {
       unavailableRoomNos.push(room.room_no);
+      continue;
     }
+
+    availableRoomNos.push(room.room_no);
+    availableRoomDetails.push({
+      id: room.id,
+      roomNo: room.room_no,
+      categoryId: room.category_id,
+      floor: room.floor,
+      roomStatus: room.room_status,
+      housekeepingStatus: room.housekeeping_status,
+    });
   }
 
   const availableRoomsCount = availableRoomNos.length;

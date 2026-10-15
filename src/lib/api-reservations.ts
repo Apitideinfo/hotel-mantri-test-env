@@ -13,6 +13,7 @@ import type {
   ReservationConfirmationData,
 } from './types-reservations';
 import { isValidEmail } from './types-reservations';
+import { getSourceCategoryFromType } from './sourceClassification';
 
 export { getRoomChartForDateRange };
 
@@ -130,6 +131,8 @@ export const getReservationsForDateRange = async (
     .from('reservations')
     .select('*')
     .eq('hotel_id', hotelId)
+    .lte('check_in_date', endDate)
+    .gte('check_out_date', startDate)
     .order('check_in_date', { ascending: true });
   if (error) {
     console.error('[getReservationsForDateRange] Supabase query error:', error);
@@ -361,23 +364,57 @@ export const saveReservation = async (
     if (toNum(res.advance_paid) > 0) {
       const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
       const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
-      Promise.resolve(supabase.from('booking_timeline').insert({
-        hotel_id: hotelId,
-        reservation_id: res.id,
-        event_type: 'advance_payment',
-        event_description: `Advance payment for reservation: ${res.guest_name}`,
-        event_amount: toNum(res.advance_paid),
-        event_data: {
-          payment_date: paymentDate,
-          business_date: paymentDate,
-          payment_method: paymentMethod,
-          pay_cash: res.pay_cash ?? 0,
-          pay_bank: res.pay_bank ?? 0,
-          pay_upi: res.pay_upi ?? 0,
-          pay_card: res.pay_card ?? 0,
-        },
-        performed_by: 'STAFF',
-      })).catch(() => {});
+      (async () => {
+        try {
+          const { data: existingEvents } = await supabase
+            .from('booking_timeline')
+            .select('id, event_data')
+            .eq('reservation_id', res.id)
+            .eq('event_type', 'advance_payment')
+            .limit(1);
+
+          if (existingEvents && existingEvents.length > 0) {
+            await supabase
+              .from('booking_timeline')
+              .update({
+                event_description: `Advance payment for reservation: ${res.guest_name} (${paymentMethod})`,
+                event_amount: toNum(res.advance_paid),
+                event_data: {
+                  ...(existingEvents[0].event_data || {}),
+                  payment_date: paymentDate,
+                  business_date: paymentDate,
+                  payment_method: paymentMethod,
+                  pay_cash: res.pay_cash ?? 0,
+                  pay_bank: res.pay_bank ?? 0,
+                  pay_upi: res.pay_upi ?? 0,
+                  pay_card: res.pay_card ?? 0,
+                  updated_at: new Date().toISOString(),
+                },
+              })
+              .eq('id', existingEvents[0].id);
+          } else {
+            await supabase.from('booking_timeline').insert({
+              hotel_id: hotelId,
+              reservation_id: res.id,
+              event_type: 'advance_payment',
+              event_description: `Advance payment for reservation: ${res.guest_name} (${paymentMethod})`,
+              event_amount: toNum(res.advance_paid),
+              event_data: {
+                payment_date: paymentDate,
+                business_date: paymentDate,
+                payment_method: paymentMethod,
+                pay_cash: res.pay_cash ?? 0,
+                pay_bank: res.pay_bank ?? 0,
+                pay_upi: res.pay_upi ?? 0,
+                pay_card: res.pay_card ?? 0,
+              },
+              performed_by: 'STAFF',
+            });
+          }
+        } catch (e) {
+          console.warn('[saveReservation] Timeline advance sync error:', e);
+        }
+      })().catch(() => {});
     }
 
     return res;
@@ -2074,7 +2111,8 @@ export const getReservationsPaginated = async (
     q = q.eq('status', params.status);
   }
   if (params.sourceCategory && params.sourceCategory !== 'all') {
-    q = q.eq('source_category', params.sourceCategory);
+    const dbCat = getSourceCategoryFromType(params.sourceCategory as any) || params.sourceCategory;
+    q = q.eq('source_category', dbCat);
   }
   if (params.roomNo && params.roomNo !== 'all') {
     q = q.ilike('room_no', params.roomNo.trim());

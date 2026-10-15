@@ -401,11 +401,9 @@ export const aggregateRoomChart = (
         break;
       case 'UPI':
         agg.payUpi += amt;
-        agg.bank += amt;
         break;
       case 'Card':
         agg.payCard += amt;
-        agg.bank += amt;
         break;
       case 'Bank':
       case 'Gateway':
@@ -415,8 +413,17 @@ export const aggregateRoomChart = (
         agg.bank += amt;
         break;
       default:
-        agg.payCash += amt;
-        agg.cash += amt;
+        if (String(tx.payment_method || '').toLowerCase().includes('cash')) {
+          agg.payCash += amt;
+          agg.cash += amt;
+        } else if (String(tx.payment_method || '').toLowerCase().includes('card')) {
+          agg.payCard += amt;
+        } else if (String(tx.payment_method || '').toLowerCase().includes('upi')) {
+          agg.payUpi += amt;
+        } else {
+          agg.payBank += amt;
+          agg.bank += amt;
+        }
     }
   }
 

@@ -305,10 +305,38 @@ export const reconcilePaymentLedger = ({
     if (!isPaymentEvt || amt <= 0) continue;
 
     const data = evt.event_data || {};
-    const paymentDate = normalizeDateString(
+    if (
+      evt.event_type?.includes('void') ||
+      data.status === 'void' ||
+      data.is_void ||
+      evt.status === 'void' ||
+      evt.status === 'cancelled'
+    ) {
+      continue;
+    }
+    let paymentDate = normalizeDateString(
       data.payment_date || data.business_date || evt.created_at
     );
-    const method = normalizePaymentMethod(data.payment_method || data.payment_mode || 'Cash');
+    const linkedRes = evt.reservation_id ? reservations.find((r) => r.id === evt.reservation_id) : null;
+    if (linkedRes && linkedRes.check_in_date) {
+      const createdDay = evt.created_at ? normalizeDateString(evt.created_at) : '';
+      if (!paymentDate || paymentDate === createdDay || paymentDate > normalizeDateString(linkedRes.check_in_date)) {
+        paymentDate = normalizeDateString(linkedRes.check_in_date);
+      }
+    }
+
+    let method = normalizePaymentMethod(data.payment_method || data.payment_mode || 'Cash');
+    if (toNum(data.pay_bank) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'Bank';
+    } else if (toNum(data.pay_upi) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'UPI';
+    } else if (toNum(data.pay_card) > 0 && toNum(data.pay_cash) === 0) {
+      method = 'Card';
+    } else if (linkedRes) {
+      if (toNum(linkedRes.pay_bank) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'Bank';
+      else if (toNum(linkedRes.pay_upi) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'UPI';
+      else if (toNum(linkedRes.pay_card) > 0 && toNum(linkedRes.pay_cash) === 0) method = 'Card';
+    }
 
     const key = `timeline::${evt.id}`;
     if (!processedKeys.has(key)) {
@@ -334,25 +362,89 @@ export const reconcilePaymentLedger = ({
     );
     if (timelineHasRes) continue;
 
-    const bookingDate = normalizeDateString(res.created_at || res.check_in_date);
+    let bookingDate = normalizeDateString(res.created_at || res.check_in_date);
+    if (res.check_in_date && normalizeDateString(res.created_at) > normalizeDateString(res.check_in_date)) {
+      bookingDate = normalizeDateString(res.check_in_date);
+    }
     const method = normalizePaymentMethod(res.payment_mode || 'Cash');
     const key = `res_adv::${res.id}::${adv}`;
     if (!processedKeys.has(key)) {
       processedKeys.add(key);
-      transactions.push({
-        id: `res_adv_${res.id}`,
-        hotel_id: res.hotel_id || hotelId || '',
-        reservation_id: res.id,
-        payment_date: bookingDate,
-        business_date: bookingDate,
-        amount: adv,
-        payment_method: method,
-        status: 'successful',
-      });
+
+      const cash = toNum(res.pay_cash);
+      const upi = toNum(res.pay_upi);
+      const card = toNum(res.pay_card);
+      const bank = toNum(res.pay_bank);
+
+      if (cash > 0 || upi > 0 || card > 0 || bank > 0) {
+        if (cash > 0) {
+          transactions.push({
+            id: `res_cash_${res.id}`,
+            hotel_id: res.hotel_id || hotelId || '',
+            reservation_id: res.id,
+            payment_date: bookingDate,
+            business_date: bookingDate,
+            amount: cash,
+            payment_method: 'Cash',
+            status: 'successful',
+          });
+        }
+        if (upi > 0) {
+          transactions.push({
+            id: `res_upi_${res.id}`,
+            hotel_id: res.hotel_id || hotelId || '',
+            reservation_id: res.id,
+            payment_date: bookingDate,
+            business_date: bookingDate,
+            amount: upi,
+            payment_method: 'UPI',
+            status: 'successful',
+          });
+        }
+        if (card > 0) {
+          transactions.push({
+            id: `res_card_${res.id}`,
+            hotel_id: res.hotel_id || hotelId || '',
+            reservation_id: res.id,
+            payment_date: bookingDate,
+            business_date: bookingDate,
+            amount: card,
+            payment_method: 'Card',
+            status: 'successful',
+          });
+        }
+        if (bank > 0) {
+          transactions.push({
+            id: `res_bank_${res.id}`,
+            hotel_id: res.hotel_id || hotelId || '',
+            reservation_id: res.id,
+            payment_date: bookingDate,
+            business_date: bookingDate,
+            amount: bank,
+            payment_method: 'Bank',
+            status: 'successful',
+          });
+        }
+      } else {
+        transactions.push({
+          id: `res_adv_${res.id}`,
+          hotel_id: res.hotel_id || hotelId || '',
+          reservation_id: res.id,
+          payment_date: bookingDate,
+          business_date: bookingDate,
+          amount: adv,
+          payment_method: method,
+          status: 'successful',
+        });
+      }
     }
   }
 
   for (const entry of roomChartEntries) {
+    const hasResv = reservations.some(
+      (r) => r.id === entry.id || (entry.reservation_id && r.id === entry.reservation_id)
+    );
+    if (hasResv) continue;
     const repDate = normalizeDateString(entry.report_date);
     if (!repDate) continue;
 
