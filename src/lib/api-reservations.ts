@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
-import { toNum, calcStayNights, isStayOverlapping } from './calc';
+import { toNum, calcStayNights, isStayOverlapping, calcGstFull } from './calc';
 import { dispatchChannelEvent } from './api-channel';
 import { apiFetch } from './api-fetch';
 import type { RoomChartEntry } from './types';
