@@ -20,6 +20,13 @@ import { extractUnassignedReason } from '@/lib/api-reservations';
 import { useGroupReservations } from '@/hooks/useGroupReservations';
 import { useReservationDocuments } from '@/hooks/useReservationDocuments';
 import { VIP_BADGE_COLORS } from '@/lib/types-crm';
+import {
+  ALL_SOURCE_TYPES,
+  synchronizeSourceAndType,
+  getCompatibleSourcesForType,
+  getSourceTypeFromSource,
+  type SourceType,
+} from '@/lib/sourceClassification';
 
 export interface BoardBooking {
   id: string;
@@ -168,12 +175,43 @@ export const BookingDetailPanel = ({
   const [editCheckOut, setEditCheckOut] = useState(booking.checkOut);
   const [editRate, setEditRate] = useState(booking.rate);
   const [editSource, setEditSource] = useState(booking.sourceName);
+  const [editSourceType, setEditSourceType] = useState<SourceType>(() => {
+    return getSourceTypeFromSource(booking.sourceName || booking.sourceCategory, sources).sourceType;
+  });
   const [editSourceCat, setEditSourceCat] = useState(booking.sourceCategory);
   const [editPayMode, setEditPayMode] = useState(booking.paymentMode);
   const [editRemarks, setEditRemarks] = useState(booking.remarks);
   const [editAdvance, setEditAdvance] = useState(
     isReservation ? toNum(reservation?.advance_paid) : 0,
   );
+
+  const handleEditSourceChange = (newSource: string) => {
+    const sync = synchronizeSourceAndType({
+      source: newSource,
+      type: editSourceType,
+      hotelSources: sources,
+      changedField: 'source',
+    });
+    setEditSource(sync.source);
+    setEditSourceType(sync.type);
+    setEditSourceCat(sync.category);
+  };
+
+  const handleEditSourceTypeChange = (newType: SourceType) => {
+    const sync = synchronizeSourceAndType({
+      source: editSource,
+      type: newType,
+      hotelSources: sources,
+      changedField: 'type',
+    });
+    setEditSource(sync.source);
+    setEditSourceType(sync.type);
+    setEditSourceCat(sync.category);
+  };
+
+  const compatibleEditSources = useMemo(() => {
+    return getCompatibleSourcesForType(editSourceType, sources);
+  }, [editSourceType, sources]);
 
   const editNights = useMemo(() => {
     return calcStayNights(editCheckIn, editCheckOut);
@@ -183,6 +221,17 @@ export const BookingDetailPanel = ({
   const editBalance = isReservation ? editTotal - toNum(editAdvance) : Math.max(0, editTotal - 0);
 
   const handleSave = () => {
+    const advNum = toNum(editAdvance);
+    const isCash = editPayMode === 'Cash';
+    const isBank = editPayMode === 'Bank';
+    const isUpi = editPayMode === 'UPI';
+    const isCard = editPayMode === 'Card';
+
+    const splitCash = isCash ? advNum : 0;
+    const splitBank = isBank ? advNum : 0;
+    const splitUpi = isUpi ? advNum : 0;
+    const splitCard = isCard ? advNum : 0;
+
     if (isReservation && reservation) {
       onEditReservation({
         room_id: room?.id ?? null,
@@ -197,6 +246,10 @@ export const BookingDetailPanel = ({
         source_name: editSource,
         payment_mode: editPayMode,
         advance_paid: editAdvance,
+        pay_cash: splitCash,
+        pay_bank: splitBank,
+        pay_upi: splitUpi,
+        pay_card: splitCard,
         remarks: editRemarks,
         status: reservation.status as Reservation['status'],
       }, reservation.id);
@@ -213,6 +266,10 @@ export const BookingDetailPanel = ({
         company: editSource,
         source_category: srcCat,
         pay_mode: normalizePayMode(editPayMode),
+        pay_cash: splitCash,
+        pay_bank: splitBank,
+        pay_upi: splitUpi,
+        pay_card: splitCard,
         remarks: editRemarks,
         pay_advance: editAdvance,
         pay_balance: editBalance,
@@ -358,8 +415,10 @@ export const BookingDetailPanel = ({
                 checkOut={editCheckOut} setCheckOut={setEditCheckOut}
                 rate={editRate} setRate={setEditRate}
                 nights={editNights} total={editTotal}
-                source={editSource} setSource={setEditSource}
-                sourceCat={editSourceCat} setSourceCat={setEditSourceCat}
+                source={editSource} onSourceChange={handleEditSourceChange}
+                sourceType={editSourceType} onSourceTypeChange={handleEditSourceTypeChange}
+                sourceCat={editSourceCat}
+                compatibleSources={compatibleEditSources}
                 payMode={editPayMode} setPayMode={setEditPayMode}
                 advance={editAdvance} setAdvance={setEditAdvance}
                 balance={editBalance}
@@ -862,8 +921,10 @@ const EditFields = (props: {
   checkOut: string; setCheckOut: (v: string) => void;
   rate: number; setRate: (v: number) => void;
   nights: number; total: number;
-  source: string; setSource: (v: string) => void;
-  sourceCat: string; setSourceCat: (v: string) => void;
+  source: string; onSourceChange: (v: string) => void;
+  sourceType: SourceType; onSourceTypeChange: (v: SourceType) => void;
+  sourceCat: string;
+  compatibleSources: string[];
   payMode: string; setPayMode: (v: string) => void;
   advance: number; setAdvance: (v: number) => void;
   balance: number;
@@ -948,18 +1009,36 @@ const EditFields = (props: {
       </div>
     </div>
 
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
       <div>
-        <label className="block text-xs font-bold text-slate-700 mb-1">Booking Source</label>
+        <div className="flex items-center justify-between mb-1">
+          <label className="block text-xs font-bold text-slate-700">Booking Source</label>
+          <span className="text-[9px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+            {props.sourceCat}
+          </span>
+        </div>
         <input
           list="edit-source-list"
           value={props.source}
-          onChange={(e) => props.setSource(e.target.value)}
-          className="w-full px-3.5 py-2 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+          onChange={(e) => props.onSourceChange(e.target.value)}
+          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
         />
         <datalist id="edit-source-list">
-          {props.sources.map((s) => <option key={s.id} value={s.name} />)}
+          {props.compatibleSources.map((s) => <option key={s} value={s} />)}
         </datalist>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Source Type</label>
+        <select
+          value={props.sourceType}
+          onChange={(e) => props.onSourceTypeChange(e.target.value as SourceType)}
+          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+        >
+          {ALL_SOURCE_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
       </div>
 
       <div>

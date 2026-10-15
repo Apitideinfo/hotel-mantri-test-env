@@ -224,6 +224,15 @@ export const reconcilePaymentLedger = ({
     if (!isPaymentEvt || amt <= 0) continue;
 
     const data = evt.event_data || {};
+    if (
+      evt.event_type?.includes('void') ||
+      data.status === 'void' ||
+      data.is_void ||
+      evt.status === 'void' ||
+      evt.status === 'cancelled'
+    ) {
+      continue;
+    }
     let paymentDate = normalizeDateString(
       data.payment_date || data.business_date || evt.created_at
     );
@@ -382,7 +391,7 @@ export const reconcilePaymentLedger = ({
     if (hasTimeline) continue;
 
     const hasResv = reservations.some(
-      (r) => (r.id === entry.id || (entry.reservation_id && r.id === entry.reservation_id)) && toNum(r.advance_paid) > 0
+      (r) => r.id === entry.id || (entry.reservation_id && r.id === entry.reservation_id)
     );
     if (hasResv) continue;
 

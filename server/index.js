@@ -126,6 +126,7 @@ import revenueRoutes from './routes/revenue.js';
 import laundryRoutes from './routes/laundry.js';
 import userRoutes from './routes/users.js';
 import housekeepingRoutes from './routes/housekeeping.js';
+import metaComplianceRoutes from './routes/metaCompliance.js';
 import {
   paymentRateLimiter,
   validateAndDeriveOrderContext,
@@ -218,6 +219,11 @@ app.use('/users', userRoutes);
 
 app.use('/api/housekeeping', housekeepingRoutes);
 app.use('/housekeeping', housekeepingRoutes);
+
+app.use('/api/meta', metaComplianceRoutes);
+app.use('/meta', metaComplianceRoutes);
+app.use('/api/compliance', metaComplianceRoutes);
+app.use('/compliance', metaComplianceRoutes);
 
 /**
  * STEP 1: Backend Endpoint to Create Order (SEC-03 Hardened)

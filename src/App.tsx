@@ -12,7 +12,17 @@ import { supabase } from '@/lib/supabase';
 import { triggerLiveSync } from '@/lib/externalChannelSyncService';
 
 
-type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'hotel-details' | 'checkout' | 'payment-success';
+type PublicView =
+  | 'landing'
+  | 'login'
+  | 'signup'
+  | 'otp-verify'
+  | 'hotel-details'
+  | 'checkout'
+  | 'payment-success'
+  | 'privacy-policy'
+  | 'data-deletion'
+  | 'terms';
 
 
 // Lazy-loaded screens — each becomes a separate chunk loaded on demand
@@ -24,6 +34,9 @@ const RecoveryScreen = lazy(() => import('@/screens/RecoveryScreen').then(m => (
 const LandingPage = lazy(() => import('@/screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const CheckoutScreen = lazy(() => import('@/screens/CheckoutScreen').then(m => ({ default: m.CheckoutScreen })));
 const PaymentSuccessScreen = lazy(() => import('@/screens/PaymentSuccessScreen').then(m => ({ default: m.PaymentSuccessScreen })));
+const PrivacyPolicyScreen = lazy(() => import('@/screens/PrivacyPolicyScreen').then(m => ({ default: m.PrivacyPolicyScreen })));
+const DataDeletionScreen = lazy(() => import('@/screens/DataDeletionScreen').then(m => ({ default: m.DataDeletionScreen })));
+const TermsOfServiceScreen = lazy(() => import('@/screens/TermsOfServiceScreen').then(m => ({ default: m.TermsOfServiceScreen })));
 const SubscriptionExpiredScreen = lazy(() => import('@/screens/SubscriptionExpiredScreen').then(m => ({ default: m.SubscriptionExpiredScreen })));
 const Dashboard = lazy(() => import('@/screens/Dashboard').then(m => ({ default: m.Dashboard })));
 const SuperAdminPanel = lazy(() => import('@/screens/SuperAdminPanel').then(m => ({ default: m.SuperAdminPanel })));
@@ -361,13 +374,21 @@ function AppInner() {
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [publicView, setPublicView] = useState<PublicView>(() => {
     try {
-      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
-      if (hash === 'login') return 'login';
-      if (hash === 'signup') return 'signup';
-      if (hash === 'checkout') return 'checkout';
-      if (hash === 'otp-verify') return 'otp-verify';
-      if (hash === 'hotel-details') return 'hotel-details';
-      if (hash === 'payment-success') return 'payment-success';
+      if (typeof window !== 'undefined') {
+        const path = window.location.pathname.toLowerCase();
+        const hash = window.location.hash.replace(/^#/, '').trim().toLowerCase();
+
+        if (path === '/privacy-policy' || path === '/privacy' || hash === 'privacy-policy' || hash === 'privacy') return 'privacy-policy';
+        if (path === '/data-deletion' || path === '/deletion' || hash === 'data-deletion' || hash === 'deletion') return 'data-deletion';
+        if (path === '/terms' || path === '/terms-and-conditions' || hash === 'terms') return 'terms';
+
+        if (hash === 'login') return 'login';
+        if (hash === 'signup') return 'signup';
+        if (hash === 'checkout') return 'checkout';
+        if (hash === 'otp-verify') return 'otp-verify';
+        if (hash === 'hotel-details') return 'hotel-details';
+        if (hash === 'payment-success') return 'payment-success';
+      }
     } catch {}
     return 'landing';
   });
@@ -489,14 +510,25 @@ function AppInner() {
   // Handle URL hash synchronization for public landing views
   useEffect(() => {
     if (loading) return;
-    if (!user) {
-      try {
-        const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
-        const isAppScreenHash = Boolean(HASH_TO_SCREEN[rawHash] || rawHash.startsWith('cm-'));
-        const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success'].includes(rawHash);
+    try {
+      const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      const isAppScreenHash = Boolean(HASH_TO_SCREEN[rawHash] || rawHash.startsWith('cm-'));
+      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success', 'privacy-policy', 'privacy', 'data-deletion', 'deletion', 'terms'].includes(rawHash);
 
+      if (publicView === 'privacy-policy') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/privacy-policy') {
+          window.history.replaceState(null, '', '/privacy-policy');
+        }
+      } else if (publicView === 'data-deletion') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/data-deletion') {
+          window.history.replaceState(null, '', '/data-deletion' + window.location.search);
+        }
+      } else if (publicView === 'terms') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/terms') {
+          window.history.replaceState(null, '', '/terms');
+        }
+      } else if (!user) {
         if (publicView === 'landing') {
-          // If unauthenticated on landing page with an authenticated app hash or public subview hash, clean the URL
           if (isAppScreenHash || isPublicHash) {
             window.history.replaceState(null, '', window.location.pathname + window.location.search);
           }
@@ -507,18 +539,19 @@ function AppInner() {
         } else if (publicView === 'checkout' && rawHash !== 'checkout') {
           window.history.replaceState(null, '', '#checkout');
         }
-      } catch {}
-    }
+      }
+    } catch {}
   }, [user, loading, publicView]);
 
   // Keep browser history in sync with internal nav state when authenticated
   useEffect(() => {
     if (loading || !user || !profileLoaded) return;
+    if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') return;
 
     try {
       const currentHash = SCREEN_TO_HASH[nav.screen] || nav.screen;
       const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
-      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success'].includes(rawHash);
+      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success', 'privacy-policy', 'privacy', 'data-deletion', 'deletion', 'terms'].includes(rawHash);
 
       // If on channel-manager and sub-tab hash exists (#cm-...), preserve it
       if (nav.screen === 'channel-manager' && rawHash.startsWith('cm-')) {
@@ -531,13 +564,28 @@ function AppInner() {
     } catch {
       // ignore
     }
-  }, [user, profileLoaded, loading, nav.screen, nav.date]);
+  }, [user, profileLoaded, loading, nav.screen, nav.date, publicView]);
 
   // Listen to browser Back/Forward (popstate) and hash changes
   useEffect(() => {
     const handleLocationChange = (e?: Event) => {
       try {
-        const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+        const path = typeof window !== 'undefined' ? window.location.pathname.toLowerCase() : '';
+        const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim().toLowerCase() : '';
+
+        // Universal compliance routes accessible across all auth states
+        if (path === '/privacy-policy' || path === '/privacy' || hash === 'privacy-policy' || hash === 'privacy') {
+          setPublicView('privacy-policy');
+          return;
+        }
+        if (path === '/data-deletion' || path === '/deletion' || hash === 'data-deletion' || hash === 'deletion') {
+          setPublicView('data-deletion');
+          return;
+        }
+        if (path === '/terms' || path === '/terms-and-conditions' || hash === 'terms') {
+          setPublicView('terms');
+          return;
+        }
 
         if (!user) {
           if (hash === 'login') setPublicView('login');
@@ -553,6 +601,10 @@ function AppInner() {
             setPublicView('landing');
           }
           return;
+        }
+
+        if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') {
+          setPublicView('landing');
         }
 
         if (role === 'housekeeping') {
@@ -614,6 +666,67 @@ function AppInner() {
     );
   }
 
+  // Universal Public Compliance Pages (Privacy Policy, Data Deletion, Terms)
+  if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') {
+    const handleReturn = () => {
+      if (user) {
+        setPublicView('landing');
+        const targetHash = SCREEN_TO_HASH[nav.screen] || 'dashboard';
+        window.history.pushState(null, '', '#' + targetHash);
+      } else {
+        setPublicView('landing');
+        window.history.pushState(null, '', '/');
+      }
+    };
+
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        {publicView === 'privacy-policy' && (
+          <PrivacyPolicyScreen
+            onNavigateHome={handleReturn}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
+        {publicView === 'data-deletion' && (
+          <DataDeletionScreen
+            onNavigateHome={handleReturn}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
+        {publicView === 'terms' && (
+          <TermsOfServiceScreen
+            onNavigateHome={handleReturn}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
+      </Suspense>
+    );
+  }
+
   // Not authenticated → Public landing page & complete conversion funnel
   if (!user) {
     return (
@@ -667,6 +780,18 @@ function AppInner() {
             onNavigateSignup={(planId) => {
               if (planId) setSelectedPlanId(planId);
               setPublicView('signup');
+            }}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
             }}
           />
         )}

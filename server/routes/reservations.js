@@ -56,6 +56,7 @@ import { sendEmail, isValidEmail } from '../services/emailService.js';
 import { sendWhatsAppMessage, buildWhatsAppDirectUrl, normalizeWhatsAppPhone } from '../services/whatsappService.js';
 import { resolveHotelOwnerEmail } from '../services/notificationService.js';
 import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
+import { getSourceCategoryFromType } from '../services/sourceClassification.js';
 
 const router = express.Router();
 
@@ -137,9 +138,10 @@ router.get('/', checkAuth, async (req, res) => {
       query = query.eq('status', status);
     }
 
-    // Filter by source / channel
+    // Filter by source / channel (maps specific types or DB categories)
     if (sourceCategory && sourceCategory !== 'all') {
-      query = query.eq('source_category', sourceCategory);
+      const dbCat = getSourceCategoryFromType(sourceCategory) || sourceCategory;
+      query = query.eq('source_category', dbCat);
     }
 
     // Filter by room

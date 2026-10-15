@@ -339,6 +339,15 @@ export const calculateDayWiseRevenue = async ({
     const amt = Number(evt.event_amount || 0);
     if (!isPaymentEvt || amt <= 0) continue;
     const ed = evt.event_data || {};
+    if (
+      evt.event_type?.includes('void') ||
+      ed.status === 'void' ||
+      ed.is_void ||
+      evt.status === 'void' ||
+      evt.status === 'cancelled'
+    ) {
+      continue;
+    }
     let pDate = ed.payment_date || ed.business_date || (evt.created_at ? evt.created_at.slice(0, 10) : null);
 
     const linkedResv = evt.reservation_id ? resvMap.get(evt.reservation_id) : null;

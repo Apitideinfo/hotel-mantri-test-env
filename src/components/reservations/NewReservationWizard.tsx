@@ -23,6 +23,12 @@ import { getCategoryAvailability } from '@/lib/api-reservations';
 import { buildReservationInputs, type RoomDetailConfig } from '@/lib/reservationFormHelpers';
 import { searchGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
+import {
+  ALL_SOURCE_TYPES,
+  synchronizeSourceAndType,
+  getCompatibleSourcesForType,
+  type SourceType,
+} from '@/lib/sourceClassification';
 
 /* ─── Wizard Step Enum ─── */
 type WizardStep = 1 | 2 | 3 | 4;
@@ -460,8 +466,37 @@ export const NewReservationWizard = ({
   const [guestCity, setGuestCity] = useState('');
   const [guestAddress, setGuestAddress] = useState('');
   const [bookingSource, setBookingSource] = useState('Direct');
-  const [sourceType, setSourceType] = useState('Walk-In');
+  const [sourceType, setSourceType] = useState<SourceType>('Direct');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
+
+  // Bidirectional source/type synchronization ensuring valid compatible state
+  const handleBookingSourceChange = useCallback((newSource: string) => {
+    const sync = synchronizeSourceAndType({
+      source: newSource,
+      type: sourceType,
+      hotelSources: sources,
+      changedField: 'source',
+    });
+    setBookingSource(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
+  }, [sourceType, sources]);
+
+  const handleSourceTypeChange = useCallback((newType: SourceType) => {
+    const sync = synchronizeSourceAndType({
+      source: bookingSource,
+      type: newType,
+      hotelSources: sources,
+      changedField: 'type',
+    });
+    setBookingSource(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
+  }, [bookingSource, sources]);
+
+  const compatibleSources = useMemo(() => {
+    return getCompatibleSourcesForType(sourceType, sources);
+  }, [sourceType, sources]);
   const [guestType, setGuestType] = useState('');
   const [companyGst, setCompanyGst] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -1737,26 +1772,21 @@ export const NewReservationWizard = ({
                     {/* Booking Source & Source Type */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1.5">Booking Source</label>
-                        <input list="wiz-sources-list"
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700">Booking Source</label>
+                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                            Category: {sourceCat}
+                          </span>
+                        </div>
+                        <input
+                          list="wiz-sources-list"
                           value={bookingSource}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setBookingSource(val);
-                            if (val.toLowerCase().includes('ota') || val.toLowerCase().includes('booking') || val.toLowerCase().includes('makemytrip')) {
-                              setSourceCat('OTA');
-                            } else if (val.toLowerCase().includes('agent')) {
-                              setSourceCat('Corporate/Agent');
-                            } else {
-                              setSourceCat('Direct/Walking');
-                            }
-                          }}
+                          onChange={(e) => handleBookingSourceChange(e.target.value)}
                           placeholder="e.g. Direct, MakeMyTrip, Agoda"
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                         />
                         <datalist id="wiz-sources-list">
-                          {STANDARD_BOOKING_SOURCES.map((s) => <option key={s} value={s} />)}
-                          {sources.map((s) => <option key={s.id} value={s.name} />)}
+                          {compatibleSources.map((s) => <option key={s} value={s} />)}
                         </datalist>
                       </div>
 
@@ -1764,9 +1794,10 @@ export const NewReservationWizard = ({
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Source Type</label>
                         <select
                           value={sourceType}
-                          onChange={(e) => setSourceType(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold">
-                          {SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                          onChange={(e) => handleSourceTypeChange(e.target.value as SourceType)}
+                          className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
+                        >
+                          {ALL_SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                         </select>
                       </div>
                     </div>
