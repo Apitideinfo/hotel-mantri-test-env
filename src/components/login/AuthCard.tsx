@@ -250,31 +250,6 @@ export const AuthCard: React.FC<AuthCardProps> = ({
                 </button>
               </form>
 
-              {/* OR Divider */}
-              <div className="relative my-5 text-center">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-200/80" />
-                </div>
-                <span className="relative bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                  OR
-                </span>
-              </div>
-
-              {/* Sign Up Navigation */}
-              {onNavigateToSignup && (
-                <div className="text-center">
-                  <p className="text-slate-500 text-xs sm:text-sm font-medium">
-                    Don't have an account?{' '}
-                    <button
-                      type="button"
-                      onClick={onNavigateToSignup}
-                      className="text-[#1a68fb] font-bold hover:underline cursor-pointer ml-1"
-                    >
-                      Sign Up
-                    </button>
-                  </p>
-                </div>
-              )}
             </>
           ) : (
             /* Forgot Password Flow */

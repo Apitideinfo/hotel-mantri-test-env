@@ -187,6 +187,9 @@ export const BookingDetailPanel = ({
   const [editAdvance, setEditAdvance] = useState(
     isReservation ? toNum(reservation?.advance_paid) : entryPaid,
   );
+  const [editRemarks, setEditRemarks] = useState(
+    reservation?.remarks || entry?.remarks || (booking.raw as any)?.remarks || '',
+  );
 
   const handleEditSourceChange = (newSource: string) => {
     const sync = synchronizeSourceAndType({
