@@ -660,7 +660,8 @@ const ViewFields = ({
     ? groupReservations.reduce((sum, r) => {
         const rRate = toNum(r.rate) > 0 ? toNum(r.rate) : effectiveRate;
         const rNights = toNum(r.nights) || booking.nights;
-        return sum + (rRate * rNights);
+        const rTotal = toNum(r.invoice_total) > 0 ? toNum(r.invoice_total) : (rRate * rNights);
+        return sum + rTotal;
       }, 0)
     : total;
 
@@ -716,7 +717,7 @@ const ViewFields = ({
               const rCat = categories.find(c => c.id === rRoom?.category_id);
               const rNights = toNum(r.nights) || booking.nights;
               const rRate = toNum(r.rate) > 0 ? toNum(r.rate) : effectiveRate;
-              const rSubtotal = rRate * rNights;
+              const rSubtotal = toNum(r.invoice_total) > 0 ? toNum(r.invoice_total) : (rRate * rNights);
 
               return (
                 <div
@@ -870,12 +871,12 @@ const ViewFields = ({
 
         <div className="space-y-2 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-slate-500 font-medium">Nightly Rate</span>
-            <span className="font-extrabold text-slate-900">₹{fmtInt(booking.rate)}/night</span>
+            <span className="text-slate-500 font-medium">{isGroup ? `Room ${booking.roomNo} Rate` : 'Nightly Rate'}</span>
+            <span className="font-extrabold text-slate-900">₹{fmtInt(effectiveRate)}/night</span>
           </div>
 
           <div className="flex items-center justify-between">
-            <span className="text-slate-500 font-medium">Stay Subtotal ({booking.nights} nights)</span>
+            <span className="text-slate-500 font-medium">{isGroup ? `Room ${booking.roomNo} Subtotal (${booking.nights}N)` : `Stay Subtotal (${booking.nights} nights)`}</span>
             <span className="font-bold text-slate-900">₹{fmtInt(total)}</span>
           </div>
 
@@ -886,27 +887,56 @@ const ViewFields = ({
             </div>
           )}
 
-          <div className="flex items-center justify-between py-2 border-t border-slate-200">
-            <span className="font-extrabold text-slate-900 text-sm">Invoice Total</span>
-            <span className="font-black text-slate-900 text-sm">₹{fmtInt(total + gstAmount)}</span>
-          </div>
+          {isGroup ? (
+            <>
+              <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-slate-900 text-sm">Total Group Stay</span>
+                  <span className="font-black text-slate-900 text-sm">₹{fmtInt(groupTotalTariff)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-medium">Total Advance Paid ({booking.paymentMode || 'Cash'})</span>
+                  <span className="font-extrabold text-emerald-700">₹{fmtInt(groupTotalAdvance)}</span>
+                </div>
+              </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-slate-500 font-medium">Advance Received ({booking.paymentMode || 'Cash'})</span>
-            <span className="font-extrabold text-emerald-700">₹{fmtInt(advance)}</span>
-          </div>
+              {/* Group Balance Pill */}
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                groupTotalBalance >= 1.0 
+                  ? 'bg-rose-50 border-rose-300 text-rose-900' 
+                  : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+              }`}>
+                <span className="font-black">Group Balance Due</span>
+                <span className="font-black text-sm">
+                  {groupTotalBalance >= 1.0 ? `Due ₹${fmtInt(groupTotalBalance)}` : '✓ Group Fully Settled'}
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between py-2 border-t border-slate-200">
+                <span className="font-extrabold text-slate-900 text-sm">Invoice Total</span>
+                <span className="font-black text-slate-900 text-sm">₹{fmtInt(total + gstAmount)}</span>
+              </div>
 
-          {/* Balance Pill */}
-          <div className={`flex items-center justify-between p-2.5 rounded-xl border ${
-            balance >= 1.0 
-              ? 'bg-rose-50 border-rose-300 text-rose-900' 
-              : 'bg-emerald-50 border-emerald-300 text-emerald-900'
-          }`}>
-            <span className="font-black">{balance >= 1.0 ? 'Balance Due' : 'Payment Status'}</span>
-            <span className="font-black text-sm">
-              {balance >= 1.0 ? `Due ₹${fmtInt(balance)}` : '✓ Fully Settled'}
-            </span>
-          </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 font-medium">Advance Received ({booking.paymentMode || 'Cash'})</span>
+                <span className="font-extrabold text-emerald-700">₹{fmtInt(advance)}</span>
+              </div>
+
+              {/* Balance Pill */}
+              <div className={`flex items-center justify-between p-2.5 rounded-xl border ${
+                balance >= 1.0 
+                  ? 'bg-rose-50 border-rose-300 text-rose-900' 
+                  : 'bg-emerald-50 border-emerald-300 text-emerald-900'
+              }`}>
+                <span className="font-black">{balance >= 1.0 ? 'Balance Due' : 'Payment Status'}</span>
+                <span className="font-black text-sm">
+                  {balance >= 1.0 ? `Due ₹${fmtInt(balance)}` : '✓ Fully Settled'}
+                </span>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

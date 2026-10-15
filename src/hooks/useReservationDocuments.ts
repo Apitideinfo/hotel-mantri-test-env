@@ -72,6 +72,7 @@ export const useReservationDocuments = ({
       const data = await getReservationConfirmationData(targetResId);
       downloadReservationConfirmationPdf({
         reservation: data.reservation,
+        multiRooms: data.multiRooms,
         settings: data.hotel as any,
       });
       setDocSuccess('Confirmation PDF downloaded.');
@@ -92,6 +93,7 @@ export const useReservationDocuments = ({
       const data = await getReservationConfirmationData(targetResId);
       printReservationConfirmationPdf({
         reservation: data.reservation,
+        multiRooms: data.multiRooms,
         settings: data.hotel as any,
       });
       setDocSuccess('Print dialog opened.');

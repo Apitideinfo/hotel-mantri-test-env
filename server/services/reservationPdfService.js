@@ -371,19 +371,20 @@ export const buildReservationConfirmationViewModel = async ({
   for (let i = 0; i < roomsList.length; i++) {
     const rm = roomsList[i];
     const catName = await resolveRoomCategoryName({ reservation: rm, hotelId });
-    const assigned = rm.room_no && rm.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${rm.room_no})` : '';
-    const unitRate = Number(rm.rate) || Math.round(Number(rm.invoice_total || 0) / nights);
-    const itemTotal = Number(rm.invoice_total) || (unitRate * nights);
+    const roomLabel = rm.room_no && rm.room_no.toLowerCase() !== 'unassigned' ? `Room ${rm.room_no}` : 'Unassigned';
+    const rmNights = calculateNights(rm.check_in_date || checkIn, rm.check_out_date || checkOut);
+    const unitRate = Number(rm.rate) || (rmNights > 0 ? Math.round(Number(rm.invoice_total || 0) / rmNights) : 0);
+    const itemTotal = Number(rm.invoice_total) || (unitRate * rmNights);
 
     roomItems.push({
       srNo: i + 1,
-      roomCategory: `${catName}${assigned}`,
-      roomNo: rm.room_no || 'Unassigned',
+      roomNo: roomLabel,
+      roomCategory: catName,
       adultsBed: `${rm.adults || 2} + ${rm.extra_beds || 0}`,
       childInfant: `${rm.children || 0} + ${rm.infants || 0}`,
       mealPlan: formatMealPlan(rm.meal_plan || reservation.meal_plan),
       unitRate,
-      nights,
+      nights: rmNights,
       total: itemTotal,
     });
   }
@@ -417,9 +418,20 @@ export const buildReservationConfirmationViewModel = async ({
     bookingSource = 'Direct';
   }
 
-  // 4. Financial totals
-  const totalVal = Number(reservation.invoice_total) || (Number(reservation.rate || 0) * nights);
-  const paidVal = Number(reservation.advance_paid) || 0;
+  // 4. Financial totals (group-aware across all sibling rooms)
+  const isGroup = roomsList.length > 1;
+  const totalVal = isGroup
+    ? roomItems.reduce((acc, it) => acc + (Number(it.total) || 0), 0)
+    : (Number(reservation.invoice_total) || (Number(reservation.rate || 0) * nights));
+
+  const paidVal = isGroup
+    ? roomsList.reduce((acc, rm) => {
+        const splitSum = (Number(rm.paid_cash) || 0) + (Number(rm.paid_card) || 0) + (Number(rm.paid_upi) || 0) + (Number(rm.paid_ota) || 0);
+        const adv = Number(rm.advance_paid) || 0;
+        return acc + (adv > 0 ? adv : splitSum);
+      }, 0)
+    : (Number(reservation.advance_paid) || 0);
+
   const dueVal = Math.max(0, totalVal - paidVal);
 
   return {
@@ -513,23 +525,73 @@ export const buildReservationConfirmationPdf = (options) => {
     phone: options.reservation?.guest_phone || '—',
   };
 
-  const roomItems = vm ? vm.roomItems : [
-    {
-      srNo: 1,
-      roomCategory: options.reservation?.rate_plan || 'Deluxe AC Room',
-      adultsBed: `${options.reservation?.adults || 2} + 0`,
-      childInfant: `${options.reservation?.children || 0} + 0`,
-      mealPlan: formatMealPlan(options.reservation?.meal_plan),
-      unitRate: Number(options.reservation?.rate || 0),
-      total: Number(options.reservation?.invoice_total || options.reservation?.rate || 0),
-    }
-  ];
+  const isMultiRoomGroup = (vm && vm.roomItems && vm.roomItems.length > 1) || (options.multiRooms && options.multiRooms.length > 1);
 
-  const fin = vm ? vm.financial : {
-    grandTotal: Number(options.reservation?.invoice_total || 0),
-    paidAmount: Number(options.reservation?.advance_paid || 0),
-    dueAmount: Math.max(0, Number(options.reservation?.invoice_total || 0) - Number(options.reservation?.advance_paid || 0)),
-  };
+  let roomItems = vm ? vm.roomItems : null;
+  if (!roomItems) {
+    if (options.multiRooms && options.multiRooms.length > 0) {
+      roomItems = options.multiRooms.map((rm, i) => {
+        const catName = rm.room_category || (rm.rate_plan && rm.rate_plan !== 'Base' ? rm.rate_plan : 'Deluxe AC Room');
+        const roomLabel = rm.room_no && rm.room_no.toLowerCase() !== 'unassigned' ? `Room ${rm.room_no}` : 'Unassigned';
+        const rmNights = calculateNights(rm.check_in_date || options.reservation?.check_in_date, rm.check_out_date || options.reservation?.check_out_date);
+        const unitRate = Number(rm.rate) || (rmNights > 0 ? Math.round(Number(rm.invoice_total || 0) / rmNights) : 0);
+        const total = Number(rm.invoice_total) || (unitRate * rmNights);
+        return {
+          srNo: i + 1,
+          roomNo: roomLabel,
+          roomCategory: catName,
+          adultsBed: `${rm.adults || 2} + ${rm.extra_beds || 0}`,
+          childInfant: `${rm.children || 0} + ${rm.infants || 0}`,
+          mealPlan: formatMealPlan(rm.meal_plan || options.reservation?.meal_plan),
+          unitRate,
+          nights: rmNights,
+          total,
+        };
+      });
+    } else {
+      const res = options.reservation;
+      const catName = res?.room_category || (res?.rate_plan && res?.rate_plan !== 'Base' ? res.rate_plan : 'Deluxe AC Room');
+      const roomLabel = res?.room_no && res?.room_no.toLowerCase() !== 'unassigned' ? `Room ${res.room_no}` : 'Unassigned';
+      const unitRate = Number(res?.rate || 0);
+      const total = Number(res?.invoice_total || res?.rate || 0);
+      roomItems = [
+        {
+          srNo: 1,
+          roomNo: roomLabel,
+          roomCategory: catName,
+          adultsBed: `${res?.adults || 2} + 0`,
+          childInfant: `${res?.children || 0} + 0`,
+          mealPlan: formatMealPlan(res?.meal_plan),
+          unitRate,
+          nights: 1,
+          total,
+        }
+      ];
+    }
+  }
+
+  const fin = vm ? vm.financial : (() => {
+    if (isMultiRoomGroup && options.multiRooms && options.multiRooms.length > 0) {
+      const grandTotal = roomItems.reduce((acc, it) => acc + (Number(it.total) || 0), 0);
+      const paidAmount = options.multiRooms.reduce((acc, rm) => {
+        const splitSum = (Number(rm.paid_cash) || 0) + (Number(rm.paid_card) || 0) + (Number(rm.paid_upi) || 0) + (Number(rm.paid_ota) || 0);
+        const adv = Number(rm.advance_paid) || 0;
+        return acc + (adv > 0 ? adv : splitSum);
+      }, 0);
+      return {
+        grandTotal,
+        paidAmount,
+        dueAmount: Math.max(0, grandTotal - paidAmount),
+      };
+    }
+    const inv = Number(options.reservation?.invoice_total || 0);
+    const adv = Number(options.reservation?.advance_paid || 0);
+    return {
+      grandTotal: inv,
+      paidAmount: adv,
+      dueAmount: Math.max(0, inv - adv),
+    };
+  })();
 
   const logoDataUrl = options.logoDataUrl || null;
 
@@ -761,7 +823,7 @@ export const buildReservationConfirmationPdf = (options) => {
     { label: 'Check Out Date', val: res.checkOut, icon: drawCalendarIcon },
     { label: 'Number of Nights', val: `${res.nights}`, icon: drawMoonIcon },
     { label: 'Number of Rooms', val: `${res.roomsCount}`, icon: drawBuildingIcon },
-    { label: 'Total Amount', val: fmtRs(fin.grandTotal), icon: (d, x, y, s, c) => drawRupee(d, x, y, 2.8, c) },
+    { label: isMultiRoomGroup ? 'Total Group Stay' : 'Total Amount', val: fmtRs(fin.grandTotal), icon: (d, x, y, s, c) => drawRupee(d, x, y, 2.8, c) },
     { label: 'Payment Reference', val: res.paymentReference, icon: drawCreditCardIcon },
     { label: 'Created By', val: res.createdBy, icon: drawUserIcon },
   ];
@@ -799,12 +861,12 @@ export const buildReservationConfirmationPdf = (options) => {
   doc.setFontSize(8.5);
   doc.text('BOOKING SUMMARY', pageWidth / 2, tableBannerY + 3.8, { align: 'center' });
 
-  // Table rows
+  // Table rows with room number and rate per night
   const tableRows = roomItems.map(item => [
     String(item.srNo),
+    item.roomNo || 'Unassigned',
     item.roomCategory,
-    item.adultsBed,
-    item.childInfant,
+    item.adultsBed || `${item.adults || 2} + 0`,
     item.mealPlan,
     Math.round(item.unitRate).toLocaleString('en-IN'),
     Math.round(item.total).toLocaleString('en-IN'),
@@ -812,7 +874,7 @@ export const buildReservationConfirmationPdf = (options) => {
 
   autoTable(doc, {
     startY: tableBannerY + 6.5,
-    head: [['SR NO.', 'ROOM CATEGORY', 'ADULTS+BED', 'CHILD+INFANT', 'MEAL PLAN', 'UNIT RATE (Rs.)', 'TOTAL (Rs.)']],
+    head: [['SR NO.', 'ROOM NO.', 'ROOM CATEGORY', 'ADULTS+BED', 'MEAL PLAN', 'RATE / NT (Rs.)', 'TOTAL (Rs.)']],
     body: tableRows,
     margin: { left: leftM, right: rightM },
     theme: 'grid',
@@ -828,12 +890,12 @@ export const buildReservationConfirmationPdf = (options) => {
     },
     columnStyles: {
       0: { halign: 'center', cellWidth: 14 },
-      1: { halign: 'left', cellWidth: 50 },
-      2: { halign: 'center', cellWidth: 26 },
+      1: { halign: 'center', cellWidth: 22 },
+      2: { halign: 'left', cellWidth: 44 },
       3: { halign: 'center', cellWidth: 24 },
-      4: { halign: 'center', cellWidth: 28 },
-      5: { halign: 'right', cellWidth: 20 },
-      6: { halign: 'right', cellWidth: 20 },
+      4: { halign: 'center', cellWidth: 26 },
+      5: { halign: 'right', cellWidth: 26 },
+      6: { halign: 'right', cellWidth: 26 },
     },
     bodyStyles: {
       fontSize: 8,
@@ -852,9 +914,9 @@ export const buildReservationConfirmationPdf = (options) => {
   // Financial Summary Lines (Right-aligned below table)
   let sumY = tableEndY + 4.5;
   const sumItems = [
-    { label: 'GRAND TOTAL', val: fmtRs(fin.grandTotal), color: C.navyDark },
-    { label: 'PAID AMOUNT', val: fmtRs(fin.paidAmount), color: C.emeraldText },
-    { label: 'DUE AMOUNT (PAY LATER)', val: fmtRs(fin.dueAmount), color: fin.dueAmount > 0 ? C.roseText : C.emeraldText },
+    { label: isMultiRoomGroup ? 'TOTAL GROUP STAY' : 'GRAND TOTAL', val: fmtRs(fin.grandTotal), color: C.navyDark },
+    { label: isMultiRoomGroup ? 'TOTAL ADVANCE PAID' : 'PAID AMOUNT', val: fmtRs(fin.paidAmount), color: C.emeraldText },
+    { label: isMultiRoomGroup ? 'GROUP BALANCE DUE' : 'DUE AMOUNT (PAY LATER)', val: fmtRs(fin.dueAmount), color: fin.dueAmount > 0 ? C.roseText : C.emeraldText },
   ];
 
   sumItems.forEach(item => {
