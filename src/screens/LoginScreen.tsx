@@ -53,6 +53,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthSuccess: _onAuth
       <img
         src="/login_bg_image.png"
         alt="HotelMantri Hospitality Platform"
+        onError={(e) => {
+          (e.target as HTMLImageElement).src = '/hero_bg.jpg';
+        }}
         className="absolute inset-0 w-full h-full object-cover object-left lg:object-center pointer-events-none z-0"
       />
 

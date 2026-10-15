@@ -21,6 +21,7 @@ import {
 import { getRooms, getRoomCategories, getCompanySources, getSettings } from '@/lib/api';
 import { getHotSeasons, isHotSeasonDate } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
+import { toNum } from '@/lib/calc';
 import { AssignRoomModal, ExtendStayModal } from './ReservationModals';
 import { ReservationConflictsModal } from './ReservationConflictsModal';
 import { NewBookingModal } from '@/components/NewBookingModal';
