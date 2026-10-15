@@ -12,6 +12,7 @@ import { reconcilePaymentLedger, type PaymentTransaction } from './financialLedg
 
 import { getExpenseEntriesForDate, getExpenseEntriesForDateRange, getRevenueEntriesForDate, getRevenueEntriesForDateRange } from './api-finance';
 import type { ExpenseEntry, RevenueEntry } from './types-finance';
+import { classifyCompanyUnified } from './sourceClassification';
 
 // The current user's hotel_id, set by the auth provider BEFORE any screen renders.
 // Starts as null — no fallback to any hardcoded hotel. Screens are gated on
@@ -39,15 +40,41 @@ export const getCurrentHotelId = (): string => {
 };
 
 
-export const getSettings = async (): Promise<HotelSettings> => {
+// Safe in-memory configuration cache for static reference data
+const _companySourcesCache = new Map<string, { data: CompanySource[]; timestamp: number }>();
+const _hotelSettingsCache = new Map<string, { data: HotelSettings; timestamp: number }>();
+const CONFIG_CACHE_TTL_MS = 60000; // 60s TTL for static configuration
+
+export const invalidateCompanySourcesCache = (hotelId?: string) => {
+  if (hotelId) _companySourcesCache.delete(hotelId);
+  else _companySourcesCache.clear();
+};
+
+export const invalidateSettingsCache = (hotelId?: string) => {
+  if (hotelId) _hotelSettingsCache.delete(hotelId);
+  else _hotelSettingsCache.clear();
+};
+
+export const getSettings = async (forceRefresh = false): Promise<HotelSettings> => {
   const hotelId = getCurrentHotelId();
+  if (!forceRefresh) {
+    const cached = _hotelSettingsCache.get(hotelId);
+    if (cached && Date.now() - cached.timestamp < CONFIG_CACHE_TTL_MS) {
+      return cached.data;
+    }
+  }
+
   try {
     const { data, error } = await supabase
       .from('hotel_settings')
       .select('*')
       .eq('id', hotelId)
       .maybeSingle();
-    if (data) return data as HotelSettings;
+    if (data) {
+      const res = data as HotelSettings;
+      _hotelSettingsCache.set(hotelId, { data: res, timestamp: Date.now() });
+      return res;
+    }
 
     const { data: hotelData } = await supabase
       .from('hotels')
@@ -66,8 +93,12 @@ export const getSettings = async (): Promise<HotelSettings> => {
       })
       .select('*')
       .maybeSingle();
-    if (created) return created as HotelSettings;
-    return {
+    if (created) {
+      const res = created as HotelSettings;
+      _hotelSettingsCache.set(hotelId, { data: res, timestamp: Date.now() });
+      return res;
+    }
+    const fallback = {
       id: hotelId,
       hotel_name: hotelName,
       total_rooms: totalRooms,
@@ -76,8 +107,10 @@ export const getSettings = async (): Promise<HotelSettings> => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     } as unknown as HotelSettings;
+    _hotelSettingsCache.set(hotelId, { data: fallback, timestamp: Date.now() });
+    return fallback;
   } catch {
-    return {
+    const fallback = {
       id: hotelId,
       hotel_name: 'Hotel',
       total_rooms: 20,
@@ -86,35 +119,49 @@ export const getSettings = async (): Promise<HotelSettings> => {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     } as unknown as HotelSettings;
+    return fallback;
   }
 };
 
 export const updateSettings = async (patch: Partial<HotelSettings>): Promise<HotelSettings> => {
+  const hotelId = getCurrentHotelId();
   const { data, error } = await supabase
     .from('hotel_settings')
     .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq('id', getCurrentHotelId())
+    .eq('id', hotelId)
     .select('*')
     .single();
   if (error) throw error;
+  invalidateSettingsCache(hotelId);
   return data as HotelSettings;
 };
 
 // ---- Company sources ----
 
-export const getCompanySources = async (): Promise<CompanySource[]> => {
+export const getCompanySources = async (forceRefresh = false): Promise<CompanySource[]> => {
+  const hotelId = getCurrentHotelId();
+  if (!forceRefresh) {
+    const cached = _companySourcesCache.get(hotelId);
+    if (cached && Date.now() - cached.timestamp < CONFIG_CACHE_TTL_MS) {
+      return cached.data;
+    }
+  }
+
   const { data, error } = await supabase
     .from('company_sources')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', hotelId)
     .order('name', { ascending: true });
   if (error) throw error;
-  return (data as CompanySource[]) ?? [];
+  const list = (data as CompanySource[]) ?? [];
+  _companySourcesCache.set(hotelId, { data: list, timestamp: Date.now() });
+  return list;
 };
 
 export const upsertCompanySource = async (
   name: string, sourceCategory: SourceCategory, id?: string
 ): Promise<CompanySource> => {
+  const hotelId = getCurrentHotelId();
   if (id) {
     // Update existing row by id (rename or category change)
     const { data, error } = await supabase
@@ -124,20 +171,24 @@ export const upsertCompanySource = async (
       .select('*')
       .single();
     if (error) throw error;
+    invalidateCompanySourcesCache(hotelId);
     return data as CompanySource;
   }
   const { data, error } = await supabase
     .from('company_sources')
-    .upsert({ hotel_id: getCurrentHotelId(), name: name.trim(), source_category: sourceCategory })
+    .upsert({ hotel_id: hotelId, name: name.trim(), source_category: sourceCategory })
     .select('*')
     .single();
   if (error) throw error;
+  invalidateCompanySourcesCache(hotelId);
   return data as CompanySource;
 };
 
 export const deleteCompanySource = async (id: string): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const { error } = await supabase.from('company_sources').delete().eq('id', id);
   if (error) throw error;
+  invalidateCompanySourcesCache(hotelId);
 };
 
 // ---- Room categories ----
@@ -281,16 +332,9 @@ export const uploadHotelLogo = async (file: File): Promise<string> => {
 // ---- Room chart ----
 
 export const classifyCompany = (
-  name: string, sources: CompanySource[]
+  name: string, sources: CompanySource[] = []
 ): SourceCategory => {
-  const found = sources.find((s) => s.name.toLowerCase() === name.trim().toLowerCase());
-  if (found) return found.source_category;
-  const n = name.trim().toLowerCase();
-  if (!n) return 'Direct/Walking';
-  if (/walk\s*in|direct/.test(n)) return 'Direct/Walking';
-  if (/phonebook/.test(n)) return 'Phonebook';
-  if (/makemytrip|mmt|booking\.com|goibibo|cleartrip|oyo|agoda|expedia|airbnb|treebo|fabhotels/.test(n)) return 'OTA';
-  return 'Corporate/Agent';
+  return classifyCompanyUnified(name, sources);
 };
 
 // ---- Room chart & authoritative stay synthesis ----
@@ -553,13 +597,15 @@ export const deleteRoomChartRow = async (id: string): Promise<void> => {
 
 export const getRoomChartForDateRange = async (fromDate: string, toDate: string): Promise<RoomChartEntry[]> => {
   const hotelId = getCurrentHotelId();
-  // Fetch room chart entries created in the past 60 days or for future dates
+  // Fetch room chart entries bounded between lookback and lookahead window
   const lookbackDate = addDays(fromDate, -60);
+  const lookaheadDate = addDays(toDate, 60);
   const { data, error } = await supabase
     .from('room_chart_entries')
     .select('*')
     .eq('hotel_id', hotelId)
     .gte('report_date', lookbackDate)
+    .lte('report_date', lookaheadDate)
     .order('report_date', { ascending: true });
   if (error) {
     console.error('[getRoomChartForDateRange] Supabase error:', error);

@@ -23,6 +23,12 @@ import { getCategoryAvailability } from '@/lib/api-reservations';
 import { buildReservationInputs, type RoomDetailConfig } from '@/lib/reservationFormHelpers';
 import { searchGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
+import {
+  ALL_SOURCE_TYPES,
+  synchronizeSourceAndType,
+  getCompatibleSourcesForType,
+  type SourceType,
+} from '@/lib/sourceClassification';
 
 /* ─── Wizard Step Enum ─── */
 type WizardStep = 1 | 2 | 3 | 4;
@@ -509,35 +515,39 @@ export const NewReservationWizard = ({
   const [guestCity, setGuestCity] = useState('');
   const [guestAddress, setGuestAddress] = useState('');
   const [bookingSource, setBookingSource] = useState('Direct');
-  const [sourceType, setSourceType] = useState('Walk-In');
+  const [sourceType, setSourceType] = useState<SourceType>('Direct');
   const [sourceCat, setSourceCat] = useState<SourceCategory>('Direct/Walking');
   const [isCustomSource, setIsCustomSource] = useState(false);
   const [customSourceName, setCustomSourceName] = useState('');
 
-  const activeSourcesList = useMemo(() => {
-    return getSourcesForType(sourceType, sources);
+  // Bidirectional source/type synchronization ensuring valid compatible state
+  const handleBookingSourceChange = useCallback((newSource: string) => {
+    const sync = synchronizeSourceAndType({
+      source: newSource,
+      type: sourceType,
+      hotelSources: sources,
+      changedField: 'source',
+    });
+    setBookingSource(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
   }, [sourceType, sources]);
 
-  const handleSourceTypeChange = (newType: string) => {
-    setSourceType(newType);
-    let newCat: SourceCategory = 'Direct/Walking';
-    if (newType === 'OTA') newCat = 'OTA';
-    else if (newType === 'Corporate' || newType === 'Agent') newCat = 'Corporate/Agent';
-    else newCat = 'Direct/Walking';
-    setSourceCat(newCat);
+  const handleSourceTypeChange = useCallback((newType: SourceType) => {
+    const sync = synchronizeSourceAndType({
+      source: bookingSource,
+      type: newType,
+      hotelSources: sources,
+      changedField: 'type',
+    });
+    setBookingSource(sync.source);
+    setSourceType(sync.type);
+    setSourceCat(sync.category);
+  }, [bookingSource, sources]);
 
-    const available = getSourcesForType(newType, sources);
-    setIsCustomSource(false);
-    setCustomSourceName('');
-    if (newType === 'OTA') {
-      setBookingSource('Booking.com');
-    } else if (available.length > 0) {
-      setBookingSource(available[0]);
-    } else {
-      setBookingSource(newType === 'Corporate' ? 'Corporate Direct' : newType === 'Agent' ? 'Travel Agent' : 'Direct');
-    }
-  };
-
+  const compatibleSources = useMemo(() => {
+    return getCompatibleSourcesForType(sourceType, sources);
+  }, [sourceType, sources]);
   const [guestType, setGuestType] = useState('');
   const [companyGst, setCompanyGst] = useState('');
   const [companyName, setCompanyName] = useState('');
@@ -1877,18 +1887,12 @@ export const NewReservationWizard = ({
                               setIsCustomSource(true);
                             } else {
                               setIsCustomSource(false);
-                              setBookingSource(val);
-                              if (ALL_LISTED_OTAS.includes(val) || val.toLowerCase().includes('ota')) {
-                                setSourceCat('OTA');
-                                setSourceType('OTA');
-                              } else if (val.toLowerCase().includes('corporate') || val.toLowerCase().includes('agent')) {
-                                setSourceCat('Corporate/Agent');
-                              }
+                              handleBookingSourceChange(val);
                             }
                           }}
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                         >
-                          {activeSourcesList.map((s) => (
+                          {compatibleSources.map((s) => (
                             <option key={s} value={s}>{s}</option>
                           ))}
                           <option value="__CUSTOM__">+ Other / Custom Source...</option>
@@ -1902,7 +1906,7 @@ export const NewReservationWizard = ({
                             onChange={(e) => {
                               const val = e.target.value;
                               setCustomSourceName(val);
-                              setBookingSource(val);
+                              handleBookingSourceChange(val);
                             }}
                             placeholder="Type custom booking source..."
                             className="mt-2 w-full px-3.5 py-2 text-xs text-slate-900 bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
@@ -1914,12 +1918,15 @@ export const NewReservationWizard = ({
                         <label className="block text-xs font-bold text-slate-700 mb-1.5">Source Type</label>
                         <select
                           value={sourceType}
-                          onChange={(e) => handleSourceTypeChange(e.target.value)}
+                          onChange={(e) => {
+                            const newType = e.target.value as SourceType;
+                            handleSourceTypeChange(newType);
+                            setIsCustomSource(false);
+                            setCustomSourceName('');
+                          }}
                           className="w-full px-3.5 py-2.5 text-xs text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-semibold"
                         >
-                          {SOURCE_TYPES.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
+                          {ALL_SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                         </select>
                       </div>
                     </div>

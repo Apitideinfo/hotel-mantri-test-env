@@ -246,6 +246,7 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
         }
         periodCash={periodRevenue?.summary.collections.cash}
         periodBank={periodRevenue?.summary.collections.bank}
+        periodTotalCollections={periodRevenue?.summary.collections.total}
         periodArr={periodRevenue?.summary.arr}
         periodRevpar={periodRevenue?.summary.revpar}
         periodOcc={periodRevenue?.summary.occupancyPercent}

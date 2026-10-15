@@ -148,46 +148,101 @@ export const getWhatsAppProviderConfig = () => {
  * @param {string} [params.templateLanguage]
  * @returns {{ templateName: string, templateLanguage: string, templateComponents: Array }}
  */
+/**
+ * Constructs standard WhatsApp Business Cloud API template payload components
+ * for Hotel Mantri reservation confirmations.
+ *
+ * Official Approved HotelMantri Template Variable Mapping:
+ *   {{1}} = Guest name
+ *   {{2}} = Booking ID
+ *   {{3}} = Room number
+ *   {{4}} = Check-in date
+ *   {{5}} = Check-out date
+ *   {{6}} = Total amount
+ *   {{7}} = Invoice URL
+ *
+ * Header (Optional Dynamic Document):
+ *   document: { link, filename }
+ *
+ * @param {Object} params
+ * @returns {{ name: string, language: { code: string }, components: Array }}
+ */
 export const buildMetaBookingConfirmationTemplate = ({
   guestName = 'Guest',
-  hotelName = 'Hotel Mantri',
+  bookingId = '',
   confirmationNumber = '',
   reservationReference = '',
+  roomNo = '',
+  roomNumber = '',
   roomDetails = '',
   roomCategory = '',
-  roomNo = '',
   checkIn = '',
+  checkInDate = '',
   checkOut = '',
+  checkOutDate = '',
   totalAmount = '0',
+  invoiceUrl = '',
+  hotelName = 'Hotel Mantri',
+  guestCount = 1,
+  currency = '₹',
   templateName = null,
   templateLanguage = null,
+  documentUrl = null,
+  documentFilename = null,
 } = {}) => {
-  const name = templateName || process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation';
+  const name = templateName || process.env.WHINTA_RESERVATION_TEMPLATE || process.env.WHATSAPP_CONFIRMATION_TEMPLATE || 'booking_confirmation';
   const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
 
-  const ref = confirmationNumber || reservationReference || 'HM-RES';
-  const room = roomDetails || (roomCategory ? `${roomCategory}${roomNo ? ` (Room ${roomNo})` : ''}` : 'Standard Room');
+  const ref = bookingId || confirmationNumber || reservationReference || 'HM-RES';
+  const cleanRoom = roomNo || roomNumber || (roomDetails ? String(roomDetails).replace(/^.*Room\s*([0-9A-Za-z-]+).*$/i, '$1') : '') || roomCategory || 'Unassigned';
 
+  const curr = currency || '₹';
   const formattedAmount = typeof totalAmount === 'number'
-    ? `₹${Math.round(totalAmount).toLocaleString('en-IN')}`
-    : String(totalAmount).startsWith('₹')
+    ? `${curr}${Math.round(totalAmount).toLocaleString('en-IN')}`
+    : String(totalAmount).startsWith(curr)
     ? totalAmount
-    : `₹${totalAmount}`;
+    : `${curr}${totalAmount}`;
 
-  const components = [
-    {
-      type: 'body',
+  const resolvedInvoiceUrl = invoiceUrl || documentUrl || '—';
+
+  const components = [];
+
+  // Dynamic Document Header Component (Whinta / Meta Cloud API format)
+  if (documentUrl) {
+    components.push({
+      type: 'header',
       parameters: [
-        { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
-        { type: 'text', text: String(hotelName || 'Hotel Mantri').slice(0, 60) },
-        { type: 'text', text: String(ref).slice(0, 30) },
-        { type: 'text', text: String(room).slice(0, 60) },
-        { type: 'text', text: String(checkIn || '—').slice(0, 30) },
-        { type: 'text', text: String(checkOut || '—').slice(0, 30) },
-        { type: 'text', text: formattedAmount.slice(0, 30) },
+        {
+          type: 'document',
+          document: {
+            link: documentUrl,
+            filename: documentFilename || `HotelMantri-Booking-${ref}.pdf`,
+          },
+        },
       ],
-    },
-  ];
+    });
+  }
+
+  // Official Approved HotelMantri 7 Body Parameters:
+  // {{1}} = Guest name
+  // {{2}} = Booking ID
+  // {{3}} = Room number
+  // {{4}} = Check-in date
+  // {{5}} = Check-out date
+  // {{6}} = Total amount
+  // {{7}} = Invoice URL
+  components.push({
+    type: 'body',
+    parameters: [
+      { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
+      { type: 'text', text: String(ref).slice(0, 40) },
+      { type: 'text', text: String(cleanRoom).slice(0, 30) },
+      { type: 'text', text: String(checkIn || checkInDate || '—').slice(0, 30) },
+      { type: 'text', text: String(checkOut || checkOutDate || '—').slice(0, 30) },
+      { type: 'text', text: formattedAmount.slice(0, 30) },
+      { type: 'text', text: String(resolvedInvoiceUrl).slice(0, 500) },
+    ],
+  });
 
   return {
     name,
@@ -196,6 +251,128 @@ export const buildMetaBookingConfirmationTemplate = ({
     templateName: name,
     templateLanguage: lang,
     templateComponents: components,
+    guestName,
+    bookingId: ref,
+    roomNo: cleanRoom,
+    checkIn: checkIn || checkInDate,
+    checkOut: checkOut || checkOutDate,
+    totalAmount: formattedAmount,
+    invoiceUrl: resolvedInvoiceUrl,
+    hotelName,
+    guestCount,
+    currency: curr,
+    documentUrl,
+    documentFilename: documentFilename || `HotelMantri-Booking-${ref}.pdf`,
+  };
+};
+
+// ─── Meta WhatsApp Daily Hotel Report Template Builder ────────────────────────
+
+/**
+ * Constructs standard WhatsApp Business Cloud API template payload components
+ * for automated daily hotel reports.
+ *
+ * Variable mapping for `daily_hotel_report`:
+ * Header (Optional Dynamic Document):
+ *   document: { link, filename }
+ * Body parameters:
+ *   {{1}}  = Hotel Name
+ *   {{2}}  = Report Date
+ *   {{3}}  = Total Active Rooms
+ *   {{4}}  = Occupied Rooms
+ *   {{5}}  = Occupancy Percentage
+ *   {{6}}  = New Reservations
+ *   {{7}}  = Check-ins
+ *   {{8}}  = Check-outs
+ *   {{9}}  = Daily Revenue
+ *   {{10}} = Closing Cash Balance
+ *
+ * @param {Object} params
+ * @returns {{ templateName: string, templateLanguage: string, templateComponents: Array }}
+ */
+export const buildMetaDailyReportTemplate = ({
+  hotelName = 'Hotel Mantri',
+  reportDate = '',
+  totalRooms = 0,
+  occupiedRooms = 0,
+  occupancyPercentage = '0%',
+  newReservations = 0,
+  checkIns = 0,
+  checkOuts = 0,
+  dailyRevenue = '0',
+  closingCash = '0',
+  currency = '₹',
+  templateName = null,
+  templateLanguage = null,
+  documentUrl = null,
+  documentFilename = null,
+} = {}) => {
+  const name = templateName || process.env.WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report';
+  const lang = templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
+  const curr = currency || '₹';
+
+  const formattedRevenue = typeof dailyRevenue === 'number'
+    ? `${curr}${Math.round(dailyRevenue).toLocaleString('en-IN')}`
+    : String(dailyRevenue).startsWith(curr)
+    ? dailyRevenue
+    : `${curr}${dailyRevenue}`;
+
+  const formattedCash = typeof closingCash === 'number'
+    ? `${curr}${Math.round(closingCash).toLocaleString('en-IN')}`
+    : String(closingCash).startsWith(curr)
+    ? closingCash
+    : `${curr}${closingCash}`;
+
+  const formattedOccPercent = typeof occupancyPercentage === 'number'
+    ? `${occupancyPercentage.toFixed(1)}%`
+    : String(occupancyPercentage).includes('%')
+    ? occupancyPercentage
+    : `${occupancyPercentage}%`;
+
+  const components = [];
+
+  // Dynamic Document Header Component (Whinta / Meta Cloud API format)
+  if (documentUrl) {
+    components.push({
+      type: 'header',
+      parameters: [
+        {
+          type: 'document',
+          document: {
+            link: documentUrl,
+            filename: documentFilename || `HotelMantri-Daily-Report-${reportDate || 'Today'}.pdf`,
+          },
+        },
+      ],
+    });
+  }
+
+  // Standard 10 Body Parameters
+  components.push({
+    type: 'body',
+    parameters: [
+      { type: 'text', text: String(hotelName || 'Hotel Property').slice(0, 60) },
+      { type: 'text', text: String(reportDate || 'Today').slice(0, 30) },
+      { type: 'text', text: String(totalRooms || 0).slice(0, 10) },
+      { type: 'text', text: String(occupiedRooms || 0).slice(0, 10) },
+      { type: 'text', text: formattedOccPercent.slice(0, 15) },
+      { type: 'text', text: String(newReservations || 0).slice(0, 10) },
+      { type: 'text', text: String(checkIns || 0).slice(0, 10) },
+      { type: 'text', text: String(checkOuts || 0).slice(0, 10) },
+      { type: 'text', text: formattedRevenue.slice(0, 30) },
+      { type: 'text', text: formattedCash.slice(0, 30) },
+    ],
+  });
+
+  return {
+    name,
+    language: { code: lang },
+    components,
+    templateName: name,
+    templateLanguage: lang,
+    templateComponents: components,
+    documentUrl,
+    documentFilename: documentFilename || `HotelMantri-Daily-Report-${reportDate || 'Today'}.pdf`,
   };
 };
 
@@ -343,6 +520,7 @@ export default {
   normalizeWhatsAppPhone,
   buildWhatsAppDirectUrl,
   buildMetaBookingConfirmationTemplate,
+  buildMetaDailyReportTemplate,
   getWhatsAppProviderConfig,
   sendWhatsAppMessage,
   WhintaProvider,

@@ -56,6 +56,7 @@ import { sendEmail, isValidEmail } from '../services/emailService.js';
 import { sendWhatsAppMessage, buildWhatsAppDirectUrl, normalizeWhatsAppPhone } from '../services/whatsappService.js';
 import { resolveHotelOwnerEmail } from '../services/notificationService.js';
 import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
+import { getSourceCategoryFromType } from '../services/sourceClassification.js';
 
 const router = express.Router();
 
@@ -137,9 +138,10 @@ router.get('/', checkAuth, async (req, res) => {
       query = query.eq('status', status);
     }
 
-    // Filter by source / channel
+    // Filter by source / channel (maps specific types or DB categories)
     if (sourceCategory && sourceCategory !== 'all') {
-      query = query.eq('source_category', sourceCategory);
+      const dbCat = getSourceCategoryFromType(sourceCategory) || sourceCategory;
+      query = query.eq('source_category', dbCat);
     }
 
     // Filter by room
@@ -1509,11 +1511,16 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     const metaTemplate = buildMetaBookingConfirmationTemplate({
       guestName: reservation.guest_name || 'Guest',
       hotelName,
+      bookingId: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
       confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      roomNo: reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? reservation.room_no : 'Unassigned',
       roomDetails: roomInfo,
       checkIn: formatDateReadable(checkIn),
       checkOut: formatDateReadable(checkOut),
       totalAmount: totalVal,
+      invoiceUrl: pdfUrl || '—',
+      documentUrl: pdfUrl || null,
+      documentFilename: fileName,
     });
 
     // Send via Whinta provider with PDF attachment

@@ -292,9 +292,19 @@ export async function buildDailyMISPDF(opts: DailyMISOpts): Promise<jsPDF> {
   y = kvTable(doc, expRows, y, false);
 
   // New page if near bottom
-  if (y > 220) { doc.addPage(); y = 34; }
+  if (y > 200) { doc.addPage(); y = 34; }
 
-  y = sectionHead(doc, 'Cash Summary', y, false);
+  const totalColl = toNum(r.pay_cash) + toNum(r.pay_bank) + toNum(r.pay_upi) + toNum(r.pay_card);
+  y = sectionHead(doc, 'Collection Summary', y, false);
+  y = kvTable(doc, [
+    ['Cash Collection',         rs(r.pay_cash)],
+    ['Bank Transfer / Direct',  rs(r.pay_bank)],
+    ['UPI Digital',             rs(r.pay_upi)],
+    ['Card POS',                rs(r.pay_card)],
+    ['Total Collection',        rs(totalColl)],
+  ], y, false);
+
+  y = sectionHead(doc, 'Cash Drawer Summary', y, false);
   y = kvTable(doc, [
     ['Opening Cash',            rs(openingCash)],
     ['+ Cash Collection',       rs(cashCollection)],
@@ -304,7 +314,6 @@ export async function buildDailyMISPDF(opts: DailyMISOpts): Promise<jsPDF> {
     ['- Bank Cash Deposit',     rs(r.bank_cash_deposit)],
     ['= Cash Closing',          rs(toNum(r.cash_closing))],
     ['Tomorrow Opening Cash',   rs(tomorrowOpening)],
-    ['Bank Collection',         rs(r.bank)],
   ], y, false);
 
   y = sectionHead(doc, 'Tomorrow Status', y, false);

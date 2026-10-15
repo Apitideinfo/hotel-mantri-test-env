@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Calendar, List, LogIn, LogOut, Clock, AlertCircle, Plus, X,
   ChevronLeft, ChevronRight, Loader2, Users, Phone, Star, RefreshCw,
@@ -94,6 +94,17 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const listReqSeqRef = useRef(0);
+
+  // Debounce search input by 300ms without freezing UI or spamming network on every keystroke
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
   const [filterAssigned, setFilterAssigned] = useState<'all' | 'assigned' | 'unassigned'>('all');
@@ -212,15 +223,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   }, []);
 
-  // Load List View Data
+  // Load List View Data with stale-response protection
   const loadListData = useCallback(async () => {
+    const currentSeq = ++listReqSeqRef.current;
     setLoading(true);
     setError(null);
     try {
       const res = await getReservationsPaginated({
         page,
         pageSize,
-        search,
+        search: debouncedSearch,
         status: filterStatus,
         sourceCategory: filterSource,
         assignedStatus: filterAssigned,
@@ -230,6 +242,8 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         sortBy: 'check_in_date',
         sortOrder: 'desc',
       });
+      // Drop out-of-order response if a newer query has fired
+      if (currentSeq !== listReqSeqRef.current) return;
       setPaginatedData({
         reservations: res.reservations,
         totalCount: res.totalCount,
@@ -237,11 +251,14 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
         metrics: res.metrics,
       });
     } catch (e: any) {
+      if (currentSeq !== listReqSeqRef.current) return;
       setError(e?.message || 'Unable to load reservations');
     } finally {
-      setLoading(false);
+      if (currentSeq === listReqSeqRef.current) {
+        setLoading(false);
+      }
     }
-  }, [page, pageSize, search, filterStatus, filterSource, filterAssigned, filterRoomNo, filterFromDate, filterToDate]);
+  }, [page, pageSize, debouncedSearch, filterStatus, filterSource, filterAssigned, filterRoomNo, filterFromDate, filterToDate]);
 
   // Load Matrix/Secondary Views Data
   const loadMatrixData = useCallback(async () => {
@@ -1204,11 +1221,29 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
                 onChange={(e) => { setFilterSource(e.target.value); setPage(1); }}
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-800 font-semibold"
               >
-                <option value="all">All Channels</option>
-                <option value="Direct/Walking">Direct / Walk-In</option>
-                <option value="OTA">OTA Channels (MMT, Agoda, etc.)</option>
-                <option value="Corporate">Corporate Accounts</option>
-                <option value="Travel Agent">Travel Agents</option>
+                <option value="all">All Channels & Sources</option>
+                <optgroup label="Source Categories">
+                  <option value="Direct/Walking">Direct / Walk-In</option>
+                  <option value="OTA">OTA Channels (Booking.com, MMT, etc.)</option>
+                  <option value="Corporate/Agent">Corporate / Agent Accounts</option>
+                  <option value="Phonebook">Phone / WhatsApp Inquiries</option>
+                </optgroup>
+                <optgroup label="Specific Source Types">
+                  <option value="Direct">Direct Front Desk</option>
+                  <option value="Walk-in">Walk-in</option>
+                  <option value="Website">Official Website</option>
+                  <option value="Corporate">Corporate</option>
+                  <option value="Travel Agent">Travel Agent</option>
+                  <option value="Phone">Phone Reservation</option>
+                  <option value="WhatsApp">WhatsApp</option>
+                </optgroup>
+                {sources.length > 0 && (
+                  <optgroup label="Configured Hotel Sources">
+                    {sources.map((s) => (
+                      <option key={s.id} value={s.source_category}>{s.name} ({s.source_category})</option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </div>
 
