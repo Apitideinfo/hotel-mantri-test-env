@@ -149,8 +149,8 @@ export const NewReservationWizard = ({
   /* ── State: Step 1 – Stay Details ── */
   const [checkIn, setCheckIn] = useState(preselectCheckIn ?? defaultDate);
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
-  const [numRooms, setNumRooms] = useState<number>(1);
-  const [adults, setAdults] = useState<number>(2);
+  const [numRooms, setNumRooms] = useState<number>(0);
+  const [adults, setAdults] = useState<number>(0);
   const [children, setChildren] = useState<number>(0);
 
   const nights = useMemo(() => calcStayNights(checkIn, checkOut), [checkIn, checkOut]);
@@ -182,13 +182,14 @@ export const NewReservationWizard = ({
       const catRate = cat?.default_tariff ?? r?.default_tariff ?? 0;
 
       setCategoryQuantities({ [catId]: 1 });
+      setNumRooms(1);
       setRoomRows([{
         uid: crypto.randomUUID(),
         categoryId: catId,
         categoryName: catName,
         roomNo: cleanNo,
         roomId: r?.id ?? null,
-        adults: 2,
+        adults: 0,
         children: 0,
         mealPlan: 'EP',
         rate: catRate,
@@ -364,7 +365,7 @@ export const NewReservationWizard = ({
   const handleClearAllRooms = useCallback(() => {
     setCategoryQuantities({});
     setRoomRows([]);
-    setNumRooms(1);
+    setNumRooms(0);
   }, []);
 
   const handleBookFullHotelAndProceed = useCallback(() => {
@@ -458,7 +459,7 @@ export const NewReservationWizard = ({
             categoryName: catName,
             roomNo: candidate ? candidate.room_no : 'Unassigned',
             roomId: candidate ? candidate.id : null,
-            adults: Math.max(1, adults),
+            adults: Math.max(0, adults),
             children: Math.max(0, children),
             mealPlan: globalMealPlan,
             rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : candidateTariff,
@@ -693,8 +694,8 @@ export const NewReservationWizard = ({
         setError('Check-out date must be strictly after check-in date.');
         return false;
       }
-      // If no rooms have been selected yet, prepare default rows according to numRooms with auto-assigned physical rooms
-      if (roomRows.length === 0 && categories.length > 0) {
+      // If no rooms have been selected yet and numRooms > 0, prepare default rows according to numRooms with auto-assigned physical rooms
+      if (numRooms > 0 && roomRows.length === 0 && categories.length > 0) {
         const firstCat = categories[0];
         const catId = firstCat.id;
         setCategoryQuantities({ [catId]: numRooms });
@@ -740,7 +741,7 @@ export const NewReservationWizard = ({
             categoryName: firstCat.name,
             roomNo: candidate ? candidate.room_no : 'Unassigned',
             roomId: candidate ? candidate.id : null,
-            adults: Math.max(1, adults),
+            adults: Math.max(0, adults),
             children: Math.max(0, children),
             mealPlan: 'EP',
             rate: tariff,
@@ -1352,8 +1353,9 @@ export const NewReservationWizard = ({
                       <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3">
                         <label className="block text-xs font-bold text-slate-700 mb-2">Number of Rooms</label>
                         <div className="flex items-center justify-between">
-                          <button type="button" onClick={() => setNumRooms(Math.max(1, numRooms - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                          <button type="button" onClick={() => setNumRooms(Math.max(0, numRooms - 1))}
+                            disabled={numRooms <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{numRooms}</span>
@@ -1368,8 +1370,9 @@ export const NewReservationWizard = ({
                       <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-3">
                         <label className="block text-xs font-bold text-slate-700 mb-2">Adults</label>
                         <div className="flex items-center justify-between">
-                          <button type="button" onClick={() => setAdults(Math.max(1, adults - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                          <button type="button" onClick={() => setAdults(Math.max(0, adults - 1))}
+                            disabled={adults <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{adults}</span>
@@ -1385,7 +1388,8 @@ export const NewReservationWizard = ({
                         <label className="block text-xs font-bold text-slate-700 mb-2">Children</label>
                         <div className="flex items-center justify-between">
                           <button type="button" onClick={() => setChildren(Math.max(0, children - 1))}
-                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 transition cursor-pointer active:scale-95">
+                            disabled={children <= 0}
+                            className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40 transition cursor-pointer active:scale-95">
                             <Minus className="w-4 h-4 text-slate-600" />
                           </button>
                           <span className="text-lg font-black text-slate-900">{children}</span>
@@ -1484,8 +1488,14 @@ export const NewReservationWizard = ({
 
                       {/* Room Categories Grid */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {categoryAvailability.map(({ category, availableRooms }) => {
+                        {categoryAvailability.map(({ category, availableRooms, catRooms }) => {
                           const selectedCount = categoryQuantities[category.id] || 0;
+                          const displayTariff = toNum(category.default_tariff) > 0
+                            ? toNum(category.default_tariff)
+                            : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
+                            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+                            : (toNum((settings as any)?.default_room_tariff) || 0);
+
                           return (
                             <div key={category.id}
                               className={`p-4 rounded-2xl border transition-all ${
@@ -1507,7 +1517,7 @@ export const NewReservationWizard = ({
                                   </div>
                                 </div>
                                 <div className="text-right">
-                                  <span className="text-xs font-black text-indigo-700">₹{fmtInt(category.default_tariff)}</span>
+                                  <span className="text-xs font-black text-indigo-700">₹{fmtInt(displayTariff)}</span>
                                   <span className="block text-[10px] text-slate-400 font-medium">/ night</span>
                                 </div>
                               </div>
@@ -1525,7 +1535,8 @@ export const NewReservationWizard = ({
                                   <span className="w-6 text-center text-xs font-black text-slate-900">{selectedCount}</span>
                                   <button type="button"
                                     onClick={() => updateCategoryQuantity(category.id, selectedCount + 1)}
-                                    className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center hover:bg-indigo-100 transition cursor-pointer">
+                                    disabled={availableRooms > 0 && selectedCount >= availableRooms}
+                                    className="w-7 h-7 rounded-lg bg-indigo-50 border border-indigo-200 flex items-center justify-center hover:bg-indigo-100 disabled:opacity-40 transition cursor-pointer">
                                     <Plus className="w-3.5 h-3.5 text-indigo-700" />
                                   </button>
                                 </div>
@@ -1644,8 +1655,8 @@ export const NewReservationWizard = ({
                                   <div>
                                     <label className="block text-[10px] font-bold text-slate-500 mb-0.5">Adults</label>
                                     <input
-                                      type="number" min={1} max={10} value={row.adults}
-                                      onChange={(e) => updateRoomRow(row.uid, { adults: Math.max(1, Number(e.target.value)) })}
+                                      type="number" min={0} max={10} value={row.adults}
+                                      onChange={(e) => updateRoomRow(row.uid, { adults: Math.max(0, Number(e.target.value)) })}
                                       className="w-12 px-2 py-1 text-xs font-bold text-center bg-white border border-slate-200 rounded-lg"
                                     />
                                   </div>
