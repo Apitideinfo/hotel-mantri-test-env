@@ -269,6 +269,7 @@ export interface ReservationConfirmationData {
     address?: string;
   };
   reservation: Reservation;
+  multiRooms?: Reservation[];
   room: {
     room_no: string;
     room_id?: string;

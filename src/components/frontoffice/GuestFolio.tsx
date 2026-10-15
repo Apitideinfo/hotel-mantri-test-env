@@ -99,6 +99,7 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
       const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
       downloadReservationConfirmationPdf({
         reservation: data.reservation,
+        multiRooms: data.multiRooms,
         settings: data.hotel as any,
       });
       setActionSuccess('Confirmation PDF downloaded.');
@@ -119,6 +120,7 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
       const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
       printReservationConfirmationPdf({
         reservation: data.reservation,
+        multiRooms: data.multiRooms,
         settings: data.hotel as any,
       });
       setActionSuccess('Print dialog opened.');

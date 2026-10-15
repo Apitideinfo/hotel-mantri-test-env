@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   ArrowLeft, Loader2, AlertCircle, Calendar, TrendingUp, LogIn, LogOut,
-  BedDouble, Users, IndianRupee, BarChart3,
+  BedDouble, Users, IndianRupee, BarChart3, Download,
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import { autoTable } from 'jspdf-autotable';
 import type { Reservation } from '@/lib/types-reservations';
 import { getReservationsForDateRange, getRoomAvailabilityForDate, type RoomAvailability } from '@/lib/api-reservations';
 
@@ -100,16 +102,261 @@ export const ReservationReports = ({ onBack }: { onBack: () => void }) => {
     [reservations, startDate, endDate],
   );
 
+  // Group reconciliation map for multi-room group bookings
+  const groupFinancials = useMemo(() => {
+    const map = new Map<string, {
+      isGroup: boolean;
+      groupRoomsCount: number;
+      totalGroupStay: number;
+      totalGroupPaid: number;
+      groupBalanceDue: number;
+    }>();
+
+    const groups = new Map<string, Reservation[]>();
+    for (const r of reservations) {
+      if (r.group_id) {
+        const list = groups.get(r.group_id) || [];
+        list.push(r);
+        groups.set(r.group_id, list);
+      }
+    }
+
+    for (const r of reservations) {
+      if (r.group_id && groups.has(r.group_id)) {
+        const siblings = groups.get(r.group_id)!;
+        if (siblings.length > 1) {
+          const totalStay = siblings.reduce((sum, s) => {
+            const n = Math.max(1, Number(s.nights) || 1);
+            return sum + (Number(s.invoice_total) || (Number(s.rate) * n));
+          }, 0);
+          const totalPaid = siblings.reduce((sum, s) => {
+            const split = (Number(s.paid_cash) || 0) + (Number(s.paid_card) || 0) + (Number(s.paid_upi) || 0) + (Number(s.paid_ota) || 0);
+            const adv = Number(s.advance_paid) || 0;
+            return sum + (adv > 0 ? adv : split);
+          }, 0);
+          const due = Math.max(0, totalStay - totalPaid);
+          map.set(r.id, {
+            isGroup: true,
+            groupRoomsCount: siblings.length,
+            totalGroupStay: totalStay,
+            totalGroupPaid: totalPaid,
+            groupBalanceDue: due,
+          });
+          continue;
+        }
+      }
+      const n = Math.max(1, Number(r.nights) || 1);
+      const stay = Number(r.invoice_total) || (Number(r.rate) * n);
+      const paid = Number(r.advance_paid) || 0;
+      map.set(r.id, {
+        isGroup: false,
+        groupRoomsCount: 1,
+        totalGroupStay: stay,
+        totalGroupPaid: paid,
+        groupBalanceDue: Math.max(0, stay - paid),
+      });
+    }
+
+    return map;
+  }, [reservations]);
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const leftM = 14;
+    const rightM = 14;
+    const rightX = pageWidth - rightM;
+
+    // Header banner
+    doc.setFillColor(10, 46, 76);
+    doc.rect(0, 0, pageWidth, 24, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(14);
+    doc.text('HOTEL MANTRI', leftM, 11);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Reservation Reports — ${reportType.toUpperCase()}`, leftM, 17);
+
+    doc.setFontSize(8);
+    doc.text(`Period: ${fmtDate(startDate)} to ${fmtDate(endDate)}`, rightX, 11, { align: 'right' });
+    doc.text(`Generated: ${new Date().toLocaleDateString('en-IN')}`, rightX, 17, { align: 'right' });
+
+    const startY = 30;
+
+    if (reportType === 'forecast') {
+      const rows = forecastData.map(f => [
+        fmtDate(f.date),
+        String(f.arrivals),
+        String(f.departures),
+        String(f.inHouse),
+        fmtMoney(f.revenue),
+      ]);
+      const totalArrivals = forecastData.reduce((s, f) => s + f.arrivals, 0);
+      const totalDepartures = forecastData.reduce((s, f) => s + f.departures, 0);
+      const avgInHouse = Math.round(forecastData.reduce((s, f) => s + f.inHouse, 0) / (forecastData.length || 1));
+      const totalRev = forecastData.reduce((s, f) => s + f.revenue, 0);
+
+      autoTable(doc, {
+        startY,
+        head: [['Date', 'Arrivals', 'Departures', 'In-house', 'Expected Revenue']],
+        body: [
+          ...rows,
+          ['Total / Average', String(totalArrivals), String(totalDepartures), String(avgInHouse), fmtMoney(totalRev)],
+        ],
+        margin: { left: leftM, right: rightM },
+        theme: 'grid',
+        headStyles: { fillColor: [10, 46, 76], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+        columnStyles: {
+          0: { halign: 'left', cellWidth: 40 },
+          1: { halign: 'center', cellWidth: 32 },
+          2: { halign: 'center', cellWidth: 32 },
+          3: { halign: 'center', cellWidth: 32 },
+          4: { halign: 'right', cellWidth: 46 },
+        },
+        styles: { fontSize: 8 },
+      });
+    } else if (reportType === 'occupancy') {
+      const rows = occupancyData.map(f => [
+        fmtDate(f.date),
+        `${f.occupancyPct}%`,
+        `${f.inHouse} / ${totalRooms}`,
+        fmtMoney(f.revenue),
+      ]);
+
+      autoTable(doc, {
+        startY,
+        head: [['Date', 'Occupancy %', 'Rooms Sold / Total', 'Expected Revenue']],
+        body: rows,
+        margin: { left: leftM, right: rightM },
+        theme: 'grid',
+        headStyles: { fillColor: [10, 46, 76], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+        columnStyles: {
+          0: { halign: 'left', cellWidth: 46 },
+          1: { halign: 'center', cellWidth: 42 },
+          2: { halign: 'center', cellWidth: 46 },
+          3: { halign: 'right', cellWidth: 48 },
+        },
+        styles: { fontSize: 8 },
+      });
+    } else if (reportType === 'arrivals') {
+      const rows = arrivals.map(r => {
+        const gf = groupFinancials.get(r.id);
+        const roomLabel = r.room_no || 'Unassigned';
+        const groupTag = gf?.isGroup ? ` (Grp of ${gf.groupRoomsCount})` : '';
+        return [
+          r.guest_name,
+          `${roomLabel}${groupTag}`,
+          fmtDate(r.check_in_date),
+          fmtDate(r.check_out_date),
+          String(r.nights),
+          fmtMoney(Number(r.rate)),
+          r.source_category || 'Direct',
+        ];
+      });
+
+      autoTable(doc, {
+        startY,
+        head: [['Guest Name', 'Room No.', 'Arrival', 'Departure', 'Nights', 'Rate / Night', 'Source']],
+        body: rows,
+        margin: { left: leftM, right: rightM },
+        theme: 'grid',
+        headStyles: { fillColor: [10, 46, 76], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+        columnStyles: {
+          0: { halign: 'left', cellWidth: 40 },
+          1: { halign: 'left', cellWidth: 32 },
+          2: { halign: 'center', cellWidth: 24 },
+          3: { halign: 'center', cellWidth: 24 },
+          4: { halign: 'center', cellWidth: 16 },
+          5: { halign: 'right', cellWidth: 24 },
+          6: { halign: 'left', cellWidth: 22 },
+        },
+        styles: { fontSize: 8 },
+      });
+    } else if (reportType === 'departures') {
+      const rows = departures.map(r => {
+        const gf = groupFinancials.get(r.id);
+        const roomLabel = r.room_no || 'Unassigned';
+        const groupTag = gf?.isGroup ? ` (Grp of ${gf.groupRoomsCount})` : '';
+        const balanceLabel = gf?.isGroup ? `${fmtMoney(gf.groupBalanceDue)} (Grp)` : fmtMoney(gf?.groupBalanceDue ?? 0);
+        return [
+          r.guest_name,
+          `${roomLabel}${groupTag}`,
+          fmtDate(r.check_out_date),
+          String(r.nights),
+          fmtMoney(Number(r.rate)),
+          balanceLabel,
+        ];
+      });
+
+      autoTable(doc, {
+        startY,
+        head: [['Guest Name', 'Room No.', 'Departure', 'Nights', 'Rate / Night', 'Balance Due']],
+        body: rows,
+        margin: { left: leftM, right: rightM },
+        theme: 'grid',
+        headStyles: { fillColor: [10, 46, 76], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+        columnStyles: {
+          0: { halign: 'left', cellWidth: 48 },
+          1: { halign: 'left', cellWidth: 36 },
+          2: { halign: 'center', cellWidth: 26 },
+          3: { halign: 'center', cellWidth: 18 },
+          4: { halign: 'right', cellWidth: 26 },
+          5: { halign: 'right', cellWidth: 28 },
+        },
+        styles: { fontSize: 8 },
+      });
+    } else if (reportType === 'availability') {
+      const rows = availability.map(a => [
+        a.room_no,
+        a.category,
+        a.floor || '—',
+        a.status,
+        a.guestName || '—',
+      ]);
+
+      autoTable(doc, {
+        startY,
+        head: [['Room No.', 'Category', 'Floor', 'Status', 'Current Guest']],
+        body: rows,
+        margin: { left: leftM, right: rightM },
+        theme: 'grid',
+        headStyles: { fillColor: [10, 46, 76], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5 },
+        columnStyles: {
+          0: { halign: 'center', cellWidth: 26 },
+          1: { halign: 'left', cellWidth: 48 },
+          2: { halign: 'center', cellWidth: 26 },
+          3: { halign: 'center', cellWidth: 32 },
+          4: { halign: 'left', cellWidth: 50 },
+        },
+        styles: { fontSize: 8 },
+      });
+    }
+
+    doc.save(`reservation_report_${reportType}_${startDate}.pdf`);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <div>
-          <h1 className="text-xl font-bold text-brand-navy-800">Reservation Reports</h1>
-          <p className="text-xs text-slate-400">Forecast · Arrivals · Departures · Availability</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-xl font-bold text-brand-navy-800">Reservation Reports</h1>
+            <p className="text-xs text-slate-400">Forecast · Arrivals · Departures · Availability</p>
+          </div>
         </div>
+
+        <button
+          onClick={handleExportPDF}
+          disabled={loading}
+          className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-white bg-brand-navy-700 hover:bg-brand-navy-800 rounded-xl shadow-sm transition disabled:opacity-50"
+        >
+          <Download className="w-4 h-4" />
+          <span>Export PDF Report</span>
+        </button>
       </div>
 
       {error && (
@@ -241,17 +488,27 @@ export const ReservationReports = ({ onBack }: { onBack: () => void }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {arrivals.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-brand-navy-700">{r.guest_name}</td>
-                        <td className="px-4 py-3">{r.room_no}</td>
-                        <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_in_date)}</td>
-                        <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_out_date)}</td>
-                        <td className="px-4 py-3 tabular-nums">{r.nights}</td>
-                        <td className="px-4 py-3 tabular-nums">{fmtMoney(r.rate)}</td>
-                        <td className="px-4 py-3 text-slate-600">{r.source_category}</td>
-                      </tr>
-                    ))}
+                    {arrivals.map((r) => {
+                      const gf = groupFinancials.get(r.id);
+                      return (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 font-semibold text-brand-navy-700">
+                            {r.guest_name}
+                            {gf?.isGroup && (
+                              <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                Grp ({gf.groupRoomsCount} Rms)
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{r.room_no || 'Unassigned'}</td>
+                          <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_in_date)}</td>
+                          <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_out_date)}</td>
+                          <td className="px-4 py-3 tabular-nums">{r.nights}</td>
+                          <td className="px-4 py-3 tabular-nums font-semibold text-slate-700">{fmtMoney(r.rate)}</td>
+                          <td className="px-4 py-3 text-slate-600">{r.source_category}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
@@ -271,16 +528,36 @@ export const ReservationReports = ({ onBack }: { onBack: () => void }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {departures.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-brand-navy-700">{r.guest_name}</td>
-                        <td className="px-4 py-3">{r.room_no}</td>
-                        <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_out_date)}</td>
-                        <td className="px-4 py-3 tabular-nums">{r.nights}</td>
-                        <td className="px-4 py-3 tabular-nums">{fmtMoney(r.rate)}</td>
-                        <td className="px-4 py-3 tabular-nums">{fmtMoney(Number(r.invoice_total) - Number(r.advance_paid))}</td>
-                      </tr>
-                    ))}
+                    {departures.map((r) => {
+                      const gf = groupFinancials.get(r.id);
+                      const due = gf?.groupBalanceDue ?? Math.max(0, Number(r.invoice_total) - Number(r.advance_paid));
+                      return (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          <td className="px-4 py-3 font-semibold text-brand-navy-700">
+                            {r.guest_name}
+                            {gf?.isGroup && (
+                              <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">
+                                Grp ({gf.groupRoomsCount} Rms)
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-medium text-slate-800">{r.room_no || 'Unassigned'}</td>
+                          <td className="px-4 py-3 text-slate-600">{fmtDate(r.check_out_date)}</td>
+                          <td className="px-4 py-3 tabular-nums">{r.nights}</td>
+                          <td className="px-4 py-3 tabular-nums font-semibold text-slate-700">{fmtMoney(r.rate)}</td>
+                          <td className="px-4 py-3 tabular-nums">
+                            <span className={due > 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-semibold'}>
+                              {fmtMoney(due)}
+                            </span>
+                            {gf?.isGroup && (
+                              <span className="block text-[10px] text-slate-400 font-normal">
+                                Group Balance Due
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

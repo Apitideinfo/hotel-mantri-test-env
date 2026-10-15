@@ -79,25 +79,52 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
   const [acting, setActing] = useState(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [fetchedGroupReservations, setFetchedGroupReservations] = useState<Reservation[]>([]);
+
+  useEffect(() => {
+    if (reservation.group_id && (!groupReservations || groupReservations.length <= 1)) {
+      supabase
+        .from('reservations')
+        .select('*')
+        .eq('group_id', reservation.group_id)
+        .order('room_no', { ascending: true })
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            setFetchedGroupReservations(data as Reservation[]);
+          }
+        });
+    }
+  }, [reservation.group_id, groupReservations]);
 
   const isPhysical = (rm?: string | null) => {
     const norm = (rm || '').trim().toLowerCase();
     return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
   };
-  const isMulti = Boolean(groupReservations && groupReservations.length > 1);
+
+  const effectiveGroup = (groupReservations && groupReservations.length > 1)
+    ? groupReservations
+    : (fetchedGroupReservations.length > 1 ? fetchedGroupReservations : [reservation]);
+
+  const isMulti = effectiveGroup.length > 1;
   const allRooms = isMulti
-    ? groupReservations!.filter((r, idx, arr) => {
+    ? effectiveGroup.filter((r, idx, arr) => {
         if (isPhysical(r.room_no)) {
           return arr.findIndex((x) => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
         }
         return arr.findIndex((x) => x.id === r.id) === idx;
       })
     : [reservation];
+
   const totalStayAmount = allRooms.reduce(
-    (sum, r) => sum + (r.invoice_total > 0 ? r.invoice_total : (r.rate * (r.nights || 1))),
+    (sum, r) => sum + (Number(r.invoice_total) > 0 ? Number(r.invoice_total) : (Number(r.rate || 0) * (Number(r.nights) || 1))),
     0
   );
-  const totalAdvancePaid = allRooms.reduce((sum, r) => sum + (r.advance_paid || 0), 0);
+  const totalAdvancePaid = allRooms.reduce((sum, r) => {
+    return sum + Math.max(
+      Number(r.advance_paid || 0),
+      Number((r as any).pay_cash || 0) + Number((r as any).pay_upi || 0) + Number((r as any).pay_card || 0) + Number((r as any).pay_bank || 0)
+    );
+  }, 0);
   const totalBalanceDue = Math.max(0, totalStayAmount - totalAdvancePaid);
 
   // Email recipient — seeded immediately from the reservation's saved guest email
@@ -230,6 +257,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     try {
       downloadReservationConfirmationPdf({
         reservation,
+        multiRooms: allRooms,
         settings,
         version: docData?.document?.version || 1,
       });

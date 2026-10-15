@@ -581,6 +581,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       primaryRoomNo: string;
       groupTotalDue: number;
       groupTotalTariff: number;
+      groupTotalPaid: number;
       groupRoomsCount: number;
     }>();
 
@@ -632,6 +633,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
           primaryRoomNo: primary.roomNo,
           groupTotalDue: totalDue,
           groupTotalTariff: totalTariff,
+          groupTotalPaid: totalPaid,
           groupRoomsCount: sorted.length,
         });
       }
@@ -1719,6 +1721,8 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                               primaryRoomNo={groupInfo?.primaryRoomNo}
                               groupTotalDue={groupInfo?.groupTotalDue}
                               groupTotalTariff={groupInfo?.groupTotalTariff}
+                              groupTotalPaid={groupInfo?.groupTotalPaid}
+                              groupRoomsCount={groupInfo?.groupRoomsCount}
                               isMoving={movingBooking?.id === b.id}
                               onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}
                               onMouseDownStretchRight={(e) => handleMouseDownStretchRight(b, d, e)}
@@ -2002,6 +2006,8 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
                                         primaryRoomNo={groupInfo?.primaryRoomNo}
                                         groupTotalDue={groupInfo?.groupTotalDue}
                                         groupTotalTariff={groupInfo?.groupTotalTariff}
+                                        groupTotalPaid={groupInfo?.groupTotalPaid}
+                                        groupRoomsCount={groupInfo?.groupRoomsCount}
                                         isStretching={isStretching}
                                         isMoving={isMoving}
                                         onMouseDownMove={(e) => handleMouseDownBooking(b, d, e)}

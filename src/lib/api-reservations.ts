@@ -2492,15 +2492,64 @@ export const getReservationConfirmationData = async (
   const nights = calcStayNights(checkIn, checkOut);
   const bookingDate = reservation.created_at || new Date().toISOString();
 
+  // Resolve group sibling rooms if part of a multi-room booking
+  let multiRooms: Reservation[] = [reservation];
+  if (reservation.group_id && reservation.group_id.trim() !== '') {
+    const { data: siblings } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('group_id', reservation.group_id)
+      .order('room_no', { ascending: true });
+
+    if (siblings && siblings.length > 0) {
+      const isPhysical = (rm?: string | null) => {
+        const norm = (rm || '').trim().toLowerCase();
+        return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+      };
+      multiRooms = siblings.filter((r, idx, arr) => {
+        if (isPhysical(r.room_no)) {
+          return arr.findIndex(x => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+        }
+        return arr.findIndex(x => x.id === r.id) === idx;
+      }) as Reservation[];
+    }
+  }
+
   // 6. Calculate authoritative charges
   const rate = Number(reservation.rate) || 0;
-  const roomCharges = rate * nights;
-  const taxableAmount = Number(reservation.taxable_amount) || roomCharges;
-  const gstAmount = Number(reservation.gst_amount) || 0;
-  const totalAmount = Number(reservation.invoice_total) || (taxableAmount + gstAmount);
+  const isMultiRoomGroup = multiRooms.length > 1;
+
+  const totalAmount = isMultiRoomGroup
+    ? multiRooms.reduce((sum, r) => {
+        const rRate = Number(r.rate) || 0;
+        const rNights = calcStayNights(r.check_in_date || checkIn, r.check_out_date || checkOut);
+        return sum + (Number(r.invoice_total) || (rRate * rNights));
+      }, 0)
+    : (Number(reservation.invoice_total) || (rate * nights));
+
+  const taxableAmount = isMultiRoomGroup
+    ? multiRooms.reduce((sum, r) => sum + (Number(r.taxable_amount) || Number(r.rate) * calcStayNights(r.check_in_date || checkIn, r.check_out_date || checkOut)), 0)
+    : (Number(reservation.taxable_amount) || rate * nights);
+
+  const gstAmount = isMultiRoomGroup
+    ? multiRooms.reduce((sum, r) => sum + Number(r.gst_amount || 0), 0)
+    : Number(reservation.gst_amount || 0);
+
+  const roomCharges = isMultiRoomGroup
+    ? multiRooms.reduce((sum, r) => sum + Number(r.rate || 0) * calcStayNights(r.check_in_date || checkIn, r.check_out_date || checkOut), 0)
+    : (rate * nights);
 
   // 7. Calculate authoritative payments and balance
-  const advancePaid = Number(reservation.advance_paid) || 0;
+  const advancePaid = isMultiRoomGroup
+    ? multiRooms.reduce((sum, r) => {
+        return sum + Math.max(
+          Number(r.advance_paid || 0),
+          (Number((r as any).pay_cash) || 0) + (Number((r as any).pay_upi) || 0) + (Number((r as any).pay_card) || 0) + (Number((r as any).pay_bank) || 0)
+        );
+      }, 0)
+    : Number(reservation.advance_paid || 0);
+
   const balance = Math.max(0, totalAmount - advancePaid);
   const paymentStatus = (balance === 0 ? 'Paid' : (advancePaid > 0 ? 'Partially Paid' : 'Pending')) as 'Paid' | 'Partially Paid' | 'Pending';
   const paymentMode = reservation.payment_mode || 'Cash';
@@ -2529,6 +2578,7 @@ export const getReservationConfirmationData = async (
     hotel,
     guest,
     reservation,
+    multiRooms,
     room: {
       room_no: reservation.room_no || 'Unassigned',
       room_id: roomId,

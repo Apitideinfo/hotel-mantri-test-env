@@ -22,6 +22,8 @@ interface BookingBarProps {
   primaryRoomNo?: string;
   groupTotalDue?: number;
   groupTotalTariff?: number;
+  groupTotalPaid?: number;
+  groupRoomsCount?: number;
   isStretching?: boolean;
   isMoving?: boolean;
   onMouseDownMove?: (e: React.MouseEvent) => void;
@@ -188,6 +190,8 @@ export const BookingBar: React.FC<BookingBarProps> = ({
   primaryRoomNo,
   groupTotalDue,
   groupTotalTariff,
+  groupTotalPaid,
+  groupRoomsCount,
   isStretching = false,
   isMoving = false,
   onMouseDownMove,
@@ -238,11 +242,13 @@ export const BookingBar: React.FC<BookingBarProps> = ({
 
   const singleBalance = Math.max(0, total - advance);
 
-  // Group-aware balance: If it's a multi-room booking, evaluate against group total
+  // Group-aware balance & totals: If it's a multi-room booking, evaluate against consolidated group totals
   const effectiveDue = isGroup
     ? (groupTotalDue !== undefined ? groupTotalDue : singleBalance)
     : singleBalance;
   const isPaid = effectiveDue < 1.0;
+  const effectiveTotal = isGroup && groupTotalTariff !== undefined ? groupTotalTariff : total;
+  const effectivePaid = isGroup && groupTotalPaid !== undefined ? groupTotalPaid : advance;
 
   const canEdit = booking.status !== 'cancelled' && booking.status !== 'no_show';
   const canExtend = canEdit && booking.status !== 'checked_out';
@@ -263,7 +269,7 @@ export const BookingBar: React.FC<BookingBarProps> = ({
     : 'rounded-none border-x-0 -mx-[9px] z-[2] p-1.5 px-2';
 
   const tooltipTitle = isGroup
-    ? `${booking.guestName || 'Guest'} · Room ${booking.roomNo} · Group Booking · Total ₹${fmtInt(groupTotalTariff || total)} · ${isPaid ? 'Fully Paid' : isGroupPrimary ? `Group Due ₹${fmtInt(effectiveDue)}` : `Due ₹${fmtInt(effectiveDue)} on Rm ${primaryRoomNo || booking.roomNo}`}`
+    ? `${booking.guestName || 'Guest'} · Room ${booking.roomNo} · Group Booking (${groupRoomsCount || 2} Rooms)\nTotal Group Stay: ₹${fmtInt(effectiveTotal)} · Total Advance Paid: ₹${fmtInt(effectivePaid)} · ${isPaid ? 'Group Fully Settled' : `Group Balance Due: ₹${fmtInt(effectiveDue)}`}`
     : `${booking.guestName || 'Guest'} · ${booking.sourceName || booking.sourceCategory} · ${booking.nights} Night${booking.nights > 1 ? 's' : ''} (₹${fmtInt(total)}) · ${statusCfg.statusLabel}${isPaid ? ' · Fully Settled' : ` · Due ₹${fmtInt(effectiveDue)}`}`;
 
   return (
@@ -337,16 +343,12 @@ export const BookingBar: React.FC<BookingBarProps> = ({
                   </span>
                 ) : isGroup ? (
                   isPaid ? (
-                    <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                    <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5" title={`Group Fully Settled · Total Group Stay: ₹${fmtInt(effectiveTotal)} · Advance Paid: ₹${fmtInt(effectivePaid)}`}>
                       <CheckCircle2 className="w-2 h-2" /> Paid
                     </span>
-                  ) : isGroupPrimary ? (
-                    <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
-                      Due ₹{fmtInt(effectiveDue)}
-                    </span>
                   ) : (
-                    <span className="text-indigo-700 font-black bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[8px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group payment tracked on Room ${primaryRoomNo || 'primary'}`}>
-                      Grp · Rm {primaryRoomNo || '1'}
+                    <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group Booking (${groupRoomsCount || 2} Rooms)\nTotal Group Stay: ₹${fmtInt(effectiveTotal)}\nTotal Advance Paid: ₹${fmtInt(effectivePaid)}\nGroup Balance Due: ₹${fmtInt(effectiveDue)}`}>
+                      Due ₹{fmtInt(effectiveDue)}
                     </span>
                   )
                 ) : isPaid ? (
@@ -448,8 +450,8 @@ export const BookingBar: React.FC<BookingBarProps> = ({
 
             {/* Bottom Row: Total Tariff + Payment Due / Paid */}
             <div className="flex items-center justify-between gap-1 text-[9.5px] font-bold pb-0.5 min-w-0">
-              <span className="text-slate-700 font-extrabold text-[9.5px] truncate">
-                ₹{fmtInt(total)}
+              <span className="text-slate-700 font-extrabold text-[9.5px] truncate" title={isGroup ? `Total Group Stay: ₹${fmtInt(effectiveTotal)} (${groupRoomsCount || 2} Rooms)` : `Stay Total: ₹${fmtInt(total)}`}>
+                ₹{fmtInt(effectiveTotal)}
               </span>
 
               {booking.isComplimentary ? (
@@ -458,16 +460,12 @@ export const BookingBar: React.FC<BookingBarProps> = ({
                 </span>
               ) : isGroup ? (
                 isPaid ? (
-                  <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5">
+                  <span className="text-emerald-700 font-black bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[8px] shadow-2xs flex items-center gap-0.5" title={`Group Fully Settled · Total Group Stay: ₹${fmtInt(effectiveTotal)} · Advance Paid: ₹${fmtInt(effectivePaid)}`}>
                     <CheckCircle2 className="w-2 h-2" /> Paid
                   </span>
-                ) : isGroupPrimary ? (
-                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap">
-                    Due ₹{fmtInt(effectiveDue)}
-                  </span>
                 ) : (
-                  <span className="text-indigo-700 font-black bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded text-[8px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group payment due ₹${fmtInt(effectiveDue)} tracked on Room ${primaryRoomNo || 'primary'}`}>
-                    Grp · Rm {primaryRoomNo || '1'}
+                  <span className="text-rose-700 font-black bg-rose-50 border border-rose-200/90 px-1.5 py-0.2 rounded text-[8.5px] tracking-tight shadow-2xs whitespace-nowrap" title={`Group Booking (${groupRoomsCount || 2} Rooms)\nTotal Group Stay: ₹${fmtInt(effectiveTotal)}\nTotal Advance Paid: ₹${fmtInt(effectivePaid)}\nGroup Balance Due: ₹${fmtInt(effectiveDue)}`}>
+                    Due ₹{fmtInt(effectiveDue)}
                   </span>
                 )
               ) : isPaid ? (

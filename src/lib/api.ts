@@ -339,7 +339,11 @@ export const classifyCompany = (
 
 // ---- Room chart & authoritative stay synthesis ----
 
-export const reservationToRoomChartEntry = (r: Reservation, overrideBalance?: number): RoomChartEntry => {
+export const reservationToRoomChartEntry = (
+  r: Reservation,
+  overrideBalance?: number,
+  overrideAdvance?: number,
+): RoomChartEntry => {
   const ci = (r.check_in_date ?? '').slice(0, 10);
   const co = (r.check_out_date ?? '').slice(0, 10);
   const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
@@ -386,7 +390,7 @@ export const reservationToRoomChartEntry = (r: Reservation, overrideBalance?: nu
     pay_upi: toNum(r.pay_upi),
     pay_card: toNum(r.pay_card),
     pay_bank: toNum(r.pay_bank),
-    pay_advance: toNum(r.advance_paid),
+    pay_advance: overrideAdvance !== undefined ? overrideAdvance : toNum(r.advance_paid),
     pay_balance: overrideBalance !== undefined ? Math.max(0, overrideBalance) : defaultBalance,
     id_proof_type: '',
     id_proof_number: '',
@@ -436,6 +440,9 @@ export const mergeReservationsWithRoomChart = (
   }
 
   const groupBalanceMap = new Map<string, number>();
+  const groupPaidMap = new Map<string, number>();
+  const groupStayMap = new Map<string, number>();
+
   for (const [, groupList] of groupMap.entries()) {
     if (groupList.length === 1) {
       // Single reservation - standard balance
@@ -447,6 +454,8 @@ export const mergeReservationsWithRoomChart = (
       );
       if (isComp) {
         groupBalanceMap.set(r.id, 0);
+        groupPaidMap.set(r.id, 0);
+        groupStayMap.set(r.id, 0);
         continue;
       }
       const ci = (r.check_in_date ?? '').slice(0, 10);
@@ -456,10 +465,12 @@ export const mergeReservationsWithRoomChart = (
       const splitPaid = toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
       const totalPaid = Math.max(toNum(r.advance_paid), splitPaid);
       groupBalanceMap.set(r.id, Math.max(0, inv - totalPaid));
+      groupPaidMap.set(r.id, totalPaid);
+      groupStayMap.set(r.id, inv);
       continue;
     }
 
-    // Multi-room group: pool invoices and payments
+    // Multi-room group: pool invoices and payments across each room's rate * nights
     const totalGroupInvoice = groupList.reduce((sum, r) => {
       const isComp = Boolean(
         (r as any).is_complimentary ||
@@ -475,33 +486,21 @@ export const mergeReservationsWithRoomChart = (
 
     const totalGroupPaid = groupList.reduce((sum, r) => {
       const splitPaid = toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
-      return sum + Math.max(toNum(r.advance_paid), splitPaid);
+      const adv = toNum(r.advance_paid);
+      return sum + (adv > 0 ? adv : splitPaid);
     }, 0);
 
-    if (totalGroupPaid >= totalGroupInvoice) {
-      for (const r of groupList) {
-        groupBalanceMap.set(r.id, 0);
-      }
-    } else {
-      let pool = totalGroupPaid;
-      for (const r of groupList) {
-        const isComp = Boolean(
-          (r as any).is_complimentary ||
-          r.payment_mode === 'Complimentary' ||
-          (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
-        );
-        if (isComp) {
-          groupBalanceMap.set(r.id, 0);
-          continue;
-        }
-        const ci = (r.check_in_date ?? '').slice(0, 10);
-        const co = (r.check_out_date ?? '').slice(0, 10);
-        const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
-        const inv = toNum(r.invoice_total) || (toNum(r.rate) * n);
-        const covered = Math.min(inv, pool);
-        groupBalanceMap.set(r.id, Math.max(0, inv - covered));
-        pool = Math.max(0, pool - covered);
-      }
+    const groupBalanceDue = Math.max(0, totalGroupInvoice - totalGroupPaid);
+
+    for (const r of groupList) {
+      const isComp = Boolean(
+        (r as any).is_complimentary ||
+        r.payment_mode === 'Complimentary' ||
+        (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
+      );
+      groupBalanceMap.set(r.id, isComp ? 0 : groupBalanceDue);
+      groupPaidMap.set(r.id, isComp ? 0 : totalGroupPaid);
+      groupStayMap.set(r.id, isComp ? 0 : totalGroupInvoice);
     }
   }
 
@@ -511,6 +510,7 @@ export const mergeReservationsWithRoomChart = (
       return {
         ...e,
         pay_balance: groupBalanceMap.get(e.reservation_id)!,
+        pay_advance: groupPaidMap.get(e.reservation_id) ?? e.pay_advance,
       };
     }
     return e;
@@ -518,7 +518,8 @@ export const mergeReservationsWithRoomChart = (
 
   const synthesized = unlinkedResvs.map((r) => {
     const overrideBal = groupBalanceMap.get(r.id);
-    return reservationToRoomChartEntry(r, overrideBal);
+    const overridePaid = groupPaidMap.get(r.id);
+    return reservationToRoomChartEntry(r, overrideBal, overridePaid);
   });
 
   return [...updatedEntries, ...synthesized];
