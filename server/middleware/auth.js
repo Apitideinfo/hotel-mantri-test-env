@@ -2,22 +2,55 @@ import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
 const getSupabaseConfig = () => {
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
+  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
   return { url, anonKey };
 };
 
 /**
  * Resolves the authenticated user and their authorized hotel context.
  * Strictly verifies role permissions and rejects unauthorized cross-hotel requests.
+ * 
+ * Rules:
+ * 1. Requires valid Supabase JWT authentication.
+ * 2. Super Admin can select and switch between authorized properties.
+ * 3. Hotel Owner / Admin / Staff is strictly bound to ONE authorized hotel resolved
+ *    from the database. Client-supplied hotel IDs cannot override authorization.
+ *    Any mismatch is immediately rejected with 403 HOTEL_ACCESS_DENIED.
  */
+
+/**
+ * Constant-time string comparison to prevent timing attacks against secret tokens (SEC-09).
+ * Pre-hashes inputs using SHA-256 so buffers are strictly uniform in length (32 bytes),
+ * completely avoiding RangeError while neutralizing length-based timing leaks.
+ */
+export const timingSafeSecretEqual = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (!a || !b) return false;
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+};
+
+let customHotelResolver = null;
+
+export const setHotelResolverForTesting = (resolverFn) => {
+  customHotelResolver = resolverFn;
+};
+
 export const resolveAuthorizedHotel = async (req) => {
+  if (customHotelResolver) {
+    return customHotelResolver(req);
+  }
+
   if (req.user && req.auth?.hotelId) {
     return {
       success: true,
       user: req.user,
+      userId: req.user.id || req.auth.userId,
       hotelId: req.auth.hotelId,
-      role: req.userRole || req.auth.role || 'super_admin',
+      role: req.userRole || req.auth.role || 'hotel_admin',
+      isSuperAdmin: Boolean(req.auth.isSuperAdmin),
       hotel: req.hotel || { id: req.auth.hotelId },
       scopedSupabase: req.scopedSupabase,
     };
@@ -43,18 +76,39 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
-  const { url: supabaseUrl, anonKey: supabaseAnonKey } = getSupabaseConfig();
-  if (!supabaseUrl || !supabaseAnonKey) {
+  const supabaseConfig = getSupabaseConfig();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  // Privileged internal server-to-server call with service role key ONLY (SEC-09 timing-safe)
+  if (serviceKey && timingSafeSecretEqual(token, serviceKey)) {
+    const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
+    if (!requestedHotelId) {
+      return {
+        success: false,
+        status: 400,
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context is required for service role operations.',
+      };
+    }
     return {
-      success: false,
-      status: 500,
-      code: 'CONFIG_ERROR',
-      message: 'Supabase configuration is missing on the server.',
+      success: true,
+      user: { id: 'service-role-admin', email: 'service@hotelmantri.com' },
+      userId: 'service-role-admin',
+      role: 'super_admin',
+      isSuperAdmin: true,
+      hotelId: requestedHotelId,
+      hotel: { id: requestedHotelId },
+      scopedSupabase: createClient(supabaseConfig.url, serviceKey, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }),
     };
   }
 
-  // Create request-scoped Supabase client with user's JWT
-  const scopedSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+  // Normal user token validation via Supabase Auth
+  const scopedSupabase = createClient(supabaseConfig.url, supabaseConfig.anonKey, {
     global: {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -66,7 +120,6 @@ export const resolveAuthorizedHotel = async (req) => {
     },
   });
 
-  // Verify token and retrieve user
   const { data: { user }, error: authError } = await scopedSupabase.auth.getUser(token);
   if (authError || !user) {
     return {
@@ -77,7 +130,9 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
-  // Check Super Admin privilege via RPC
+  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
+
+  // Check Super Admin privilege via RPC is_super_admin()
   let isSuperAdmin = false;
   try {
     const { data: isSuper, error: rpcErr } = await scopedSupabase.rpc('is_super_admin');
@@ -88,10 +143,21 @@ export const resolveAuthorizedHotel = async (req) => {
     isSuperAdmin = false;
   }
 
-  // Requested hotel from header, query, or body
-  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.body?.hotel_id || req.body?.hotelId;
+  if (!isSuperAdmin) {
+    const { data: cu } = await scopedSupabase
+      .from('company_users')
+      .select('role')
+      .eq('user_id', user.id)
+      .eq('status', 'Active')
+      .maybeSingle();
+
+    if (cu && (cu.role === 'founder' || cu.role === 'company_admin')) {
+      isSuperAdmin = true;
+    }
+  }
 
   if (isSuperAdmin) {
+    // Super Admin Flow: Must specify an active target hotel property
     if (!requestedHotelId) {
       return {
         success: false,
@@ -101,7 +167,6 @@ export const resolveAuthorizedHotel = async (req) => {
       };
     }
 
-    // Verify hotel exists
     const { data: hotel, error: hotelErr } = await scopedSupabase
       .from('hotels')
       .select('id, hotel_name, subscription_status, is_active')
@@ -122,14 +187,15 @@ export const resolveAuthorizedHotel = async (req) => {
       user,
       userId: user.id,
       role: 'super_admin',
+      isSuperAdmin: true,
       hotelId: requestedHotelId,
       hotel,
       scopedSupabase,
     };
   }
 
-  // Hotel Admin / Staff Flow:
-  // Query active hotel assignments for this user
+  // Hotel Owner / Hotel Admin / Staff Flow:
+  // Authoritatively query assigned hotel from database
   const { data: adminRecords, error: dbError } = await scopedSupabase
     .from('hotel_admins')
     .select('role, hotel_id, status')
@@ -148,6 +214,7 @@ export const resolveAuthorizedHotel = async (req) => {
 
   const activeRecord = adminRecords && adminRecords[0];
   let authorizedHotelId = activeRecord?.hotel_id;
+  let userRole = activeRecord?.role || 'hotel_admin';
 
   if (!authorizedHotelId && user.email) {
     const { data: matchedHotel } = await scopedSupabase
@@ -158,23 +225,8 @@ export const resolveAuthorizedHotel = async (req) => {
       .maybeSingle();
 
     if (matchedHotel) {
-      if (requestedHotelId && requestedHotelId !== matchedHotel.id) {
-        return {
-          success: false,
-          status: 403,
-          code: 'HOTEL_ACCESS_DENIED',
-          message: 'Cross-hotel access denied. You are not authorized for this property.',
-        };
-      }
-      return {
-        success: true,
-        user,
-        userId: user.id,
-        role: 'hotel_admin',
-        hotelId: matchedHotel.id,
-        hotel: matchedHotel,
-        scopedSupabase,
-      };
+      authorizedHotelId = matchedHotel.id;
+      userRole = 'hotel_admin';
     }
   }
 
@@ -182,18 +234,18 @@ export const resolveAuthorizedHotel = async (req) => {
     return {
       success: false,
       status: 403,
-      code: 'HOTEL_ACCESS_DENIED',
-      message: 'User is not assigned to any active hotel property.',
+      code: 'NO_HOTEL_ASSIGNED',
+      message: 'No hotel is associated with this account.',
     };
   }
 
-  // If client passed an X-Hotel-Id, verify it matches their assigned hotel
+  // STRICT SECURITY CHECK: Reject any client hotel tampering attempt
   if (requestedHotelId && requestedHotelId !== authorizedHotelId) {
     return {
       success: false,
       status: 403,
       code: 'HOTEL_ACCESS_DENIED',
-      message: 'Cross-hotel access denied. You are not authorized for this property.',
+      message: 'You are not authorized to access this hotel.',
     };
   }
 
@@ -204,11 +256,27 @@ export const resolveAuthorizedHotel = async (req) => {
     .eq('id', authorizedHotelId)
     .maybeSingle();
 
+  // Check user metadata role first (e.g. housekeeping, manager, reception, accounts)
+  const metaRole = user.user_metadata?.role;
+  let effectiveRole = metaRole || userRole;
+  if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+
+  const userPermissions = user.user_metadata?.permissions || {
+    canLaundry: Boolean(user.user_metadata?.can_laundry),
+    canMaintenance: user.user_metadata?.can_maintenance !== false,
+    canApproveInspection: Boolean(user.user_metadata?.can_approve_inspection),
+    assignedFloor: user.user_metadata?.assigned_floor || '',
+    assignedCategoryId: user.user_metadata?.assigned_category_id || '',
+    shift: user.user_metadata?.shift || 'General',
+  };
+
   return {
     success: true,
     user,
     userId: user.id,
-    role: activeRecord.role || 'hotel_admin',
+    role: effectiveRole,
+    permissions: userPermissions,
+    isSuperAdmin: false,
     hotelId: authorizedHotelId,
     hotel: hotel || { id: authorizedHotelId, hotel_name: 'Hotel' },
     scopedSupabase,
@@ -227,6 +295,7 @@ export const requireAuth = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
+        error: 'AUTH_REQUIRED',
         code: 'AUTH_REQUIRED',
         message: 'Missing or invalid Authorization header.',
         requestId,
@@ -244,6 +313,7 @@ export const requireAuth = async (req, res, next) => {
     if (authError || !user) {
       return res.status(401).json({
         success: false,
+        error: 'INVALID_TOKEN',
         code: 'INVALID_TOKEN',
         message: 'Authentication token is invalid or expired.',
         requestId,
@@ -257,6 +327,7 @@ export const requireAuth = async (req, res, next) => {
     console.error(`[${requestId}] requireAuth error:`, err?.message || err);
     res.status(500).json({
       success: false,
+      error: 'SERVER_ERROR',
       code: 'SERVER_ERROR',
       message: 'Internal server error during authentication.',
       requestId,
@@ -266,7 +337,7 @@ export const requireAuth = async (req, res, next) => {
 
 /**
  * Middleware: Requires authenticated user AND valid authorized hotel context.
- * Strictly verifies role permissions and attaches req.auth = { userId, role, hotelId, hotel }.
+ * Strictly verifies role permissions and attaches req.auth = { userId, role, isSuperAdmin, hotelId, hotel }.
  */
 export const requireHotelAccess = async (req, res, next) => {
   const requestId = req.headers['x-request-id'] || crypto.randomUUID();
@@ -275,17 +346,17 @@ export const requireHotelAccess = async (req, res, next) => {
   try {
     const resolution = await resolveAuthorizedHotel(req);
     if (!resolution.success) {
-      // Safe diagnostic logging (NEVER log tokens or passwords)
       console.warn(`[${requestId}] Hotel Auth Denied:`, {
         endpoint: req.originalUrl || req.url,
         method: req.method,
         statusCode: resolution.status,
         code: resolution.code,
-        requestedHotelId: req.headers['x-hotel-id'] || req.query.hotelId,
+        message: resolution.message,
       });
 
       return res.status(resolution.status).json({
         success: false,
+        error: resolution.code,
         code: resolution.code,
         message: resolution.message,
         requestId,
@@ -301,6 +372,9 @@ export const requireHotelAccess = async (req, res, next) => {
     req.auth = {
       userId: resolution.userId,
       role: resolution.role,
+      permissions: resolution.permissions || {},
+      userMetadata: resolution.user?.user_metadata || {},
+      isSuperAdmin: resolution.isSuperAdmin,
       hotelId: resolution.hotelId,
       hotel: resolution.hotel,
     };
@@ -310,10 +384,72 @@ export const requireHotelAccess = async (req, res, next) => {
     console.error(`[${requestId}] requireHotelAccess exception:`, error?.message || error);
     res.status(500).json({
       success: false,
+      error: 'SERVER_ERROR',
       code: 'SERVER_ERROR',
       message: 'Internal server error during hotel authorization.',
       requestId,
     });
   }
+};
+
+/**
+ * Middleware: Requires the authenticated user to have one of the specified roles.
+ * Super Admin always passes.
+ * 'owner' and 'hotel_admin' are treated interchangeably.
+ */
+export const requireRoles = (allowedRoles = []) => {
+  return (req, res, next) => {
+    const requestId = req.requestId || crypto.randomUUID();
+    const role = (req.userRole || req.auth?.role || '').toLowerCase();
+    if (req.auth?.isSuperAdmin || role === 'super_admin') {
+      return next();
+    }
+
+    const allowed = allowedRoles.map((r) => r.toLowerCase());
+    const isOwnerOrAdmin = role === 'hotel_admin' || role === 'owner';
+    const isPermitted =
+      allowed.includes(role) ||
+      (isOwnerOrAdmin && (allowed.includes('hotel_admin') || allowed.includes('owner')));
+
+    if (!isPermitted) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        code: 'ROLE_FORBIDDEN',
+        message: `Access denied. Users with role "${role}" cannot perform this action or access this module.`,
+        requestId,
+      });
+    }
+
+    next();
+  };
+};
+
+/**
+ * Middleware: Denies access if the user has any of the specified roles.
+ * Super Admin is never forbidden.
+ */
+export const forbidRoles = (forbiddenRoles = []) => {
+  return (req, res, next) => {
+    const requestId = req.requestId || crypto.randomUUID();
+    if (req.auth?.isSuperAdmin) {
+      return next();
+    }
+
+    const role = (req.userRole || req.auth?.role || '').toLowerCase();
+    const forbidden = forbiddenRoles.map((r) => r.toLowerCase());
+
+    if (forbidden.includes(role)) {
+      return res.status(403).json({
+        success: false,
+        error: 'ACCESS_DENIED',
+        code: 'ROLE_FORBIDDEN',
+        message: `Access denied. Users with role "${role}" cannot access this module or resource.`,
+        requestId,
+      });
+    }
+
+    next();
+  };
 };
 

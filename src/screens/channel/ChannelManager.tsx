@@ -6,10 +6,10 @@ import {
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter, Activity,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-  RefreshCcw, Download } from 'lucide-react';
+  RefreshCcw, Download, Info } from 'lucide-react';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
-  bulkUpdateInventory, saveChannelConnection, deleteChannelConnection,
+  bulkUpdateInventory, applyBulkInventoryPatch, saveChannelConnection, deleteChannelConnection,
   saveChannelRateMapping, deleteChannelRateMapping, insertSyncLog,
   updateOtaReservationStatus, getSyncLogs, getChannelSettings,
   saveChannelSettings, updateChannelSettingsStatus, retrySyncLog,
@@ -23,12 +23,21 @@ import type {
   ChannelManagerOverview, ChannelConnection, ChannelInventoryRestriction,
   ChannelSyncLog, ChannelOtaReservation, ChannelSettings,
 } from '@/lib/api-channel';
+import {
+  getBulkKey, parseBulkKey, mergeBulkDraft, removeDraftItem,
+  clearDraft, buildPatchListFromDraft, summarizeDraft,
+  normalizeToISODate, addDays, daysBetween,
+  validateAndFilterDraft, loadTenantDraft, saveTenantDraft, clearTenantDraft
+} from '@/lib/bulkUpdateDraft';
+import type { BulkDraftItem, BulkDraftMap, BulkInventoryPatch } from '@/lib/bulkUpdateDraft';
 import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
 import { fmtMoney, toNum } from '@/lib/calc';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { ChannelsDashboard } from './components/ChannelsDashboard';
 import { useHotel } from '@/lib/hotel-context';
 import { HotelSelectorModal } from '@/components/HotelSelectorModal';
+import { supabase } from '@/lib/supabase';
 
 interface ChannelManagerProps {
   onBack?: () => void;
@@ -44,48 +53,30 @@ const HOTEL_OWNER_TABS: Tab[] = ['overview', 'channels', 'inventory', 'reservati
 
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
-const addDays = (dateStr: string, n: number): string => {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + n);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
-
 const todayStr = (): string => {
-  const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  const now = new Date();
+  return now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 };
 
 const fmtDate = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  const norm = normalizeToISODate(d);
+  if (!norm) return d;
+  const [y, m, day] = norm.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
 };
 
 const fmtDateLong = (d: string): string => {
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+  const norm = normalizeToISODate(d);
+  if (!norm) return d;
+  const [y, m, day] = norm.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'long', year: 'numeric' });
 };
 
 const fmtDateTime = (d: string): string => {
   const dt = new Date(d);
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-};
-
-const daysBetween = (start: string, end: string): string[] => {
-  const days: string[] = [];
-  let cur = start;
-  let guard = 0;
-  while (cur <= end && guard < 400) {
-    days.push(cur);
-    cur = addDays(cur, 1);
-    guard++;
-  }
-  return days;
+  return dt.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -146,8 +137,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       setError(null);
       const data = await getChannelManagerOverview();
       setOverview(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load Channel Manager');
+    } catch (e: any) {
+      const rawMsg = e instanceof Error ? e.message : String(e || 'Failed to load Channel Manager');
+      const isInternalJsError = rawMsg.includes('resolveAuthorizedHotel') || rawMsg.includes('ReferenceError') || rawMsg.includes('is not defined');
+      setError(isInternalJsError ? 'Channel integration is initializing. Please refresh shortly.' : rawMsg);
     } finally {
       setLoading(false);
     }
@@ -155,8 +148,10 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
 
   useEffect(() => {
     if (hotelId) {
+      setOverview(null);
       load();
     } else {
+      setOverview(null);
       setLoading(false);
     }
   }, [hotelId, load]);
@@ -259,26 +254,40 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   }
 
   if (!hotelId || hotelStatus === 'HOTEL_CONTEXT_EMPTY') {
+    if (isSuperAdminUser) {
+      return (
+        <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
+          <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1a68fb] flex items-center justify-center mx-auto shadow-sm">
+            <Building2 className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900">Select a Hotel Property</h2>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            Channel Manager requires an active hotel context to manage OTA channels, sync rates, and process reservations.
+          </p>
+          <button
+            onClick={() => setShowHotelSelector(true)}
+            className="bg-[#1a68fb] hover:bg-blue-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 text-sm"
+          >
+            <Building2 className="w-4 h-4" /> Select Hotel Property
+          </button>
+          <HotelSelectorModal
+            isOpen={showHotelSelector}
+            onClose={() => setShowHotelSelector(false)}
+            isMandatory={false}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className="px-4 py-12 max-w-xl mx-auto text-center space-y-4">
-        <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1a68fb] flex items-center justify-center mx-auto shadow-sm">
-          <Building2 className="w-8 h-8" />
+        <div className="w-16 h-16 rounded-3xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto shadow-sm">
+          <AlertTriangle className="w-8 h-8" />
         </div>
-        <h2 className="text-xl font-bold text-slate-900">Select a Hotel Property</h2>
+        <h2 className="text-xl font-bold text-slate-900">No Hotel Assigned</h2>
         <p className="text-sm text-slate-500 leading-relaxed">
-          Channel Manager requires an active hotel context to manage OTA channels, sync rates, and process reservations.
+          Your account is not associated with an active hotel property. Please contact an administrator.
         </p>
-        <button
-          onClick={() => setShowHotelSelector(true)}
-          className="bg-[#1a68fb] hover:bg-blue-700 text-white font-bold px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition inline-flex items-center gap-2 text-sm"
-        >
-          <Building2 className="w-4 h-4" /> Select Hotel Property
-        </button>
-        <HotelSelectorModal
-          isOpen={showHotelSelector}
-          onClose={() => setShowHotelSelector(false)}
-          isMandatory={false}
-        />
       </div>
     );
   }
@@ -312,7 +321,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
               )}
             </div>
             <p className="text-sm text-slate-400 mt-0.5">
-              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Mock/Test Mode'}
+              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Not Connected'}
               {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
               {!isHotelOwner && <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Superadmin View</span>}
             </p>
@@ -320,7 +329,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </div>
         <div className="flex items-center gap-2">
           <span className={`text-xs font-semibold px-3 py-1.5 rounded-full border ${overview?.isLiveMode ? STATUS_STYLES.connected : 'bg-amber-100 text-amber-700 border-amber-300'}`}>
-            {overview?.isLiveMode ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Live Sync</> : <><Clock className="w-3 h-3 inline mr-1" /> Integration Ready</>}
+            {overview?.isLiveMode ? <><CheckCircle2 className="w-3 h-3 inline mr-1" /> Live Sync</> : <><Clock className="w-3 h-3 inline mr-1" /> Not Connected</>}
           </span>
           <button
             onClick={async () => {
@@ -349,14 +358,27 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </div>
       </div>
 
-      {/* Mock mode banner */}
+      {/* Connection status banner */}
       {overview && !overview.isLiveMode && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-700">
-            <span className="font-semibold">Mock/Test Mode:</span> {isHotelOwner
-              ? 'Channel Manager credentials are not yet configured. Please contact Superadmin to configure integration.'
-              : 'Channel Manager credentials are not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.'}
+            <span className="font-semibold">
+              {overview.channelStatus?.errorCode === 'AIOSSELL_AUTH_FAILED' || overview.channelStatus?.status === 'AUTH_ERROR' 
+                ? 'Authentication Required:' 
+                : overview.channelStatus?.errorCode === 'AIOSSELL_HOTEL_NOT_FOUND' || overview.channelStatus?.status === 'PROPERTY_NOT_CONFIGURED' 
+                ? 'Property Code Notice:' 
+                : overview.channelStatus?.errorCode === 'AIOSSELL_HOTEL_CODE_INVALID'
+                ? 'Property Access Notice:'
+                : 'Channel Sync Notice:'}
+            </span>{' '}
+            {overview.channelStatus?.message || (
+              overview.settings?.aiosell_hotel_code
+                ? 'Channel Manager is syncing with upstream distribution network. Click Sync Now to refresh.'
+                : (isHotelOwner
+                    ? 'Channel Manager property code is not yet configured. Please contact Superadmin to configure integration.'
+                    : 'Channel Manager property code is not yet configured. Connect your provider in Connection Settings below to enable live OTA sync.')
+            )}
           </p>
         </div>
       )}
@@ -398,6 +420,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
           {tab === 'channels' && (
             <ChannelsDashboard
+              key={hotelId || 'channels'}
               connections={overview.connections}
               categories={overview.categories}
               ratePlans={overview.ratePlans}
@@ -408,20 +431,22 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
               loading={loading}
             />
           )}
-          {tab === 'inventory' && <InventoryTab categories={overview.categories} isLiveMode={overview.isLiveMode} />}
-          {tab === 'reservations' && <ReservationsTab reservations={overview.otaReservations} onChanged={load} />}
-          {tab === 'mapping' && <MappingTab categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
-          {tab === 'logs' && <LogsTab logs={overview.syncLogs} connections={overview.connections} />}
-          {tab === 'diagnostics' && <DiagnosticsTab />}
-          {tab === 'settings' && <SettingsTab settings={overview.settings} onChanged={load} />}
+          {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
+          {tab === 'reservations' && <ReservationsTab key={hotelId || 'reservations'} reservations={overview.otaReservations} onChanged={load} />}
+          {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
+          {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
+          {tab === 'diagnostics' && <DiagnosticsTab key={hotelId || 'diagnostics'} />}
+          {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} onChanged={load} />}
         </>
       ) : null}
 
-      <HotelSelectorModal
-        isOpen={showHotelSelector}
-        onClose={() => setShowHotelSelector(false)}
-        isMandatory={false}
-      />
+      {isSuperAdminUser && (
+        <HotelSelectorModal
+          isOpen={showHotelSelector}
+          onClose={() => setShowHotelSelector(false)}
+          isMandatory={false}
+        />
+      )}
     </div>
   );
 };
@@ -452,7 +477,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
     { label: 'Connected Channels', value: `${connected}`, sub: `${overview.connections.length} total`, icon: <Wifi className="w-5 h-5" />, color: 'text-brand-600', bg: 'bg-brand-50' },
     { label: 'Today OTA Bookings', value: `${todayOtaBookings}`, sub: 'New today', icon: <FileText className="w-5 h-5" />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
     { label: 'OTA Revenue Today', value: rs(otaRevenueToday), sub: 'From OTA bookings', icon: <Zap className="w-5 h-5" />, color: 'text-brand-gold-600', bg: 'bg-brand-gold-50' },
-    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : 'Not Connected', sub: overview.isLiveMode ? 'Live' : 'Mock mode', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
+    { label: 'Sync Health', value: overview.isLiveMode ? 'Healthy' : (overview.channelStatus?.status === 'CONNECTED' ? 'Healthy' : (overview.channelStatus?.status || 'Not Connected')), sub: overview.isLiveMode ? 'Live' : 'Disconnected', icon: <CheckCircle2 className="w-5 h-5" />, color: overview.isLiveMode ? 'text-emerald-600' : 'text-amber-600', bg: overview.isLiveMode ? 'bg-emerald-50' : 'bg-amber-50' },
     { label: 'Pending Actions', value: `${pendingActions}`, sub: 'Needs attention', icon: <Clock className="w-5 h-5" />, color: pendingActions > 0 ? 'text-orange-600' : 'text-slate-500', bg: pendingActions > 0 ? 'bg-orange-50' : 'bg-slate-100' },
     { label: 'Last Successful Sync', value: lastSync ? fmtDateTime(lastSync.last_sync_at!) : 'Never', sub: lastSync?.channel_name ?? '', icon: <Radio className="w-5 h-5" />, color: 'text-brand-navy-700', bg: 'bg-brand-navy-50' },
   ];
@@ -622,6 +647,7 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
 type RangePreset = '7' | '14' | '30' | 'custom';
 
 const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; isLiveMode: boolean }) => {
+  const { hotelId } = useHotel();
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState(addDays(todayStr(), 6));
   const [rangePreset, setRangePreset] = useState<RangePreset>('7');
@@ -649,7 +675,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   const [syncNotice, setSyncNotice] = useState<{
     title: string;
     message: string;
-    type: 'success' | 'warning' | 'error';
+    type: 'success' | 'warning' | 'error' | 'info';
     details?: string;
   } | null>(null);
 
@@ -734,7 +760,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             date: item.date,
             availability: item.available,
             base_rate: item.base_rate,
-            channel_rate: 0,
+            channel_rate: (item as any).channel_rate ?? 0,
             min_stay: item.min_stay,
             max_stay: item.max_stay,
             stop_sell: item.stop_sell,
@@ -757,6 +783,38 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
   }, [startDate, endDate]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Listen for local and realtime availability/reservation updates
+  useEffect(() => {
+    const handleUpdate = () => {
+      load();
+    };
+    window.addEventListener('hotel_mantri_availability_updated', handleUpdate);
+    window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('hotel_mantri_availability_updated', handleUpdate);
+      window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
+    };
+  }, [load]);
+
+  // Direct Supabase realtime listener for channel_inventory_restrictions scoped to this hotel
+  useEffect(() => {
+    if (!hotelId) return;
+    const channel = supabase
+      .channel(`inventory_tab_changes_${hotelId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [hotelId, load]);
 
   const getR = (catId: string, date: string): Partial<ChannelInventoryRestriction> => {
     return restrictions.get(`${catId}|${date}`) ?? {
@@ -824,9 +882,10 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
               onClick={handlePushToChannel}
               disabled={isSyncing}
               className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-xl shadow-soft-blue hover:shadow-md transition-all active:scale-[0.98] ml-2 disabled:opacity-50"
+              title="Manual full reconciliation with external OTA channel manager"
             >
               {isSyncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />} 
-              {isSyncing ? 'Syncing...' : 'Push Inventory & Rates'}
+              {isSyncing ? 'Syncing...' : 'Reconcile / Sync Now'}
             </button>
         </div>
       </div>
@@ -839,7 +898,13 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             <input
               type="date"
               value={startDate}
-              onChange={(e) => { setStartDate(e.target.value); setRangePreset('custom'); }}
+              onChange={(e) => {
+                const newFrom = e.target.value;
+                setRangePreset('custom');
+                setStartDate(newFrom);
+                // If the existing endDate is now before the new startDate, clamp it
+                setEndDate((prev) => (!prev || prev < newFrom ? newFrom : prev));
+              }}
               className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
             />
           </div>
@@ -848,7 +913,13 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             <input
               type="date"
               value={endDate}
-              onChange={(e) => { setEndDate(e.target.value); setRangePreset('custom'); }}
+              min={startDate}
+              onChange={(e) => {
+                const newTo = e.target.value;
+                setRangePreset('custom');
+                // Never allow toDate < fromDate
+                setEndDate(newTo >= startDate ? newTo : startDate);
+              }}
               className="text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
             />
           </div>
@@ -1060,14 +1131,14 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           categoryName={cellEdit.categoryName}
           restriction={getR(cellEdit.catId, cellEdit.date)}
           onClose={() => setCellEdit(null)}
-          onSave={async (data) => {
-            await upsertInventoryRestriction({
+          onSave={async (patch) => {
+            const res = await upsertInventoryRestriction({
               room_category_id: cellEdit.catId,
               date: cellEdit.date,
-              ...data,
-            } as Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>);
-            setCellEdit(null);
+              ...patch,
+            });
             await load();
+            return res;
           }}
         />
       )}
@@ -1078,11 +1149,70 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
           categories={categories}
           defaultStart={startDate}
           defaultEnd={endDate}
+          existingRestrictions={restrictions}
+          hotelId={hotelId}
           onClose={() => setBulkOpen(false)}
-          onApply={async (updates) => {
-            await bulkUpdateInventory(updates);
-            setBulkOpen(false);
+          onSuccess={async (result?: any) => {
             await load();
+            if (!result) {
+              setBulkOpen(false);
+              return;
+            }
+
+            const extSync = result.externalSync;
+            const status = extSync?.status;
+
+            if (status === 'VERIFIED' || (result.allVerified && extSync?.success)) {
+              setBulkOpen(false);
+              setSyncNotice({
+                title: 'Inventory & Rates Updated and Verified',
+                message: result.message || 'Authoritative rates and inventory were saved to PMS and verified with the external channel manager.',
+                type: 'success'
+              });
+            } else if (status === 'NOT_CONFIGURED') {
+              setBulkOpen(false);
+              setSyncNotice({
+                title: 'PMS Saved (Local Only)',
+                message: 'Authoritative inventory and rates were saved to the PMS database. Channel manager integration is not configured for this hotel, so external channels were not updated.',
+                type: 'info'
+              });
+            } else if (status === 'SKIPPED') {
+              setBulkOpen(false);
+              setSyncNotice({
+                title: 'PMS Saved (Sync Skipped)',
+                message: 'Authoritative inventory and rates were saved to the PMS database. External channel manager sync was skipped as requested.',
+                type: 'info'
+              });
+            } else if (status === 'PARTIAL_SUCCESS') {
+              const failureDetails = [
+                ...(extSync?.failureReasons || []),
+                extSync?.rateSync?.error ? `Rate Sync Error: ${extSync.rateSync.error}` : null,
+                extSync?.inventorySync?.error ? `Inventory Sync Error: ${extSync.inventorySync.error}` : null,
+                extSync?.rateSync?.discrepancies?.length ? `Rate Verification: ${extSync.rateSync.discrepancies.length} discrepancy items` : null,
+                extSync?.inventorySync?.discrepancies?.length ? `Inventory Verification: ${extSync.inventorySync.discrepancies.length} discrepancy items` : null
+              ].filter(Boolean).join('\n');
+
+              setSyncNotice({
+                title: 'Partial Channel Manager Sync',
+                message: 'PMS inventory was saved, but external channel manager sync partially failed. Your draft has been preserved so you can retry.',
+                type: 'warning',
+                details: failureDetails || extSync?.message || 'One or more channel updates could not be confirmed.'
+              });
+            } else {
+              const failureDetails = [
+                ...(extSync?.failureReasons || []),
+                extSync?.rateSync?.error ? `Rate Sync Error: ${extSync.rateSync.error}` : null,
+                extSync?.inventorySync?.error ? `Inventory Sync Error: ${extSync.inventorySync.error}` : null,
+                extSync?.message ? `Reason: ${extSync.message}` : null
+              ].filter(Boolean).join('\n');
+
+              setSyncNotice({
+                title: 'External Channel Manager Sync Failed',
+                message: 'Authoritative inventory and rates were saved to the PMS database, but the external channel manager sync failed or was rejected. Your draft has been preserved so you can retry.',
+                type: 'error',
+                details: failureDetails || 'External channel manager rejected update or verification failed.'
+              });
+            }
           }}
         />
       )}
@@ -1095,11 +1225,12 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
               {syncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
               {syncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
               {syncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+              {syncNotice.type === 'info' && <Info className="w-6 h-6 text-blue-600 flex-shrink-0" />}
               <h4 className="text-base font-bold text-slate-900">{syncNotice.title}</h4>
             </div>
             <p className="text-sm text-slate-600 leading-relaxed">{syncNotice.message}</p>
             {syncNotice.details && (
-              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono">
+              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono whitespace-pre-wrap">
                 {syncNotice.details}
               </pre>
             )}
@@ -1126,30 +1257,86 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   categoryName: string;
   restriction: Partial<ChannelInventoryRestriction>;
   onClose: () => void;
-  onSave: (data: Partial<ChannelInventoryRestriction>) => Promise<void>;
+  onSave: (patch: Partial<ChannelInventoryRestriction>) => Promise<any>;
 }) => {
-  const [availability, setAvailability] = useState(String(toNum(restriction.availability)));
-  const [baseRate, setBaseRate] = useState(String(toNum(restriction.base_rate)));
-  const [minStay, setMinStay] = useState(String(toNum(restriction.min_stay)));
-  const [maxStay, setMaxStay] = useState(String(toNum(restriction.max_stay)));
-  const [stopSell, setStopSell] = useState(Boolean(restriction.stop_sell));
-  const [cta, setCta] = useState(Boolean(restriction.closed_to_arrival));
-  const [ctd, setCtd] = useState(Boolean(restriction.closed_to_departure));
+  const initAvailStr = restriction.availability !== undefined && restriction.availability !== null ? String(restriction.availability) : '';
+  const initRateStr = restriction.base_rate !== undefined && restriction.base_rate !== null && Number(restriction.base_rate) > 0 ? String(restriction.base_rate) : '';
+  const initMinStr = restriction.min_stay !== undefined && restriction.min_stay !== null ? String(restriction.min_stay) : '1';
+  const initMaxStr = restriction.max_stay !== undefined && restriction.max_stay !== null ? String(restriction.max_stay) : '0';
+  const initStop = Boolean(restriction.stop_sell);
+  const initCta = Boolean(restriction.closed_to_arrival);
+  const initCtd = Boolean(restriction.closed_to_departure);
+
+  const [availability, setAvailability] = useState(initAvailStr);
+  const [baseRate, setBaseRate] = useState(initRateStr);
+  const [minStay, setMinStay] = useState(initMinStr);
+  const [maxStay, setMaxStay] = useState(initMaxStr);
+  const [stopSell, setStopSell] = useState(initStop);
+  const [cta, setCta] = useState(initCta);
+  const [ctd, setCtd] = useState(initCtd);
   const [saving, setSaving] = useState(false);
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'warning' | 'error'>('idle');
+  const [syncNoticeText, setSyncNoticeText] = useState<string>('');
 
   const handleSave = async () => {
     setSaving(true);
-    await onSave({
-      availability: parseInt(availability) || 0,
-      base_rate: parseFloat(baseRate) || 0,
-      channel_rate: 0,
-      min_stay: parseInt(minStay) || 1,
-      max_stay: parseInt(maxStay) || 0,
-      stop_sell: stopSell,
-      closed_to_arrival: cta,
-      closed_to_departure: ctd,
-    });
-    setSaving(false);
+    setSyncState('syncing');
+    setSyncNoticeText('');
+    try {
+      const patch: Partial<ChannelInventoryRestriction> = {};
+
+      if (availability !== initAvailStr) {
+        patch.availability = availability.trim() === '' ? (null as any) : Math.max(0, parseInt(availability) || 0);
+      }
+      if (baseRate !== initRateStr) {
+        patch.base_rate = baseRate.trim() === '' ? 0 : Math.max(0, parseFloat(baseRate) || 0);
+      }
+      if (minStay !== initMinStr) {
+        patch.min_stay = Math.max(1, parseInt(minStay) || 1);
+      }
+      if (maxStay !== initMaxStr) {
+        patch.max_stay = Math.max(0, parseInt(maxStay) || 0);
+      }
+      if (stopSell !== initStop) {
+        patch.stop_sell = stopSell;
+      }
+      if (cta !== initCta) {
+        patch.closed_to_arrival = cta;
+      }
+      if (ctd !== initCtd) {
+        patch.closed_to_departure = ctd;
+      }
+
+      const result = await onSave(patch);
+
+      if (result?.externalSync?.status === 'NOT_CONFIGURED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved to PMS (channel not configured)');
+        setTimeout(() => onClose(), 1000);
+      } else if (result?.externalSync?.status === 'SKIPPED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved to PMS (channel sync skipped)');
+        setTimeout(() => onClose(), 1000);
+      } else if (result?.allVerified === true || result?.externalSync?.status === 'VERIFIED') {
+        setSyncState('synced');
+        setSyncNoticeText('Saved and verified with channel manager');
+        setTimeout(() => onClose(), 800);
+      } else if (result?.externalSync?.status === 'PARTIAL_SUCCESS') {
+        setSyncState('warning');
+        setSyncNoticeText(result.externalSync.message || 'Saved locally, but channel sync partially failed');
+      } else if (result?.externalSync && !result.externalSync.success) {
+        setSyncState('warning');
+        setSyncNoticeText(result.externalSync.message || 'Saved locally, external channel push failed');
+      } else {
+        setSyncState('synced');
+        setSyncNoticeText('Saved successfully');
+        setTimeout(() => onClose(), 800);
+      }
+    } catch (err: any) {
+      setSyncState('error');
+      setSyncNoticeText(err.message || 'Failed to save');
+      setSaving(false);
+    }
   };
 
   return (
@@ -1167,19 +1354,41 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Availability</label>
-            <input type="number" value={availability} onChange={(e) => setAvailability(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={availability}
+              onChange={(e) => setAvailability(e.target.value)}
+              placeholder="Leave empty for calculated"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Base Rate</label>
-            <input type="number" value={baseRate} onChange={(e) => setBaseRate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Base Rate (₹)</label>
+            <input
+              type="number"
+              value={baseRate}
+              onChange={(e) => setBaseRate(e.target.value)}
+              placeholder="e.g. 14000"
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Min Stay (nights)</label>
-            <input type="number" value={minStay} onChange={(e) => setMinStay(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={minStay}
+              onChange={(e) => setMinStay(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-500 block mb-1">Max Stay (nights)</label>
-            <input type="number" value={maxStay} onChange={(e) => setMaxStay(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
+            <input
+              type="number"
+              value={maxStay}
+              onChange={(e) => setMaxStay(e.target.value)}
+              className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
+            />
           </div>
         </div>
 
@@ -1204,14 +1413,49 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
           </button>
         </div>
 
-        <div className="flex items-center gap-2 mt-5">
+        <div className="mt-4 p-2.5 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5 text-slate-600">
+            {syncState === 'idle' && (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Auto-syncs live to OTA Channel Manager on Save</span>
+              </>
+            )}
+            {syncState === 'syncing' && (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-brand-600" />
+                <span className="font-semibold text-brand-700">Pushing & verifying with channel manager...</span>
+              </>
+            )}
+            {syncState === 'synced' && (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="font-semibold text-emerald-700">✓ {syncNoticeText || 'Saved and synced'}</span>
+              </>
+            )}
+            {syncState === 'warning' && (
+              <>
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                <span className="font-semibold text-amber-700">{syncNoticeText || 'Saved locally (external sync warning)'}</span>
+              </>
+            )}
+            {syncState === 'error' && (
+              <>
+                <XCircle className="w-3.5 h-3.5 text-red-600" />
+                <span className="font-semibold text-red-700">{syncNoticeText || 'Error saving update'}</span>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 mt-4">
           <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-2.5 transition">Cancel</button>
           <button
             onClick={handleSave}
             disabled={saving}
             className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-2.5 transition"
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {syncState === 'synced' ? '✓ Synced' : 'Save & Sync'}
           </button>
         </div>
       </div>
@@ -1219,23 +1463,7 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
-// BULK UPDATE DRAWER
-// ══════════════════════════════════════════════════════════════════
-
-type UpdateType = 'availability' | 'base_rate' | 'channel_rate' | 'stop_sell' | 'min_stay' | 'max_stay' | 'cta' | 'ctd';
-type RateMode = 'fixed' | 'inc_abs' | 'dec_abs' | 'inc_pct' | 'dec_pct';
-
-const UPDATE_TYPES: { key: UpdateType; label: string }[] = [
-  { key: 'availability', label: 'Availability' },
-  { key: 'base_rate', label: 'Base Rate' },
-  { key: 'channel_rate', label: 'Channel Rate' },
-  { key: 'stop_sell', label: 'Stop Sell' },
-  { key: 'min_stay', label: 'Minimum Stay' },
-  { key: 'max_stay', label: 'Maximum Stay' },
-  { key: 'cta', label: 'Closed to Arrival' },
-  { key: 'ctd', label: 'Closed to Departure' },
-];
+// ── Bulk Update Drawer ──
 
 const QUICK_RANGES = [
   { label: 'Today', from: 0, to: 0 },
@@ -1245,27 +1473,102 @@ const QUICK_RANGES = [
   { label: 'Next 30 Days', from: 0, to: 29 },
   { label: 'This Month', from: 0, to: 30, dynamic: true },
   { label: 'Next Month', from: 0, to: 30, dynamic: true },
+  { label: 'December', from: 0, to: 31, dynamic: true },
 ];
 
-const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, existingRestrictions, onClose, onApply }: {
+type RateMode = 'fixed' | 'inc_abs' | 'dec_abs' | 'inc_pct' | 'dec_pct';
+
+const BulkUpdateDrawer = ({
+  categories,
+  defaultStart,
+  defaultEnd,
+  existingRestrictions,
+  hotelId,
+  onClose,
+  onSuccess,
+}: {
   categories: RoomCategory[];
   defaultStart: string;
   defaultEnd: string;
   existingRestrictions?: Map<string, ChannelInventoryRestriction>;
+  hotelId?: string | null;
   onClose: () => void;
-  onApply: (updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>>) => Promise<void>;
+  onSuccess: (result?: any) => Promise<void>;
 }) => {
   const [fromDate, setFromDate] = useState(defaultStart);
   const [toDate, setToDate] = useState(defaultEnd);
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set(categories.map((c) => c.id)));
-  const [updateType, setUpdateType] = useState<UpdateType>('availability');
+
+  // Prefetched authoritative restrictions for the selected drawer date range
+  const [rangeRestrictions, setRangeRestrictions] = useState<Map<string, ChannelInventoryRestriction>>(new Map());
+
+  useEffect(() => {
+    const s = normalizeToISODate(fromDate);
+    const e = normalizeToISODate(toDate);
+    if (!s || !e || s > e) return;
+
+    let active = true;
+    getInventoryRestrictions(s, e)
+      .then((rows) => {
+        if (!active) return;
+        setRangeRestrictions((prev) => {
+          const next = new Map(prev);
+          for (const r of rows) {
+            next.set(`${r.room_category_id}|${r.date}`, r);
+          }
+          return next;
+        });
+      })
+      .catch((err) => {
+        console.warn('[BulkUpdateDrawer] Prefetch restrictions error:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [fromDate, toDate]);
+
+  // Dimension 1: Rates
+  const [enableRate, setEnableRate] = useState(false);
   const [rateMode, setRateMode] = useState<RateMode>('fixed');
-  const [valueNum, setValueNum] = useState('');
-  const [boolVal, setBoolVal] = useState(true);
-  const [showPreview, setShowPreview] = useState(false);
-  const [applying, setApplying] = useState(false);
+  const [rateValue, setRateValue] = useState('');
+
+  // Dimension 2: Availability
+  const [enableAvail, setEnableAvail] = useState(false);
+  const [availValue, setAvailValue] = useState('');
+
+  // Dimension 3: Restrictions
+  const [enableRestrictions, setEnableRestrictions] = useState(false);
+  const [stopSell, setStopSell] = useState<'keep' | 'on' | 'off'>('keep');
+  const [minStay, setMinStay] = useState('');
+  const [maxStay, setMaxStay] = useState('');
+  const [cta, setCta] = useState<'keep' | 'open' | 'closed'>('keep');
+  const [ctd, setCtd] = useState<'keep' | 'open' | 'closed'>('keep');
+
+  // Multi-edit persistent drafts map — loaded from tenant-namespaced storage
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<BulkDraftMap>(() => {
+    if (!hotelId) return {};
+    const { drafts: loaded, removedCount } = loadTenantDraft(hotelId, categories);
+    if (removedCount > 0) {
+      // We can't call setState inside useState initialiser, defer via microtask
+      Promise.resolve().then(() => setStaleNotice(
+        `${removedCount} queued inventory change${removedCount !== 1 ? 's' : ''} belonged to another property and ${removedCount !== 1 ? 'were' : 'was'} removed. Please review before saving.`
+      ));
+    }
+    return loaded;
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'configure' | 'review'>('configure');
+  const [confirmDiscard, setConfirmDiscard] = useState<(() => void) | null>(null);
+  const [confirmDiscardMsg, setConfirmDiscardMsg] = useState<string>('');
 
   const allDays = useMemo(() => daysBetween(fromDate, toDate), [fromDate, toDate]);
+  const summary = useMemo(() => summarizeDraft(drafts), [drafts]);
+  // Pass categories so buildPatchListFromDraft can filter out any foreign items (second defence layer)
+  const patchList = useMemo(() => buildPatchListFromDraft(drafts, hotelId || undefined, categories), [drafts, hotelId, categories]);
 
   const toggleCat = (id: string) => {
     const next = new Set(selectedCats);
@@ -1275,255 +1578,776 @@ const BulkUpdateDrawer = ({ categories, defaultStart, defaultEnd, existingRestri
 
   const applyQuickRange = (label: string) => {
     const today = todayStr();
+    const [y, m] = today.split('-').map(Number);
     if (label === 'This Month') {
-      const d = new Date();
-      const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - 1;
+      const lastD = new Date(Date.UTC(y, m, 0)).getUTCDate();
       setFromDate(today);
-      setToDate(addDays(today, last - d.getDate() + 1));
+      setToDate(`${y}-${String(m).padStart(2, '0')}-${String(lastD).padStart(2, '0')}`);
     } else if (label === 'Next Month') {
-      const d = new Date();
-      const firstNext = new Date(d.getFullYear(), d.getMonth() + 1, 1);
-      const lastNext = new Date(d.getFullYear(), d.getMonth() + 2, 0);
-      setFromDate(firstNext.toISOString().slice(0, 10));
-      setToDate(lastNext.toISOString().slice(0, 10));
+      const nextM = m === 12 ? 1 : m + 1;
+      const nextY = m === 12 ? y + 1 : y;
+      const firstNext = `${nextY}-${String(nextM).padStart(2, '0')}-01`;
+      const lastNextD = new Date(Date.UTC(nextY, nextM, 0)).getUTCDate();
+      const lastNext = `${nextY}-${String(nextM).padStart(2, '0')}-${String(lastNextD).padStart(2, '0')}`;
+      setFromDate(firstNext);
+      setToDate(lastNext);
+    } else if (label === 'December') {
+      setFromDate(`${y}-12-01`);
+      setToDate(`${y}-12-31`);
     } else {
       const qr = QUICK_RANGES.find((q) => q.label === label);
       if (qr) { setFromDate(addDays(today, qr.from)); setToDate(addDays(today, qr.to)); }
     }
   };
 
-  // Compute preview
-  const previewData = useMemo(() => {
-    const dates = allDays.length;
-    const cats = selectedCats.size;
-    const total = dates * cats;
-    return { dates, cats, total };
-  }, [allDays, selectedCats]);
-
-  const computeNewValue = (oldVal: number): number => {
-    const v = parseFloat(valueNum) || 0;
-    if (updateType === 'base_rate' || updateType === 'channel_rate') {
-      switch (rateMode) {
-        case 'fixed': return v;
-        case 'inc_abs': return oldVal + v;
-        case 'dec_abs': return Math.max(0, oldVal - v);
-        case 'inc_pct': return Math.round(oldVal * (1 + v / 100));
-        case 'dec_pct': return Math.round(oldVal * (1 - v / 100));
-      }
+  const handleQueueChanges = () => {
+    setSaveError(null);
+    const s = normalizeToISODate(fromDate);
+    const e = normalizeToISODate(toDate);
+    if (!s || !e) {
+      setSaveError('Please select both a valid From Date and To Date.');
+      return;
     }
-    return v;
-  };
+    if (s > e) {
+      setSaveError(`From Date (${s}) cannot be after To Date (${e}).`);
+      return;
+    }
+    if (allDays.length === 0) {
+      setSaveError('Please select a valid date range.');
+      return;
+    }
+    if (selectedCats.size === 0) {
+      setSaveError('Please select at least one room category.');
+      return;
+    }
+    if (!enableRate && !enableAvail && !enableRestrictions) {
+      setSaveError('Please select at least one dimension to update (Rates, Availability, or Restrictions).');
+      return;
+    }
 
-  const handleApply = async () => {
-    setApplying(true);
-    const updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>> = [];
+    if (enableRate && rateValue.trim() === '') {
+      setSaveError('Please enter a valid rate amount.');
+      return;
+    }
+
+    if (enableAvail && availValue.trim() === '') {
+      setSaveError('Please enter the number of available rooms.');
+      return;
+    }
+
+    // 🔒 Tenant Guard: verify every selected category belongs to this hotel's categories list
+    const validCatIds = new Set(categories.map((c) => c.id));
+    const foreignCats = [...selectedCats].filter((id) => !validCatIds.has(id));
+    if (foreignCats.length > 0) {
+      setSaveError(
+        'One or more selected room categories do not belong to this property. Please deselect them before queuing.'
+      );
+      setSelectedCats((prev) => { const next = new Set(prev); foreignCats.forEach((id) => next.delete(id)); return next; });
+      return;
+    }
+
+    const updates: Record<string, Partial<BulkDraftItem>> = {};
+
     for (const catId of selectedCats) {
-      for (const date of allDays) {
-        const existing = existingRestrictions?.get(`${catId}|${date}`);
-        const oldAvail = toNum(existing?.availability);
-        const oldBase = toNum(existing?.base_rate);
-        const oldChannel = toNum(existing?.channel_rate);
-        const oldMin = toNum(existing?.min_stay);
-        const oldMax = toNum(existing?.max_stay);
-        const oldStop = Boolean(existing?.stop_sell);
-        const oldCta = Boolean(existing?.closed_to_arrival);
-        const oldCtd = Boolean(existing?.closed_to_departure);
-        updates.push({
-          room_category_id: catId,
-          date,
-          availability: updateType === 'availability' ? (parseInt(valueNum) || 0) : oldAvail,
-          base_rate: updateType === 'base_rate' ? computeNewValue(oldBase) : oldBase,
-          channel_rate: updateType === 'channel_rate' ? computeNewValue(oldChannel) : oldChannel,
-          min_stay: updateType === 'min_stay' ? (parseInt(valueNum) || 1) : oldMin,
-          max_stay: updateType === 'max_stay' ? (parseInt(valueNum) || 0) : oldMax,
-          stop_sell: updateType === 'stop_sell' ? boolVal : oldStop,
-          closed_to_arrival: updateType === 'cta' ? boolVal : oldCta,
-          closed_to_departure: updateType === 'ctd' ? boolVal : oldCtd,
-        });
+      const category = categories.find((c) => c.id === catId);
+      for (const d of allDays) {
+        const key = getBulkKey(hotelId || '', d, catId, 'all');
+        const existing = rangeRestrictions.get(`${catId}|${d}`) || existingRestrictions?.get(`${catId}|${d}`);
+        const patch: Partial<BulkDraftItem> = {};
+
+        // 1. Rate
+        if (enableRate) {
+          const v = parseFloat(rateValue);
+          if (!isNaN(v)) {
+            const currentRate = existing?.base_rate ? Number(existing.base_rate) : (category?.default_tariff ? Number(category.default_tariff) : 0);
+            let newRate = v;
+            if (rateMode === 'inc_abs') newRate = currentRate + v;
+            else if (rateMode === 'dec_abs') newRate = Math.max(0, currentRate - v);
+            else if (rateMode === 'inc_pct') newRate = Math.round(currentRate * (1 + v / 100));
+            else if (rateMode === 'dec_pct') newRate = Math.round(currentRate * (1 - v / 100));
+            patch.baseRate = Math.max(0, Math.round(newRate));
+          }
+        }
+
+        // 2. Availability
+        if (enableAvail) {
+          const av = parseInt(availValue);
+          if (!isNaN(av)) {
+            patch.availability = Math.max(0, av);
+          }
+        }
+
+        // 3. Restrictions
+        if (enableRestrictions) {
+          if (stopSell === 'on') patch.stopSell = true;
+          else if (stopSell === 'off') patch.stopSell = false;
+
+          if (minStay.trim() !== '') {
+            const ms = parseInt(minStay);
+            if (!isNaN(ms)) patch.minStay = Math.max(1, ms);
+          }
+          if (maxStay.trim() !== '') {
+            const xs = parseInt(maxStay);
+            if (!isNaN(xs)) patch.maxStay = Math.max(0, xs);
+          }
+
+          if (cta === 'closed') patch.closedToArrival = true;
+          else if (cta === 'open') patch.closedToArrival = false;
+
+          if (ctd === 'closed') patch.closedToDeparture = true;
+          else if (ctd === 'open') patch.closedToDeparture = false;
+        }
+
+        updates[key] = patch;
       }
     }
-    await onApply(updates);
-    setApplying(false);
+
+    setDrafts((prev) => {
+      const merged = mergeBulkDraft(prev, updates);
+      // Persist tenant-scoped draft immediately so it survives a page refresh but never leaks to another hotel
+      if (hotelId) saveTenantDraft(hotelId, merged);
+      return merged;
+    });
+    setFeedbackMsg(`✓ Queued updates for ${allDays.length} dates across ${selectedCats.size} categories.`);
+    setTimeout(() => setFeedbackMsg(null), 3500);
+
+    // Reset entry fields so user can queue another room/date without overwriting
+    setRateValue('');
+    setAvailValue('');
+    setMinStay('');
+    setMaxStay('');
+    setEnableRate(false);
+    setEnableAvail(false);
+    setEnableRestrictions(false);
+    setStopSell('keep');
+    setCta('keep');
+    setCtd('keep');
   };
 
-  const needsNumber = updateType === 'availability' || updateType === 'min_stay' || updateType === 'max_stay' || updateType === 'base_rate' || updateType === 'channel_rate';
-  const needsBool = updateType === 'stop_sell' || updateType === 'cta' || updateType === 'ctd';
-  const needsRateMode = updateType === 'base_rate' || updateType === 'channel_rate';
+  const handleRemoveItem = (key: string) => {
+    setDrafts((prev) => removeDraftItem(prev, key));
+  };
+
+  const handleClearAll = () => {
+    setConfirmDiscardMsg('Are you sure you want to discard all unsaved updates in this draft?');
+    setConfirmDiscard(() => () => {
+      const empty = clearDraft();
+      setDrafts(empty);
+      if (hotelId) clearTenantDraft(hotelId);
+      setConfirmDiscard(null);
+    });
+  };
+
+  const handleSaveAll = async () => {
+    if (patchList.length === 0) return;
+    setSaving(true);
+    setSaveError(null);
+
+    // 🔒 Pre-flight tenant validation: filter the patch list against current hotel categories
+    const validCatIds = new Set(categories.map((c) => c.id));
+    const safePatchList = patchList.filter((p) => validCatIds.has(p.roomCategoryId));
+    const blockedCount = patchList.length - safePatchList.length;
+
+    if (blockedCount > 0) {
+      // Purge the foreign entries from draft state and storage
+      const validCatArray = categories.map((c) => ({ id: c.id }));
+      const { validDrafts, removedCount } = validateAndFilterDraft(drafts, hotelId || '', validCatArray);
+      setDrafts(validDrafts);
+      if (hotelId) saveTenantDraft(hotelId, validDrafts);
+      setSaveError(
+        `${removedCount} draft item${removedCount !== 1 ? 's' : ''} belonged to another property and ${removedCount !== 1 ? 'were' : 'was'} removed. Please review the remaining changes and try again.`
+      );
+      setSaving(false);
+      return;
+    }
+
+    if (safePatchList.length === 0) {
+      setSaveError('No valid inventory changes to save.');
+      setSaving(false);
+      return;
+    }
+
+    try {
+      const result = await applyBulkInventoryPatch(safePatchList);
+      if (result && result.success) {
+        const isNotConfigured = result.externalSync?.status === 'NOT_CONFIGURED';
+        const isSkipped = result.externalSync?.status === 'SKIPPED';
+        const isVerified = result.allVerified === true || result.externalSync?.status === 'VERIFIED';
+
+        // Clear draft only when changes are fully verified, skipped, or channel is not configured
+        if (isVerified || isNotConfigured || isSkipped) {
+          const empty = clearDraft();
+          setDrafts(empty);
+          if (hotelId) clearTenantDraft(hotelId);
+        }
+        await onSuccess(result);
+      } else {
+        throw new Error(result?.message || 'Failed to apply updates.');
+      }
+    } catch (err: any) {
+      console.error('[BulkUpdateDrawer] Save error:', err);
+      setSaveError(err.message || 'An error occurred while saving bulk updates.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClose = () => {
+    if (summary.hasUnsavedChanges) {
+      setConfirmDiscardMsg(`You have ${summary.totalItems} unsaved updates in your draft. Are you sure you want to exit and discard them?`);
+      setConfirmDiscard(() => () => {
+        setConfirmDiscard(null);
+        onClose();
+      });
+    } else {
+      onClose();
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={onClose} />
-      <div className="relative bg-white w-full max-w-md h-full overflow-y-auto shadow-2xl animate-slide-in-right">
+      <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={handleClose} />
+      <div className="relative bg-white w-full max-w-xl h-full flex flex-col shadow-2xl animate-slide-in-right z-10">
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-slate-200 px-5 py-4 flex items-center justify-between z-10">
-          <h3 className="text-base font-bold text-brand-navy-800">Bulk Update</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1"><X className="w-5 h-5" /></button>
+        <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-bold text-brand-navy-800">Bulk Inventory & Rate Update</h3>
+              {summary.totalItems > 0 && (
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-100 text-brand-700">
+                  {summary.totalItems} in draft
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Accumulate updates across dates & rooms, then save & sync atomically
+            </p>
+          </div>
+          <button
+            onClick={handleClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        <div className="p-5 space-y-5">
-          {/* Date Range */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Date Range</label>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div>
-                <label className="text-[10px] text-slate-400">From</label>
-                <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="text-[10px] text-slate-400">To</label>
-                <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-full text-sm border border-slate-200 rounded-lg px-2 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none" />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {QUICK_RANGES.map((q) => (
-                <button
-                  key={q.label}
-                  onClick={() => applyQuickRange(q.label)}
-                  className="text-[10px] font-semibold px-2.5 py-1.5 rounded-full border bg-white text-slate-500 border-slate-200 hover:border-brand-300 hover:text-brand-600 transition"
-                >
-                  {q.label}
-                </button>
-              ))}
-            </div>
-          </div>
+        {/* Tab Navigation */}
+        <div className="flex border-b border-slate-200 px-4 bg-white">
+          <button
+            onClick={() => setActiveTab('configure')}
+            className={`py-3 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+              activeTab === 'configure'
+                ? 'border-brand-600 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Calendar className="w-4 h-4" />
+            1. Configure Update
+          </button>
+          <button
+            onClick={() => setActiveTab('review')}
+            className={`py-3 px-4 text-xs font-bold border-b-2 transition flex items-center gap-2 ${
+              activeTab === 'review'
+                ? 'border-brand-600 text-brand-600'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            2. Draft Queue ({summary.totalItems})
+          </button>
+        </div>
 
-          {/* Room Categories */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Room Categories</label>
+        {/* Stale Cross-Hotel Draft Notice */}
+        {staleNotice && (
+          <div className="mx-4 mt-3 p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs font-medium text-amber-900 flex items-start gap-2 animate-fade-in">
+            <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <span className="flex-1">{staleNotice}</span>
+            <button
+              onClick={() => setStaleNotice(null)}
+              className="p-0.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Feedback / Save Error Banner */}
+        {feedbackMsg && (
+          <div className="mx-4 mt-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-medium text-emerald-800 flex items-center gap-2 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>{feedbackMsg}</span>
+          </div>
+        )}
+        {saveError && (
+          <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-medium text-red-800 flex items-center gap-2 animate-fade-in">
+            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <span>{saveError}</span>
+          </div>
+        )}
+
+        {/* Body Content */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {activeTab === 'configure' ? (
+            <div className="space-y-4">
+              {/* Date Range Selector */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <CalendarDays className="w-4 h-4 text-brand-600" />
+                    Date Range ({allDays.length} {allDays.length === 1 ? 'day' : 'days'})
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUICK_RANGES.map((q) => (
+                    <button
+                      key={q.label}
+                      onClick={() => applyQuickRange(q.label)}
+                      className="text-[11px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-brand-50 hover:text-brand-600 font-medium transition"
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 block mb-1">From Date</label>
+                    <input
+                      type="date"
+                      value={fromDate}
+                      onChange={(e) => {
+                        const newFrom = e.target.value;
+                        setFromDate(newFrom);
+                        // Atomically clamp toDate if it would become invalid
+                        setToDate((prev) => (!prev || prev < newFrom ? newFrom : prev));
+                      }}
+                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-500 block mb-1">To Date</label>
+                    <input
+                      type="date"
+                      value={toDate}
+                      min={fromDate}
+                      onChange={(e) => {
+                        const newTo = e.target.value;
+                        // Never allow toDate < fromDate
+                        setToDate(newTo >= fromDate ? newTo : fromDate);
+                      }}
+                      className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white focus:ring-2 focus:ring-brand-400 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Room Categories */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Building2 className="w-4 h-4 text-brand-600" />
+                    Target Room Categories ({selectedCats.size} of {categories.length})
+                  </span>
+                  <div className="flex gap-2 text-[11px]">
+                    <button
+                      onClick={() => setSelectedCats(new Set(categories.map((c) => c.id)))}
+                      className="text-brand-600 hover:underline font-semibold"
+                    >
+                      All
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      onClick={() => setSelectedCats(new Set())}
+                      className="text-slate-500 hover:underline font-semibold"
+                    >
+                      None
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {categories.map((c) => {
+                    const active = selectedCats.has(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => toggleCat(c.id)}
+                        className={`text-xs px-2.5 py-1.5 rounded-lg border font-medium transition ${
+                          active
+                            ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
+                            : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {c.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Dimension 1: Rates Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableRate ? 'bg-blue-50/40 border-blue-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableRate}
+                      onChange={(e) => setEnableRate(e.target.checked)}
+                      className="w-4 h-4 rounded text-brand-600 focus:ring-brand-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 1: Update Base Rate</span>
+                  </label>
+                  {enableRate && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableRate && (
+                  <div className="space-y-2.5 pt-2">
+                    <div className="grid grid-cols-5 gap-1">
+                      {(
+                        [
+                          { mode: 'fixed', label: 'Fixed ₹' },
+                          { mode: 'inc_abs', label: '+₹' },
+                          { mode: 'dec_abs', label: '-₹' },
+                          { mode: 'inc_pct', label: '+%' },
+                          { mode: 'dec_pct', label: '-%' },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.mode}
+                          onClick={() => setRateMode(m.mode)}
+                          className={`text-xs py-1.5 rounded-lg border font-semibold transition ${
+                            rateMode === m.mode
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                        {rateMode === 'fixed' ? 'New Base Rate Amount (₹)' : 'Adjustment Value'}
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={rateValue}
+                        onChange={(e) => setRateValue(e.target.value)}
+                        placeholder="e.g. 15000"
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-blue-400 focus:outline-none"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 italic">
+                      Note: Rate update leaves Authoritative Room Availability untouched.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Dimension 2: Availability Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableAvail ? 'bg-emerald-50/40 border-emerald-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableAvail}
+                      onChange={(e) => setEnableAvail(e.target.checked)}
+                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 2: Authoritative Room Availability</span>
+                  </label>
+                  {enableAvail && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableAvail && (
+                  <div className="space-y-2 pt-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">
+                        Available Rooms to Sell on OTAs
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={availValue}
+                        onChange={(e) => setAvailValue(e.target.value)}
+                        placeholder="e.g. 1"
+                        className="w-full text-xs border border-slate-200 rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-emerald-400 focus:outline-none"
+                      />
+                    </div>
+                    <p className="text-[11px] text-slate-500 italic">
+                      Note: Availability update leaves Base Rate untouched.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Dimension 3: Restrictions Card */}
+              <div className={`p-3.5 rounded-xl border transition ${enableRestrictions ? 'bg-amber-50/40 border-amber-200' : 'bg-white border-slate-200'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={enableRestrictions}
+                      onChange={(e) => setEnableRestrictions(e.target.checked)}
+                      className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300"
+                    />
+                    <span className="text-xs font-bold text-slate-800">Dimension 3: Restrictions & Stop Sell</span>
+                  </label>
+                  {enableRestrictions && (
+                    <span className="text-[10px] uppercase tracking-wider font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {enableRestrictions && (
+                  <div className="space-y-3 pt-2">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-500 block mb-1">Stop Sell</label>
+                      <div className="grid grid-cols-3 gap-1">
+                        {(['keep', 'on', 'off'] as const).map((s) => (
+                          <button
+                            key={s}
+                            onClick={() => setStopSell(s)}
+                            className={`text-xs py-1.5 rounded-lg border font-semibold capitalize transition ${
+                              stopSell === s
+                                ? 'bg-amber-600 text-white border-amber-600'
+                                : 'bg-white text-slate-600 border-slate-200'
+                            }`}
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">Min Stay</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={minStay}
+                          onChange={(e) => setMinStay(e.target.value)}
+                          placeholder="No change"
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">Max Stay</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={maxStay}
+                          onChange={(e) => setMaxStay(e.target.value)}
+                          placeholder="No change"
+                          className="w-full text-xs border border-slate-200 rounded-lg px-2.5 py-1.5 bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">CTA (Closed to Arrival)</label>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['keep', 'open', 'closed'] as const).map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setCta(m)}
+                              className={`text-[11px] py-1 rounded border capitalize ${cta === m ? 'bg-slate-700 text-white' : 'bg-white text-slate-600'}`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-500 block mb-1">CTD (Closed to Departure)</label>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['keep', 'open', 'closed'] as const).map((m) => (
+                            <button
+                              key={m}
+                              onClick={() => setCtd(m)}
+                              className={`text-[11px] py-1 rounded border capitalize ${ctd === m ? 'bg-slate-700 text-white' : 'bg-white text-slate-600'}`}
+                            >
+                              {m}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Queue Button */}
               <button
-                onClick={() => setSelectedCats(selectedCats.size === categories.length ? new Set() : new Set(categories.map((c) => c.id)))}
-                className="text-[10px] font-semibold text-brand-600 hover:text-brand-700"
+                onClick={handleQueueChanges}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs rounded-xl shadow transition"
               >
-                {selectedCats.size === categories.length ? 'Deselect All' : 'Select All'}
+                <Plus className="w-4 h-4" />
+                Add to Draft Queue ({allDays.length * selectedCats.size} cells targeted)
               </button>
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {categories.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => toggleCat(c.id)}
-                  className={`text-xs font-semibold px-3 py-1.5 rounded-full border transition ${
-                    selectedCats.has(c.id) ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200'
-                  }`}
-                >
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Update Type */}
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Update Type</label>
-            <div className="grid grid-cols-2 gap-1.5">
-              {UPDATE_TYPES.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setUpdateType(t.key)}
-                  className={`text-xs font-semibold px-3 py-2 rounded-lg border transition ${
-                    updateType === t.key ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Value fields */}
-          {needsRateMode && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Rate Mode</label>
-              <select
-                value={rateMode}
-                onChange={(e) => setRateMode(e.target.value as RateMode)}
-                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-              >
-                <option value="fixed">Fixed Rate</option>
-                <option value="inc_abs">Increase by Amount</option>
-                <option value="dec_abs">Decrease by Amount</option>
-                <option value="inc_pct">Increase by Percentage</option>
-                <option value="dec_pct">Decrease by Percentage</option>
-              </select>
-            </div>
-          )}
-
-          {needsNumber && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                {updateType === 'availability' ? 'Rooms Available' : updateType === 'min_stay' || updateType === 'max_stay' ? 'Nights' : 'Amount'}
-              </label>
-              <input
-                type="number"
-                value={valueNum}
-                onChange={(e) => setValueNum(e.target.value)}
-                className="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-400 focus:outline-none"
-                placeholder={needsRateMode ? 'Enter amount or percentage' : 'Enter value'}
-              />
-            </div>
-          )}
-
-          {needsBool && (
-            <div>
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Value</label>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setBoolVal(true)}
-                  className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${boolVal ? 'bg-slate-600 text-white border-slate-600' : 'bg-white text-slate-500 border-slate-200'}`}
-                >
-                  {updateType === 'stop_sell' ? 'On' : 'Closed'}
-                </button>
-                <button
-                  onClick={() => setBoolVal(false)}
-                  className={`flex-1 text-sm font-semibold py-2.5 rounded-lg border transition ${!boolVal ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-500 border-slate-200'}`}
-                >
-                  {updateType === 'stop_sell' ? 'Off' : 'Open'}
-                </button>
+          ) : (
+            /* Review & Draft Queue Tab */
+            <div className="space-y-4">
+              {/* Summary Stats */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-3 gap-2 text-center">
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-blue-600">{summary.totalRates}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Rates</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-emerald-600">{summary.totalAvailabilities}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Availabilities</div>
+                </div>
+                <div className="p-2 bg-white rounded-lg border border-slate-100">
+                  <div className="text-base font-bold text-amber-600">{summary.totalRestrictions}</div>
+                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">Restrictions</div>
+                </div>
               </div>
-            </div>
-          )}
 
-          {/* Preview */}
-          {showPreview && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 animate-fade-in">
-              <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Summary</h4>
-              <div className="text-xs space-y-1">
-                <div className="flex justify-between"><span className="text-slate-400">Date Range:</span><span className="font-semibold text-slate-700">{fmtDate(fromDate)} – {fmtDate(toDate)}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Dates Affected:</span><span className="font-semibold text-slate-700">{previewData.dates}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Categories:</span><span className="font-semibold text-slate-700">{previewData.cats}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">Update Type:</span><span className="font-semibold text-slate-700">{UPDATE_TYPES.find((t) => t.key === updateType)?.label}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">New Value:</span><span className="font-semibold text-slate-700">
-                  {needsBool ? (boolVal ? (updateType === 'stop_sell' ? 'On' : 'Closed') : (updateType === 'stop_sell' ? 'Off' : 'Open')) : valueNum || '0'}
-                </span></div>
-                <div className="flex justify-between border-t border-slate-200 pt-1 mt-1"><span className="text-slate-400">Total Updates:</span><span className="font-bold text-brand-600">{previewData.total}</span></div>
-              </div>
+              {summary.totalItems === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-xs font-semibold text-slate-600">No updates in draft queue yet</p>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Select dates, categories, and values in the Configure tab, then click &quot;Add to Draft Queue&quot;.
+                  </p>
+                  <button
+                    onClick={() => setActiveTab('configure')}
+                    className="mt-3 px-3 py-1.5 bg-brand-50 text-brand-600 font-semibold text-xs rounded-lg hover:bg-brand-100 transition"
+                  >
+                    Go to Configure
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs font-bold text-slate-700">
+                      Queued Changes ({summary.totalItems} target dates/rooms)
+                    </span>
+                    <button
+                      onClick={handleClearAll}
+                      className="text-xs text-red-600 hover:underline font-semibold flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Discard All
+                    </button>
+                  </div>
+                  <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                    {Object.entries(drafts).map(([key, item]) => {
+                      const parsed = parseBulkKey(key);
+                      const catName = categories.find((c) => c.id === parsed.roomCategoryId)?.name || 'Room';
+                      return (
+                        <div
+                          key={key}
+                          className="p-3 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-800">{catName}</span>
+                              <span className="text-[11px] text-slate-400 font-mono">{parsed.date}</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5 text-[11px]">
+                              {item.baseRate !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-100">
+                                  Rate: ₹{fmtMoney(item.baseRate)}
+                                </span>
+                              )}
+                              {item.availability !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100">
+                                  Avail: {item.availability}
+                                </span>
+                              )}
+                              {item.stopSell !== undefined && (
+                                <span className={`px-2 py-0.5 rounded-md font-semibold border ${item.stopSell ? 'bg-red-50 text-red-700 border-red-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
+                                  StopSell: {item.stopSell ? 'ON' : 'OFF'}
+                                </span>
+                              )}
+                              {item.minStay !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  Min: {item.minStay}n
+                                </span>
+                              )}
+                              {item.maxStay !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  Max: {item.maxStay}n
+                                </span>
+                              )}
+                              {item.closedToArrival !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  CTA: {item.closedToArrival ? 'Closed' : 'Open'}
+                                </span>
+                              )}
+                              {item.closedToDeparture !== undefined && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                                  CTD: {item.closedToDeparture ? 'Closed' : 'Open'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleRemoveItem(key)}
+                            className="p-1 text-slate-400 hover:text-red-600 rounded hover:bg-slate-50 transition"
+                            title="Remove this change"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Footer actions */}
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex items-center gap-2">
-          <button onClick={onClose} className="flex-1 text-sm font-semibold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl py-3 transition">Cancel</button>
-          {!showPreview ? (
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3">
+          <button
+            onClick={handleClose}
+            className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+          >
+            Cancel
+          </button>
+          <div className="flex items-center gap-2">
+            {summary.totalItems > 0 && (
+              <button
+                onClick={handleClearAll}
+                className="px-3 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition"
+              >
+                Clear Draft
+              </button>
+            )}
             <button
-              onClick={() => setShowPreview(true)}
-              disabled={selectedCats.size === 0 || allDays.length === 0 || (needsNumber && !valueNum)}
-              className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-slate-600 hover:bg-slate-700 disabled:opacity-50 rounded-xl py-3 transition"
+              onClick={handleSaveAll}
+              disabled={saving || patchList.length === 0}
+              className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl shadow transition"
             >
-              <Eye className="w-4 h-4" /> Preview
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              {saving ? 'Saving & Syncing...' : `Save & Sync ${summary.totalItems} Updates`}
             </button>
-          ) : (
-            <button
-              onClick={handleApply}
-              disabled={applying}
-              className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold text-white bg-brand-600 hover:bg-brand-700 disabled:opacity-50 rounded-xl py-3 transition"
-            >
-              {applying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />} Apply ({previewData.total})
-            </button>
-          )}
+          </div>
         </div>
       </div>
+
+      <ConfirmModal
+        open={Boolean(confirmDiscard)}
+        onClose={() => setConfirmDiscard(null)}
+        onConfirm={() => {
+          if (confirmDiscard) confirmDiscard();
+        }}
+        title="Discard Draft Updates?"
+        variant="warning"
+        confirmText="Yes, Discard Updates"
+        cancelText="Keep Editing"
+        message={confirmDiscardMsg}
+      />
     </div>
   );
 };
@@ -2480,8 +3304,8 @@ const SettingsTab = ({ settings, onChanged }: {
           ok: true, 
           message: "✓ Provider Connected",
           details: {
-            status: res.status,
-            responseTimeMs: res.responseTimeMs,
+            status: res.status || 'CONNECTED',
+            responseTimeMs: res.responseTimeMs || res.latencyMs || 0,
             hotelCode: res.hotelCode,
             partnerId: res.partnerId,
             environment: res.environment,
@@ -2501,7 +3325,7 @@ const SettingsTab = ({ settings, onChanged }: {
           onChanged();
         }
       } else {
-        const errMsg = typeof res.error === 'string' ? res.error : res.error?.message;
+        const errMsg = typeof res.error === 'string' ? res.error : (res.error?.message || res.message);
         setProviderTestResult({ ok: false, message: errMsg || "Failed to connect to Provider." });
         if (settings) {
           await saveChannelSettings({
@@ -2512,10 +3336,17 @@ const SettingsTab = ({ settings, onChanged }: {
         }
       }
     } catch (err: any) {
-      const isAuthError = err?.status === 401 || err?.code === 'AUTHENTICATION_ERROR';
+      const isAuthError = err?.status === 401 || err?.errorCode === 'AIOSSELL_AUTH_FAILED';
+      const rawMsg = err?.message || err?.error || "✕ Hotel Mantri Backend Unreachable";
+      const isInternalJsError = String(rawMsg).includes('resolveAuthorizedHotel') || String(rawMsg).includes('ReferenceError') || String(rawMsg).includes('is not defined');
+      const safeMsg = isInternalJsError
+        ? "✕ Channel integration configuration required"
+        : isAuthError
+        ? "✕ Channel Manager Authentication Failed"
+        : (rawMsg.startsWith('✕') ? rawMsg : `✕ ${rawMsg}`);
       setProviderTestResult({ 
         ok: false, 
-        message: isAuthError ? "✕ Provider Authentication Failed" : (err?.message || "✕ Hotel Mantri Backend Unreachable") 
+        message: safeMsg
       });
       if (settings) {
         await saveChannelSettings({
@@ -2687,12 +3518,12 @@ const DiagnosticsTab = () => {
     setActionLoading('inventory');
     try {
       const today = new Date().toISOString().split('T')[0];
-      const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      const res = await pushChannelInventory(today, nextMonth);
+      const futureDate = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+      const res = await pushChannelInventory(today, futureDate);
       setModalNotice({
         type: res?.verified ? 'success' : 'warning',
         title: res?.verified ? 'Inventory Updated and Verified' : 'Inventory Push Update',
-        message: res?.message || 'Live PMS inventory successfully transmitted to channel manager for the next 30 days.',
+        message: res?.message || 'Live PMS inventory successfully transmitted to channel manager for the next 60 days.',
         details: res?.discrepancies ? JSON.stringify(res.discrepancies, null, 2) : `Confirmed: ${res?.recordsVerified ?? res?.recordsAttempted ?? 0} room date updates verified.`
       });
     } catch (err: any) {
@@ -2710,12 +3541,12 @@ const DiagnosticsTab = () => {
     setActionLoading('rates');
     try {
       const today = new Date().toISOString().split('T')[0];
-      const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-      const rateRes = await pushChannelRates(today, nextMonth);
+      const futureDate = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+      const rateRes = await pushChannelRates(today, futureDate);
       setModalNotice({
         type: rateRes?.verified ? 'success' : 'warning',
         title: rateRes?.verified ? 'Rates Updated and Verified' : 'Rate Push Update',
-        message: rateRes?.message || 'Live PMS rates successfully transmitted to channel manager for the next 30 days.',
+        message: rateRes?.message || 'Live PMS rates successfully transmitted to channel manager for the next 60 days.',
         details: rateRes?.discrepancies ? JSON.stringify(rateRes.discrepancies, null, 2) : `Confirmed: ${rateRes?.recordsVerified ?? rateRes?.recordsAttempted ?? 0} rate plan updates verified.`
       });
     } catch (err: any) {

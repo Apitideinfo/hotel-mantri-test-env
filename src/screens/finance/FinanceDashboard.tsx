@@ -70,32 +70,41 @@ export const FinanceDashboard = ({ onBack, onNavigate }: FinanceDashboardProps) 
       ) : kpis ? (
         <>
           {/* KPI Cards */}
-          <div className="px-4 py-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-            <KPICard label="Today's Collection" value={fmtMoney(kpis.todayCollection)} icon={<IndianRupee className="w-4 h-4" />} color="text-emerald-600 bg-emerald-50" />
-            <KPICard label="Cash Collection" value={fmtMoney(kpis.todayCashCollection)} icon={<Banknote className="w-4 h-4" />} color="text-amber-600 bg-amber-50" />
-            <KPICard label="Bank/UPI/Card" value={fmtMoney(kpis.todayBankCollection)} icon={<CreditCard className="w-4 h-4" />} color="text-blue-600 bg-blue-50" />
-            <KPICard label="Today's Expenses" value={fmtMoney(kpis.todayExpenses)} icon={<TrendingDown className="w-4 h-4" />} color="text-red-600 bg-red-50" />
-            <KPICard label="Cash Closing" value={fmtMoney(kpis.cashClosing)} icon={<Wallet className="w-4 h-4" />} color="text-slate-700 bg-slate-100" />
-            <KPICard label="Total Receivables" value={fmtMoney(kpis.totalReceivables)} icon={<Clock className="w-4 h-4" />} color="text-violet-600 bg-violet-50" />
-            <KPICard label="Total Payables" value={fmtMoney(kpis.totalPayables)} icon={<Clock className="w-4 h-4" />} color="text-rose-600 bg-rose-50" />
-            <KPICard label="MTD Revenue" value={fmtMoney(kpis.mtdRevenue)} icon={<TrendingUp className="w-4 h-4" />} color="text-emerald-600 bg-emerald-50" />
-            <KPICard label="MTD Expenses" value={fmtMoney(kpis.mtdExpenses)} icon={<TrendingDown className="w-4 h-4" />} color="text-red-600 bg-red-50" />
-            <KPICard label="MTD Operating Profit" value={fmtMoney(kpis.mtdOperatingProfit)} icon={<PieChart className="w-4 h-4" />} color={kpis.mtdOperatingProfit >= 0 ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'} />
-            <KPICard label="OTA Outstanding" value={fmtMoney(kpis.outstandingOTA)} icon={<AlertCircle className="w-4 h-4" />} color="text-orange-600 bg-orange-50" />
-            <KPICard label="Corporate Outstanding" value={fmtMoney(kpis.outstandingCorporate)} icon={<AlertCircle className="w-4 h-4" />} color="text-indigo-600 bg-indigo-50" />
+          <div className="px-4 lg:px-6 py-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3.5">
+            <KPICard label="Today's Collection" value={fmtMoney(kpis.todayCollection)} icon={<IndianRupee className="w-4 h-4" />} color="text-emerald-600 bg-emerald-50 border-emerald-100" />
+            <KPICard label="Cash Collection" value={fmtMoney(kpis.todayCashCollection)} icon={<Banknote className="w-4 h-4" />} color="text-amber-600 bg-amber-50 border-amber-100" />
+            <KPICard label="Bank/UPI/Card" value={fmtMoney(kpis.todayBankCollection)} icon={<CreditCard className="w-4 h-4" />} color="text-sky-600 bg-sky-50 border-sky-100" />
+            <KPICard label="Today's Expenses" value={fmtMoney(kpis.todayExpenses)} icon={<TrendingDown className="w-4 h-4" />} color="text-rose-600 bg-rose-50 border-rose-100" />
+            <KPICard label="Cash Closing" value={fmtMoney(kpis.cashClosing)} icon={<Wallet className="w-4 h-4" />} color="text-slate-700 bg-slate-100 border-slate-200" />
+            <KPICard label="Total Receivables" value={fmtMoney(kpis.totalReceivables)} icon={<Clock className="w-4 h-4" />} color="text-violet-600 bg-violet-50 border-violet-100" />
+            <KPICard label="Total Payables" value={fmtMoney(kpis.totalPayables)} icon={<Clock className="w-4 h-4" />} color="text-rose-600 bg-rose-50 border-rose-100" />
+            <KPICard label="MTD Revenue" value={fmtMoney(kpis.mtdRevenue)} icon={<TrendingUp className="w-4 h-4" />} color="text-emerald-600 bg-emerald-50 border-emerald-100" />
+            <KPICard label="MTD Expenses" value={fmtMoney(kpis.mtdExpenses)} icon={<TrendingDown className="w-4 h-4" />} color="text-rose-600 bg-rose-50 border-rose-100" />
+            <KPICard label="MTD Operating Profit" value={fmtMoney(kpis.mtdOperatingProfit)} icon={<PieChart className="w-4 h-4" />} color={kpis.mtdOperatingProfit >= 0 ? 'text-emerald-600 bg-emerald-50 border-emerald-100' : 'text-rose-600 bg-rose-50 border-rose-100'} />
+            <KPICard label="OTA Outstanding" value={fmtMoney(kpis.outstandingOTA)} icon={<AlertCircle className="w-4 h-4" />} color="text-orange-600 bg-orange-50 border-orange-100" />
+            <KPICard label="Corporate Outstanding" value={fmtMoney(kpis.outstandingCorporate)} icon={<AlertCircle className="w-4 h-4" />} color="text-indigo-600 bg-indigo-50 border-indigo-100" />
           </div>
 
           {/* Quick Navigation */}
-          <div className="px-4 pb-4">
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Accounting Modules</h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+          <div className="px-4 lg:px-6 pb-8">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Accounting Control Modules</h3>
+              <span className="text-[11px] text-slate-400 font-medium">16 modules configured</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-3">
               {navItems.map((item) => (
-                <button key={item.id} onClick={() => onNavigate(item.id)}
-                  className="flex items-center gap-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl p-2.5 shadow-sm transition text-left">
-                  <span className="w-8 h-8 rounded-lg bg-sky-50 flex items-center justify-center text-sky-600 shrink-0">
+                <button
+                  key={item.id}
+                  onClick={() => onNavigate(item.id)}
+                  className="group flex items-center gap-3 bg-white hover:bg-slate-50/80 border border-slate-200/80 hover:border-sky-300/80 rounded-2xl p-3.5 shadow-2xs hover:shadow-xs transition-all duration-200 text-left cursor-pointer active:scale-[0.99]"
+                >
+                  <span className="w-9 h-9 rounded-xl bg-sky-50 border border-sky-100/80 group-hover:bg-sky-100 flex items-center justify-center text-sky-600 shrink-0 transition-colors">
                     {item.icon}
                   </span>
-                  <span className="text-xs font-semibold text-slate-700">{item.label}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs sm:text-sm font-bold text-slate-800 group-hover:text-sky-900 transition-colors truncate">{item.label}</p>
+                    <p className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Manage</p>
+                  </div>
                 </button>
               ))}
             </div>
@@ -106,12 +115,22 @@ export const FinanceDashboard = ({ onBack, onNavigate }: FinanceDashboardProps) 
   );
 };
 
-const KPICard = ({ label, value, icon, color }: { label: string; value: string; icon: React.ReactNode; color: string }) => (
-  <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-3">
-    <div className="flex items-center justify-between mb-2">
-      <span className={`w-8 h-8 rounded-lg flex items-center justify-center ${color}`}>{icon}</span>
+const KPICard = ({
+  label,
+  value,
+  icon,
+  color,
+}: {
+  label: string;
+  value: string;
+  icon: React.ReactNode;
+  color: string;
+}) => (
+  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:border-slate-300/90 hover:shadow-card-hover transition-all duration-200 p-4">
+    <div className="flex items-center justify-between mb-3">
+      <span className={`w-8 h-8 rounded-xl border flex items-center justify-center ${color}`}>{icon}</span>
     </div>
-    <p className="text-lg font-bold text-slate-800 tabular-nums">{value}</p>
-    <p className="text-[10px] text-slate-400 uppercase tracking-wide mt-0.5">{label}</p>
+    <p className="text-lg sm:text-xl font-black text-slate-900 tabular-nums tracking-tight">{value}</p>
+    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1 truncate">{label}</p>
   </div>
 );

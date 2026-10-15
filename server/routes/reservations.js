@@ -1,0 +1,1569 @@
+/**
+ * HOTEL MANTRI — Authoritative Reservation API Routes
+ * 
+ * Provides:
+ * - Authoritative hotel-scoped reservation queries with pagination & filtering
+ * - Conflict diagnostic scans for authorized administrators
+ * - Atomic reservation creation with physical room overlap prevention
+ * - Atomic reservation updates, room assignments, stay extensions, and safe check-in
+ */
+
+import express from 'express';
+import { supabaseServiceRole } from '../supabaseClient.js';
+import { requireHotelAccess as checkAuth, resolveAuthorizedHotel, forbidRoles } from '../middleware/auth.js';
+import { pdfRateLimiter } from '../middleware/rateLimiter.js';
+import {
+  generateGuestConfirmationToken,
+  verifyGuestReservationToken,
+} from '../services/paymentSecurityService.js';
+import {
+  checkRoomAvailability,
+  getCategoryPhysicalRoomAvailability,
+  detectExistingConflicts,
+} from '../services/ReservationConflictService.js';
+import {
+  createReservationsAtomically,
+  updateReservationAtomically,
+  assignPhysicalRoom,
+  extendReservationStay,
+  validateAndProcessCheckIn,
+  autoAssignPhysicalRoom,
+  processPendingRoomAllocations,
+  batchAutoAssignReservations,
+  isAutoAssignEnabled,
+  setAutoAssignEnabled,
+} from '../services/RoomAssignmentService.js';
+import {
+  generateAndDeliverConfirmation,
+  buildReservationConfirmationEmail,
+  buildOtaOwnerConfirmationEmail,
+  buildCustomerConfirmationEmail,
+  buildReservationConfirmationWhatsAppText,
+  buildMetaBookingConfirmationTemplate,
+  resolveReservationNotificationRecipient,
+  isOTAReservation,
+  normalizeBookingSource,
+} from '../services/reservationDeliveryService.js';
+import {
+  getReservationDocuments,
+  readPdfFromStorage,
+  generateAndStoreReservationConfirmation,
+  updateDocumentDeliveryStatus,
+  DOCUMENT_TYPES,
+  DELIVERY_STATUS,
+} from '../services/documentService.js';
+import { sendEmail, isValidEmail } from '../services/emailService.js';
+import { sendWhatsAppMessage, buildWhatsAppDirectUrl, normalizeWhatsAppPhone } from '../services/whatsappService.js';
+import { resolveHotelOwnerEmail } from '../services/notificationService.js';
+import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
+import { getSourceCategoryFromType } from '../services/sourceClassification.js';
+
+const router = express.Router();
+
+// Strict RBAC: All reservation operations require valid hotel context and forbid Housekeeping role
+// Guest confirmation PDF route (/:id/confirmation/pdf) handles its own scoped HMAC token authentication
+router.use((req, res, next) => {
+  if (req.path.includes('/confirmation/pdf')) {
+    return next();
+  }
+  return checkAuth(req, res, (err) => {
+    if (err) return next(err);
+    forbidRoles(['housekeeping'])(req, res, next);
+  });
+});
+
+const formatDateReadable = (iso) => {
+  if (!iso) return '—';
+  const clean = String(iso).slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length === 3 && parts[0].length === 4) {
+    const [y, m, d] = parts;
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${d} ${months[parseInt(m, 10) - 1] || m} ${y}`;
+  }
+  return clean;
+};
+
+// Cooldown tracker for non-blocking opportunistic allocation reconciliation per hotel (P4 Performance)
+const lastReconciliationMap = new Map();
+const RECONCILIATION_COOLDOWN_MS = 60 * 1000; // 60 seconds debounce
+
+/**
+ * GET /api/reservations
+ * Authoritative paginated list with search, date range, channel, and status filters.
+ */
+router.get('/', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
+    }
+
+    // Opportunistic automatic reconciliation for pending unassigned OTA reservations
+    // Non-blocking and cooldown-guarded (max once every 60s per hotel) to eliminate request blocking
+    const now = Date.now();
+    const lastRun = lastReconciliationMap.get(hotelId) || 0;
+    if (now - lastRun > RECONCILIATION_COOLDOWN_MS) {
+      lastReconciliationMap.set(hotelId, now);
+      processPendingRoomAllocations(hotelId).catch((allocErr) => {
+        console.warn('[Reservations] Background reconciliation non-blocking warning:', allocErr.message);
+      });
+    }
+
+    const {
+      page = 1,
+      pageSize = 20,
+      search = '',
+      fromDate,
+      toDate,
+      status,
+      sourceCategory,
+      assignedStatus, // 'all', 'assigned', 'unassigned'
+      roomNo,
+      sortBy = 'check_in_date',
+      sortOrder = 'desc',
+    } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(pageSize, 10) || 20));
+    const offset = (pageNum - 1) * limit;
+
+    let query = supabaseServiceRole
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId);
+
+    // Filter by status
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
+
+    // Filter by source / channel (maps specific types or DB categories)
+    if (sourceCategory && sourceCategory !== 'all') {
+      const dbCat = getSourceCategoryFromType(sourceCategory) || sourceCategory;
+      query = query.eq('source_category', dbCat);
+    }
+
+    // Filter by room
+    if (roomNo && roomNo !== 'all') {
+      query = query.ilike('room_no', roomNo.trim());
+    }
+
+    // Filter by assigned / unassigned
+    if (assignedStatus === 'unassigned') {
+      query = query.or('room_no.is.null,room_no.eq.,room_no.ilike.unassigned,room_no.ilike.tbd');
+    } else if (assignedStatus === 'assigned') {
+      query = query
+        .not('room_no', 'is', null)
+        .neq('room_no', '')
+        .not('room_no', 'ilike', 'unassigned')
+        .not('room_no', 'ilike', 'tbd');
+    }
+
+    // Filter by stay dates (stay overlaps [fromDate, toDate])
+    if (fromDate && toDate) {
+      query = query.lt('check_in_date', toDate).gt('check_out_date', fromDate);
+    } else if (fromDate) {
+      query = query.gte('check_out_date', fromDate);
+    } else if (toDate) {
+      query = query.lte('check_in_date', toDate);
+    }
+
+    // Search query: guest name, phone, email, room, id
+    if (search && search.trim()) {
+      const s = search.trim();
+      query = query.or(`guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%,guest_email.ilike.%${s}%,room_no.ilike.%${s}%,payment_ref.ilike.%${s}%`);
+    }
+
+    // Sort order
+    const isAscending = String(sortOrder).toLowerCase() === 'asc';
+    query = query.order(sortBy, { ascending: isAscending });
+
+    // Fetch all matching reservations for accurate grouping & pagination
+    const { data: rawReservations, error } = await query;
+    if (error) {
+      console.error('[API /reservations] Query error:', error);
+      throw error;
+    }
+
+    // Deduplicate any accidental duplicate physical room records in the same group
+    const seenGroupRooms = new Set();
+    const cleanReservations = [];
+    const duplicateIdsToDelete = [];
+
+    for (const r of (rawReservations || [])) {
+      const roomKey = (r.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+      const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+      if (dedupeKey) {
+        if (seenGroupRooms.has(dedupeKey)) {
+          duplicateIdsToDelete.push(r.id);
+          continue;
+        }
+        seenGroupRooms.add(dedupeKey);
+      }
+      cleanReservations.push(r);
+    }
+
+    if (duplicateIdsToDelete.length > 0) {
+      console.log(`[API /reservations] Auto-purging ${duplicateIdsToDelete.length} duplicate room records:`, duplicateIdsToDelete);
+      supabaseServiceRole
+        .from('reservations')
+        .delete()
+        .in('id', duplicateIdsToDelete)
+        .catch((e) => console.warn('[API /reservations] Duplicate delete warning:', e.message));
+    }
+
+    // Grouping BEFORE pagination
+    const groupsMap = new Map();
+    const groupOrder = [];
+
+    for (const r of cleanReservations) {
+      const normalizedName = (r.guest_name || '').trim().toLowerCase();
+      const key = (r.group_id && r.group_id.trim() !== '') 
+        ? r.group_id 
+        : (normalizedName ? `${normalizedName}::${r.check_in_date}::${r.check_out_date}` : r.id);
+
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, []);
+        groupOrder.push(key);
+      }
+      groupsMap.get(key).push(r);
+    }
+
+    const totalGroupsCount = groupOrder.length;
+    const paginatedGroupKeys = groupOrder.slice(offset, offset + limit);
+    const paginatedReservations = [];
+    for (const k of paginatedGroupKeys) {
+      paginatedReservations.push(...groupsMap.get(k));
+    }
+
+    // Calculate Global Metrics independent of filters & pagination
+    const { data: allHotelRes } = await supabaseServiceRole
+      .from('reservations')
+      .select('id, group_id, status, room_no, invoice_total, rate, nights')
+      .eq('hotel_id', hotelId);
+
+    const seenMetricsKeys = new Set();
+    let totalBookings = 0;
+    let confirmedCount = 0;
+    let checkedInCount = 0;
+    let unassignedCount = 0;
+    let pipelineTariff = 0;
+
+    for (const r of (allHotelRes || [])) {
+      const roomKey = (r.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+      const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+      const key = dedupeKey || r.id;
+
+      if (!seenMetricsKeys.has(key)) {
+        seenMetricsKeys.add(key);
+        totalBookings++;
+        if (r.status === 'confirmed') confirmedCount++;
+        if (r.status === 'checked_in') checkedInCount++;
+        if (!isPhysical) unassignedCount++;
+        const invoiceTotal = Number(r.invoice_total) || 0;
+        const rate = Number(r.rate) || 0;
+        const nights = Number(r.nights) || 1;
+        pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+      }
+    }
+
+    res.json({
+      success: true,
+      reservations: paginatedReservations,
+      totalCount: totalGroupsCount,
+      page: pageNum,
+      pageSize: limit,
+      totalPages: Math.ceil(totalGroupsCount / limit),
+      metrics: {
+        totalBookings,
+        confirmed: confirmedCount,
+        checkedIn: checkedInCount,
+        unassigned: unassignedCount,
+        totalRevenue: pipelineTariff
+      }
+    });
+  } catch (err) {
+    console.error('Error in GET /api/reservations:', err);
+    res.status(500).json({
+      success: false,
+      code: 'RESERVATIONS_FETCH_FAILED',
+      message: 'Failed to fetch reservations list.',
+    });
+  }
+});
+
+/**
+ * GET /api/reservations/conflicts
+ * Diagnostic view for authorized admins to detect existing historical conflicts.
+ */
+router.get('/conflicts', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
+    }
+
+    const conflicts = await detectExistingConflicts(hotelId);
+    res.json({
+      success: true,
+      conflicts,
+      count: conflicts.length,
+    });
+  } catch (err) {
+    console.error('Error checking reservation conflicts:', err);
+    res.status(500).json({ success: false, code: 'CONFLICT_SCAN_FAILED', message: 'Failed to scan reservation conflicts.' });
+  }
+});
+
+/**
+ * POST /api/reservations/category-availability
+ * Authoritative category physical room availability check.
+ * Returns total rooms, available rooms, unavailable rooms, and available room numbers.
+ */
+router.post('/category-availability', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
+    }
+
+    const { categoryId, checkIn, checkOut, excludeReservationId } = req.body;
+    if (!checkIn || !checkOut) {
+      return res.status(400).json({ success: false, code: 'INVALID_STAY_DATES', message: 'Check-in and check-out dates are required.' });
+    }
+
+    const result = await getCategoryPhysicalRoomAvailability({
+      hotelId,
+      categoryId: categoryId || null,
+      checkIn,
+      checkOut,
+      excludeReservationId: excludeReservationId || null,
+    });
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err) {
+    console.error('Error checking category availability:', err);
+    res.status(500).json({ success: false, code: 'AVAILABILITY_CHECK_FAILED', message: 'Failed to check category availability.' });
+  }
+});
+
+/**
+ * POST /api/reservations/check-availability
+ * Proactive check for frontend date/room/category selection before submit.
+ */
+router.post('/check-availability', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { roomNo, categoryId, checkIn, checkOut, excludeReservationId } = req.body;
+
+    if (categoryId && !roomNo) {
+      const catResult = await getCategoryPhysicalRoomAvailability({
+        hotelId,
+        categoryId,
+        checkIn,
+        checkOut,
+        excludeReservationId,
+      });
+      return res.json({
+        success: true,
+        available: catResult.available,
+        totalRooms: catResult.totalRooms,
+        availableRooms: catResult.availableRooms,
+        unavailableRooms: catResult.unavailableRooms,
+        availableRoomNos: catResult.availableRoomNos,
+        availableRoomDetails: catResult.availableRoomDetails,
+        message: catResult.message,
+      });
+    }
+
+    const result = await checkRoomAvailability({
+      hotelId,
+      roomNo,
+      checkIn,
+      checkOut,
+      excludeReservationId,
+    });
+
+    res.json({
+      success: true,
+      available: result.available,
+      code: result.code || null,
+      message: result.message || (result.available ? 'Room is available.' : 'Room is not available.'),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Availability check failed.' });
+  }
+});
+
+/**
+ * POST /api/reservations
+ * Authoritative atomic creation of single or multi-room reservation.
+ */
+router.post('/', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+
+    const rawList = Array.isArray(req.body) ? req.body : [req.body];
+    if (rawList.length === 0) {
+      return res.status(400).json({ success: false, code: 'EMPTY_INPUT', message: 'No reservation inputs provided.' });
+    }
+
+    // Backend validation: Guest email is mandatory for manual reservations and deduplicate physical rooms
+    const seenPhysicalRooms = new Set();
+    const cleanList = [];
+    for (const item of rawList) {
+      const roomKey = (item.room_no || '').trim().toLowerCase();
+      const isPhysical = roomKey && roomKey !== 'tbd' && roomKey !== 'unassigned';
+      if (isPhysical) {
+        if (seenPhysicalRooms.has(roomKey)) {
+          console.warn(`[API /reservations] Deduplicating redundant physical room in batch payload: ${item.room_no}`);
+          continue;
+        }
+        seenPhysicalRooms.add(roomKey);
+      }
+
+      const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
+      const allowEmptyEmail = Boolean(req.body?.allowEmptyEmail || item.allowEmptyEmail);
+      const cleanEmail = (item.guest_email || '').trim();
+      if (!isOta && !allowEmptyEmail) {
+        if (!cleanEmail) {
+          return res.status(422).json({
+            success: false,
+            code: 'GUEST_EMAIL_REQUIRED',
+            message: 'Guest email is required to create a reservation.',
+          });
+        }
+      }
+      if (cleanEmail && !isValidEmail(cleanEmail)) {
+        return res.status(422).json({
+          success: false,
+          code: 'INVALID_GUEST_EMAIL',
+          message: 'Please provide a valid guest email address.',
+        });
+      }
+      cleanList.push(item);
+    }
+
+    const headerIdemp = req.headers['idempotency-key'] || req.headers['x-idempotency-key'] || null;
+    const bodyIdemp = req.body?.idempotency_key || req.body?.idempotencyKey || req.body?.client_reference || null;
+    const idempotencyKey = (headerIdemp || bodyIdemp || '').trim() || null;
+
+    const result = await createReservationsAtomically({
+      hotelId,
+      inputs: cleanList,
+      userId,
+      allowEmptyEmail: Boolean(req.body?.allowEmptyEmail || cleanList.some(i => i.allowEmptyEmail)),
+      idempotencyKey,
+    });
+
+    // Generate confirmation PDF and deliver confirmation email/notification
+    const deliveryResults = [];
+    for (const resItem of result) {
+      try {
+        const delivery = await generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: resItem.id,
+          reservation: resItem,
+          eventType: 'NEW_RESERVATION',
+          generatedBy: userId || 'STAFF',
+        });
+        deliveryResults.push(delivery);
+      } catch (e) {
+        console.error(`[API /reservations] Confirmation delivery error for ${resItem.id}:`, e.message);
+        deliveryResults.push({
+          emailDelivery: { status: 'failed', error: e.message },
+          whatsappDelivery: { status: 'pending' },
+        });
+      }
+    }
+
+    const firstDelivery = deliveryResults[0];
+    const emailStatus = firstDelivery?.emailDelivery?.status === 'sent'
+      ? 'EMAIL_SENT'
+      : firstDelivery?.emailDelivery?.status === 'not_configured'
+      ? 'EMAIL_NOT_CONFIGURED'
+      : firstDelivery?.email?.status === 'sent'
+      ? 'EMAIL_SENT'
+      : firstDelivery?.email?.status === 'not_configured'
+      ? 'EMAIL_NOT_CONFIGURED'
+      : 'EMAIL_FAILED';
+
+    const waStatusRaw = firstDelivery?.whatsapp?.status || firstDelivery?.whatsappDelivery?.status;
+    const whatsappStatus = waStatusRaw === 'sent'
+      ? 'WHATSAPP_SENT'
+      : waStatusRaw === 'duplicate'
+      ? 'WHATSAPP_DUPLICATE_PREVENTED'
+      : waStatusRaw === 'not_configured'
+      ? 'WHATSAPP_NOT_CONFIGURED'
+      : waStatusRaw === 'skipped'
+      ? 'WHATSAPP_SKIPPED'
+      : waStatusRaw === 'ready_manual'
+      ? 'WHATSAPP_READY_MANUAL'
+      : 'WHATSAPP_FAILED';
+
+    let confirmationToken = null;
+    if (result && result.length > 0 && result[0]?.id) {
+      try {
+        confirmationToken = generateGuestConfirmationToken({
+          reservationId: result[0].id,
+          hotelId,
+        });
+      } catch (tokErr) {
+        // non-fatal
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Reservation created successfully.',
+      reservations: result,
+      reservation: result[0],
+      confirmationToken,
+      emailStatus,
+      emailDelivery: firstDelivery?.email || firstDelivery?.emailDelivery || null,
+      whatsappStatus,
+      whatsappDelivery: firstDelivery?.whatsapp || firstDelivery?.whatsappDelivery || null,
+      pdfDocument: firstDelivery?.pdf || firstDelivery?.document || null,
+    });
+  } catch (err) {
+    if (err.idempotentReplay && err.existingReservation) {
+      return res.status(200).json({
+        success: true,
+        idempotentReplay: true,
+        message: 'Reservation already exists for this idempotency key.',
+        reservation: err.existingReservation,
+        reservations: [err.existingReservation],
+      });
+    }
+
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'RESERVATION_CREATE_FAILED',
+      message: err.message || 'Failed to create reservation.',
+      conflictingReservation: err.conflictingReservation || null,
+      existingReservation: err.existingReservation || null,
+    });
+  }
+});
+
+/**
+ * PUT /api/reservations/:id
+ * Authoritative atomic update of a reservation.
+ */
+router.put('/:id', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+
+    const isOta = Boolean(req.body.is_ota || req.body.source_category === 'OTA');
+    if (!isOta && req.body.guest_email !== undefined && req.body.guest_email !== null) {
+      const cleanEmail = String(req.body.guest_email).trim();
+      if (cleanEmail && !isValidEmail(cleanEmail)) {
+        return res.status(422).json({
+          success: false,
+          code: 'INVALID_GUEST_EMAIL',
+          message: 'Please provide a valid guest email address.',
+        });
+      }
+    }
+
+    const updated = await updateReservationAtomically({
+      hotelId,
+      reservationId: id,
+      updates: req.body,
+      userId,
+    });
+
+    // Asynchronously generate versioned modification confirmation
+    (async () => {
+      try {
+        await generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: id,
+          reservation: updated,
+          eventType: 'RESERVATION_MODIFIED',
+          forceNewVersion: true,
+          generatedBy: userId || 'STAFF',
+        });
+      } catch (e) {
+        console.error(`[API /reservations/:id] Modification confirmation error for ${id}:`, e.message);
+      }
+    })().catch(e => console.error('[API /reservations/:id] Delivery worker error:', e));
+
+    res.json({
+      success: true,
+      message: 'Reservation updated successfully.',
+      reservation: updated,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'RESERVATION_UPDATE_FAILED',
+      message: err.message || 'Failed to update reservation.',
+      conflictingReservation: err.conflictingReservation || null,
+    });
+  }
+});
+
+/**
+ * POST /api/reservations/:id/assign-room
+ * Assigns or reassigns physical room with conflict prevention.
+ */
+router.post('/:id/assign-room', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+    const { roomNo, roomId } = req.body;
+
+    const updated = await assignPhysicalRoom({
+      hotelId,
+      reservationId: id,
+      roomNo,
+      roomId,
+      userId,
+    });
+
+    (async () => {
+      try {
+        await generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: id,
+          reservation: updated,
+          eventType: 'RESERVATION_MODIFIED',
+          forceNewVersion: true,
+          generatedBy: userId || 'STAFF',
+        });
+      } catch (e) {
+        console.error(`[API /assign-room] Confirmation error for ${id}:`, e.message);
+      }
+    })().catch(e => console.error('[API /assign-room] Worker error:', e));
+
+    res.json({
+      success: true,
+      message: `Room ${roomNo || 'Unassigned'} assigned successfully.`,
+      reservation: updated,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'ROOM_ASSIGNMENT_FAILED',
+      message: err.message || 'Failed to assign room.',
+      conflictingReservation: err.conflictingReservation || null,
+    });
+  }
+});
+
+/**
+ * POST /api/reservations/:id/auto-assign
+ * Automatically assigns an eligible physical room to an unassigned reservation.
+ */
+router.post('/:id/auto-assign', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+    const { preferredRoomNo, dryRun } = req.body || {};
+
+    const result = await autoAssignPhysicalRoom({
+      hotelId,
+      reservationId: id,
+      preferredRoomNo,
+      userId,
+      dryRun: Boolean(dryRun),
+    });
+
+    if (result.success && !dryRun) {
+      (async () => {
+        try {
+          const { data: updatedRes } = await supabaseServiceRole
+            .from('reservations')
+            .select('*')
+            .eq('id', id)
+            .single();
+
+          if (updatedRes) {
+            await generateAndDeliverConfirmation({
+              hotelId,
+              reservationId: id,
+              reservation: updatedRes,
+              eventType: 'RESERVATION_MODIFIED',
+              forceNewVersion: true,
+              generatedBy: userId || 'STAFF',
+            });
+          }
+        } catch (e) {
+          console.error(`[API /auto-assign] Confirmation error for ${id}:`, e.message);
+        }
+      })().catch(e => console.error('[API /auto-assign] Worker error:', e));
+    }
+
+    res.json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'AUTO_ASSIGN_FAILED',
+      message: err.message || 'Failed to auto-assign room.',
+    });
+  }
+});
+
+/**
+ * POST /api/reservations/auto-assign-all
+ * Batch auto-assigns all unassigned reservations in the hotel.
+ */
+router.post('/auto-assign-all', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const result = await batchAutoAssignReservations(hotelId);
+    res.json({
+      success: true,
+      message: `Processed ${result.total} unassigned reservations: ${result.assignedCount} assigned, ${result.unassignedCount} remaining.`,
+      ...result,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: 'BATCH_AUTO_ASSIGN_FAILED',
+      message: err.message || 'Failed to batch auto-assign reservations.',
+    });
+  }
+});
+
+/**
+ * GET /api/reservations/auto-assign-setting
+ * Retrieves hotel setting for automatic room assignment.
+ */
+router.get('/auto-assign-setting', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const enabled = await isAutoAssignEnabled(hotelId);
+    res.json({ success: true, hotelId, enabled });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to retrieve auto-assign setting.' });
+  }
+});
+
+/**
+ * POST /api/reservations/auto-assign-setting
+ * Updates hotel setting for automatic room assignment.
+ */
+router.post('/auto-assign-setting', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { enabled } = req.body;
+    const result = await setAutoAssignEnabled(hotelId, enabled);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to update auto-assign setting.' });
+  }
+});
+
+/**
+ * POST /api/reservations/:id/extend
+ * Extends reservation stay date with conflict checking.
+ */
+router.post('/:id/extend', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+    const { newCheckOut } = req.body;
+
+    const updated = await extendReservationStay({
+      hotelId,
+      reservationId: id,
+      newCheckOut,
+      userId,
+    });
+
+    (async () => {
+      try {
+        await generateAndDeliverConfirmation({
+          hotelId,
+          reservationId: id,
+          reservation: updated,
+          eventType: 'RESERVATION_MODIFIED',
+          forceNewVersion: true,
+          generatedBy: userId || 'STAFF',
+        });
+      } catch (e) {
+        console.error(`[API /extend] Confirmation error for ${id}:`, e.message);
+      }
+    })().catch(e => console.error('[API /extend] Worker error:', e));
+
+    res.json({
+      success: true,
+      message: 'Stay extended successfully.',
+      reservation: updated,
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'STAY_EXTENSION_FAILED',
+      message: err.message || 'Failed to extend stay.',
+      conflictingReservation: err.conflictingReservation || null,
+    });
+  }
+});
+
+/**
+ * POST /api/reservations/:id/check-in
+ * Safe check-in validation.
+ */
+router.post('/:id/check-in', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || null;
+    const { id } = req.params;
+
+    const result = await validateAndProcessCheckIn({
+      hotelId,
+      reservationId: id,
+      userId,
+    });
+
+    res.json(result);
+  } catch (err) {
+    const status = err.status || 500;
+    res.status(status).json({
+      success: false,
+      code: err.code || 'CHECK_IN_BLOCKED',
+      message: err.message || 'Failed to check in.',
+    });
+  }
+});
+
+/**
+ * DELETE /api/reservations/:id
+ * Cancels or deletes a reservation.
+ */
+router.delete('/:id', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { id } = req.params;
+    const { hardDelete = false } = req.query;
+
+    if (hardDelete === 'true') {
+      const { error } = await supabaseServiceRole
+        .from('reservations')
+        .delete()
+        .eq('id', id)
+        .eq('hotel_id', hotelId);
+      if (error) throw error;
+    } else {
+      const { error } = await supabaseServiceRole
+        .from('reservations')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('hotel_id', hotelId);
+      if (error) throw error;
+
+      // Asynchronously generate cancellation confirmation
+      (async () => {
+        try {
+          await generateAndDeliverConfirmation({
+            hotelId,
+            reservationId: id,
+            eventType: 'RESERVATION_CANCELLED',
+            generatedBy: req.user?.id || 'STAFF',
+          });
+        } catch (e) {
+          console.error(`[API /reservations/:id] Cancellation confirmation error for ${id}:`, e.message);
+        }
+      })().catch(e => console.error('[API /reservations/:id] Cancellation worker error:', e));
+    }
+
+    res.json({ success: true, message: 'Reservation cancelled successfully.' });
+  } catch (err) {
+    res.status(500).json({ success: false, code: 'CANCEL_FAILED', message: 'Failed to cancel reservation.' });
+  }
+});
+
+// ─── GET /api/reservations/:id/confirmation ──────────────────────────────────
+/**
+ * Returns latest confirmation document status, versions history, and WhatsApp links.
+ */
+router.get('/:id/confirmation', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { id } = req.params;
+
+    // 1. Verify reservation belongs to hotel
+    const { data: reservation, error: resErr } = await supabaseServiceRole
+      .from('reservations')
+      .select('*')
+      .eq('id', id)
+      .eq('hotel_id', hotelId)
+      .maybeSingle();
+
+    if (resErr || !reservation) {
+      return res.status(404).json({ success: false, code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found.' });
+    }
+
+    // 2. Fetch existing documents
+    let docs = await getReservationDocuments(hotelId, id);
+
+    // If no document exists yet, auto-generate version 1
+    if (!docs || docs.length === 0) {
+      try {
+        const gen = await generateAndStoreReservationConfirmation({
+          hotelId,
+          reservationId: id,
+          reservation,
+        });
+        docs = [gen.document];
+      } catch (err) {
+        console.warn(`[API /confirmation] Auto-generation failed for ${id}:`, err.message);
+      }
+    }
+
+    const latestDoc = docs && docs.length > 0 ? docs[0] : null;
+
+    // 3. Resolve WhatsApp direct link (guest phone for direct, owner phone for OTA)
+    const ownerWhatsApp = await resolveHotelOwnerWhatsApp(hotelId);
+    let whatsappDirectUrl = null;
+    const isOta = isOTAReservation(reservation);
+    const targetPhone = isOta
+      ? (ownerWhatsApp.valid ? ownerWhatsApp.phone : null)
+      : (reservation.guest_phone || (ownerWhatsApp.valid ? ownerWhatsApp.phone : null));
+
+    if (targetPhone) {
+      const ci = String(reservation.check_in_date || '').slice(0, 10);
+      const co = String(reservation.check_out_date || '').slice(0, 10);
+      const d1 = new Date(ci + 'T00:00:00');
+      const d2 = new Date(co + 'T00:00:00');
+      const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 3600 * 24)));
+
+      const waText = buildReservationConfirmationWhatsAppText({
+        hotelName: ownerWhatsApp.hotelName || 'Hotel Mantri',
+        reservationId: id,
+        confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+        otaBookingId: reservation.remarks || '',
+        bookingSource: reservation.source_name || reservation.source_category || (isOta ? 'OTA' : 'Direct'),
+        guestName: reservation.guest_name || 'Guest',
+        checkIn: reservation.check_in_date,
+        checkOut: reservation.check_out_date,
+        nights,
+        roomCategory: reservation.rate_plan || reservation.room_category || 'Standard',
+        roomNo: reservation.room_no,
+        totalAmount: reservation.invoice_total || reservation.rate || 0,
+        advancePaid: reservation.advance_paid || 0,
+        balanceDue: Math.max(0, (reservation.invoice_total || 0) - (reservation.advance_paid || 0)),
+        version: latestDoc?.version || 1,
+      });
+      whatsappDirectUrl = buildWhatsAppDirectUrl(targetPhone, waText);
+    }
+
+    const ownerEmail = await resolveHotelOwnerEmail(hotelId);
+    const recipientResolution = await resolveReservationNotificationRecipient({ hotelId, reservation });
+    const sourceInfo = normalizeBookingSource(reservation);
+
+    let confirmationToken = null;
+    try {
+      confirmationToken = generateGuestConfirmationToken({
+        reservationId: id,
+        hotelId,
+      });
+    } catch (tokErr) {
+      // non-fatal
+    }
+
+    res.json({
+      success: true,
+      reservationId: id,
+      confirmationToken,
+      document: latestDoc,
+      versions: docs || [],
+      recipient: recipientResolution,
+      sourceInfo,
+      guestContact: {
+        name: reservation.guest_name || 'Guest',
+        email: reservation.guest_email || null,
+        phone: reservation.guest_phone || null,
+      },
+      ownerContact: {
+        email: ownerEmail?.email || null,
+        phone: ownerWhatsApp.valid ? ownerWhatsApp.phone : null,
+      },
+      whatsappDirectUrl,
+    });
+  } catch (err) {
+    console.error('Error fetching reservation confirmation:', err);
+    res.status(500).json({ success: false, code: 'CONFIRMATION_FETCH_FAILED', message: err.message });
+  }
+});
+
+// ─── Helper: PDF Access Authentication ───────────────────────────────────────
+/**
+ * Authorizes access to a reservation confirmation PDF.
+ * Accepts:
+ * 1. Authenticated Staff / Hotel Administrator / Super Admin via Bearer JWT or query token
+ * 2. Scoped, expiring Guest Access via HMAC-SHA256 guest token
+ * 
+ * Fails closed on missing, invalid, expired, or cross-tenant tokens.
+ */
+const authenticatePdfAccess = async (req, reservationId) => {
+  const authHeader = req.headers.authorization;
+  const rawToken = req.query.token || req.query.auth_token || req.query.auth || req.headers['x-guest-token'];
+
+  // 0. Prohibit Bearer JWTs in URL query parameters to eliminate credential leakage
+  // via browser navigation history, reverse proxy access logs, and Referer headers (CWE-598 / RFC 6750).
+  if (rawToken && typeof rawToken === 'string' && rawToken.trim().split('.').length === 3) {
+    return {
+      authorized: false,
+      status: 401,
+      code: 'QUERY_JWT_DISALLOWED',
+      message: 'Bearer JWT credentials in URL query parameters are disallowed to prevent credential exposure. Use Authorization header or scoped confirmation token.',
+    };
+  }
+
+  let bearerToken = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    bearerToken = authHeader.split(' ')[1]?.trim();
+  }
+
+  // 1. Staff / Admin Authentication (Supabase JWT)
+  if (bearerToken) {
+    const clonedReq = {
+      ...req,
+      headers: {
+        ...req.headers,
+        authorization: `Bearer ${bearerToken}`,
+      },
+      query: req.query || {},
+      body: req.body || {},
+    };
+
+    const authRes = await resolveAuthorizedHotel(clonedReq);
+    if (!authRes.success) {
+      return {
+        authorized: false,
+        status: authRes.status || 401,
+        code: authRes.code || 'INVALID_TOKEN',
+        message: authRes.message || 'Authentication token is invalid or expired.',
+      };
+    }
+
+    return {
+      authorized: true,
+      authType: 'STAFF',
+      user: authRes.user,
+      userId: authRes.userId,
+      role: authRes.role,
+      isSuperAdmin: authRes.isSuperAdmin,
+      hotelId: authRes.hotelId,
+      hotel: authRes.hotel,
+    };
+  }
+
+  // 2. Guest Token Authentication (HMAC-SHA256 signed 2-part token)
+  if (rawToken && typeof rawToken === 'string') {
+    const tokenStr = rawToken.trim();
+    if (tokenStr.split('.').length === 2) {
+      const guestRes = verifyGuestReservationToken(tokenStr, reservationId);
+      if (!guestRes.valid) {
+        const isMismatch = guestRes.code === 'TOKEN_RESERVATION_MISMATCH';
+        const isExpired = guestRes.code === 'TOKEN_EXPIRED';
+        return {
+          authorized: false,
+          status: isMismatch ? 403 : 401,
+          code: guestRes.code,
+          message: guestRes.message,
+        };
+      }
+
+      return {
+        authorized: true,
+        authType: 'GUEST',
+        reservationId: guestRes.payload.resv,
+        hotelId: guestRes.payload.hotel,
+        tokenPurpose: guestRes.payload.purpose,
+      };
+    }
+
+    return {
+      authorized: false,
+      status: 401,
+      code: 'INVALID_TOKEN',
+      message: 'Provided access token is malformed.',
+    };
+  }
+
+  // 3. Neither Bearer JWT nor Guest Token present -> Fail closed
+  return {
+    authorized: false,
+    status: 401,
+    code: 'AUTH_REQUIRED',
+    message: 'Authentication or valid guest access token is required to view reservation confirmation PDF.',
+  };
+};
+
+// ─── GET /api/reservations/:id/confirmation/pdf ──────────────────────────────
+/**
+ * Streams or downloads the generated PDF document.
+ * Strictly protected: requires verified Staff Bearer token or scoped Guest token.
+ */
+router.get('/:id/confirmation/pdf', pdfRateLimiter, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const requestedVersion = req.query.version ? parseInt(req.query.version, 10) : null;
+
+    // 1. Authorize caller
+    const auth = await authenticatePdfAccess(req, id);
+    if (!auth.authorized) {
+      return res.status(auth.status).json({
+        success: false,
+        code: auth.code,
+        message: auth.message,
+      });
+    }
+
+    // 2. Fetch reservation with tenant boundaries enforced
+    const query = supabaseServiceRole
+      .from('reservations')
+      .select('*')
+      .eq('id', id);
+
+    if (auth.authType === 'GUEST') {
+      // Guest is strictly bound to the hotelId encoded in the cryptographically signed token
+      query.eq('hotel_id', auth.hotelId);
+    } else if (auth.authType === 'STAFF') {
+      if (!auth.isSuperAdmin) {
+        // Staff / Hotel Admin is strictly bound to their authorized hotel
+        query.eq('hotel_id', auth.hotelId);
+      } else {
+        // Super Admin may optionally narrow to a specific hotel
+        const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId;
+        if (requestedHotelId) {
+          query.eq('hotel_id', requestedHotelId);
+        }
+      }
+    }
+
+    const { data: reservation, error: resErr } = await query.maybeSingle();
+
+    if (resErr || !reservation) {
+      return res.status(404).json({
+        success: false,
+        code: 'RESERVATION_NOT_FOUND',
+        message: 'Reservation not found.',
+      });
+    }
+
+    const hotelId = reservation.hotel_id;
+
+    // 3. Fetch or generate the confirmation document
+    const docs = await getReservationDocuments(hotelId, id);
+    let targetDoc = null;
+    if (requestedVersion) {
+      targetDoc = docs.find(d => d.version === requestedVersion);
+    } else {
+      targetDoc = docs && docs.length > 0 ? docs[0] : null;
+    }
+
+    let pdfBuffer = null;
+    if (targetDoc?.storage_path) {
+      pdfBuffer = await readPdfFromStorage(hotelId, id, targetDoc.storage_path);
+    }
+
+    if (!pdfBuffer) {
+      // Generate on the fly if file missing
+      const gen = await generateAndStoreReservationConfirmation({
+        hotelId,
+        reservationId: id,
+        reservation,
+      });
+      pdfBuffer = gen.buffer;
+      targetDoc = gen.document;
+    }
+
+    const fileName = targetDoc?.file_name || `Hotel-Mantri-Reservation-Confirmation-HM-${id.slice(0, 8).toUpperCase()}.pdf`;
+
+    // 4. Return PDF with strict privacy and cache-control headers
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error('[RESERVATION_PDF] Error streaming confirmation PDF:', err?.stack || err);
+    res.status(500).json({ success: false, code: 'PDF_FETCH_FAILED', message: 'Failed to retrieve reservation confirmation document.' });
+  }
+});
+
+// ─── POST /api/reservations/:id/confirmation/regenerate ──────────────────────
+router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const userId = req.user?.id || req.auth?.userId || 'STAFF';
+    const { id } = req.params;
+    const { newVersion = false } = req.body;
+
+    const result = await generateAndDeliverConfirmation({
+      hotelId,
+      reservationId: id,
+      forceNewVersion: !!newVersion,
+      generatedBy: userId,
+    });
+
+    res.json({
+      success: true,
+      message: 'Confirmation regenerated successfully.',
+      ...result,
+    });
+  } catch (err) {
+    console.error('Error regenerating confirmation:', err);
+    res.status(500).json({ success: false, code: 'REGENERATE_FAILED', message: err.message });
+  }
+});
+
+// ─── POST /api/reservations/:id/confirmation/send-email ──────────────────────
+router.post('/:id/confirmation/send-email', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { id } = req.params;
+    const { recipientEmail } = req.body;
+
+    // 1. Fetch reservation
+    const { data: reservation, error: resErr } = await supabaseServiceRole
+      .from('reservations')
+      .select('*')
+      .eq('id', id)
+      .eq('hotel_id', hotelId)
+      .maybeSingle();
+
+    if (resErr || !reservation) {
+      return res.status(404).json({ success: false, code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found.' });
+    }
+
+    // 2. Resolve recipient email: either custom recipient or source-based resolution
+    const recipientResolution = await resolveReservationNotificationRecipient({ hotelId, reservation });
+    let targetEmail = (recipientEmail || '').trim();
+    let isOta = recipientResolution.sourceType === 'OTA';
+
+    if (!targetEmail) {
+      if (recipientResolution.recipientType === 'NONE') {
+        return res.status(400).json({
+          success: false,
+          code: 'EMAIL_NOT_AVAILABLE',
+          message: 'Customer email is not available for this reservation. Please provide a recipient email address to send the confirmation.',
+        });
+      }
+      targetEmail = recipientResolution.email || '';
+    } else {
+      // If user manually entered an email for an OTA booking, keep isOta true; if manual booking, keep false
+      if (!isOTAReservation(reservation)) {
+        isOta = false;
+      }
+    }
+
+    if (!targetEmail || !isValidEmail(targetEmail)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_RECIPIENT',
+        message: 'No valid recipient email address available.',
+      });
+    }
+
+    // 3. Ensure confirmation PDF exists
+    let docs = await getReservationDocuments(hotelId, id);
+    let targetDoc = docs[0];
+    let pdfBuffer = targetDoc ? await readPdfFromStorage(hotelId, id, targetDoc.storage_path) : null;
+
+    if (!pdfBuffer) {
+      const gen = await generateAndStoreReservationConfirmation({ hotelId, reservationId: id, reservation });
+      pdfBuffer = gen.buffer;
+      targetDoc = gen.document;
+    }
+
+    // 4. Build email content using dedicated source template
+    const hotel = (await supabaseServiceRole.from('hotels').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const settings = (await supabaseServiceRole.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const hotelName = settings.hotel_name || hotel.hotel_name || 'Hotel Mantri';
+    const hotelPhone = settings.phone || hotel.phone || '';
+    const hotelEmail = settings.email || hotel.email || '';
+    const hotelAddress = settings.address || hotel.address || '';
+
+    const checkIn = String(reservation.check_in_date || '').slice(0, 10);
+    const checkOut = String(reservation.check_out_date || '').slice(0, 10);
+    const d1 = new Date(checkIn + 'T00:00:00');
+    const d2 = new Date(checkOut + 'T00:00:00');
+    const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 3600 * 24)));
+    const rateVal = Number(reservation.rate) || 0;
+    const taxableVal = Number(reservation.taxable_amount) || (rateVal * nights);
+    const gstVal = Number(reservation.gst_amount) || 0;
+    const totalVal = Number(reservation.invoice_total) || (taxableVal + gstVal);
+    const advanceVal = Number(reservation.advance_paid) || 0;
+    const dueVal = Math.max(0, totalVal - advanceVal);
+
+    let emailContent;
+    if (isOta) {
+      emailContent = buildOtaOwnerConfirmationEmail({
+        hotelName,
+        reservationId: id,
+        confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+        otaBookingId: recipientResolution.otaBookingId || reservation.remarks || '',
+        bookingSource: recipientResolution.sourceName || reservation.source_name || 'OTA',
+        guestName: reservation.guest_name || 'Guest',
+        guestPhone: reservation.guest_phone || '',
+        checkIn,
+        checkOut,
+        nights,
+        roomCategory: reservation.rate_plan || reservation.room_category || 'Standard',
+        roomNo: reservation.room_no,
+        ratePlan: reservation.rate_plan || 'Standard',
+        totalAmount: totalVal,
+        advancePaid: advanceVal,
+        balanceDue: dueVal,
+        paymentStatus: dueVal === 0 ? 'Paid' : 'Pending',
+        specialRequests: reservation.remarks || '',
+        pdfFilename: targetDoc.file_name,
+        version: targetDoc.version || 1,
+      });
+    } else {
+      emailContent = buildCustomerConfirmationEmail({
+        hotelName,
+        hotelPhone,
+        hotelEmail,
+        hotelAddress,
+        reservationId: id,
+        confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+        bookingDate: reservation.created_at || new Date().toISOString(),
+        bookingSource: reservation.source_name || reservation.source_category || 'Walk-in',
+        guestName: reservation.guest_name || 'Guest',
+        guestPhone: reservation.guest_phone || '',
+        guestEmail: targetEmail,
+        checkIn,
+        checkOut,
+        nights,
+        roomCategory: reservation.rate_plan || reservation.room_category || 'Standard',
+        roomsCount: 1,
+        roomNo: reservation.room_no,
+        mealPlan: reservation.meal_plan || 'EP',
+        ratePlan: reservation.rate_plan || 'Standard',
+        totalAmount: totalVal,
+        advancePaid: advanceVal,
+        balanceDue: dueVal,
+        paymentStatus: dueVal === 0 ? 'Paid' : 'Pending',
+        pdfFilename: targetDoc.file_name,
+        version: targetDoc.version || 1,
+      });
+    }
+
+    // 5. Send email via SMTP with attached PDF
+    const sendResult = await sendEmail({
+      to: targetEmail,
+      subject: emailContent.subject,
+      html: emailContent.html,
+      text: emailContent.text,
+      attachments: [
+        {
+          filename: targetDoc.file_name,
+          content: pdfBuffer,
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+
+    if (sendResult.success) {
+      await updateDocumentDeliveryStatus(hotelId, id, targetDoc.version, { emailStatus: DELIVERY_STATUS.SENT });
+      return res.json({
+        success: true,
+        message: `Confirmation email sent to ${targetEmail}.`,
+        messageId: sendResult.messageId,
+      });
+    } else {
+      await updateDocumentDeliveryStatus(hotelId, id, targetDoc.version, {
+        emailStatus: DELIVERY_STATUS.FAILED,
+        errorDetails: sendResult.errorCode || sendResult.message,
+      });
+      return res.status(502).json({
+        success: false,
+        code: sendResult.errorCode || 'EMAIL_SEND_FAILED',
+        message: sendResult.message || 'Failed to send confirmation email.',
+      });
+    }
+  } catch (err) {
+    console.error('Error sending confirmation email:', err);
+    res.status(500).json({ success: false, code: 'EMAIL_SEND_FAILED', message: err.message });
+  }
+});
+
+// ─── POST /api/reservations/:id/confirmation/send-whatsapp ───────────────────
+router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    const { id } = req.params;
+    const { phoneNumber } = req.body;
+
+    // 1. Fetch reservation
+    const { data: reservation, error: resErr } = await supabaseServiceRole
+      .from('reservations')
+      .select('*')
+      .eq('id', id)
+      .eq('hotel_id', hotelId)
+      .maybeSingle();
+
+    if (resErr || !reservation) {
+      return res.status(404).json({ success: false, code: 'RESERVATION_NOT_FOUND', message: 'Reservation not found.' });
+    }
+
+    // 2. Resolve recipient phone
+    let targetPhone = phoneNumber;
+    const hotelObj = (await supabaseServiceRole.from('hotels').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const settingsObj = (await supabaseServiceRole.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle()).data || {};
+    const hotelName = settingsObj.hotel_name || hotelObj.hotel_name || 'Hotel Mantri';
+
+    if (!targetPhone) {
+      if (reservation.guest_phone) {
+        targetPhone = reservation.guest_phone;
+      } else {
+        const ownerWhatsApp = await resolveHotelOwnerWhatsApp(hotelId);
+        if (ownerWhatsApp.valid) {
+          targetPhone = ownerWhatsApp.phone;
+        }
+      }
+    }
+
+    const norm = normalizeWhatsAppPhone(targetPhone);
+    if (!norm.valid) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_PHONE',
+        message: norm.error || 'No valid recipient WhatsApp phone number available.',
+      });
+    }
+    targetPhone = norm.normalized;
+
+    const checkIn = String(reservation.check_in_date || '').slice(0, 10);
+    const checkOut = String(reservation.check_out_date || '').slice(0, 10);
+    const d1 = new Date(checkIn + 'T00:00:00');
+    const d2 = new Date(checkOut + 'T00:00:00');
+    const nights = Math.max(1, Math.round((d2 - d1) / (1000 * 3600 * 24)));
+    const totalVal = Number(reservation.invoice_total) || (Number(reservation.rate || 0) * nights);
+    const advanceVal = Number(reservation.advance_paid) || 0;
+    const dueVal = Math.max(0, totalVal - advanceVal);
+
+    // 3. Ensure confirmation PDF is generated and persistently stored
+    let targetDoc = null;
+    try {
+      const pdfGenResult = await generateAndStoreReservationConfirmation({
+        hotelId,
+        reservationId: id,
+        reservation,
+      });
+      targetDoc = pdfGenResult?.document;
+    } catch (pdfErr) {
+      console.warn('[CONFIRMATION_WHATSAPP] Non-fatal PDF generation error:', pdfErr.message);
+    }
+
+    const protocol = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = process.env.APP_URL || process.env.PUBLIC_URL || `${protocol}://${host}`;
+    const pdfUrl = `${baseUrl}/api/reservations/${id}/confirmation/pdf`;
+    const fileName = targetDoc?.file_name || `Hotel-Mantri-Reservation-HM-${id.slice(0, 8).toUpperCase()}.pdf`;
+
+    let waText = buildReservationConfirmationWhatsAppText({
+      hotelName,
+      reservationId: id,
+      confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      otaBookingId: reservation.remarks || '',
+      bookingSource: reservation.source_name || reservation.source_category || 'Direct',
+      guestName: reservation.guest_name || 'Guest',
+      checkIn,
+      checkOut,
+      nights,
+      roomCategory: reservation.rate_plan || reservation.room_category || 'Standard',
+      roomNo: reservation.room_no,
+      totalAmount: totalVal,
+      advancePaid: advanceVal,
+      balanceDue: dueVal,
+    });
+
+    // Append PDF download link to the text
+    waText = `${waText}\n\n📄 *Official PDF:* ${pdfUrl}`;
+
+    const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);
+
+    const roomInfo = `${reservation.rate_plan || reservation.room_category || 'Standard'}${
+      reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${reservation.room_no})` : ''
+    }`;
+
+    const metaTemplate = buildMetaBookingConfirmationTemplate({
+      guestName: reservation.guest_name || 'Guest',
+      hotelName,
+      bookingId: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      confirmationNumber: `HM-RES-${id.slice(0, 8).toUpperCase()}`,
+      roomNo: reservation.room_no && reservation.room_no.toLowerCase() !== 'unassigned' ? reservation.room_no : 'Unassigned',
+      roomDetails: roomInfo,
+      checkIn: formatDateReadable(checkIn),
+      checkOut: formatDateReadable(checkOut),
+      totalAmount: totalVal,
+      invoiceUrl: pdfUrl || '—',
+      documentUrl: pdfUrl || null,
+      documentFilename: fileName,
+    });
+
+    // Send via Whinta provider with PDF attachment
+    const sendResult = await sendWhatsAppMessage({
+      to: targetPhone,
+      text: waText,
+      mediaUrl: pdfUrl,
+      fileName,
+      caption: waText,
+      mediaType: 'document',
+      templateName: metaTemplate.templateName,
+      templateComponents: metaTemplate.templateComponents,
+      templateLanguage: metaTemplate.templateLanguage,
+    });
+
+    // Update document delivery status if document exists
+    const docs = await getReservationDocuments(hotelId, id);
+    const latestVersion = docs && docs.length > 0 ? docs[0].version : 1;
+    if (sendResult.success) {
+      await updateDocumentDeliveryStatus(hotelId, id, latestVersion, { whatsappStatus: DELIVERY_STATUS.SENT });
+      return res.json({
+        success: true,
+        message: 'WhatsApp confirmation sent successfully.',
+        messageId: sendResult.messageId,
+        whatsappDirectUrl: directUrl,
+      });
+    } else {
+      const isNotConfigured = sendResult.status === 'provider_not_configured';
+      await updateDocumentDeliveryStatus(hotelId, id, latestVersion, {
+        whatsappStatus: isNotConfigured ? DELIVERY_STATUS.NOT_CONFIGURED : DELIVERY_STATUS.FAILED,
+        errorDetails: sendResult.message || sendResult.errorCode,
+      });
+      return res.json({
+        success: false,
+        code: sendResult.errorCode,
+        message: sendResult.message,
+        whatsappDirectUrl: directUrl,
+      });
+    }
+  } catch (err) {
+    console.error('Error sending confirmation WhatsApp:', err);
+    res.status(500).json({ success: false, code: 'WHATSAPP_SEND_FAILED', message: err.message });
+  }
+});
+
+export default router;

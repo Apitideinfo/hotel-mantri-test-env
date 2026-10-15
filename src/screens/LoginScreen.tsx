@@ -70,6 +70,30 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onAuthSuccess: _onAuth
           error={error}
           setError={setError}
         />
+
+        {/* Public Compliance Links */}
+        <div className="mt-4 flex items-center justify-center gap-4 text-[11px] text-slate-400 font-medium">
+          <a
+            href="/privacy-policy"
+            className="hover:text-white transition-colors underline-offset-2 hover:underline"
+          >
+            Privacy Policy
+          </a>
+          <span className="text-slate-600">•</span>
+          <a
+            href="/data-deletion"
+            className="hover:text-white transition-colors underline-offset-2 hover:underline"
+          >
+            Data Deletion
+          </a>
+          <span className="text-slate-600">•</span>
+          <a
+            href="/terms"
+            className="hover:text-white transition-colors underline-offset-2 hover:underline"
+          >
+            Terms of Service
+          </a>
+        </div>
       </div>
     </div>
   );

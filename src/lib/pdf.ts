@@ -237,7 +237,7 @@ export async function buildDailyMISPDF(opts: DailyMISOpts): Promise<jsPDF> {
   let y = 36;
 
   const revpar = totalRooms > 0 ? toNum(r.room_sale_amount) / totalRooms : 0;
-  const cashExpenses = toNum(r.housekeeping_supply) + toNum(r.other_expense) + toNum(r.maintenance_bill) + toNum(r.finance_expenses);
+  const cashExpenses = toNum(r.housekeeping_supply) + toNum(r.other_expense) + toNum(r.maintenance_bill) + toNum(r.cash_expenses ?? r.finance_expenses);
   const cashCollection = toNum(r.pay_cash);
   const openingCash = toNum(r.cash_closing) - cashCollection + cashExpenses + toNum(r.salary_advance) + toNum(r.cash_handover_md) + toNum(r.bank_cash_deposit);
   const tomorrowOpening = toNum(r.cash_closing);
@@ -292,9 +292,19 @@ export async function buildDailyMISPDF(opts: DailyMISOpts): Promise<jsPDF> {
   y = kvTable(doc, expRows, y, false);
 
   // New page if near bottom
-  if (y > 220) { doc.addPage(); y = 34; }
+  if (y > 200) { doc.addPage(); y = 34; }
 
-  y = sectionHead(doc, 'Cash Summary', y, false);
+  const totalColl = toNum(r.pay_cash) + toNum(r.pay_bank) + toNum(r.pay_upi) + toNum(r.pay_card);
+  y = sectionHead(doc, 'Collection Summary', y, false);
+  y = kvTable(doc, [
+    ['Cash Collection',         rs(r.pay_cash)],
+    ['Bank Transfer / Direct',  rs(r.pay_bank)],
+    ['UPI Digital',             rs(r.pay_upi)],
+    ['Card POS',                rs(r.pay_card)],
+    ['Total Collection',        rs(totalColl)],
+  ], y, false);
+
+  y = sectionHead(doc, 'Cash Drawer Summary', y, false);
   y = kvTable(doc, [
     ['Opening Cash',            rs(openingCash)],
     ['+ Cash Collection',       rs(cashCollection)],
@@ -304,7 +314,6 @@ export async function buildDailyMISPDF(opts: DailyMISOpts): Promise<jsPDF> {
     ['- Bank Cash Deposit',     rs(r.bank_cash_deposit)],
     ['= Cash Closing',          rs(toNum(r.cash_closing))],
     ['Tomorrow Opening Cash',   rs(tomorrowOpening)],
-    ['Bank Collection',         rs(r.bank)],
   ], y, false);
 
   y = sectionHead(doc, 'Tomorrow Status', y, false);
@@ -494,26 +503,26 @@ export async function buildRoomChartPDF(opts: RoomChartPDFOpts): Promise<jsPDF> 
   py = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
 
   // ── Section 3: Daily Summary ─────────────────────────────────────────────
-  const roomRevenue = agg.roomRevenue;
+  const roomRevenueBeforeGst = agg.taxableRevenue > 0 ? agg.taxableRevenue : (agg.roomRevenue - agg.gstCollected);
+  const roomRevenueInclGst = roomRevenueBeforeGst + agg.gstCollected;
   const otherRev = revenueTotal + (derivedReport ? toNum(derivedReport.kitchen) + toNum(derivedReport.other_income) : 0);
-  const grossRevenue = roomRevenue + otherRev;
+  const grossRevenue = roomRevenueInclGst + otherRev;
   const totalExp = expenseTotal + (derivedReport ? toNum(derivedReport.housekeeping_supply) + toNum(derivedReport.other_expense) + toNum(derivedReport.maintenance_bill) : 0);
   const netOp = grossRevenue - totalExp;
 
   py = sectionHead(doc, 'Daily Summary', py, false);
   const summaryRows: [string, string, boolean][] = [
-    ['Room Revenue (Before GST)', rs(agg.taxableRevenue || roomRevenue), false],
+    ['Room Revenue (Before GST)', rs(roomRevenueBeforeGst), false],
     ['+ GST Collected', rs(agg.gstCollected), false],
-    ['= Invoice Total (incl. GST)', rs((agg.taxableRevenue || roomRevenue) + agg.gstCollected), true],
-    ['= Room Revenue (After GST)', rs((agg.taxableRevenue || roomRevenue) + agg.gstCollected), false],
+    ['= Room Revenue (incl. GST)', rs(roomRevenueInclGst), true],
     ['+ Other Revenue', rs(otherRev), false],
-    ['= Gross Revenue', rs(grossRevenue + agg.gstCollected), true],
+    ['= Gross Revenue', rs(grossRevenue), true],
     ['- Total Expenses', rs(totalExp), false],
-    ['= Net Operating Profit', rs(netOp + agg.gstCollected), true],
+    ['= Net Operating Profit', rs(netOp), true],
   ];
   if (derivedReport) {
     const dr = derivedReport;
-    const drCashExp = toNum(dr.housekeeping_supply) + toNum(dr.other_expense) + toNum(dr.maintenance_bill) + toNum(dr.finance_expenses);
+    const drCashExp = toNum(dr.housekeeping_supply) + toNum(dr.other_expense) + toNum(dr.maintenance_bill) + toNum(dr.cash_expenses ?? dr.finance_expenses);
     const drCashCol = toNum(dr.pay_cash);
     const drOpenCash = toNum(dr.cash_closing) - drCashCol + drCashExp + toNum(dr.salary_advance) + toNum(dr.cash_handover_md) + toNum(dr.bank_cash_deposit);
     summaryRows.push(['Opening Cash', rs(drOpenCash), false]);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, MessageCircle, Pencil, BedDouble, Info, FileText, Calendar, TrendingUp, DollarSign, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, MessageCircle, Pencil, BedDouble, Info, FileText, Calendar, TrendingUp, IndianRupee, ShieldCheck } from 'lucide-react';
 import type { HotelSettings, DerivedReport } from '@/lib/types';
 import { getSettings, getDerivedReport, getDerivedReportsForMonth } from '@/lib/api';
 import { calcArr, calcOcc, calcTotalRevenue, calcTotalExpenses, calcClosingRooms, aggregateDerived, fmtMoney, fmtInt, toNum } from '@/lib/calc';
@@ -184,7 +184,7 @@ export const ReportView = ({ date, onBack, onNavigate }: ReportViewProps) => {
           </ReportCard>
 
           {/* Expenses & Cash Flow Audit */}
-          <ReportCard title="Expenses & Cash Audit" icon={<DollarSign className="w-4 h-4 text-amber-600" />}>
+          <ReportCard title="Expenses & Cash Audit" icon={<IndianRupee className="w-4 h-4 text-amber-600" />}>
             <ReportRow label="Housekeeping Supplies" value={`₹${fmtMoney(activeReport.housekeeping_supply)}`} />
             <ReportRow label="Maintenance & Utilities" value={`₹${fmtMoney(activeReport.maintenance_bill)}`} />
             <ReportRow label="Other Operating Expenses" value={`₹${fmtMoney(activeReport.other_expense)}`} />

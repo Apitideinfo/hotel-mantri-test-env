@@ -1,5 +1,18 @@
 export type SourceCategory = 'OTA' | 'Direct/Walking' | 'Corporate/Agent' | 'Phonebook';
 export type PayMode = 'Cash' | 'Bank';
+
+/**
+ * Authoritative PayMode normalizer for room_chart_entries.
+ * room_chart_entries.pay_mode has a database check constraint: CHECK (pay_mode IN ('Cash','Bank')).
+ * Cash transactions are recorded as 'Cash'. All non-cash payment channels
+ * (OTA payouts, UPI, Card, NetBanking, Cheque, Bank Transfer) route to 'Bank'.
+ */
+export const normalizePayMode = (mode?: string | null): PayMode => {
+  if (!mode) return 'Cash';
+  const m = mode.trim().toLowerCase();
+  if (m === 'cash') return 'Cash';
+  return 'Bank';
+};
 export type MealPlan = 'EP' | 'CP' | 'MAP' | 'AP';
 export type GstMode = 'Inclusive' | 'Exclusive';
 export type GstType = 'No Scope' | 'Inclusive' | 'Exclusive';
@@ -85,6 +98,11 @@ export interface HotelSettings {
   default_gst_slab: GstSlab;
   // POS
   restaurant_pos_enabled: boolean;
+  // Dynamic Hotel Branding & Confirmation Settings
+  check_in_time?: string;
+  check_out_time?: string;
+  cancellation_policy?: string;
+  important_notes?: string;
 }
 
 // ── POS Menu Management types ──
@@ -351,7 +369,7 @@ export const groupRoomsByCategory = <T extends { category_id: string | null }>(
 export type HousekeepingStatus =
   | 'Vacant Clean' | 'Vacant Dirty' | 'Occupied'
   | 'Occupied Clean' | 'Occupied Service Due'
-  | 'Cleaning In Progress' | 'Ready for Inspection'
+  | 'Cleaning In Progress' | 'Ready for Inspection' | 'Inspection'
   | 'Inspected / Ready' | 'Out Of Order' | 'Blocked';
 
 export type CleaningPriority =
@@ -369,6 +387,7 @@ export interface Room {
   is_active: boolean;
   sort_order: number;
   created_at: string;
+  room_status?: string;
   housekeeping_status: HousekeepingStatus;
   housekeeping_note: string;
   housekeeping_updated_at: string | null;
@@ -508,6 +527,7 @@ export interface DerivedReport {
   // Finance Management expenses (from expense_entries table)
   finance_expenses: number;
   finance_expense_by_category: { category: string; amount: number }[];
+  cash_expenses?: number;
   // Other Revenue entries (from daily_revenue_entries table)
   other_revenue_entries: number;
   other_revenue_by_category: { category: string; amount: number }[];

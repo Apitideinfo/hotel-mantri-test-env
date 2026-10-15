@@ -1,8 +1,47 @@
 {
   "version": 2,
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/whinta-daily-report",
+      "schedule": "30 15 * * *"
+    },
+    {
+      "path": "/api/notifications/whatsapp/cron?type=morning",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/notifications/whatsapp/cron?type=evening",
+      "schedule": "0 22 * * *"
+    }
+  ],
   "rewrites": [
     {
+      "source": "/api",
+      "destination": "/api/index.js"
+    },
+    {
       "source": "/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/Test/api",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/Test/api/(.*)",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/test/api",
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/test/api/(.*)",
       "destination": "/api/index.js"
     },
     {

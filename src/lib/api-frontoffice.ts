@@ -1,12 +1,15 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, saveRoomChartRow, getCompanySources, classifyCompany } from './api';
-import { updateReservationStatus } from './api-reservations';
-import { toNum, calcGstFull, calcStayNights } from './calc';
+import { updateReservationStatus, checkRoomAvailability } from './api-reservations';
+import { dispatchChannelEvent } from './api-channel';
+import { toNum, calcGstFull, calcStayNights, isStayOverlapping } from './calc';
+import { isValidEmail } from './types-reservations';
 import type {
   RoomChartEntry, RoomChartEntryInput, Room, HousekeepingStatus,
   BookingTimelineEvent, TimelineEventType, FolioCharge, FolioChargeInput,
   RoomShift, SourceCategory, PayMode, GstType, GstSlab, MealPlan,
 } from './types';
+import { normalizePayMode } from './types';
 
 // ── Timeline ──
 
@@ -82,30 +85,94 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
   const hotelId = getCurrentHotelId();
   const sources = await getCompanySources();
 
-  // Prevent double check-in: check if entry already exists for this room+date
+  // 1. Idempotency guard: If reservation is already checked in, return existing record
+  if (params.reservationId) {
+    const { data: currentRes } = await supabase
+      .from('reservations')
+      .select('id, status, room_chart_entry_id')
+      .eq('id', params.reservationId)
+      .maybeSingle();
+
+    if (currentRes?.status === 'checked_in' && currentRes.room_chart_entry_id) {
+      const { data: existingEntry } = await supabase
+        .from('room_chart_entries')
+        .select('*')
+        .eq('id', currentRes.room_chart_entry_id)
+        .maybeSingle();
+      if (existingEntry) return existingEntry as RoomChartEntry;
+    }
+
+    const { data: existingByRes } = await supabase
+      .from('room_chart_entries')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('reservation_id', params.reservationId)
+      .is('checked_out_at', null)
+      .maybeSingle();
+    if (existingByRes) return existingByRes as RoomChartEntry;
+  }
+
+  // 2. Prevent duplicate active check-in for the same room on this date
   const { data: existing } = await supabase
     .from('room_chart_entries')
-    .select('id, checked_in_at')
+    .select('id, checked_in_at, reservation_id')
     .eq('hotel_id', hotelId)
     .eq('room_no', params.roomNo)
     .eq('report_date', params.checkIn)
+    .is('checked_out_at', null)
     .maybeSingle();
+
   if (existing && (existing as { checked_in_at?: string }).checked_in_at) {
-    throw new Error('Guest is already checked in for this date.');
+    if (params.reservationId && (existing as any).reservation_id === params.reservationId) {
+      const { data: fullEntry } = await supabase
+        .from('room_chart_entries')
+        .select('*')
+        .eq('id', existing.id)
+        .single();
+      if (fullEntry) return fullEntry as RoomChartEntry;
+    }
+    throw new Error(`Room ${params.roomNo} is already occupied for this date.`);
   }
 
   const nights = calcStayNights(params.checkIn, params.checkOut);
   const subtotal = params.rate * nights;
   const discount = toNum(params.discount);
   const afterDiscount = Math.max(0, subtotal - discount);
+  const validGstType = params.gstType ?? 'No Scope';
+  const validGstSlab = ([0, 5, 12, 18].includes(toNum(params.gstSlab) as any) ? toNum(params.gstSlab) : 0) as GstSlab;
   const { taxable, gst, invoiceTotal } = calcGstFull(
     afterDiscount,
-    params.gstType ?? 'No Scope',
-    params.gstSlab ?? 0,
+    validGstType,
+    validGstSlab,
   );
 
-  const totalReceived = toNum(params.payCash) + toNum(params.payUpi) + toNum(params.payCard) + toNum(params.payBank);
+  const normalizedPayMode = normalizePayMode(params.paymentMode);
+  const advPaid = toNum(params.advancePaid);
+  const cashPaid = toNum(params.payCash);
+  const upiPaid = toNum(params.payUpi);
+  const cardPaid = toNum(params.payCard);
+  const bankPaid = toNum(params.payBank);
+  const sumSplit = cashPaid + upiPaid + cardPaid + bankPaid;
+  const totalReceived = Math.max(advPaid, sumSplit);
   const balance = Math.max(0, invoiceTotal - totalReceived);
+
+  // If advance was paid via OTA/Bank/Cash and split buckets are unallocated, populate the corresponding bucket
+  let finalCash = cashPaid;
+  let finalBank = bankPaid;
+  let finalUpi = upiPaid;
+  let finalCard = cardPaid;
+  if (advPaid > 0 && sumSplit === 0) {
+    const rawMode = (params.paymentMode || '').trim().toLowerCase();
+    if (rawMode === 'cash') {
+      finalCash = advPaid;
+    } else if (rawMode.includes('upi')) {
+      finalUpi = advPaid;
+    } else if (rawMode.includes('card')) {
+      finalCard = advPaid;
+    } else {
+      finalBank = advPaid;
+    }
+  }
 
   let guestId: string | null = null;
   const cleanName = (params.guestName ?? '').trim();
@@ -166,6 +233,42 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     }
   }
 
+  const validMealPlan = (['EP', 'CP', 'MAP', 'AP'].includes(params.mealPlan as any) ? params.mealPlan : 'EP') as MealPlan;
+
+  // Resolve room category from room inventory or reservation
+  let resolvedRoomCategory = (params as any).roomCategory || 'Standard';
+  if (params.roomNo) {
+    try {
+      const { data: rm } = await supabase
+        .from('rooms')
+        .select('category_id, room_categories(name)')
+        .eq('hotel_id', hotelId)
+        .eq('room_no', params.roomNo)
+        .maybeSingle();
+      if ((rm as any)?.room_categories?.name) {
+        resolvedRoomCategory = (rm as any).room_categories.name;
+      } else if (rm?.category_id) {
+        const { data: cat } = await supabase
+          .from('room_categories')
+          .select('name')
+          .eq('id', rm.category_id)
+          .maybeSingle();
+        if (cat?.name) resolvedRoomCategory = cat.name;
+      }
+    } catch { /* fallback */ }
+  }
+  if (resolvedRoomCategory === 'Standard' && params.reservationId) {
+    try {
+      const { data: resv } = await supabase
+        .from('reservations')
+        .select('room_category, rate_plan')
+        .eq('id', params.reservationId)
+        .maybeSingle();
+      if (resv?.room_category) resolvedRoomCategory = resv.room_category;
+      else if (resv?.rate_plan && resv.rate_plan !== 'Standard') resolvedRoomCategory = resv.rate_plan;
+    } catch { /* fallback */ }
+  }
+
   const entryInput: RoomChartEntryInput = {
     report_date: params.checkIn,
     room_no: params.roomNo,
@@ -177,13 +280,13 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     total: subtotal,
     company: params.sourceName ?? '',
     source_category: params.sourceCategory ?? classifyCompany(params.sourceName ?? '', sources),
-    pay_mode: params.paymentMode ?? 'Cash',
+    pay_mode: normalizedPayMode,
     description: '',
     is_complimentary: false,
-    meal_plan: params.mealPlan ?? 'EP',
+    meal_plan: validMealPlan,
     gst_mode: 'Exclusive',
-    gst_type: params.gstType ?? 'No Scope',
-    gst_slab: params.gstSlab ?? 0,
+    gst_type: validGstType,
+    gst_slab: validGstSlab,
     gst_amount: gst,
     taxable_amount: taxable,
     invoice_total: invoiceTotal,
@@ -191,11 +294,11 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     remarks: params.remarks ?? '',
     created_by: params.performedBy ?? '',
     business_date: params.checkIn,
-    room_category: 'Standard',
-    pay_cash: params.payCash ?? 0,
-    pay_upi: params.payUpi ?? 0,
-    pay_card: params.payCard ?? 0,
-    pay_bank: params.payBank ?? 0,
+    room_category: resolvedRoomCategory,
+    pay_cash: finalCash,
+    pay_upi: finalUpi,
+    pay_card: finalCard,
+    pay_bank: finalBank,
     pay_advance: totalReceived,
     pay_balance: balance,
     id_proof_type: params.idProofType ?? '',
@@ -209,26 +312,69 @@ export const checkInGuest = async (params: CheckInParams): Promise<RoomChartEntr
     guest_id: guestId,
   };
 
-  const saved = await saveRoomChartRow(entryInput, sources);
+  // Phase 7: Atomicity — insert room chart entry with rollback safety
+  let saved: RoomChartEntry;
+  try {
+    saved = await saveRoomChartRow(entryInput, sources);
+  } catch (err: any) {
+    console.error('[checkInGuest] Database error saving room_chart_entry:', {
+      code: err?.code,
+      message: err?.message,
+      details: err?.details,
+      hint: err?.hint,
+    });
+    throw new Error('Unable to complete check-in because the room occupancy record could not be created. No changes were committed.');
+  }
 
-  // Update room housekeeping status to Occupied
-  await updateRoomHousekeeping(params.roomNo, 'Occupied');
+  try {
+    // Update room housekeeping status to Occupied
+    await updateRoomHousekeeping(params.roomNo, 'Occupied');
 
-  // Update reservation status if from reservation
-  if (params.reservationId) {
-    await updateReservationStatus(params.reservationId, 'checked_in', saved.id);
+    // Update reservation status if from reservation
+    if (params.reservationId) {
+      await updateReservationStatus(params.reservationId, 'checked_in', saved.id);
+    }
+  } catch (syncErr: any) {
+    // Atomicity rollback: delete created room chart row if downstream updates fail
+    console.error('[checkInGuest] Downstream update failed, rolling back room_chart_entry:', syncErr);
+    try {
+      await supabase.from('room_chart_entries').delete().eq('id', saved.id);
+    } catch (rbErr) {
+      console.error('[checkInGuest] Rollback failed:', rbErr);
+    }
+    throw new Error('Unable to complete check-in due to a state synchronization error. The operation was safely rolled back.');
   }
 
   // Add timeline event
-  await addTimelineEvent({
-    entryId: saved.id,
-    reservationId: params.reservationId,
-    eventType: 'check_in',
-    description: `Check-in: ${params.guestName} → Room ${params.roomNo}`,
-    amount: totalReceived,
-    performedBy: params.performedBy,
-    eventData: { room_no: params.roomNo, arrival_time: params.arrivalTime },
-  });
+  try {
+    await addTimelineEvent({
+      entryId: saved.id,
+      reservationId: params.reservationId,
+      eventType: 'check_in',
+      description: `Check-in: ${params.guestName} → Room ${params.roomNo}`,
+      amount: totalReceived,
+      performedBy: params.performedBy,
+      eventData: {
+        room_no: params.roomNo,
+        arrival_time: params.arrivalTime,
+        payment_date: params.checkIn,
+        business_date: params.checkIn,
+        payment_method: normalizedPayMode,
+        pay_cash: finalCash,
+        pay_upi: finalUpi,
+        pay_card: finalCard,
+        pay_bank: finalBank,
+      },
+    });
+  } catch (timelineErr) {
+    console.warn('[checkInGuest] Timeline recording warning:', timelineErr);
+  }
+
+  dispatchChannelEvent('CHECK_IN', {
+    startDate: params.checkIn,
+    endDate: params.checkOut,
+    room_no: params.roomNo,
+  }).catch((e) => console.warn('[checkInGuest] Auto-sync warning:', e));
 
   return saved;
 };
@@ -287,13 +433,41 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
       })
       .eq('hotel_id', hotelId)
       .eq('room_no', params.roomNo);
+    const checkoutDate = (new Date()).toISOString().slice(0, 10);
+    const checkoutAmount = toNum(params.collectCash) + toNum(params.collectUpi) + toNum(params.collectCard) + toNum(params.collectBank);
     await addTimelineEvent({
       reservationId: res.id,
       eventType: 'checkout',
       description: `Check-out: ${res.guest_name} from Room ${params.roomNo}`,
-      amount: toNum(params.collectCash) + toNum(params.collectUpi) + toNum(params.collectCard) + toNum(params.collectBank),
+      amount: checkoutAmount,
       performedBy: params.performedBy,
+      eventData: {
+        room_no: params.roomNo,
+        payment_date: checkoutDate,
+        business_date: checkoutDate,
+        payment_method: toNum(params.collectCash) > 0 ? 'Cash' : toNum(params.collectUpi) > 0 ? 'UPI' : toNum(params.collectCard) > 0 ? 'Card' : 'Bank',
+        pay_cash: params.collectCash ?? 0,
+        pay_upi: params.collectUpi ?? 0,
+        pay_card: params.collectCard ?? 0,
+        pay_bank: params.collectBank ?? 0,
+      },
     });
+    let checkoutRoomCategory = (res as any)?.room_category || res.rate_plan || 'Standard';
+    if (checkoutRoomCategory === 'Standard' && (params.roomNo || res.room_no)) {
+      try {
+        const targetRoomNo = params.roomNo || res.room_no;
+        const { data: rm } = await supabase
+          .from('rooms')
+          .select('category_id, room_categories(name)')
+          .eq('hotel_id', hotelId)
+          .eq('room_no', targetRoomNo)
+          .maybeSingle();
+        if ((rm as any)?.room_categories?.name) {
+          checkoutRoomCategory = (rm as any).room_categories.name;
+        }
+      } catch { /* fallback */ }
+    }
+
     return {
       id: res.id,
       hotel_id: res.hotel_id,
@@ -321,7 +495,7 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
       remarks: res.remarks ?? '',
       created_by: res.created_by ?? '',
       business_date: res.check_in_date,
-      room_category: 'Standard',
+      room_category: checkoutRoomCategory,
       pay_cash: toNum(res.pay_cash) + toNum(params.collectCash),
       pay_upi: toNum(res.pay_upi) + toNum(params.collectUpi),
       pay_card: toNum(res.pay_card) + toNum(params.collectCard),
@@ -401,14 +575,31 @@ export const checkOutGuest = async (params: CheckOutParams): Promise<RoomChartEn
   }
 
   // Add timeline event
+  const checkoutDate = (new Date()).toISOString().slice(0, 10);
   await addTimelineEvent({
     entryId: params.entryId,
     eventType: 'checkout',
     description: `Check-out: ${entry.guest_name} from Room ${params.roomNo}`,
     amount: additionalPayment,
     performedBy: params.performedBy,
-    eventData: { balance_remaining: Math.max(0, grandTotal - (totalReceived + additionalPayment)) },
+    eventData: {
+      room_no: params.roomNo,
+      balance_remaining: Math.max(0, grandTotal - (totalReceived + additionalPayment)),
+      payment_date: checkoutDate,
+      business_date: checkoutDate,
+      payment_method: toNum(params.collectCash) > 0 ? 'Cash' : toNum(params.collectUpi) > 0 ? 'UPI' : toNum(params.collectCard) > 0 ? 'Card' : 'Bank',
+      pay_cash: params.collectCash ?? 0,
+      pay_upi: params.collectUpi ?? 0,
+      pay_card: params.collectCard ?? 0,
+      pay_bank: params.collectBank ?? 0,
+    },
   });
+
+  dispatchChannelEvent('CHECK_OUT', {
+    startDate: entry.arrival || entry.report_date,
+    endDate: entry.departure,
+    room_no: params.roomNo,
+  }).catch(e => console.warn('[checkOutGuest] Auto-sync warning:', e));
 
   return updated as RoomChartEntry;
 };
@@ -424,16 +615,39 @@ export const shiftRoom = async (params: {
 }): Promise<RoomChartEntry> => {
   const hotelId = getCurrentHotelId();
 
-  // Verify target room is not occupied
-  const { data: existing } = await supabase
+  // Fetch current stay dates and linked reservation
+  const { data: currentEntry } = await supabase
     .from('room_chart_entries')
-    .select('id')
-    .eq('hotel_id', hotelId)
-    .eq('room_no', params.toRoom)
-    .is('checked_out_at', null)
+    .select('arrival, departure, report_date, reservation_id')
+    .eq('id', params.entryId)
     .maybeSingle();
-  if (existing) {
-    throw new Error('Target room is already occupied.');
+
+  const stayIn = (currentEntry?.arrival || currentEntry?.report_date || '').slice(0, 10);
+  const stayOut = (currentEntry?.departure || '').slice(0, 10);
+
+  if (stayIn && stayOut) {
+    const isAvail = await checkRoomAvailability(
+      params.toRoom,
+      stayIn,
+      stayOut,
+      currentEntry?.reservation_id ? [params.entryId, currentEntry.reservation_id] : params.entryId
+    );
+    if (!isAvail) {
+      throw new Error(`Target room ${params.toRoom} is not available for this stay (${stayIn} to ${stayOut}).`);
+    }
+  } else {
+    // Verify target room is not occupied
+    const { data: existing } = await supabase
+      .from('room_chart_entries')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', params.toRoom)
+      .neq('id', params.entryId)
+      .is('checked_out_at', null)
+      .maybeSingle();
+    if (existing) {
+      throw new Error('Target room is already occupied.');
+    }
   }
 
   // Update entry with new room
@@ -444,6 +658,25 @@ export const shiftRoom = async (params: {
     .select('*')
     .single();
   if (error) throw error;
+
+  // Sync linked reservation room assignment
+  if (currentEntry?.reservation_id) {
+    const { data: targetRoomObj } = await supabase
+      .from('rooms')
+      .select('id')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', params.toRoom)
+      .maybeSingle();
+
+    await supabase
+      .from('reservations')
+      .update({
+        room_no: params.toRoom,
+        room_id: targetRoomObj?.id ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', currentEntry.reservation_id);
+  }
 
   // Update housekeeping: old room → Vacant Dirty, new room → Occupied
   await updateRoomHousekeeping(params.fromRoom, 'Vacant Dirty');
@@ -468,6 +701,13 @@ export const shiftRoom = async (params: {
     performedBy: params.performedBy,
     eventData: { from: params.fromRoom, to: params.toRoom, reason: params.reason },
   });
+
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: updated.arrival || updated.report_date,
+    endDate: updated.departure,
+    fromRoom: params.fromRoom,
+    toRoom: params.toRoom,
+  }).catch(e => console.warn('[shiftRoom] Auto-sync warning:', e));
 
   return updated as RoomChartEntry;
 };
@@ -495,34 +735,47 @@ export const extendStay = async (params: {
     throw new Error('New checkout date must be after the check-in date.');
   }
 
-  // Check room availability for extended period
-  const { data: overlap } = await supabase
+  // Check room availability for extended period (excluding this entry and its linked reservation)
+  const roomKey = entry.room_no.trim().toLowerCase();
+  const ci = (entry.arrival ?? entry.report_date).slice(0, 10);
+  const co = params.newCheckOut.slice(0, 10);
+
+  const { data: allActiveEntries } = await supabase
     .from('room_chart_entries')
-    .select('id')
+    .select('id, room_no, arrival, departure, report_date, reservation_id')
     .eq('hotel_id', hotelId)
-    .eq('room_no', entry.room_no)
     .neq('id', params.entryId)
-    .is('checked_out_at', null)
-    .or(`and(arrival.lte.${params.newCheckOut},departure.gte.${(entry.arrival ?? entry.report_date)})`)
-    .maybeSingle();
-  if (overlap) {
+    .is('checked_out_at', null);
+
+  const overlapEntry = (allActiveEntries ?? []).find(e => {
+    if ((e.room_no || '').trim().toLowerCase() !== roomKey) return false;
+    if (entry.reservation_id && e.reservation_id === entry.reservation_id) return false;
+    const eCi = (e.arrival ?? e.report_date ?? '').slice(0, 10);
+    const eCo = (e.departure ?? e.report_date ?? '').slice(0, 10);
+    return isStayOverlapping(ci, co, eCi, eCo);
+  });
+
+  if (overlapEntry) {
     throw new Error('Room is not available for the extended period (overlap detected).');
   }
 
   // Also check reservations
-  const { data: resOverlaps } = await supabase
+  const { data: allActiveRes } = await supabase
     .from('reservations')
-    .select('id, room_chart_entry_id')
+    .select('id, room_no, check_in_date, check_out_date, room_chart_entry_id')
     .eq('hotel_id', hotelId)
-    .eq('room_no', entry.room_no)
-    .in('status', ['confirmed', 'checked_in'])
-    .or(`and(check_in_date.lte.${params.newCheckOut},check_out_date.gte.${(entry.arrival ?? entry.report_date)})`);
+    .in('status', ['confirmed', 'checked_in']);
     
-  if (resOverlaps && resOverlaps.length > 0) {
-    const actualOverlap = resOverlaps.find(r => r.room_chart_entry_id !== params.entryId);
-    if (actualOverlap) {
-      throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
-    }
+  const overlapRes = (allActiveRes ?? []).find(r => {
+    if ((r.room_no || '').trim().toLowerCase() !== roomKey) return false;
+    if (r.id === entry.reservation_id || r.room_chart_entry_id === params.entryId) return false;
+    const rCi = (r.check_in_date ?? '').slice(0, 10);
+    const rCo = (r.check_out_date ?? '').slice(0, 10);
+    return isStayOverlapping(ci, co, rCi, rCo);
+  });
+
+  if (overlapRes) {
+    throw new Error('Room has a confirmed reservation that conflicts with the extended stay.');
   }
 
   // Recalculate billing
@@ -569,6 +822,12 @@ export const extendStay = async (params: {
     performedBy: params.performedBy,
     eventData: { new_checkout: params.newCheckOut, new_nights: newNights, new_total: invoiceTotal },
   });
+
+  dispatchChannelEvent('STAY_EXTENDED', {
+    startDate: saved.arrival || saved.report_date,
+    endDate: params.newCheckOut,
+    room_no: saved.room_no,
+  }).catch(e => console.warn('[extendStay] Auto-sync warning:', e));
 
   return updated as RoomChartEntry;
 };
@@ -624,10 +883,12 @@ export const updateRoomHousekeeping = async (
   note?: string,
 ): Promise<void> => {
   const hotelId = getCurrentHotelId();
+  const roomStatus = status === 'Occupied' ? 'Occupied' : (status.startsWith('Vacant') ? 'Vacant' : status);
   const { error } = await supabase
     .from('rooms')
     .update({
       housekeeping_status: status,
+      room_status: roomStatus,
       housekeeping_note: note ?? '',
       housekeeping_updated_at: new Date().toISOString(),
     })
@@ -650,6 +911,11 @@ export const getRoomShifts = async (entryId: string): Promise<RoomShift[]> => {
 
 export const validateCheckIn = (params: CheckInParams): string | null => {
   if (!params.guestName?.trim()) return 'Guest name is required.';
+  const cleanPhone = (params.phone || '').trim();
+  if (!cleanPhone) return 'Mobile number is required.';
+  const cleanEmail = (params.email || '').trim();
+  if (!cleanEmail) return 'Guest email is required.';
+  if (!isValidEmail(cleanEmail)) return 'Please enter a valid email address.';
   if (!params.roomNo?.trim()) return 'Room number is required.';
   if (!params.checkIn || !params.checkOut) return 'Check-in and check-out dates are required.';
   if (new Date(params.checkOut + 'T00:00:00') <= new Date(params.checkIn + 'T00:00:00')) {

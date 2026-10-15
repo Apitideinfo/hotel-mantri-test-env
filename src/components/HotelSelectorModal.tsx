@@ -13,11 +13,11 @@ export const HotelSelectorModal: React.FC<HotelSelectorModalProps> = ({
   onClose,
   isMandatory = false,
 }) => {
-  const { availableHotels, hotelId, setSelectedHotel, status } = useHotel();
+  const { availableHotels, hotelId, setSelectedHotel, status, isSuperAdmin } = useHotel();
   const [search, setSearch] = useState('');
   const [selectingId, setSelectingId] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  if (!isOpen || !isSuperAdmin) return null;
 
   const filtered = availableHotels.filter((h) => {
     const q = search.toLowerCase();

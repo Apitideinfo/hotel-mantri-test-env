@@ -1,6 +1,8 @@
 import { supabaseServiceRole } from '../../../supabaseClient.js';
 import dotenv from 'dotenv';
 import { executeInventoryPush } from '../../../routes/aiosell.js';
+import { checkRoomAvailability, normalizePhysicalRoom, withRoomLock } from '../../ReservationConflictService.js';
+import { autoAssignPhysicalRoom, resolveHotelRoomCategory, isAutoAssignEnabled, sanitizeReservationPayload } from '../../RoomAssignmentService.js';
 dotenv.config();
 
 export const getSupabase = () => supabaseServiceRole;
@@ -9,7 +11,7 @@ export const getSupabase = () => supabaseServiceRole;
  * Finds an available physical room for a given category and date range.
  * If all physical rooms in the category are occupied, returns room_no: 'Unassigned'.
  */
-export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkInDate, checkOutDate, excludeReservationId = null) => {
+export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkInDate, checkOutDate, excludeReservationId = null, excludeRoomIds = []) => {
   const supabase = getSupabase();
   if (!hotelId || !roomCategoryId || !checkInDate || !checkOutDate) {
     return { roomId: null, roomNo: 'Unassigned' };
@@ -19,7 +21,7 @@ export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkIn
     // 1. Fetch active physical rooms in this category
     const { data: physicalRooms, error: roomsErr } = await supabase
       .from('rooms')
-      .select('id, room_no')
+      .select('id, room_no, room_status, housekeeping_status, is_active')
       .eq('hotel_id', hotelId)
       .eq('category_id', roomCategoryId)
       .eq('is_active', true)
@@ -29,49 +31,37 @@ export const findAvailablePhysicalRoom = async (hotelId, roomCategoryId, checkIn
       return { roomId: null, roomNo: 'Unassigned' };
     }
 
-    // 2. Fetch occupied reservations in this date range
-    let resQuery = supabase
-      .from('reservations')
-      .select('id, room_id, room_no')
-      .eq('hotel_id', hotelId)
-      .in('status', ['confirmed', 'checked_in'])
-      .lt('check_in_date', checkOutDate)
-      .gt('check_out_date', checkInDate);
+    const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+    const eligibleRooms = physicalRooms.filter(r => !nonAssignable.has(String(r.room_status || '').toLowerCase()));
 
-    if (excludeReservationId) {
-      resQuery = resQuery.neq('id', excludeReservationId);
-    }
+    const excludeSet = excludeRoomIds instanceof Set ? excludeRoomIds : new Set(Array.isArray(excludeRoomIds) ? excludeRoomIds : []);
 
-    const { data: bookedReservations } = await resQuery;
-
-    // 3. Fetch occupied in-house room chart entries
-    const { data: occupiedEntries } = await supabase
-      .from('room_chart_entries')
-      .select('room_no')
-      .eq('hotel_id', hotelId)
-      .is('checked_out_at', null)
-      .lt('report_date', checkOutDate)
-      .gte('report_date', checkInDate);
-
-    const occupiedRoomNos = new Set();
-    const occupiedRoomIds = new Set();
-
-    (bookedReservations || []).forEach(r => {
-      if (r.room_id) occupiedRoomIds.add(r.room_id);
-      if (r.room_no) occupiedRoomNos.add(r.room_no.trim().toLowerCase());
+    // Deterministic sort: vacant first, room_no ascending
+    const sorted = [...eligibleRooms].sort((a, b) => {
+      const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+      const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+      if (aVacant && !bVacant) return -1;
+      if (!aVacant && bVacant) return 1;
+      const numA = parseInt(a.room_no, 10);
+      const numB = parseInt(b.room_no, 10);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.room_no.localeCompare(b.room_no);
     });
 
-    (occupiedEntries || []).forEach(e => {
-      if (e.room_no) occupiedRoomNos.add(e.room_no.trim().toLowerCase());
-    });
+    for (const room of sorted) {
+      if (excludeSet.has(room.id) || excludeSet.has(room.room_no)) continue;
 
-    // 4. Find the first physical room that is not occupied
-    const freeRoom = physicalRooms.find(r => 
-      !occupiedRoomIds.has(r.id) && !occupiedRoomNos.has(r.room_no.trim().toLowerCase())
-    );
+      const avail = await checkRoomAvailability({
+        hotelId,
+        roomNo: room.room_no,
+        checkIn: checkInDate,
+        checkOut: checkOutDate,
+        excludeReservationId,
+      });
 
-    if (freeRoom) {
-      return { roomId: freeRoom.id, roomNo: freeRoom.room_no };
+      if (avail.available) {
+        return { roomId: room.id, roomNo: room.room_no };
+      }
     }
 
     return { roomId: null, roomNo: 'Unassigned' };
@@ -163,7 +153,12 @@ export const upsertGuest = async (hotelId, guestInfo = {}) => {
  * Creates or updates a reservation in the core PMS `reservations` table.
  * Strictly maintains idempotency via external booking ID and reservation ID.
  */
-export const createOrUpdateReservation = async (reservationData, externalId, existingReservationId = null) => {
+export const createOrUpdateReservation = async (
+  reservationData,
+  externalId,
+  existingReservationId = null,
+  excludeRoomIds = []
+) => {
   const supabase = getSupabase();
   const idempotencyMarker = `[OTA_BOOKING_ID: ${externalId}]`;
   const legacyMarker = `[AIOSELL_BOOKING_ID: ${externalId}]`;
@@ -180,13 +175,22 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
     if (data) existing = data;
   }
 
+  const roomSubMatch = (reservationData.internal_note || '').match(/\[ROOM:\s*\d+\/\d+\]/i);
+  const targetMarker = roomSubMatch ? `${idempotencyMarker} ${roomSubMatch[0]}` : idempotencyMarker;
+
   if (!existing) {
-    const { data: existingList, error: searchError } = await supabase
+    let query = supabase
       .from('reservations')
       .select('id, internal_note, room_id, room_no, guest_name, guest_phone, guest_email, guest_address, remarks')
-      .eq('hotel_id', reservationData.hotel_id)
-      .or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`)
-      .limit(1);
+      .eq('hotel_id', reservationData.hotel_id);
+
+    if (roomSubMatch) {
+      query = query.or(`internal_note.ilike.%${targetMarker}%,remarks.ilike.%${targetMarker}%`);
+    } else {
+      query = query.or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`);
+    }
+
+    const { data: existingList, error: searchError } = await query.limit(1);
 
     if (searchError) {
       throw new Error(`Failed to query existing reservations: ${searchError.message}`);
@@ -210,11 +214,47 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
   delete payload.nights;
   delete payload.room_categories;
 
+  // Validate physical room availability to prevent overlaps
+  const norm = normalizePhysicalRoom(payload.room_no);
+  if (norm) {
+    const avail = await checkRoomAvailability({
+      hotelId: reservationData.hotel_id,
+      roomNo: norm,
+      checkIn: cleanCheckIn,
+      checkOut: cleanCheckOut,
+      excludeReservationId: existing?.id || null,
+    });
+    if (!avail.available) {
+      console.warn(`[OTA Service] Room ${norm} is occupied for ${cleanCheckIn} to ${cleanCheckOut}. Preserving as Unassigned.`);
+      payload.room_no = 'Unassigned';
+      payload.room_id = null;
+    } else {
+      payload.room_no = norm;
+    }
+  } else {
+    payload.room_no = 'Unassigned';
+    payload.room_id = null;
+  }
+
   if (existing) {
-    // Preserve existing physical room assignment if already set and new payload didn't assign one
-    if (existing.room_id && (!payload.room_id || payload.room_no === 'Unassigned' || payload.room_no === 'TBD')) {
-      payload.room_id = existing.room_id;
-      payload.room_no = existing.room_no;
+    // If existing reservation has a physical room, check if it remains conflict-free for the stay dates
+    if (existing.room_id && existing.room_no && (!payload.room_id || payload.room_no === 'Unassigned' || payload.room_no === 'TBD')) {
+      const stillAvail = await checkRoomAvailability({
+        hotelId: reservationData.hotel_id,
+        roomNo: existing.room_no,
+        checkIn: cleanCheckIn,
+        checkOut: cleanCheckOut,
+        excludeReservationId: existing.id,
+      });
+
+      if (stillAvail.available) {
+        payload.room_id = existing.room_id;
+        payload.room_no = existing.room_no;
+      } else {
+        console.warn(`[OTA Service] Existing room ${existing.room_no} now conflicts with updated stay ${cleanCheckIn} to ${cleanCheckOut}. Will auto-reassign.`);
+        payload.room_id = null;
+        payload.room_no = 'Unassigned';
+      }
     }
 
     // Preserve valid local guest details if incoming payload has blanks
@@ -234,21 +274,40 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
     payload.internal_note = internalNote;
     payload.updated_at = new Date().toISOString();
 
+    const cleanUpdatePayload = sanitizeReservationPayload(payload);
+    delete cleanUpdatePayload.hotel_id;
+
     const { data, error } = await supabase
       .from('reservations')
-      .update(payload)
+      .update(cleanUpdatePayload)
       .eq('id', existing.id)
       .select('*')
       .single();
 
     if (error) throw new Error(`Failed to update reservation: ${error.message}`);
 
-    triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
+    // If reservation remains unassigned, attempt automatic physical room assignment
+    if (!data.room_id || data.room_no === 'Unassigned' || data.room_no === 'TBD') {
+      try {
+        const autoRes = await autoAssignPhysicalRoom({
+          hotelId: payload.hotel_id,
+          reservationId: data.id,
+          excludeRoomIds,
+        });
+        if (autoRes?.success && autoRes.roomNo) {
+          data.room_no = autoRes.roomNo;
+          data.room_id = autoRes.roomId;
+        }
+      } catch (autoErr) {
+        console.warn('[HotelMantriReservationService] Automatic assignment non-blocking warning:', autoErr.message);
+      }
+    }
+
     return data;
   } else {
     // Create new reservation
     const internalNote = payload.internal_note
-      ? `${payload.internal_note}\n${idempotencyMarker}`
+      ? (payload.internal_note.includes(idempotencyMarker) ? payload.internal_note : `${payload.internal_note}\n${idempotencyMarker}`)
       : idempotencyMarker;
 
     payload.internal_note = internalNote;
@@ -260,15 +319,33 @@ export const createOrUpdateReservation = async (reservationData, externalId, exi
     payload.created_at = new Date().toISOString();
     payload.updated_at = new Date().toISOString();
 
+    const cleanInsertPayload = sanitizeReservationPayload(payload);
+
     const { data, error } = await supabase
       .from('reservations')
-      .insert(payload)
+      .insert(cleanInsertPayload)
       .select('*')
       .single();
 
     if (error) throw new Error(`Failed to create reservation: ${error.message}`);
 
-    triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
+    // Attempt automatic room assignment immediately upon import if room is not yet assigned
+    if (!data.room_id || data.room_no === 'Unassigned' || data.room_no === 'TBD') {
+      try {
+        const autoRes = await autoAssignPhysicalRoom({
+          hotelId: payload.hotel_id,
+          reservationId: data.id,
+          excludeRoomIds,
+        });
+        if (autoRes?.success && autoRes.roomNo) {
+          data.room_no = autoRes.roomNo;
+          data.room_id = autoRes.roomId;
+        }
+      } catch (autoErr) {
+        console.warn('[HotelMantriReservationService] Automatic assignment non-blocking warning:', autoErr.message);
+      }
+    }
+
     return data;
   }
 };
@@ -278,58 +355,41 @@ export const cancelReservation = async (hotelId, externalId, existingReservation
   const idempotencyMarker = `[OTA_BOOKING_ID: ${externalId}]`;
   const legacyMarker = `[AIOSELL_BOOKING_ID: ${externalId}]`;
 
-  let existing = null;
+  // Find all reservations for this booking
+  let query = supabase
+    .from('reservations')
+    .select('id, hotel_id, check_in_date, check_out_date, status')
+    .eq('hotel_id', hotelId);
 
   if (existingReservationId) {
-    const { data } = await supabase
-      .from('reservations')
-      .select('id, hotel_id, check_in_date, check_out_date')
-      .eq('id', existingReservationId)
-      .eq('hotel_id', hotelId)
-      .maybeSingle();
-    if (data) existing = data;
+    query = query.or(`id.eq.${existingReservationId},internal_note.ilike.%${idempotencyMarker}%,remarks.ilike.%${idempotencyMarker}%`);
+  } else {
+    query = query.or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`);
   }
 
-  if (!existing) {
-    const { data: existingReservations } = await supabase
-      .from('reservations')
-      .select('id, hotel_id, check_in_date, check_out_date')
-      .eq('hotel_id', hotelId)
-      .or(`internal_note.ilike.%${idempotencyMarker}%,internal_note.ilike.%${legacyMarker}%,remarks.ilike.%${idempotencyMarker}%,remarks.ilike.%${legacyMarker}%`)
-      .limit(1);
+  const { data: existingReservations } = await query;
 
-    existing = existingReservations && existingReservations.length > 0 ? existingReservations[0] : null;
-  }
-
-  if (!existing) {
+  if (!existingReservations || existingReservations.length === 0) {
     return null;
   }
 
-  const { data, error } = await supabase
+  const idsToCancel = existingReservations.map(r => r.id);
+
+  const { data: cancelledRows, error } = await supabase
     .from('reservations')
     .update({ 
       status: 'cancelled',
       room_id: null,
+      room_no: 'Unassigned',
       updated_at: new Date().toISOString()
     })
-    .eq('id', existing.id)
-    .select('*')
-    .single();
+    .in('id', idsToCancel)
+    .select('*');
 
+  if (error) throw new Error(`Failed to cancel reservations: ${error.message}`);
 
-  if (error) throw new Error(`Failed to cancel reservation: ${error.message}`);
-
-  triggerBackgroundSync(data.hotel_id, data.check_in_date, data.check_out_date);
-  return data;
-};
-
-const triggerBackgroundSync = (hotelId, startDate, endDate) => {
-  if (!hotelId || !startDate || !endDate) return;
-  const start = String(startDate).slice(0, 10);
-  const end = String(endDate).slice(0, 10);
-  // Fire and forget inventory push
-  executeInventoryPush(hotelId, null, start, end)
-    .catch(err => console.warn(`[AutoSync] Background inventory push deferred for hotel ${hotelId}:`, err.message));
+  const primary = (cancelledRows || []).find(r => r.id === existingReservationId) || cancelledRows?.[0] || existingReservations[0];
+  return primary;
 };
 
 export default {

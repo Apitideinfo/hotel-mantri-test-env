@@ -1,7 +1,10 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
+import { apiFetch } from './api-fetch';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
+import type { BulkInventoryPatch } from './bulkUpdateDraft';
+import { normalizeToISODate } from './bulkUpdateDraft';
 import { testAiosellConnection as testChannelConnection, checkAiosellStatus as checkChannelStatus, getAiosellMapping as fetchChannelMapping } from './api-aiosell';
 export { testChannelConnection, checkChannelStatus, fetchChannelMapping };
 
@@ -307,28 +310,503 @@ export const getInventoryRestrictions = async (
   return (data as ChannelInventoryRestriction[]) ?? [];
 };
 
-export const upsertInventoryRestriction = async (
-  input: Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>
-): Promise<void> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId(), updated_at: new Date().toISOString() };
-  const { error } = await supabase
+export type InventoryRestrictionInput = Partial<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>> & {
+  room_category_id: string;
+  date: string;
+};
+
+export type ChannelEventType =
+  | 'RATE_CHANGED'
+  | 'AVAILABILITY_CHANGED'
+  | 'INVENTORY_CHANGED'
+  | 'RESERVATION_CREATED'
+  | 'RESERVATION_MODIFIED'
+  | 'RESERVATION_CANCELLED'
+  | 'RESERVATION_CHANGED'
+  | 'CHECK_IN'
+  | 'CHECK_OUT'
+  | 'ROOM_TRANSFER'
+  | 'STAY_EXTENDED'
+  | 'ROOM_BLOCKED'
+  | 'ROOM_UNBLOCKED'
+  | 'MANUAL_SYNC';
+
+export interface DispatchChannelEventDetails {
+  startDate?: string | null;
+  endDate?: string | null;
+  date?: string | null;
+  roomCategoryId?: string | null;
+  roomCategoryIds?: string[] | null;
+  ratePlanIds?: string[] | null;
+  room_no?: string | null;
+  fromRoom?: string | null;
+  toRoom?: string | null;
+  [key: string]: any;
+}
+
+export const dispatchChannelEvent = async (
+  eventType: ChannelEventType,
+  details: DispatchChannelEventDetails = {}
+): Promise<any> => {
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) return null;
+
+  try {
+    const res = await apiFetch('/api/channels/events/dispatch', {
+      method: 'POST',
+      body: JSON.stringify({
+        hotelId,
+        eventType,
+        details,
+      }),
+    });
+    return res;
+  } catch (err: any) {
+    console.warn(`[dispatchChannelEvent] Event ${eventType} sync warning:`, err?.message || err);
+    return { success: false, error: err };
+  }
+};
+
+export interface ExternalSyncResult {
+  success: boolean;
+  status: 'VERIFIED' | 'PARTIAL_SUCCESS' | 'FAILED' | 'NOT_CONFIGURED' | 'SKIPPED' | 'NOT_NEEDED' | string;
+  message?: string;
+  failureReasons?: string[];
+  rateSync?: any;
+  inventorySync?: any;
+}
+
+export interface BulkInventoryPatchResult {
+  success: boolean;
+  updatedCount: number;
+  allVerified?: boolean;
+  externalSync?: ExternalSyncResult | null;
+  rateSync?: any;
+  inventorySync?: any;
+  message?: string;
+  updated?: any[];
+  localUpdate?: {
+    success: boolean;
+    count: number;
+  };
+  hasRate?: boolean;
+  hasInv?: boolean;
+  dateRange?: string;
+}
+
+export const applyBulkInventoryPatch = async (
+  patches: BulkInventoryPatch[],
+  skipSync = false
+): Promise<BulkInventoryPatchResult> => {
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) throw new Error('Hotel context is required to update inventory/rates');
+  if (!patches || patches.length === 0) {
+    return { success: true, updatedCount: 0, message: 'No patches to apply' };
+  }
+
+  // 1. Try server backend endpoint first
+  try {
+    const res = await apiFetch('/api/channels/inventory-restrictions/patch', {
+      method: 'POST',
+      body: JSON.stringify({ updates: patches, skipSync })
+    });
+    if (res && res.success) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
+          detail: { hotelId, count: patches.length }
+        }));
+      }
+      return res;
+    }
+  } catch (err: any) {
+    const isNetworkOr404 =
+      err?.status === 404 ||
+      err?.code === 'API_ROUTE_NOT_FOUND' ||
+      err?.error === 'NETWORK_ERROR' ||
+      err?.code === 'ERR_NETWORK_FAILURE' ||
+      err?.code === 'ERR_INTERNET_DISCONNECTED';
+
+    if (!isNetworkOr404) {
+      console.error('[applyBulkInventoryPatch] Backend route returned error (not falling back):', err);
+      throw new Error(err?.message || (typeof err?.error === 'string' ? err.error : 'Failed to apply bulk inventory and rate updates.'));
+    }
+
+    console.warn('[applyBulkInventoryPatch] Backend route unavailable/offline (404/network), falling back to client-side merge:', err);
+  }
+
+  // 2. Client-side resilient non-destructive merge fallback
+  const targetDates = [...new Set(patches.map(p => normalizeToISODate(p.date)).filter(Boolean))];
+  const targetCatIds = [...new Set(patches.map(p => p.roomCategoryId).filter(Boolean))];
+
+  const { data: existingRows, error: fetchErr } = await supabase
     .from('channel_inventory_restrictions')
-    .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
-  if (error) throw error;
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('date', targetDates)
+    .in('room_category_id', targetCatIds);
+
+  if (fetchErr) {
+    console.error('[applyBulkInventoryPatch] Error fetching existing rows:', fetchErr);
+    throw fetchErr;
+  }
+
+  const existingMap = new Map<string, ChannelInventoryRestriction>();
+  (existingRows || []).forEach(r => {
+    existingMap.set(`${r.room_category_id}|${r.date}`, r as ChannelInventoryRestriction);
+  });
+
+  // Coalesce patches
+  const coalescedMap = new Map<string, BulkInventoryPatch>();
+  for (const p of patches) {
+    const d = normalizeToISODate(p.date);
+    if (!d || !p.roomCategoryId) continue;
+    const key = `${p.roomCategoryId}|${d}`;
+    const prev = coalescedMap.get(key) || { date: d, roomCategoryId: p.roomCategoryId };
+    coalescedMap.set(key, { ...prev, ...p, date: d });
+  }
+
+  const mergedPayload: any[] = [];
+  let hasRate = false;
+  let hasInv = false;
+
+  for (const [key, patch] of coalescedMap.entries()) {
+    const existing = existingMap.get(key);
+    const merged: any = {
+      hotel_id: hotelId,
+      room_category_id: patch.roomCategoryId,
+      date: patch.date,
+      updated_at: new Date().toISOString()
+    };
+
+    if (patch.baseRate !== undefined) {
+      hasRate = true;
+      merged.base_rate = patch.baseRate === null ? 0 : Math.max(0, patch.baseRate);
+    } else if (existing) {
+      merged.base_rate = existing.base_rate ?? 0;
+    } else {
+      merged.base_rate = 0;
+    }
+
+    if (patch.channelRate !== undefined) {
+      hasRate = true;
+      merged.channel_rate = patch.channelRate === null ? 0 : Math.max(0, patch.channelRate);
+    } else if (existing) {
+      merged.channel_rate = existing.channel_rate ?? 0;
+    } else {
+      merged.channel_rate = 0;
+    }
+
+    if (patch.availability !== undefined) {
+      hasInv = true;
+      merged.availability = patch.availability === null ? null : Math.max(0, patch.availability);
+    } else if (existing) {
+      merged.availability = existing.availability;
+    } else {
+      merged.availability = null;
+    }
+
+    if (patch.stopSell !== undefined) {
+      hasInv = true;
+      merged.stop_sell = Boolean(patch.stopSell);
+    } else if (existing) {
+      merged.stop_sell = Boolean(existing.stop_sell);
+    } else {
+      merged.stop_sell = false;
+    }
+
+    if (patch.minStay !== undefined) {
+      hasInv = true;
+      merged.min_stay = patch.minStay === null ? 1 : Math.max(1, patch.minStay);
+    } else if (existing) {
+      merged.min_stay = existing.min_stay ?? 1;
+    } else {
+      merged.min_stay = 1;
+    }
+
+    if (patch.maxStay !== undefined) {
+      hasInv = true;
+      merged.max_stay = patch.maxStay === null ? 0 : Math.max(0, patch.maxStay);
+    } else if (existing) {
+      merged.max_stay = existing.max_stay ?? 0;
+    } else {
+      merged.max_stay = 0;
+    }
+
+    if (patch.closedToArrival !== undefined) {
+      hasInv = true;
+      merged.closed_to_arrival = Boolean(patch.closedToArrival);
+    } else if (existing) {
+      merged.closed_to_arrival = Boolean(existing.closed_to_arrival);
+    } else {
+      merged.closed_to_arrival = false;
+    }
+
+    if (patch.closedToDeparture !== undefined) {
+      hasInv = true;
+      merged.closed_to_departure = Boolean(patch.closedToDeparture);
+    } else if (existing) {
+      merged.closed_to_departure = Boolean(existing.closed_to_departure);
+    } else {
+      merged.closed_to_departure = false;
+    }
+
+    // NEVER include id in the upsert payload.
+    // Omission guarantees PostgREST does not inject null for new rows in the batch.
+    // PostgreSQL handles ON CONFLICT (hotel_id, room_category_id, date) DO UPDATE:
+    // - Existing rows retain their database-assigned UUID primary key
+    // - New rows are inserted with database DEFAULT gen_random_uuid()
+    delete merged.id;
+
+    mergedPayload.push(merged);
+  }
+
+  const { error: upsertErr } = await supabase
+    .from('channel_inventory_restrictions')
+    .upsert(mergedPayload, { onConflict: 'hotel_id,room_category_id,date' });
+
+  if (upsertErr) {
+    console.error('[applyBulkInventoryPatch] Client fallback upsert error:', upsertErr);
+    throw new Error(upsertErr.message || 'Client fallback upsert failed.');
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
+      detail: { hotelId, count: mergedPayload.length }
+    }));
+  }
+
+  // Trigger real-time sync if needed
+  if (!skipSync) {
+    const dates = targetDates.sort();
+    const startDate = dates[0];
+    const endDate = dates[dates.length - 1];
+
+    if (hasRate) {
+      dispatchChannelEvent('RATE_CHANGED', {
+        startDate,
+        endDate,
+        roomCategoryIds: targetCatIds,
+      }).catch(e => console.warn('[applyBulkInventoryPatch] Rate auto-sync error:', e));
+    }
+    if (hasInv) {
+      dispatchChannelEvent('AVAILABILITY_CHANGED', {
+        startDate,
+        endDate,
+        roomCategoryIds: targetCatIds,
+      }).catch(e => console.warn('[applyBulkInventoryPatch] Inventory auto-sync error:', e));
+    }
+  }
+
+  return {
+    success: true,
+    updatedCount: mergedPayload.length,
+    message: `Saved ${mergedPayload.length} records.`
+  };
+};
+
+export const upsertInventoryRestriction = async (
+  input: InventoryRestrictionInput
+): Promise<any> => {
+  const patch: BulkInventoryPatch = {
+    roomCategoryId: input.room_category_id,
+    date: normalizeToISODate(input.date) || input.date,
+    ...(input.base_rate !== undefined ? { baseRate: input.base_rate } : {}),
+    ...(input.channel_rate !== undefined ? { channelRate: input.channel_rate } : {}),
+    ...(input.availability !== undefined ? { availability: input.availability } : {}),
+    ...(input.stop_sell !== undefined ? { stopSell: input.stop_sell } : {}),
+    ...(input.min_stay !== undefined ? { minStay: input.min_stay } : {}),
+    ...(input.max_stay !== undefined ? { maxStay: input.max_stay } : {}),
+    ...(input.closed_to_arrival !== undefined ? { closedToArrival: input.closed_to_arrival } : {}),
+    ...(input.closed_to_departure !== undefined ? { closedToDeparture: input.closed_to_departure } : {}),
+  };
+  return await applyBulkInventoryPatch([patch]);
 };
 
 export const bulkUpdateInventory = async (
-  updates: Array<Omit<ChannelInventoryRestriction, 'id' | 'hotel_id' | 'updated_at'>>
+  updates: Array<InventoryRestrictionInput>
 ): Promise<void> => {
-  const payload = updates.map((u) => ({
-    ...u,
-    hotel_id: getCurrentHotelId(),
-    updated_at: new Date().toISOString(),
+  const patches: BulkInventoryPatch[] = updates.map(u => ({
+    roomCategoryId: u.room_category_id,
+    date: normalizeToISODate(u.date) || u.date,
+    ...(u.base_rate !== undefined ? { baseRate: u.base_rate } : {}),
+    ...(u.channel_rate !== undefined ? { channelRate: u.channel_rate } : {}),
+    ...(u.availability !== undefined ? { availability: u.availability } : {}),
+    ...(u.stop_sell !== undefined ? { stopSell: u.stop_sell } : {}),
+    ...(u.min_stay !== undefined ? { minStay: u.min_stay } : {}),
+    ...(u.max_stay !== undefined ? { maxStay: u.max_stay } : {}),
+    ...(u.closed_to_arrival !== undefined ? { closedToArrival: u.closed_to_arrival } : {}),
+    ...(u.closed_to_departure !== undefined ? { closedToDeparture: u.closed_to_departure } : {}),
   }));
-  const { error } = await supabase
-    .from('channel_inventory_restrictions')
-    .upsert(payload, { onConflict: 'hotel_id,room_category_id,date' });
-  if (error) throw error;
+  await applyBulkInventoryPatch(patches);
+};
+
+export interface AuthoritativeMatrixItem {
+  date: string;
+  room_category_id: string;
+  category_name: string;
+  physical: number;
+  occupied: number;
+  blocked: number;
+  calculatedAvailable: number;
+  available: number;
+  stop_sell: boolean;
+  is_manual?: boolean;
+  manual_availability?: number | null;
+  base_rate?: number;
+  channel_rate?: number;
+  min_stay?: number;
+  max_stay?: number;
+  closed_to_arrival?: boolean;
+  closed_to_departure?: boolean;
+}
+
+export const getAuthoritativeAvailabilityMatrix = async (
+  startDate: string,
+  endDate: string
+): Promise<{ matrix: AuthoritativeMatrixItem[]; source: 'api' | 'supabase' }> => {
+  const hotelId = getCurrentHotelId();
+  // 1. Try server matrix endpoint first
+  try {
+    const res = await getInventoryMatrix(startDate, endDate);
+    if (res && res.success && Array.isArray(res.matrix)) {
+      return { matrix: res.matrix, source: 'api' };
+    }
+  } catch {
+    // Fall back to client calculation from Supabase
+  }
+
+  // 2. Client-side authoritative calculation directly from Supabase
+  const [catsRes, roomsRes, resvsRes, blocksRes, restrictionsRes] = await Promise.all([
+    supabase.from('room_categories').select('id, name').eq('hotel_id', hotelId).eq('is_active', true).order('sort_order', { ascending: true }),
+    supabase.from('rooms').select('id, category_id, room_no, is_active').eq('hotel_id', hotelId),
+    supabase.from('reservations').select('id, room_id, room_no, check_in_date, check_out_date, status, created_at').eq('hotel_id', hotelId).in('status', ['confirmed', 'checked_in']).lte('check_in_date', endDate).gte('check_out_date', startDate),
+    supabase.from('room_blocks').select('room_no, start_date, end_date, block_type').eq('hotel_id', hotelId).lte('start_date', endDate).gte('end_date', startDate),
+    supabase.from('channel_inventory_restrictions').select('*').eq('hotel_id', hotelId).gte('date', startDate).lte('date', endDate),
+  ]);
+
+  const categories = (catsRes.data ?? []) as Array<{ id: string; name: string }>;
+  const rooms = (roomsRes.data ?? []) as Array<{ id: string; category_id: string; room_no: string; is_active: boolean }>;
+  const reservations = (resvsRes.data ?? []) as Array<{ id: string; room_id: string; room_no: string; check_in_date: string; check_out_date: string; status: string }>;
+  const blocks = (blocksRes.data ?? []) as Array<{ room_no: string; start_date: string; end_date: string; block_type: string }>;
+  const restrictions = (restrictionsRes.data ?? []) as ChannelInventoryRestriction[];
+
+  const physicalCounts: Record<string, number> = {};
+  const roomToCatMap: Record<string, string> = {};
+  const roomNoToCatMap: Record<string, string> = {};
+
+  for (const r of rooms) {
+    if (r.category_id && r.is_active !== false) {
+      roomToCatMap[r.id] = r.category_id;
+      physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
+      if (r.room_no) {
+        roomNoToCatMap[r.room_no.trim().toLowerCase()] = r.category_id;
+      }
+    }
+  }
+
+  const restrictionMap = new Map<string, ChannelInventoryRestriction>();
+  for (const r of restrictions) {
+    restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
+  }
+
+  // Generate date array
+  const dates: string[] = [];
+  let cur = startDate;
+  while (cur <= endDate) {
+    dates.push(cur);
+    const [y, m, d] = cur.split('-').map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + 1));
+    cur = dt.toISOString().slice(0, 10);
+  }
+
+  const matrix: AuthoritativeMatrixItem[] = [];
+
+  for (const d of dates) {
+    const dTime = new Date(d + 'T12:00:00');
+    const occCounts: Record<string, number> = {};
+    for (const res of reservations) {
+      const ci = new Date(res.check_in_date + 'T12:00:00');
+      const co = new Date(res.check_out_date + 'T12:00:00');
+      if (dTime >= ci && dTime < co) {
+        const catId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+        if (catId) {
+          occCounts[catId] = (occCounts[catId] || 0) + 1;
+        }
+      }
+    }
+
+    const blkCounts: Record<string, number> = {};
+    for (const b of blocks) {
+      const bs = new Date(b.start_date + 'T12:00:00');
+      const be = new Date(b.end_date + 'T12:00:00');
+      if (dTime >= bs && dTime <= be) {
+        const catId = roomNoToCatMap[b.room_no.trim().toLowerCase()];
+        if (catId) {
+          blkCounts[catId] = (blkCounts[catId] || 0) + 1;
+        }
+      }
+    }
+
+    for (const cat of categories) {
+      const physical = physicalCounts[cat.id] || 0;
+      const occupied = occCounts[cat.id] || 0;
+      const blocked = blkCounts[cat.id] || 0;
+      const calculatedAvailable = Math.max(0, physical - occupied - blocked);
+
+      const r = restrictionMap.get(`${cat.id}|${d}`);
+      let sellable = calculatedAvailable;
+      const isManual = Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '');
+      const manualVal = isManual ? Number(r!.availability) : null;
+
+      if (r) {
+        if (r.stop_sell) {
+          sellable = 0;
+        } else if (isManual && manualVal !== null && !isNaN(manualVal)) {
+          const rUpdatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+          let newBookingsAfterUpdate = 0;
+          if (rUpdatedAt > 0) {
+            for (const res of reservations) {
+              const ci = new Date(res.check_in_date + 'T12:00:00');
+              const co = new Date(res.check_out_date + 'T12:00:00');
+              if (dTime >= ci && dTime < co) {
+                const resCreatedAt = (res as any).created_at ? new Date((res as any).created_at).getTime() : 0;
+                if (resCreatedAt > rUpdatedAt) {
+                  const matchedCatId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+                  if (matchedCatId === cat.id) {
+                    newBookingsAfterUpdate++;
+                  }
+                }
+              }
+            }
+          }
+          const remainingManual = Math.max(0, manualVal - newBookingsAfterUpdate);
+          sellable = Math.min(remainingManual, calculatedAvailable);
+        }
+      }
+
+      matrix.push({
+        date: d,
+        room_category_id: cat.id,
+        category_name: cat.name,
+        physical,
+        occupied,
+        blocked,
+        calculatedAvailable,
+        available: sellable,
+        stop_sell: Boolean(r?.stop_sell),
+        is_manual: isManual,
+        manual_availability: manualVal,
+        base_rate: r?.base_rate ?? 0,
+        channel_rate: r?.channel_rate ?? 0,
+        min_stay: r?.min_stay ?? 1,
+        max_stay: r?.max_stay ?? 0,
+        closed_to_arrival: Boolean(r?.closed_to_arrival),
+        closed_to_departure: Boolean(r?.closed_to_departure),
+      });
+    }
+  }
+
+  return { matrix, source: 'supabase' };
 };
 
 // ── Sync Logs ──
@@ -434,9 +912,6 @@ export const updateChannelSettingsStatus = async (
 
 // ── Aiosell Endpoints (Proxy to Backend) ──
 
-import { apiFetch } from './api-fetch';
-
-
 
 export const fetchChannelInventory = async (startDate: string, endDate: string): Promise<any> => {
   return apiFetch('/api/aiosell/inventory/fetch', {
@@ -505,6 +980,13 @@ export interface ChannelManagerOverview {
   syncLogs: ChannelSyncLog[];
   settings: ChannelSettings | null;
   isLiveMode: boolean;
+  channelStatus?: {
+    configured: boolean;
+    connected: boolean;
+    status: string;
+    message?: string;
+    errorCode?: string;
+  };
 }
 
 export const getChannelManagerOverview = async (): Promise<ChannelManagerOverview> => {
@@ -536,12 +1018,42 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     getChannelSettings(),
   ]);
 
-  let isLiveMode = false;
+  const dbConnected = settings?.aiosell_status === 'connected' && Boolean(settings?.aiosell_hotel_code);
+  let isLiveMode = dbConnected;
+  let channelStatus: {
+    configured: boolean;
+    connected: boolean;
+    status: string;
+    message?: string;
+    errorCode?: string;
+  } = {
+    configured: Boolean(settings?.channel_manager_enabled && settings?.aiosell_hotel_code),
+    connected: dbConnected,
+    status: dbConnected ? 'CONNECTED' : (settings?.aiosell_status || 'NOT_CONFIGURED').toUpperCase(),
+    message: ''
+  };
+
   try {
     const data = await checkChannelStatus();
-    isLiveMode = data.connected === true;
+    if (data) {
+      const isConnected = data.connected === true || String(data.status).toUpperCase() === 'CONNECTED';
+      isLiveMode = isConnected || dbConnected;
+      channelStatus = {
+        configured: data.configured ?? channelStatus.configured,
+        connected: isLiveMode,
+        status: (data.status || (isLiveMode ? 'CONNECTED' : 'DISCONNECTED')).toUpperCase(),
+        message: data.message || '',
+        errorCode: (data as any).errorCode || (data as any).error || undefined
+      };
+    }
   } catch (err) {
-    console.error('Failed to check channel status', err);
+    console.warn('Backend channel status ping non-fatal check:', err);
+    // If backend check had a transient error, retain authoritative DB state
+    if (dbConnected) {
+      isLiveMode = true;
+      channelStatus.connected = true;
+      channelStatus.status = 'CONNECTED';
+    }
   }
 
   return {
@@ -553,6 +1065,7 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
     mappings,
     syncLogs,
     isLiveMode,
+    channelStatus,
   };
 };
 

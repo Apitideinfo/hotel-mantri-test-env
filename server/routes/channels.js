@@ -1,13 +1,19 @@
 import express from 'express';
 import { supabaseServiceRole } from '../supabaseClient.js';
-import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { requireHotelAccess as checkAuth, forbidRoles } from '../middleware/auth.js';
 import * as aiosellService from '../services/aiosellService.js';
 import { getChannelProviderConfig } from '../services/providerConfig.js';
 import { executeInventoryPush, executeRatePush } from './aiosell.js';
 import { processAiosellReservation } from '../services/integrations/aiosell/AiosellReservationService.js';
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
+import { handlePmsEvent, syncRates, syncInventory, reconcileInventory } from '../services/channelSyncEngine.js';
+import { processPendingRoomAllocations } from '../services/RoomAssignmentService.js';
 
 const router = express.Router();
+
+// Strict RBAC: Channel Manager forbidden for Housekeeping
+router.use(checkAuth);
+router.use(forbidRoles(['housekeeping']));
 
 /**
  * Normalizes channel connection object to provide BOTH snake_case and camelCase
@@ -120,10 +126,10 @@ router.post('/discover', checkAuth, async (req, res) => {
     }
 
     // Verify hotel configuration exists
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     res.status(501).json({ 
-      success: false,
+      success: false, 
       code: 'DISCOVERY_NOT_SUPPORTED',
       message: 'Automatic OTA discovery is not supported for this integration account. Please use Add Channel to connect your distribution channels.',
       discovered: [],
@@ -150,29 +156,57 @@ router.post('/test-connection', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
     }
 
-    const config = await getChannelProviderConfig(hotelId, req.requestId);
+    const config = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     const result = await aiosellService.testConnection(config);
 
     if (result.success) {
+      // Authoritatively update channel_settings in DB
+      await (req.scopedSupabase || supabaseServiceRole)
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'connected',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: 'Connected successfully',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
       return res.json({
         success: true,
         status: 'connected',
         connected: true,
+        provider: 'external_channel_manager',
         hotelId,
         environment: result.environment,
         hotelCode: result.hotelCode,
         partnerId: result.partnerId,
         mappingConfigured: (result.mapping?.rooms?.length > 0) || (result.mapping?.ratePlans?.length > 0),
+        mapping: result.mapping,
         latencyMs: result.responseTimeMs,
+        responseTimeMs: result.responseTimeMs,
         message: 'Channel integration connection verified successfully',
         requestId: req.requestId
       });
     } else {
+      // Authoritatively update channel_settings in DB
+      await (req.scopedSupabase || supabaseServiceRole)
+        .from('channel_settings')
+        .update({
+          aiosell_status: 'error',
+          last_tested_at: new Date().toISOString(),
+          last_test_result: result.error?.message || 'Connection test failed',
+          updated_at: new Date().toISOString()
+        })
+        .eq('hotel_id', hotelId);
+
+      const errorCode = result.error?.errorCode || result.error?.code || 'CONNECTION_TEST_FAILED';
       return res.status(result.status || 502).json({
         success: false,
         status: 'error',
         connected: false,
-        code: result.error?.code || 'CONNECTION_TEST_FAILED',
+        provider: 'external_channel_manager',
+        code: errorCode,
+        errorCode,
         message: result.error?.message || 'Channel integration test failed',
         details: result.diagnostic,
         requestId: req.requestId
@@ -189,11 +223,903 @@ router.post('/test-connection', checkAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/channels/events/dispatch
+ * Real-time event dispatcher for PMS events (rate change, availability change, reservation, etc.)
+ * Automatically triggers server-side delta synchronization.
+ */
+router.post('/events/dispatch', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId || req.body?.hotelId;
+  const eventName = req.body.event || req.body.eventType || req.body.details?.eventType;
+  const details = req.body.details || {};
+  const startDate = req.body.startDate || details.startDate || details.date;
+  const endDate = req.body.endDate || details.endDate || startDate;
+  const roomCategoryId = req.body.roomCategoryId || details.roomCategoryId;
+  const roomCategoryIds = req.body.roomCategoryIds || details.roomCategoryIds;
+  const ratePlanIds = req.body.ratePlanIds || details.ratePlanIds;
+
+  if (!hotelId) {
+    return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+  }
+  if (!eventName) {
+    return res.status(400).json({ success: false, code: 'EVENT_REQUIRED', message: 'event or eventType is required.', requestId: req.requestId });
+  }
+
+  try {
+    const result = await handlePmsEvent(hotelId, eventName, {
+      startDate,
+      endDate,
+      roomCategoryId,
+      roomCategoryIds,
+      ratePlanIds,
+      ...details
+    });
+
+    res.json({
+      success: true,
+      event: eventName,
+      result,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error(`[POST /api/channels/events/dispatch] Error handling ${eventName}:`, err);
+    res.status(err.status || 500).json({
+      success: false,
+      event: eventName,
+      error: {
+        code: err.code || 'EVENT_SYNC_FAILED',
+        message: err.message || 'Failed to synchronize event with channel manager'
+      },
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/sync/rates
+ * Authoritative global or delta rate synchronization
+ */
+router.post('/sync/rates', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const { startDate, endDate, roomCategoryIds, ratePlanIds, channelId, skipVerification } = req.body;
+
+  if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+  try {
+    const sDate = startDate || new Date().toISOString().split('T')[0];
+    const eDate = endDate || sDate;
+
+    if (sDate > eDate) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DATE_RANGE',
+        message: 'End date must be on or after start date.',
+        requestId: req.requestId
+      });
+    }
+
+    const result = await syncRates({
+      hotelId,
+      channelId: channelId || null,
+      startDate: sDate,
+      endDate: eDate,
+      roomCategoryIds: roomCategoryIds || null,
+      ratePlanIds: ratePlanIds || null,
+      skipVerification: Boolean(skipVerification),
+      triggeredBy: 'api_sync_rates'
+    });
+
+    res.json({
+      success: true,
+      verified: result.verified,
+      message: result.message,
+      recordsAttempted: result.recordsAttempted,
+      recordsVerified: result.recordsVerified,
+      discrepancies: result.discrepancies,
+      result,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[POST /api/channels/sync/rates] Error:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'RATE_SYNC_FAILED',
+        message: err.message || 'Rate synchronization failed'
+      },
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/sync/inventory
+ * Authoritative global or delta inventory synchronization
+ */
+router.post('/sync/inventory', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const { startDate, endDate, roomCategoryIds, channelId, skipVerification } = req.body;
+
+  if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+  try {
+    const sDate = startDate || new Date().toISOString().split('T')[0];
+    const eDate = endDate || sDate;
+
+    if (sDate > eDate) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_DATE_RANGE',
+        message: 'End date must be on or after start date.',
+        requestId: req.requestId
+      });
+    }
+
+    const result = await syncInventory({
+      hotelId,
+      channelId: channelId || null,
+      startDate: sDate,
+      endDate: eDate,
+      roomCategoryIds: roomCategoryIds || null,
+      skipVerification: Boolean(skipVerification),
+      triggeredBy: 'api_sync_inventory'
+    });
+
+    res.json({
+      success: true,
+      verified: result.verified,
+      message: result.message,
+      recordsAttempted: result.recordsAttempted,
+      recordsVerified: result.recordsVerified,
+      discrepancies: result.discrepancies,
+      result,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[POST /api/channels/sync/inventory] Error:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'INVENTORY_SYNC_FAILED',
+        message: err.message || 'Inventory synchronization failed'
+      },
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * GET /api/channels/inventory-restrictions/patch
+ * Structured JSON 405 for GET requests
+ */
+router.get(['/inventory-restrictions/patch', '/invent_restrictions/patch'], (req, res) => {
+  const requestId = req.requestId || `HM-PATCH-${Date.now().toString(36).toUpperCase()}`;
+  res.status(405).json({
+    success: false,
+    error: {
+      code: 'METHOD_NOT_ALLOWED',
+      message: 'GET method is not supported on /inventory-restrictions/patch. Please use POST with updates payload.',
+      requestId
+    }
+  });
+});
+
+router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const requestId = req.requestId || `HM-PATCH-${Date.now().toString(36).toUpperCase()}`;
+  const rawList = req.body?.updates || req.body?.patches;
+  const updates = Array.isArray(rawList) ? rawList : [];
+  const { skipSync = false } = req.body || {};
+  const dbClient = req.scopedSupabase || supabaseServiceRole;
+
+  if (!hotelId) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context is required to update inventory/rates.',
+        requestId
+      }
+    });
+  }
+
+  // 1. Verify hotel exists in database
+  if (req.auth?.hotelId && req.auth.hotelId === hotelId && req.auth.hotel) {
+    // Authorized hotel already verified by requireHotelAccess middleware
+  } else {
+    try {
+      const { data: hotelRecord, error: hotelErr } = await dbClient
+        .from('hotels')
+        .select('id, hotel_name')
+        .eq('id', hotelId)
+        .maybeSingle();
+
+      if (hotelErr || !hotelRecord) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'HOTEL_NOT_FOUND',
+            message: 'The specified hotel property does not exist.',
+            requestId
+          }
+        });
+      }
+    } catch (hErr) {
+      console.error('[inventory-restrictions/patch] Hotel lookup error:', hErr);
+    }
+  }
+
+  if (updates.length === 0) {
+    return res.json({
+      success: true,
+      updatedCount: 0,
+      localUpdate: { success: true, count: 0 },
+      externalSync: { success: true, status: 'NOT_NEEDED', message: 'No updates provided.' },
+      message: 'No updates provided.',
+      requestId
+    });
+  }
+
+  try {
+    const normalizeDateStr = (dStr) => {
+      if (!dStr || typeof dStr !== 'string') return '';
+      const trimmed = dStr.trim();
+      const dmyMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+      if (dmyMatch) {
+        return `${dmyMatch[3]}-${dmyMatch[2].padStart(2, '0')}-${dmyMatch[1].padStart(2, '0')}`;
+      }
+      const ymdMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+      if (ymdMatch) {
+        return `${ymdMatch[1]}-${ymdMatch[2].padStart(2, '0')}-${ymdMatch[3].padStart(2, '0')}`;
+      }
+      return trimmed;
+    };
+
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+    // 2. Strict Payload Validation & Tenant Cross-Hotel Boundary Check
+    for (let i = 0; i < updates.length; i++) {
+      const item = updates[i];
+      if (!item || typeof item !== 'object') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Update item at index ${i} must be an object.`,
+            requestId
+          }
+        });
+      }
+
+      // Check if update item explicitly targets a foreign hotel ID
+      const itemHotelId = item.hotelId || item.hotel_id;
+      if (itemHotelId && itemHotelId !== 'hotel' && itemHotelId !== hotelId) {
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'HOTEL_ACCESS_DENIED',
+            message: `Cross-hotel inventory updates are strictly prohibited. Update item at index ${i} targets hotel ${itemHotelId}, but active authorized hotel is ${hotelId}.`,
+            hotelId,
+            foreignHotelId: itemHotelId,
+            requestId
+          }
+        });
+      }
+
+      const rawDate = item.date;
+      const catId = item.roomCategoryId || item.room_category_id;
+      const normDate = normalizeDateStr(rawDate);
+
+      if (!normDate || !dateRegex.test(normDate) || isNaN(Date.parse(normDate))) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Invalid date '${rawDate}' at index ${i}. Dates must be valid calendar dates formatted as YYYY-MM-DD.`,
+            requestId
+          }
+        });
+      }
+
+      if (!catId || typeof catId !== 'string') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_INVENTORY_UPDATE',
+            message: `Update item at index ${i} must contain a valid roomCategoryId string.`,
+            requestId
+          }
+        });
+      }
+
+      // Base rate validation
+      if (item.baseRate !== undefined && item.baseRate !== null && item.baseRate !== '') {
+        const val = Number(item.baseRate);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Base rate at index ${i} must be a non-negative number. Received: ${item.baseRate}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Channel rate validation
+      if (item.channelRate !== undefined && item.channelRate !== null && item.channelRate !== '') {
+        const val = Number(item.channelRate);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Channel rate at index ${i} must be a non-negative number. Received: ${item.channelRate}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Availability validation
+      if (item.availability !== undefined && item.availability !== null && item.availability !== '') {
+        const val = Number(item.availability);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Availability at index ${i} must be a non-negative integer. Received: ${item.availability}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Min stay validation
+      if (item.minStay !== undefined && item.minStay !== null && item.minStay !== '') {
+        const val = Number(item.minStay);
+        if (isNaN(val) || val < 1) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Min stay at index ${i} must be an integer >= 1. Received: ${item.minStay}`,
+              requestId
+            }
+          });
+        }
+      }
+
+      // Max stay validation
+      if (item.maxStay !== undefined && item.maxStay !== null && item.maxStay !== '') {
+        const val = Number(item.maxStay);
+        if (isNaN(val) || val < 0) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'INVALID_INVENTORY_UPDATE',
+              message: `Max stay at index ${i} must be a non-negative integer. Received: ${item.maxStay}`,
+              requestId
+            }
+          });
+        }
+      }
+    }
+
+    const targetDates = [...new Set(updates.map(u => normalizeDateStr(u.date)).filter(Boolean))].sort();
+    const targetCatIds = [...new Set(updates.map(u => u.roomCategoryId || u.room_category_id).filter(Boolean))];
+
+    if (targetDates.length === 0 || targetCatIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: 'Each update item must contain a valid date and roomCategoryId.',
+          requestId
+        }
+      });
+    }
+
+    const minDate = targetDates[0];
+    const maxDate = targetDates[targetDates.length - 1];
+    if (minDate > maxDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_INVENTORY_UPDATE',
+          message: 'Start date must be on or before end date.',
+          requestId
+        }
+      });
+    }
+
+    // 3. Verify target room categories belong to this authorized hotel
+    // NOTE: We query by ID alone first (RLS-safe for super-admin sessions), then verify
+    // hotel_id ownership in application code. This prevents a subtle RLS issue where
+    // combining .eq('hotel_id', x) with .in('id', [...]) can return empty results even
+    // for valid categories when using an auth-session client without service role key.
+    const { data: dbCategories, error: catFetchErr } = await dbClient
+      .from('room_categories')
+      .select('id, name, hotel_id')
+      .in('id', targetCatIds);
+
+    if (catFetchErr) {
+      console.error('[inventory-restrictions/patch] Error fetching room categories:', catFetchErr);
+      throw catFetchErr;
+    }
+
+    const foundCatMap = new Map((dbCategories || []).map(c => [c.id, c]));
+
+    // Check 1: category UUID doesn't exist in the DB at all
+    const missingCatIds = targetCatIds.filter(id => !foundCatMap.has(id));
+    if (missingCatIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_ROOM_CATEGORY_FOR_HOTEL',
+          message: `One or more room categories do not exist for this hotel: ${missingCatIds.join(', ')}`,
+          missingCategories: missingCatIds,
+          hotelId,
+          requestId
+        }
+      });
+    }
+
+    // Check 2: category exists but belongs to a DIFFERENT hotel — cross-hotel contamination
+    const foreignCatIds = targetCatIds.filter(id => {
+      const cat = foundCatMap.get(id);
+      return cat && cat.hotel_id !== hotelId;
+    });
+    if (foreignCatIds.length > 0) {
+      const foreignDetails = foreignCatIds.map(id => {
+        const cat = foundCatMap.get(id);
+        return `${id} (belongs to hotel ${cat?.hotel_id || 'unknown'})`;
+      });
+      console.error(`[inventory-restrictions/patch] 🔒 CROSS-HOTEL CONTAMINATION DETECTED: request for hotel ${hotelId} contains foreign categories: ${foreignDetails.join(', ')}`);
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: 'HOTEL_ACCESS_DENIED',
+          message: `Cross-hotel inventory update blocked. One or more room categories belong to a different property: ${foreignCatIds.join(', ')}`,
+          foreignCategories: foreignCatIds,
+          hotelId,
+          requestId
+        }
+      });
+    }
+
+
+    // 3.5. Verify target rate plans belong to this authorized hotel (if specified)
+    // Same RLS-safe approach as room category validation above.
+    const targetRatePlanIds = [...new Set(updates.map(u => u.ratePlanId || u.rate_plan_id).filter(Boolean))];
+    if (targetRatePlanIds.length > 0) {
+      const { data: dbRatePlans, error: planFetchErr } = await dbClient
+        .from('rate_plans')
+        .select('id, plan_name, hotel_id')
+        .in('id', targetRatePlanIds);
+
+      if (planFetchErr) {
+        console.error('[inventory-restrictions/patch] Error fetching rate plans:', planFetchErr);
+        throw planFetchErr;
+      }
+
+      const foundPlanMap = new Map((dbRatePlans || []).map(p => [p.id, p]));
+      const missingPlanIds = targetRatePlanIds.filter(id => !foundPlanMap.has(id));
+      if (missingPlanIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_RATE_PLAN_FOR_HOTEL',
+            message: `One or more rate plans do not exist for this hotel: ${missingPlanIds.join(', ')}`,
+            missingRatePlans: missingPlanIds,
+            hotelId,
+            requestId
+          }
+        });
+      }
+
+      // Cross-hotel rate plan check
+      const foreignPlanIds = targetRatePlanIds.filter(id => {
+        const plan = foundPlanMap.get(id);
+        return plan && plan.hotel_id !== hotelId;
+      });
+      if (foreignPlanIds.length > 0) {
+        console.error(`[inventory-restrictions/patch] 🔒 CROSS-HOTEL RATE PLAN CONTAMINATION: hotel ${hotelId} contains foreign rate plans: ${foreignPlanIds.join(', ')}`);
+        return res.status(403).json({
+          success: false,
+          error: {
+            code: 'HOTEL_ACCESS_DENIED',
+            message: `Cross-hotel rate plan update blocked. One or more rate plans belong to a different property.`,
+            foreignRatePlans: foreignPlanIds,
+            hotelId,
+            requestId
+          }
+        });
+      }
+    }
+
+
+    // 4. Query existing records for target tuples
+    const { data: existingRows, error: fetchErr } = await dbClient
+      .from('channel_inventory_restrictions')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .in('date', targetDates)
+      .in('room_category_id', targetCatIds);
+
+    if (fetchErr) {
+      console.error('[inventory-restrictions/patch] Error fetching existing rows:', fetchErr);
+      throw fetchErr;
+    }
+
+    const existingMap = new Map();
+    (existingRows || []).forEach(row => {
+      existingMap.set(`${row.room_category_id}|${row.date}`, row);
+    });
+
+    // 5. Deduplicate / coalesce updates by (room_category_id, date)
+    const coalescedMap = new Map();
+    for (const u of updates) {
+      const catId = u.roomCategoryId || u.room_category_id;
+      const d = normalizeDateStr(u.date);
+      if (!catId || !d) continue;
+      const key = `${catId}|${d}`;
+      const prev = coalescedMap.get(key) || {};
+      coalescedMap.set(key, { ...prev, ...u, room_category_id: catId, date: d });
+    }
+
+    // 6. Construct merged payload with true patch semantics
+    const mergedPayload = [];
+    let hasRate = false;
+    let hasInv = false;
+
+    for (const [key, patch] of coalescedMap.entries()) {
+      const existing = existingMap.get(key);
+
+      const merged = {
+        hotel_id: hotelId,
+        room_category_id: patch.room_category_id,
+        date: patch.date,
+        updated_at: new Date().toISOString()
+      };
+
+      // Base Rate: only update if provided
+      if (patch.baseRate !== undefined || patch.base_rate !== undefined) {
+        hasRate = true;
+        const raw = patch.baseRate !== undefined ? patch.baseRate : patch.base_rate;
+        merged.base_rate = raw === null ? 0 : Math.max(0, parseFloat(raw) || 0);
+      } else if (existing) {
+        merged.base_rate = existing.base_rate ?? 0;
+      } else {
+        merged.base_rate = 0;
+      }
+
+      // Channel Rate: only update if provided
+      if (patch.channelRate !== undefined || patch.channel_rate !== undefined) {
+        hasRate = true;
+        const raw = patch.channelRate !== undefined ? patch.channelRate : patch.channel_rate;
+        merged.channel_rate = raw === null ? 0 : Math.max(0, parseFloat(raw) || 0);
+      } else if (existing) {
+        merged.channel_rate = existing.channel_rate ?? 0;
+      } else {
+        merged.channel_rate = 0;
+      }
+
+      // Availability: only update if provided
+      if (patch.availability !== undefined) {
+        hasInv = true;
+        if (patch.availability === null || patch.availability === '') {
+          merged.availability = null;
+        } else {
+          merged.availability = Math.max(0, parseInt(patch.availability) || 0);
+        }
+      } else if (existing) {
+        merged.availability = existing.availability;
+      } else {
+        merged.availability = null;
+      }
+
+      // Stop Sell: only update if provided
+      if (patch.stopSell !== undefined || patch.stop_sell !== undefined) {
+        hasInv = true;
+        const raw = patch.stopSell !== undefined ? patch.stopSell : patch.stop_sell;
+        merged.stop_sell = Boolean(raw);
+      } else if (existing) {
+        merged.stop_sell = Boolean(existing.stop_sell);
+      } else {
+        merged.stop_sell = false;
+      }
+
+      // Min Stay: only update if provided
+      if (patch.minStay !== undefined || patch.min_stay !== undefined) {
+        hasInv = true;
+        const raw = patch.minStay !== undefined ? patch.minStay : patch.min_stay;
+        merged.min_stay = raw === null ? 1 : Math.max(1, parseInt(raw) || 1);
+      } else if (existing) {
+        merged.min_stay = existing.min_stay ?? 1;
+      } else {
+        merged.min_stay = 1;
+      }
+
+      // Max Stay: only update if provided
+      if (patch.maxStay !== undefined || patch.max_stay !== undefined) {
+        hasInv = true;
+        const raw = patch.maxStay !== undefined ? patch.maxStay : patch.max_stay;
+        merged.max_stay = raw === null ? 0 : Math.max(0, parseInt(raw) || 0);
+      } else if (existing) {
+        merged.max_stay = existing.max_stay ?? 0;
+      } else {
+        merged.max_stay = 0;
+      }
+
+      // Closed to Arrival (CTA): only update if provided
+      if (patch.closedToArrival !== undefined || patch.closed_to_arrival !== undefined) {
+        hasInv = true;
+        const raw = patch.closedToArrival !== undefined ? patch.closedToArrival : patch.closed_to_arrival;
+        merged.closed_to_arrival = Boolean(raw);
+      } else if (existing) {
+        merged.closed_to_arrival = Boolean(existing.closed_to_arrival);
+      } else {
+        merged.closed_to_arrival = false;
+      }
+
+      // Closed to Departure (CTD): only update if provided
+      if (patch.closedToDeparture !== undefined || patch.closed_to_departure !== undefined) {
+        hasInv = true;
+        const raw = patch.closedToDeparture !== undefined ? patch.closedToDeparture : patch.closed_to_departure;
+        merged.closed_to_departure = Boolean(raw);
+      } else if (existing) {
+        merged.closed_to_departure = Boolean(existing.closed_to_departure);
+      } else {
+        merged.closed_to_departure = false;
+      }
+
+      delete merged.id;
+      mergedPayload.push(merged);
+    }
+
+    // 7. Atomic Upsert into database
+    const { error: upsertErr } = await dbClient
+      .from('channel_inventory_restrictions')
+      .upsert(mergedPayload, { onConflict: 'hotel_id,room_category_id,date' });
+
+    if (upsertErr) {
+      console.error('[inventory-restrictions/patch] Upsert error:', upsertErr);
+      throw upsertErr;
+    }
+
+    // 7.5. Audit logging for bulk inventory & rate updates
+    try {
+      const auditEntries = mergedPayload.map(m => {
+        const oldRow = existingMap.get(`${m.room_category_id}|${m.date}`);
+        return {
+          hotel_id: hotelId,
+          user_id: req.user?.id || req.auth?.userId || 'system',
+          room_category_id: m.room_category_id,
+          date: m.date,
+          old_availability: oldRow?.availability ?? null,
+          new_availability: m.availability,
+          old_rate: oldRow?.base_rate ?? 0,
+          new_rate: m.base_rate,
+          timestamp: m.updated_at,
+          source: 'bulk_update'
+        };
+      });
+
+      await dbClient.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'BULK_UPDATE',
+        direction: 'outbound',
+        status: 'SUCCESS',
+        message: `Bulk update applied: ${mergedPayload.length} record updates across ${targetCatIds.length} categories (${minDate} to ${maxDate})`,
+        date_range: `${minDate} to ${maxDate}`,
+        error_detail: JSON.stringify(auditEntries.slice(0, 50))
+      });
+    } catch (auditErr) {
+      console.warn('[inventory-restrictions/patch] Audit logging warning:', auditErr.message);
+    }
+
+    // 8. Determine external channel manager configuration state
+    let isChannelConfigured = false;
+    try {
+      const config = await getChannelProviderConfig(hotelId, requestId, dbClient);
+      if (config && config.hotelCode && config.credentialPresent) {
+        isChannelConfigured = true;
+      }
+    } catch {
+      isChannelConfigured = false;
+    }
+
+    // 9. Automatic Channel Manager Sync (only if configured and not skipped)
+    let rateSyncResult = null;
+    let invSyncResult = null;
+    let externalSync = null;
+    let syncHadFailure = false;
+
+    if (!isChannelConfigured) {
+      externalSync = {
+        success: false,
+        status: 'NOT_CONFIGURED',
+        message: 'Channel manager integration is not configured for this hotel.'
+      };
+    } else if (skipSync) {
+      externalSync = {
+        success: true,
+        status: 'SKIPPED',
+        message: 'External channel synchronization skipped by request.'
+      };
+    } else {
+      if (hasRate) {
+        try {
+          rateSyncResult = await syncRates({
+            hotelId,
+            startDate: minDate,
+            endDate: maxDate,
+            roomCategoryIds: targetCatIds,
+            triggeredBy: 'bulk_update_rates',
+            client: dbClient
+          });
+          if (!rateSyncResult || rateSyncResult.success === false || rateSyncResult.verified === false) {
+            syncHadFailure = true;
+          }
+        } catch (rErr) {
+          console.warn('[inventory-restrictions/patch] Rate sync non-fatal warning:', rErr.message);
+          rateSyncResult = { success: false, error: rErr.message, code: rErr.code || 'RATE_SYNC_ERROR' };
+          syncHadFailure = true;
+        }
+      }
+
+      if (hasInv) {
+        try {
+          invSyncResult = await syncInventory({
+            hotelId,
+            startDate: minDate,
+            endDate: maxDate,
+            roomCategoryIds: targetCatIds,
+            triggeredBy: 'bulk_update_inventory',
+            client: dbClient
+          });
+          if (!invSyncResult || invSyncResult.success === false || invSyncResult.verified === false) {
+            syncHadFailure = true;
+          }
+        } catch (iErr) {
+          console.warn('[inventory-restrictions/patch] Inventory sync non-fatal warning:', iErr.message);
+          invSyncResult = { success: false, error: iErr.message, code: iErr.code || 'INVENTORY_SYNC_ERROR' };
+          syncHadFailure = true;
+        }
+      }
+
+      const failureReasons = [];
+      if (hasRate && rateSyncResult?.error) failureReasons.push(`Rate Sync: ${rateSyncResult.error}`);
+      if (hasRate && rateSyncResult?.verified === false && rateSyncResult?.discrepancies?.length) {
+        failureReasons.push(`Rate Verification: ${rateSyncResult.discrepancies.length} discrepancy detected`);
+      }
+      if (hasInv && invSyncResult?.error) failureReasons.push(`Inventory Sync: ${invSyncResult.error}`);
+      if (hasInv && invSyncResult?.verified === false && invSyncResult?.discrepancies?.length) {
+        failureReasons.push(`Inventory Verification: ${invSyncResult.discrepancies.length} discrepancy detected`);
+      }
+
+      const overallSyncStatus = !syncHadFailure
+        ? 'VERIFIED'
+        : ((rateSyncResult?.success && rateSyncResult?.verified) || (invSyncResult?.success && invSyncResult?.verified) ? 'PARTIAL_SUCCESS' : 'FAILED');
+
+      externalSync = {
+        success: !syncHadFailure,
+        status: overallSyncStatus,
+        message: failureReasons.length > 0 
+          ? failureReasons.join('; ') 
+          : (!syncHadFailure ? 'All channel manager updates synchronized and verified.' : 'External channel manager synchronization reported an issue.'),
+        failureReasons,
+        rateSync: rateSyncResult,
+        inventorySync: invSyncResult
+      };
+    }
+
+    const allVerified = Boolean(
+      isChannelConfigured &&
+      !skipSync &&
+      !syncHadFailure &&
+      (!hasRate || rateSyncResult?.verified === true) &&
+      (!hasInv || invSyncResult?.verified === true)
+    );
+
+    const updated = mergedPayload.map(m => ({
+      roomCategoryId: m.room_category_id,
+      date: m.date,
+      availability: m.availability,
+      baseRate: m.base_rate,
+      channelRate: m.channel_rate,
+      minStay: m.min_stay,
+      maxStay: m.max_stay,
+      stopSell: m.stop_sell,
+      closedToArrival: m.closed_to_arrival,
+      closedToDeparture: m.closed_to_departure
+    }));
+
+    const responseMessage = isChannelConfigured && allVerified
+      ? `Successfully saved ${mergedPayload.length} record updates. All channel manager updates verified.`
+      : isChannelConfigured && !allVerified
+      ? `Successfully saved ${mergedPayload.length} record updates. External channel sync requires attention.`
+      : `Successfully saved ${mergedPayload.length} record updates. Channel manager not configured — local save only.`;
+
+    res.json({
+      success: true,
+      updatedCount: mergedPayload.length,
+      updated,
+      localUpdate: {
+        success: true,
+        count: mergedPayload.length
+      },
+      externalSync,
+      hasRate,
+      hasInv,
+      dateRange: `${minDate} to ${maxDate}`,
+      allVerified,
+      rateSync: rateSyncResult,
+      inventorySync: invSyncResult,
+      message: responseMessage,
+      requestId
+    });
+  } catch (err) {
+    console.error('[POST /api/channels/inventory-restrictions/patch] Fatal error:', err);
+    res.status(err.status || 500).json({
+      success: false,
+      error: {
+        code: err.code || 'INVENTORY_PATCH_FAILED',
+        message: err.message || 'Failed to apply bulk inventory and rate patches.',
+        requestId
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/channels/sync/status
+ * Fetches latest channel sync logs and live health state
+ */
+router.get('/sync/status', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+  try {
+    const { data: recentLogs } = await supabaseServiceRole
+      .from('channel_sync_logs')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    res.json({
+      success: true,
+      logs: recentLogs || [],
+      requestId: req.requestId
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message,
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
  * POST /api/channels/live-sync
  * Centralized live synchronization endpoint.
  * Coordinates reservation reconciliation with external channel manager.
  * Used by page-open auto-sync and manual "Sync Now" button.
  */
+router.get('/live-sync', (req, res) => {
+  const requestId = req.requestId || `SYNC-${Date.now()}`;
+  res.status(200).json({
+    success: true,
+    status: 'READY',
+    message: 'Channel live-sync service is operational. Use POST with authorization to trigger sync.',
+    requestId
+  });
+});
+
 router.post('/live-sync', checkAuth, async (req, res) => {
   const startTime = Date.now();
   const hotelId = req.hotelId || req.auth?.hotelId;
@@ -213,7 +1139,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     // 1. Resolve channel configuration
     let config;
     try {
-      config = await getChannelProviderConfig(hotelId, requestId);
+      config = await getChannelProviderConfig(hotelId, requestId, req.scopedSupabase);
     } catch (cfgErr) {
       return res.status(200).json({
         success: false,
@@ -250,26 +1176,35 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       });
     }
 
-    // 2. Test connection with upstream provider
-    const connTest = await aiosellService.testConnection(config);
-    if (!connTest.success) {
-      const isAuthErr = connTest.status === 401 || connTest.status === 403 || connTest.error?.code === 'PROVIDER_AUTHENTICATION_FAILED';
-      const statusType = isAuthErr ? 'NOT_AUTHORIZED' : 'FAILED';
-      const errorMsg = connTest.error?.message || 'External channel manager is unreachable.';
+    // 2. Define rolling sync window (-7 days to +90 days)
+    const today = new Date();
+    const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
+    const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
+
+    // 3. Fetch real OTA reservations from provider safely
+    let rawReservations = [];
+    try {
+      rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
+    } catch (fetchErr) {
+      console.warn(`[live-sync] Upstream error fetching reservations:`, fetchErr.message);
+      const isAuthErr = fetchErr.status === 401 || fetchErr.status === 403 || fetchErr.code === 'PROVIDER_AUTHENTICATION_FAILED';
+      const isNotFound = fetchErr.status === 404 || fetchErr.code === 'PROVIDER_PROPERTY_NOT_FOUND';
+      const statusType = isAuthErr ? 'NOT_AUTHORIZED' : isNotFound ? 'NOT_CONFIGURED' : 'UPSTREAM_ERROR';
+      const errorMsg = fetchErr.message || 'External channel manager reservation fetch failed.';
 
       await supabaseServiceRole.from('channel_sync_logs').insert({
         hotel_id: hotelId,
         log_type: 'LIVE_SYNC',
         direction: 'inbound',
         status: statusType,
-        message: `Sync aborted: ${errorMsg}`,
+        message: `Sync failed: ${errorMsg}`,
         error_detail: errorMsg
       });
 
-      return res.status(connTest.status >= 500 ? 502 : 200).json({
+      return res.status(200).json({
         success: false,
         status: statusType,
-        code: connTest.error?.code || 'CONNECTION_FAILED',
+        code: fetchErr.code || (isAuthErr ? 'PROVIDER_AUTHENTICATION_FAILED' : 'UPSTREAM_FETCH_FAILED'),
         message: errorMsg,
         stats: {
           records_fetched: 0,
@@ -283,13 +1218,6 @@ router.post('/live-sync', checkAuth, async (req, res) => {
       });
     }
 
-    // 3. Define rolling sync window (-7 days to +90 days)
-    const today = new Date();
-    const startDate = req.body?.startDate || new Date(today.getTime() - 7 * 86400000).toISOString().slice(0, 10);
-    const endDate = req.body?.endDate || new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10);
-
-    // 4. Fetch reservations from provider
-    const rawReservations = await aiosellService.fetchReservations(startDate, endDate, config);
     let list = [];
     if (Array.isArray(rawReservations)) list = rawReservations;
     else if (rawReservations && Array.isArray(rawReservations.data)) list = rawReservations.data;
@@ -305,69 +1233,144 @@ router.post('/live-sync', checkAuth, async (req, res) => {
     };
     const errors = [];
 
-    // 5. Process each reservation idempotently
-    for (const raw of list) {
+    // 5. Pre-fetch existing OTA reservations for this hotel in one batch to eliminate N+1 round trips
+    const bookingIds = list.map(r => String(r.bookingId || r.reservation_id || r.id)).filter(Boolean);
+    const existingMap = new Map();
+    if (bookingIds.length > 0) {
       try {
-        const payload = parseWebhookPayload({
-          ...raw,
-          hotelCode: config.hotelCode,
-          action: raw.action || (raw.status === 'cancelled' ? 'cancel' : 'book')
-        });
-
-        const resResult = await processAiosellReservation(payload, hotelId);
-        if (resResult.status === 'mapping_required') {
-          stats.unmapped++;
-        } else if (resResult.status === 'imported') {
-          stats.created++;
-        } else if (resResult.status === 'updated') {
-          stats.updated++;
-        } else if (resResult.status === 'cancelled') {
-          stats.cancelled++;
-        } else if (resResult.status === 'failed') {
-          stats.failed++;
-        } else {
-          stats.updated++;
+        const { data: existingRecords } = await supabaseServiceRole
+          .from('channel_ota_reservations')
+          .select('id, ota_booking_id, booking_status, amount, check_in_date, check_out_date, reservation_id')
+          .eq('hotel_id', hotelId)
+          .in('ota_booking_id', bookingIds);
+        if (existingRecords) {
+          for (const rec of existingRecords) {
+            existingMap.set(String(rec.ota_booking_id), rec);
+          }
         }
-      } catch (err) {
-        stats.failed++;
-        errors.push(err.message || 'Processing error');
+      } catch (prefetchErr) {
+        console.warn('[live-sync] Could not prefetch existing OTA records:', prefetchErr.message);
       }
     }
 
-    // 6. Determine final sync status
+    // Process reservations in parallel batches; unchanged existing records are confirmed immediately
+    const BATCH_SIZE = 4;
+    for (let i = 0; i < list.length; i += BATCH_SIZE) {
+      const chunk = list.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        chunk.map(async (raw) => {
+          try {
+            const bId = String(raw.bookingId || raw.reservation_id || raw.id);
+            const existing = existingMap.get(bId);
+            const rawStatus = (raw.status || '').toLowerCase();
+            const isCancelled = rawStatus === 'cancelled' || raw.action === 'cancel';
+
+            // Fast-path: If reservation already exists and has identical state, avoid repeating 5 DB operations
+            if (existing && existing.reservation_id) {
+              const existingCancelled = existing.booking_status === 'cancelled';
+              if (isCancelled && existingCancelled) {
+                stats.cancelled++;
+                return;
+              }
+              if (!isCancelled && existing.booking_status === 'confirmed') {
+                const ciMatch = !raw.startDate || raw.startDate.slice(0, 10) === existing.check_in_date;
+                const coMatch = !raw.endDate || raw.endDate.slice(0, 10) === existing.check_out_date;
+                if (ciMatch && coMatch) {
+                  stats.updated++;
+                  return;
+                }
+              }
+            }
+
+            // New reservation or genuine status/date change: execute full idempotent sync
+            const payload = parseWebhookPayload({
+              ...raw,
+              hotelCode: config.hotelCode,
+              action: raw.action || (isCancelled ? 'cancel' : 'book')
+            });
+
+            const resResult = await processAiosellReservation(payload, hotelId, { isLiveSync: true, skipDelivery: true });
+            if (resResult.status === 'mapping_required') {
+              stats.unmapped++;
+            } else if (resResult.status === 'imported') {
+              stats.created++;
+            } else if (resResult.status === 'updated') {
+              stats.updated++;
+            } else if (resResult.status === 'cancelled') {
+              stats.cancelled++;
+            } else if (resResult.status === 'failed') {
+              stats.failed++;
+            } else {
+              stats.updated++;
+            }
+          } catch (err) {
+            stats.failed++;
+            errors.push(err.message || 'Processing error');
+          }
+        })
+      );
+    }
+
+    // 6. Authoritative PMS Inventory Reconciliation (Awaited for Vercel Serverless Safety)
+    let reconciliationResult = null;
+    try {
+      const todayKolkata = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+      const reconcileStart = (startDate && startDate >= todayKolkata) ? startDate : todayKolkata;
+      const reconcileEnd = (endDate && endDate >= reconcileStart) ? endDate : new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+
+      reconciliationResult = await reconcileInventory({
+        hotelId,
+        startDate: reconcileStart,
+        endDate: reconcileEnd,
+        autoRepair: true
+      });
+    } catch (recErr) {
+      console.warn('[live-sync] Post-reservation reconciliation error:', recErr.message);
+      reconciliationResult = { success: false, error: recErr.message };
+    }
+
+    // 7. Determine final sync status
     let overallStatus = 'SUCCESS';
     if (stats.failed > 0 && stats.created === 0 && stats.updated === 0 && stats.cancelled === 0) {
       overallStatus = 'FAILED';
-    } else if (stats.unmapped > 0 || stats.failed > 0) {
+    } else if (stats.unmapped > 0 || stats.failed > 0 || reconciliationResult?.status === 'FAILED') {
       overallStatus = 'PARTIAL_SUCCESS';
     }
 
     const now = new Date().toISOString();
     const durationMs = Date.now() - startTime;
-    const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed (${durationMs}ms)`;
+    const summaryMsg = `Live sync completed: ${stats.fetched} fetched, ${stats.created} created, ${stats.updated} updated, ${stats.cancelled} cancelled, ${stats.unmapped} unmapped, ${stats.failed} failed, reconciliation: ${reconciliationResult?.verified ? 'VERIFIED' : (reconciliationResult?.status || 'SKIPPED')} (${durationMs}ms)`;
 
-    // 7. Update channel connections timestamps
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        ...(overallStatus !== 'FAILED' ? { last_successful_sync_at: now } : {}),
-        last_sync_status: overallStatus.toLowerCase(),
-        last_error: errors.length > 0 ? errors[0] : null,
-        updated_at: now
-      })
-      .eq('hotel_id', hotelId);
+    // 8. Update channel connections timestamps
+    try {
+      await supabaseServiceRole
+        .from('channel_connections')
+        .update({
+          last_sync_at: now,
+          ...(overallStatus !== 'FAILED' ? { last_successful_sync_at: now } : {}),
+          last_sync_status: overallStatus.toLowerCase(),
+          last_error: errors.length > 0 ? errors[0] : null,
+          updated_at: now
+        })
+        .eq('hotel_id', hotelId);
+    } catch (connErr) {
+      console.warn('[live-sync] Could not update channel_connections:', connErr.message);
+    }
 
-    // 8. Log to channel_sync_logs
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      log_type: 'LIVE_SYNC',
-      direction: 'inbound',
-      status: overallStatus,
-      message: summaryMsg,
-      date_range: `${startDate} to ${endDate}`,
-      error_detail: errors.length > 0 ? JSON.stringify(errors.slice(0, 5)) : null
-    });
+    // 9. Log to channel_sync_logs
+    try {
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'LIVE_SYNC',
+        direction: 'inbound',
+        status: overallStatus,
+        message: summaryMsg,
+        date_range: `${startDate} to ${endDate}`,
+        error_detail: errors.length > 0 ? JSON.stringify(errors.slice(0, 5)) : null
+      });
+    } catch (logErr) {
+      console.warn('[live-sync] Could not insert channel_sync_logs:', logErr.message);
+    }
 
     return res.json({
       success: overallStatus === 'SUCCESS' || overallStatus === 'PARTIAL_SUCCESS',
@@ -382,6 +1385,7 @@ router.post('/live-sync', checkAuth, async (req, res) => {
         records_unmapped: stats.unmapped,
         records_failed: stats.failed
       },
+      reconciliation: reconciliationResult,
       durationMs,
       dateRange: `${startDate} to ${endDate}`,
       errors: errors.slice(0, 5),
@@ -390,19 +1394,22 @@ router.post('/live-sync', checkAuth, async (req, res) => {
 
   } catch (err) {
     console.error('Error executing live sync:', err);
-    const now = new Date().toISOString();
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      log_type: 'LIVE_SYNC',
-      direction: 'inbound',
-      status: 'FAILED',
-      message: 'Live sync failed with server error',
-      error_detail: err.message || 'Unknown server error'
-    });
+    try {
+      await supabaseServiceRole.from('channel_sync_logs').insert({
+        hotel_id: hotelId,
+        log_type: 'LIVE_SYNC',
+        direction: 'inbound',
+        status: 'FAILED',
+        message: 'Live sync failed with server error',
+        error_detail: err.message || 'Unknown server error'
+      });
+    } catch (logErr) {
+      console.warn('[live-sync] Could not write failure log:', logErr.message);
+    }
 
-    return res.status(err.status || 500).json({
+    return res.status(200).json({
       success: false,
-      status: 'FAILED',
+      status: 'SERVER_ERROR',
       code: err.code || 'LIVE_SYNC_FAILED',
       message: err.message || 'Failed to execute live synchronization',
       stats: {
@@ -413,6 +1420,44 @@ router.post('/live-sync', checkAuth, async (req, res) => {
         records_unmapped: 0,
         records_failed: 0
       },
+      requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/reconcile-inventory
+ * Authoritative Inventory Reconciliation Endpoint.
+ * Compares authoritative PMS availability against external channel manager and repairs any discrepancies.
+ */
+router.post('/reconcile-inventory', checkAuth, async (req, res) => {
+  const hotelId = req.hotelId || req.auth?.hotelId;
+  const requestId = req.requestId || `REC-${Date.now()}`;
+  if (!hotelId) {
+    return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId });
+  }
+
+  try {
+    const { startDate, endDate, roomCategoryIds, autoRepair = true } = req.body || {};
+    const result = await reconcileInventory({
+      hotelId,
+      startDate,
+      endDate,
+      roomCategoryIds,
+      autoRepair
+    });
+
+    return res.json({
+      success: true,
+      requestId,
+      ...result
+    });
+  } catch (err) {
+    console.error('[channels/reconcile-inventory] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'RECONCILIATION_FAILED',
+      message: err.message || 'Reconciliation failed',
       requestId
     });
   }
@@ -640,8 +1685,12 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
         existing = existingList?.find(e => e.id === m.id);
       } else if (roomCatId && ratePlanId) {
         existing = existingList?.find(e => e.room_category_id === roomCatId && e.rate_plan_id === ratePlanId);
-      } else if (roomCatId) {
-        existing = existingList?.find(e => e.room_category_id === roomCatId);
+      } else if (roomCatId && (m.externalRatePlanCode || m.external_rate_plan_code)) {
+        const rPlanCode = m.externalRatePlanCode || m.external_rate_plan_code;
+        existing = existingList?.find(e => e.room_category_id === roomCatId && e.external_rate_plan_code === rPlanCode);
+      } else if (roomCatId && (m.externalRoomCode || m.external_room_code)) {
+        const rCode = m.externalRoomCode || m.external_room_code;
+        existing = existingList?.find(e => e.room_category_id === roomCatId && e.external_room_code === rCode && !e.external_rate_plan_code);
       } else if (ratePlanId) {
         existing = existingList?.find(e => e.rate_plan_id === ratePlanId);
       }
@@ -687,6 +1736,14 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
       .eq('hotel_id', hotelId);
 
     const normalizedMappings = (data || []).map(normalizeMapping);
+
+    // Automatically reconcile any pending unassigned OTA reservations with the new mappings
+    setImmediate(() => {
+      processPendingRoomAllocations(hotelId).catch(reconcileErr => {
+        console.warn('[ChannelMappings] Automatic reconciliation warning:', reconcileErr.message);
+      });
+    });
+
     res.json({ success: true, count: normalizedMappings.length, mappings: normalizedMappings, requestId: req.requestId });
   } catch (err) {
     console.error('Error saving channel mappings:', err);
@@ -699,118 +1756,40 @@ router.post('/:channelId/mappings', checkAuth, async (req, res) => {
  * Push inventory for this channel.
  */
 router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
-  const startTime = Date.now();
   const hotelId = (req.hotelId || req.auth?.hotelId);
   const { channelId } = req.params;
-  const { startDate, endDate } = req.body;
+  const { startDate, endDate, roomCategoryIds, skipVerification } = req.body;
 
   try {
     if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
-    const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    const eDate = endDate || sDate;
 
-    // Validate dates
-    if (new Date(sDate) > new Date(eDate)) {
-      return res.status(400).json({ success: false, code: 'INVALID_DATE_RANGE', message: 'Start date cannot be after end date.', requestId: req.requestId });
-    }
-    const diffDays = Math.round((new Date(eDate) - new Date(sDate)) / (1000 * 60 * 60 * 24));
-    if (diffDays > 90) {
-      return res.status(400).json({ success: false, code: 'DATE_RANGE_EXCEEDED', message: 'Date range cannot exceed 90 days for inventory sync.', requestId: req.requestId });
-    }
-
-    // Check active mappings for this channel connection
-    const { data: mappings } = await supabaseServiceRole
-      .from('channel_rate_mappings')
-      .select('id, room_category_id, external_room_code, status')
-      .eq('hotel_id', hotelId)
-      .eq('status', 'mapped')
-      .not('external_room_code', 'is', null)
-      .or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
-
-    if (!mappings || mappings.length === 0) {
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'MAPPING_REQUIRED',
-          message: 'Room mappings are required before inventory can be synchronized for this channel. Please configure room mappings in Channel Settings.',
-          stage: 'mapping',
-          channelId
-        },
-        code: 'MAPPING_REQUIRED',
-        message: 'Room mappings are required before inventory can be synchronized for this channel.',
-        channelId,
-        requestId: req.requestId
-      });
-    }
-
-    const result = await executeInventoryPush(hotelId, channelId, sDate, eDate);
-
-    // Update channel connection last sync
-    const now = new Date().toISOString();
-    const syncStatus = result.verified ? 'verified' : 'success';
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        last_successful_sync_at: now,
-        last_sync_status: syncStatus,
-        last_error: null,
-        updated_at: now
-      })
-      .eq('id', channelId)
-      .eq('hotel_id', hotelId);
-
-    // Log to sync logs
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      channel_connection_id: channelId,
-      log_type: 'INVENTORY_SYNC',
-      direction: 'outbound',
-      status: result.verified ? 'VERIFIED' : 'SUCCESS',
-      message: result.message || `Inventory successfully synchronized from ${sDate} to ${eDate}`,
-      date_range: `${sDate} to ${eDate}`,
-      retry_status: 'not_retried',
-      retry_count: 0
+    const result = await syncInventory({
+      hotelId,
+      channelId,
+      startDate: sDate,
+      endDate: eDate,
+      roomCategoryIds: roomCategoryIds || null,
+      skipVerification: Boolean(skipVerification),
+      triggeredBy: 'channel_sync_inventory_route'
     });
 
     res.json({
       success: true,
       verified: result.verified,
       message: result.message,
-      durationMs: Date.now() - startTime,
+      recordsAttempted: result.recordsAttempted,
+      recordsVerified: result.recordsVerified,
+      discrepancies: result.discrepancies,
+      durationMs: result.durationMs,
       result,
       requestId: req.requestId
     });
   } catch (err) {
     console.error('Inventory sync error:', err);
-    const now = new Date().toISOString();
-
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        last_sync_status: 'failure',
-        last_error: err.message || 'Inventory sync failed',
-        updated_at: now
-      })
-      .eq('id', channelId)
-      .eq('hotel_id', hotelId);
-
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      channel_connection_id: channelId,
-      log_type: 'INVENTORY_SYNC',
-      direction: 'outbound',
-      status: 'failure',
-      message: 'Inventory synchronization failed',
-      error_detail: err.message || 'Unknown error during inventory sync',
-      retry_status: 'not_retried',
-      retry_count: 0
-    });
-
-    const statusCode = err.status || 500;
-    res.status(statusCode).json({
+    res.status(err.status || 500).json({
       success: false,
       error: {
         code: err.code || 'INVENTORY_SYNC_FAILED',
@@ -830,124 +1809,47 @@ router.post('/:channelId/sync/inventory', checkAuth, async (req, res) => {
  * Push rates for this channel.
  */
 router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
-  const startTime = Date.now();
   const hotelId = (req.hotelId || req.auth?.hotelId);
   const { channelId } = req.params;
-  const { startDate, endDate } = req.body;
+  const { startDate, endDate, roomCategoryIds, ratePlanIds, skipVerification } = req.body;
 
   try {
     if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
-    const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+    const eDate = endDate || sDate;
 
-    // Validate dates
-    if (new Date(sDate) > new Date(eDate)) {
-      return res.status(400).json({ success: false, code: 'INVALID_DATE_RANGE', message: 'Start date cannot be after end date.', requestId: req.requestId });
-    }
-    const diffDays = Math.round((new Date(eDate) - new Date(sDate)) / (1000 * 60 * 60 * 24));
-    if (diffDays > 90) {
-      return res.status(400).json({ success: false, code: 'DATE_RANGE_EXCEEDED', message: 'Date range cannot exceed 90 days for rate sync.', requestId: req.requestId });
-    }
-
-    // Check active rate mappings for this channel connection
-    const { data: mappings } = await supabaseServiceRole
-      .from('channel_rate_mappings')
-      .select('id, room_category_id, rate_plan_id, status')
-      .eq('hotel_id', hotelId)
-      .eq('status', 'mapped')
-      .not('external_rate_plan_code', 'is', null)
-      .or(`channel_connection_id.eq.${channelId},channel_connection_id.is.null`);
-
-    if (!mappings || mappings.length === 0) {
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'RATE_MAPPING_REQUIRED',
-          message: 'Rate mappings are required before rates can be synchronized for this channel. Please configure rate plan mappings in Channel Settings.',
-          stage: 'mapping',
-          channelId
-        },
-        code: 'RATE_MAPPING_REQUIRED',
-        message: 'Rate mappings are required before rates can be synchronized for this channel.',
-        channelId,
-        requestId: req.requestId
-      });
-    }
-
-    const result = await executeRatePush(hotelId, channelId, sDate, eDate);
-
-    // Update channel connection last sync
-    const now = new Date().toISOString();
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        last_successful_sync_at: now,
-        last_sync_status: result?.verified ? 'verified' : 'success',
-        last_error: null,
-        updated_at: now
-      })
-      .eq('id', channelId)
-      .eq('hotel_id', hotelId);
-
-    // Log to sync logs
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      channel_connection_id: channelId,
-      log_type: 'RATE_SYNC',
-      direction: 'outbound',
-      status: result?.verified ? 'VERIFIED' : 'success',
-      message: result?.message || `Rates successfully synchronized and verified from ${sDate} to ${eDate}`,
-      date_range: `${sDate} to ${eDate}`,
-      retry_status: 'not_retried',
-      retry_count: 0
+    const result = await syncRates({
+      hotelId,
+      channelId,
+      startDate: sDate,
+      endDate: eDate,
+      roomCategoryIds: roomCategoryIds || null,
+      ratePlanIds: ratePlanIds || null,
+      skipVerification: Boolean(skipVerification),
+      triggeredBy: 'channel_sync_rates_route'
     });
 
     res.json({
       success: true,
-      verified: result?.verified,
-      message: result?.message || 'Rates synchronized successfully.',
-      durationMs: Date.now() - startTime,
+      verified: result.verified,
+      message: result.message,
+      recordsAttempted: result.recordsAttempted,
+      recordsVerified: result.recordsVerified,
+      discrepancies: result.discrepancies,
+      durationMs: result.durationMs,
       result,
       requestId: req.requestId
     });
   } catch (err) {
     console.error('Rate sync error:', err);
-    const now = new Date().toISOString();
-
-    await supabaseServiceRole
-      .from('channel_connections')
-      .update({
-        last_sync_at: now,
-        last_sync_status: 'failure',
-        last_error: err.message || 'Rate sync failed',
-        updated_at: now
-      })
-      .eq('id', channelId)
-      .eq('hotel_id', hotelId);
-
-    await supabaseServiceRole.from('channel_sync_logs').insert({
-      hotel_id: hotelId,
-      channel_connection_id: channelId,
-      log_type: 'RATE_SYNC',
-      direction: 'outbound',
-      status: 'failure',
-      message: 'Rate synchronization failed',
-      error_detail: err.message || 'Unknown error during rate sync',
-      retry_status: 'not_retried',
-      retry_count: 0
-    });
-
-    const statusCode = err.status || 500;
-    res.status(statusCode).json({
+    res.status(err.status || 500).json({
       success: false,
       error: {
         code: err.code || 'RATE_SYNC_FAILED',
         message: err.message || 'Rate sync failed',
         stage: err.stage || 'aiosell',
-        channelId,
-        missingCategories: err.missingCategories
+        channelId
       },
       code: err.code || 'RATE_SYNC_FAILED',
       message: err.message || 'Rate sync failed',
@@ -955,6 +1857,7 @@ router.post('/:channelId/sync/rates', checkAuth, async (req, res) => {
     });
   }
 });
+
 
 /**
  * POST /api/channels/:channelId/fetch/inventory
@@ -968,7 +1871,7 @@ router.post('/:channelId/fetch/inventory', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchInventory(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1009,7 +1912,7 @@ router.post('/:channelId/fetch/rates', checkAuth, async (req, res) => {
 
     const sDate = startDate || new Date().toISOString().split('T')[0];
     const eDate = endDate || new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
-    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const hotelConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
     
     const result = await aiosellService.fetchRates(sDate, eDate, hotelConfig);
     const updates = result?.updates || (Array.isArray(result) ? result : []);
@@ -1062,10 +1965,10 @@ router.post('/:channelId/future-bookings', checkAuth, async (req, res) => {
     }
 
     // Resolve provider config properly using the centralized resolver
-    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId);
+    const providerConfig = await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Fetch channel details to know channel_name
-    const { data: connection } = await supabaseServiceRole
+    const { data: connection } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('channel_name, channel_type')
       .eq('id', channelId)
@@ -1214,10 +2117,10 @@ router.post('/', checkAuth, async (req, res) => {
     if (!channelType || !displayName) return res.status(400).json({ success: false, code: 'MISSING_FIELDS', message: 'channelType and displayName required', requestId: req.requestId });
 
     // Validate that integration is setup
-    await getChannelProviderConfig(hotelId, req.requestId);
+    await getChannelProviderConfig(hotelId, req.requestId, req.scopedSupabase);
 
     // Check for duplicate channel
-    const { data: existingChannel } = await supabaseServiceRole
+    const { data: existingChannel } = await (req.scopedSupabase || supabaseServiceRole)
       .from('channel_connections')
       .select('id')
       .eq('hotel_id', hotelId)

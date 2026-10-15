@@ -2,6 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   Lock, Unlock, AlertTriangle, CheckCircle2, Loader2,
   Calendar, ShieldCheck, History, ChevronDown, ChevronUp, AlertCircle, X,
+  ArrowRight, ArrowLeft, TrendingUp, DollarSign, Wallet, BedDouble,
+  Utensils, ArrowUpRight, ArrowDownRight, Sparkles, Building2,
+  FileCheck2, ShieldAlert, Check, RefreshCw
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import type { HotelSettings, DerivedReport, CashFlowData, DayCloseRecord, DayCloseAuditLog } from '@/lib/types';
@@ -11,7 +14,6 @@ import {
   getCashFlow,
 } from '@/lib/api';
 import { buildCashFlow, toNum, fmtMoney, fmtInt } from '@/lib/calc';
-import { ScreenHeader, SectionCard, Banner } from '@/components/finance-ui';
 
 interface CloseBusinessDayScreenProps {
   onBack: () => void;
@@ -80,6 +82,15 @@ export const CloseBusinessDayScreen = ({ onBack }: CloseBusinessDayScreenProps) 
   const cashMismatch = storedCashClosing !== null && cashDiff > 0.01;
 
   const hasBlockingWarnings = warnings.length > 0;
+  const isClosed = dayRecord?.status === 'closed';
+  const isReopened = dayRecord?.status === 'reopened';
+
+  // Date step helper
+  const shiftDate = (days: number) => {
+    const d = new Date(businessDate + 'T00:00:00');
+    d.setDate(d.getDate() + days);
+    setBusinessDate(d.toISOString().slice(0, 10));
+  };
 
   const handleClose = async () => {
     if (hasBlockingWarnings && !showOverride) {
@@ -92,7 +103,7 @@ export const CloseBusinessDayScreen = ({ onBack }: CloseBusinessDayScreenProps) 
     try {
       const performedBy = user?.id ?? 'unknown';
       const result = await closeDay(businessDate, performedBy);
-      setSuccess(`Business date ${businessDate} closed successfully. Report version ${result.report_version}.`);
+      setSuccess(`Business date ${businessDate} closed and frozen successfully. Report version ${result.report_version}.`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to close day');
@@ -114,7 +125,7 @@ export const CloseBusinessDayScreen = ({ onBack }: CloseBusinessDayScreenProps) 
     try {
       const performedBy = user?.id ?? 'unknown';
       await reopenDay(businessDate, performedBy, reopenReason);
-      setSuccess(`Business date ${businessDate} reopened. Corrections can now be made.`);
+      setSuccess(`Business date ${businessDate} reopened for revision. Ledger unlocked.`);
       setReopenReason('');
       setShowReopen(false);
       await load();
@@ -125,325 +136,668 @@ export const CloseBusinessDayScreen = ({ onBack }: CloseBusinessDayScreenProps) 
     }
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-slate-50">
-        <ScreenHeader title="Close Business Day" subtitle="Finalize · Freeze · Carry Forward" onBack={onBack}
-          icon={<Lock className="w-5 h-5 text-brand-600" />} />
-        <div className="flex flex-col items-center justify-center py-24 gap-3 text-slate-400">
-          <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
-          <p className="text-sm font-semibold text-slate-600">Loading business day parameters…</p>
-        </div>
-      </div>
-    );
-  }
+  // Financial values
+  const activeReport = report ?? {
+    report_date: businessDate,
+    rooms_occupied: 0,
+    room_sale_amount: 0,
+    kitchen: 0,
+    other_income: 0,
+    other_revenue_entries: 0,
+    gst_collected: 0,
+    housekeeping_supply: 0,
+    other_expense: 0,
+    maintenance_bill: 0,
+    finance_expenses: 0,
+    salary_advance: 0,
+    cash_handover_md: 0,
+    bank_cash_deposit: 0,
+    pay_cash: 0,
+    pay_upi: 0,
+    pay_card: 0,
+    pay_bank: 0,
+    cash_closing: 0,
+  };
 
-  const isClosed = dayRecord?.status === 'closed';
-  const isReopened = dayRecord?.status === 'reopened';
+  const roomRev = toNum(activeReport.room_sale_amount);
+  const fnbRev = toNum(activeReport.kitchen);
+  const otherRev = toNum(activeReport.other_income) + toNum(activeReport.other_revenue_entries);
+  const totalRev = roomRev + fnbRev + otherRev;
+
+  const totalExp = toNum(activeReport.housekeeping_supply) + toNum(activeReport.other_expense) + toNum(activeReport.maintenance_bill) + toNum(activeReport.finance_expenses);
+  const totalAdvances = toNum(activeReport.salary_advance);
+  const totalHandover = toNum(activeReport.cash_handover_md);
+  const totalBankDeposit = toNum(activeReport.bank_cash_deposit);
+  const netResult = totalRev - totalExp;
+
+  const payCash = toNum(activeReport.pay_cash);
+  const payUpi = toNum(activeReport.pay_upi);
+  const payCard = toNum(activeReport.pay_card);
+  const payBank = toNum(activeReport.pay_bank);
+  const totalPayments = payCash + payUpi + payCard + payBank;
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-36">
-      <ScreenHeader title="Close Business Day" subtitle="Finalize · Freeze · Carry Forward" onBack={onBack}
-        icon={<Lock className="w-5 h-5 text-brand-600" />} />
-
-      <main className="px-4 sm:px-6 py-6 space-y-5 w-full max-w-2xl mx-auto">
-        {error && (
-          <div className="bg-rose-50 border border-rose-200/80 text-rose-800 text-sm rounded-2xl p-4 flex items-center gap-3 shadow-sm">
-            <AlertCircle className="w-5 h-5 shrink-0 text-rose-600" />
-            <div className="flex-1">
-              <p className="font-semibold text-rose-900">Unable to load day-closing data</p>
-              <p className="text-xs text-rose-700 mt-0.5">{error}</p>
+    <div className="min-h-screen bg-slate-900/[0.02] text-slate-800 pb-28">
+      {/* ── Top Header ── */}
+      <header className="sticky top-0 z-30 bg-white/90 backdrop-blur-xl border-b border-slate-200/80 shadow-xs px-4 sm:px-6 py-3.5">
+        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="p-2 -ml-1.5 hover:bg-slate-100 rounded-xl text-slate-600 transition cursor-pointer"
+              title="Go Back"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shadow-md shrink-0 ${
+              isClosed ? 'bg-emerald-600 text-white shadow-emerald-500/20' : 'bg-gradient-to-tr from-brand-600 to-indigo-600 text-white shadow-brand-500/20'
+            }`}>
+              {isClosed ? <Lock className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
             </div>
-            <button onClick={() => setError(null)} className="p-1 hover:bg-rose-100 rounded-lg text-rose-600 transition">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base sm:text-lg font-black text-slate-900 tracking-tight">
+                  Business Day Closing & Cash Audit
+                </h1>
+                {isClosed ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[10px] font-bold">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" /> LOCKED & FROZEN
+                  </span>
+                ) : isReopened ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">
+                    <Unlock className="w-3 h-3 text-amber-600" /> REOPENED REVISION
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-bold">
+                    <Sparkles className="w-3 h-3 text-indigo-600" /> OPEN FOR CLOSE
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-400 font-medium">
+                Physical Cash Drawer Reconciliation · Ledger Freeze · Balance Carry Forward
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Date Stepper Pill */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <button
+              onClick={() => shiftDate(-1)}
+              className="p-1.5 hover:bg-white rounded-xl text-slate-600 transition cursor-pointer"
+              title="Previous Day"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+            <input
+              type="date"
+              value={businessDate}
+              onChange={(e) => setBusinessDate(e.target.value)}
+              className="bg-transparent text-xs font-bold text-slate-800 px-2.5 py-1 focus:outline-none cursor-pointer"
+            />
+            <button
+              onClick={() => shiftDate(1)}
+              className="p-1.5 hover:bg-white rounded-xl text-slate-600 transition cursor-pointer"
+              title="Next Day"
+            >
+              <ArrowRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setBusinessDate(new Date().toISOString().slice(0, 10))}
+              className="ml-1 px-2.5 py-1 bg-white hover:bg-slate-50 text-[11px] font-bold text-indigo-600 rounded-xl shadow-2xs border border-slate-200/80 transition cursor-pointer"
+            >
+              Today
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-6 space-y-6">
+        {/* Error / Success Notifications */}
+        {error && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-900 text-xs font-medium rounded-2xl p-4 flex items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-2.5">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError(null)} className="p-1 hover:bg-rose-100 rounded-lg text-rose-600 transition cursor-pointer">
               <X className="w-4 h-4" />
             </button>
           </div>
         )}
 
         {success && (
-          <div className="bg-emerald-50 border border-emerald-200/80 text-emerald-800 text-sm rounded-2xl p-4 flex items-center gap-3 shadow-sm">
-            <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-600" />
-            <span className="font-semibold">{success}</span>
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-medium rounded-2xl p-4 flex items-center gap-3 shadow-xs">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <span className="font-bold">{success}</span>
           </div>
         )}
 
-        {/* Business Date Form Card */}
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 shadow-card space-y-3">
-          <label className="block space-y-2">
-            <span className="block text-xs font-bold text-slate-500 uppercase tracking-widest">Business Date</span>
-            <div className="relative flex items-center">
-              <input
-                type="date"
-                value={businessDate}
-                onChange={(e) => setBusinessDate(e.target.value)}
-                className="w-full h-[52px] px-4 border border-slate-200/80 rounded-xl bg-white text-slate-900 font-bold text-base focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition shadow-xs"
-              />
-            </div>
-          </label>
-        </div>
-
-        {/* Status banner */}
+        {/* ── Status Banner (When Locked / Reopened) ── */}
         {isClosed && (
-          <div className="bg-emerald-50 border border-emerald-200/80 rounded-2xl p-4 flex items-center gap-3 shadow-sm">
-            <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 shrink-0">
-              <Lock className="w-5 h-5" />
+          <div className="bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-3xl p-5 sm:p-6 shadow-xl shadow-emerald-700/10 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center text-white shrink-0 border border-white/20">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-black tracking-tight">
+                  Business Date is Certified & Locked
+                </h3>
+                <p className="text-xs text-emerald-100 font-medium mt-0.5">
+                  Closed by <strong className="text-white">{dayRecord?.closed_by ?? 'Hotel Admin'}</strong> · Report Version #{dayRecord?.report_version ?? 1}
+                  {dayRecord?.closed_at && ` · Certified on ${new Date(dayRecord.closed_at).toLocaleString('en-IN')}`}
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="text-base font-bold text-emerald-900">This business date is CLOSED</p>
-              <p className="text-xs font-medium text-emerald-700 mt-0.5">
-                Closed by {dayRecord?.closed_by ?? '—'} · Report version {dayRecord?.report_version ?? 0}
-                {dayRecord?.closed_at && ` · ${new Date(dayRecord.closed_at).toLocaleString('en-IN')}`}
-              </p>
-            </div>
+
+            {canReopen && !showReopen && (
+              <button
+                onClick={() => setShowReopen(true)}
+                className="px-4 py-2 bg-white text-emerald-900 hover:bg-emerald-50 font-bold text-xs rounded-xl shadow-md transition cursor-pointer flex items-center gap-1.5"
+              >
+                <Unlock className="w-4 h-4 text-emerald-700" />
+                <span>Reopen Day for Revision</span>
+              </button>
+            )}
           </div>
         )}
 
         {isReopened && (
-          <div className="bg-amber-50 border border-amber-200/80 rounded-2xl p-4 flex items-center gap-3 shadow-sm">
-            <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 shrink-0">
-              <Unlock className="w-5 h-5" />
-            </div>
-            <div>
-              <p className="text-base font-bold text-amber-900">This business date was REOPENED for correction</p>
-              <p className="text-xs font-medium text-amber-700 mt-0.5">
-                Reopened by {dayRecord?.reopened_by ?? '—'} · {dayRecord?.reopen_reason ?? '—'}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Validation warnings */}
-        {warnings.length > 0 && !isClosed && (
-          <SectionCard title="Validation Warnings" icon={<AlertTriangle className="w-4 h-4 text-amber-600" />}>
-            <div className="space-y-2">
-              {warnings.map((w, i) => (
-                <div key={i} className="flex items-start gap-2.5 text-xs font-medium text-amber-800 bg-amber-50/80 p-2.5 rounded-xl border border-amber-200/60">
-                  <span className="w-2 h-2 rounded-full bg-amber-500 mt-1 shrink-0" />
-                  <span>{w}</span>
-                </div>
-              ))}
-            </div>
-            {!showOverride && (
-              <p className="text-xs text-slate-400 font-medium mt-3">
-                Resolve these warnings before closing, or use override with remarks (Admin only).
-              </p>
-            )}
-          </SectionCard>
-        )}
-
-        {/* Override panel */}
-        {showOverride && hasBlockingWarnings && !isClosed && canClose && (
-          <div className="bg-amber-50 border border-amber-300/80 rounded-2xl p-5 space-y-3 shadow-card">
-            <div className="flex items-center gap-2.5">
-              <ShieldCheck className="w-5 h-5 text-amber-600" />
-              <p className="text-base font-bold text-amber-900">Admin Override</p>
-            </div>
-            <p className="text-xs font-medium text-amber-700">
-              You are about to close the day with unresolved warnings. This will be recorded in the audit log with your remarks.
-            </p>
-            <textarea
-              value={overrideRemarks}
-              onChange={(e) => setOverrideRemarks(e.target.value)}
-              placeholder="Enter reason for overriding warnings (required)…"
-              rows={2}
-              className="w-full p-3 border border-amber-300 rounded-xl bg-white text-slate-900 text-xs font-medium resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-            />
-          </div>
-        )}
-
-        {/* Cash Audit Panel */}
-        {(() => {
-          const activeReport = report ?? {
-            report_date: businessDate,
-            rooms_occupied: 0,
-            room_sale_amount: 0,
-            kitchen: 0,
-            other_income: 0,
-            other_revenue_entries: 0,
-            gst_collected: 0,
-            housekeeping_supply: 0,
-            other_expense: 0,
-            maintenance_bill: 0,
-            finance_expenses: 0,
-            salary_advance: 0,
-            cash_handover_md: 0,
-            bank_cash_deposit: 0,
-            pay_cash: 0,
-            pay_upi: 0,
-            pay_card: 0,
-            pay_bank: 0,
-            cash_closing: 0,
-          };
-          return (
-            <>
-              <SectionCard title="Cash Audit Panel" icon={<Calendar className="w-4 h-4 text-brand-600" />}>
-                <CashRow label="Opening Cash" value={cashFlow?.opening_cash ?? 0} />
-                <CashRow label="+ Cash Collection" value={toNum(activeReport.pay_cash)} positive />
-                <CashRow label="- Cash Expenses" value={toNum(activeReport.housekeeping_supply) + toNum(activeReport.other_expense) + toNum(activeReport.maintenance_bill) + toNum(activeReport.finance_expenses)} negative />
-                <CashRow label="- Salary Advance" value={toNum(activeReport.salary_advance)} negative />
-                <CashRow label="- Cash Handover" value={toNum(activeReport.cash_handover_md)} negative />
-                <CashRow label="- Bank Cash Deposit" value={toNum(activeReport.bank_cash_deposit)} negative />
-                <div className="flex justify-between pt-3 mt-2 border-t border-slate-200">
-                  <span className="text-sm font-bold text-slate-900">= Calculated Cash Closing</span>
-                  <span className="text-base font-bold text-brand-700 tabular-nums">₹{fmtMoney(calculatedCashClosing)}</span>
-                </div>
-                {storedCashClosing !== null && (
-                  <>
-                    <div className="flex justify-between py-1">
-                      <span className="text-xs text-slate-500 font-medium">Stored Cash Closing</span>
-                      <span className="text-xs font-bold text-slate-800 tabular-nums">₹{fmtMoney(storedCashClosing)}</span>
-                    </div>
-                    <div className="flex justify-between py-1">
-                      <span className="text-xs text-slate-500 font-medium">Difference</span>
-                      <span className={`text-xs font-bold tabular-nums ${cashMismatch ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        ₹{fmtMoney(cashDiff)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      {cashMismatch ? (
-                        <>
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-xs font-bold">
-                            <AlertTriangle className="w-3.5 h-3.5" /> Mismatch
-                          </span>
-                          <span className="text-xs font-medium text-rose-600">Day close blocked until resolved or overridden</span>
-                        </>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Matched
-                        </span>
-                      )}
-                    </div>
-                  </>
-                )}
-              </SectionCard>
-
-              {/* Daily Summary */}
-              <SectionCard title="Daily Summary" icon={<CheckCircle2 className="w-4 h-4 text-emerald-600" />}>
-                <SummaryRow label="Rooms Occupied" value={fmtInt(activeReport.rooms_occupied)} />
-                <SummaryRow label="Room Revenue" value={`₹${fmtMoney(activeReport.room_sale_amount)}`} />
-                <SummaryRow label="F&B Revenue" value={`₹${fmtMoney(activeReport.kitchen)}`} />
-                <SummaryRow label="Other Revenue" value={`₹${fmtMoney(activeReport.other_income + toNum(activeReport.other_revenue_entries))}`} />
-                <SummaryRow label="Total Revenue" value={`₹${fmtMoney(activeReport.room_sale_amount + activeReport.kitchen + activeReport.other_income + toNum(activeReport.other_revenue_entries))}`} strong />
-                <SummaryRow label="GST Collected" value={`₹${fmtMoney(toNum(activeReport.gst_collected))}`} />
-                <SummaryRow label="Total Expenses" value={`₹${fmtMoney(toNum(activeReport.housekeeping_supply) + toNum(activeReport.other_expense) + toNum(activeReport.maintenance_bill) + toNum(activeReport.finance_expenses))}`} />
-                <SummaryRow label="Net Operating Result" value={`₹${fmtMoney(activeReport.room_sale_amount + activeReport.kitchen + activeReport.other_income + toNum(activeReport.other_revenue_entries) - toNum(activeReport.housekeeping_supply) - toNum(activeReport.other_expense) - toNum(activeReport.maintenance_bill) - toNum(activeReport.finance_expenses))}`} strong />
-              </SectionCard>
-
-              {/* Payment Mode Breakup */}
-              <SectionCard title="Payment Mode Breakup" icon={<Calendar className="w-4 h-4 text-teal-600" />}>
-                <SummaryRow label="Cash" value={`₹${fmtMoney(toNum(activeReport.pay_cash))}`} />
-                <SummaryRow label="UPI" value={`₹${fmtMoney(toNum(activeReport.pay_upi))}`} />
-                <SummaryRow label="Card" value={`₹${fmtMoney(toNum(activeReport.pay_card))}`} />
-                <SummaryRow label="Bank Transfer" value={`₹${fmtMoney(toNum(activeReport.pay_bank))}`} />
-              </SectionCard>
-            </>
-          );
-        })()}
-
-        {/* Audit log */}
-        {auditLog.length > 0 && (
-          <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-card">
-            <button
-              onClick={() => setShowAudit(!showAudit)}
-              className="w-full px-5 py-4 flex items-center justify-between hover:bg-slate-50 transition"
-            >
-              <div className="flex items-center gap-2.5">
-                <History className="w-4 h-4 text-slate-500" />
-                <span className="text-xs font-bold text-slate-700 uppercase tracking-widest">Audit Log ({auditLog.length})</span>
+          <div className="bg-gradient-to-r from-amber-500 to-orange-600 text-white rounded-3xl p-5 sm:p-6 shadow-xl shadow-amber-600/10 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center text-white shrink-0 border border-white/20">
+                <Unlock className="w-6 h-6" />
               </div>
-              {showAudit ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-            </button>
-            {showAudit && (
-              <div className="px-5 pb-4 space-y-3 border-t border-slate-100 pt-3">
-                {auditLog.map((log) => (
-                  <div key={log.id} className="flex items-start gap-3 text-xs border-b border-slate-100 last:border-0 pb-3 last:pb-0">
-                    <span className={`px-2 py-0.5 rounded-md font-bold shrink-0 ${
-                      log.action === 'close' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {log.action === 'close' ? 'CLOSED' : 'REOPENED'}
+              <div>
+                <h3 className="text-base sm:text-lg font-black tracking-tight">
+                  Reopened for Corrections & Adjustments
+                </h3>
+                <p className="text-xs text-amber-100 font-medium mt-0.5">
+                  Reopened by <strong className="text-white">{dayRecord?.reopened_by ?? 'Admin'}</strong> · Reason: "{dayRecord?.reopen_reason ?? 'Correction'}"
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Executive Top Stat Cards (Hero KPI Strip) ── */}
+        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3.5 sm:gap-4">
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-card">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[10px] font-black uppercase tracking-wider">Occupancy</span>
+              <BedDouble className="w-4 h-4 text-indigo-500" />
+            </div>
+            <p className="text-lg sm:text-xl font-black text-slate-900 mt-2">
+              {fmtInt(activeReport.rooms_occupied)} <span className="text-xs font-semibold text-slate-400">Rooms</span>
+            </p>
+            <p className="text-[11px] font-semibold text-indigo-600 mt-0.5">₹{fmtMoney(roomRev)} Room Rev</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-card">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[10px] font-black uppercase tracking-wider">F&B / Kitchen</span>
+              <Utensils className="w-4 h-4 text-amber-500" />
+            </div>
+            <p className="text-lg sm:text-xl font-black text-slate-900 mt-2">
+              ₹{fmtMoney(fnbRev)}
+            </p>
+            <p className="text-[11px] font-semibold text-amber-600 mt-0.5">Restaurant & Room Service</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-card">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[10px] font-black uppercase tracking-wider">Gross Revenue</span>
+              <ArrowUpRight className="w-4 h-4 text-emerald-500" />
+            </div>
+            <p className="text-lg sm:text-xl font-black text-emerald-700 mt-2">
+              ₹{fmtMoney(totalRev)}
+            </p>
+            <p className="text-[11px] font-semibold text-slate-400 mt-0.5">All income streams</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-card">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[10px] font-black uppercase tracking-wider">Total Expenses</span>
+              <ArrowDownRight className="w-4 h-4 text-rose-500" />
+            </div>
+            <p className="text-lg sm:text-xl font-black text-rose-600 mt-2">
+              ₹{fmtMoney(totalExp)}
+            </p>
+            <p className="text-[11px] font-semibold text-slate-400 mt-0.5">Direct bills & supplies</p>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-slate-200/80 shadow-card col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between text-slate-400">
+              <span className="text-[10px] font-black uppercase tracking-wider">Net Operating Result</span>
+              <TrendingUp className="w-4 h-4 text-indigo-500" />
+            </div>
+            <p className={`text-lg sm:text-xl font-black mt-2 ${netResult >= 0 ? 'text-indigo-600' : 'text-rose-600'}`}>
+              {netResult >= 0 ? '+' : ''}₹{fmtMoney(netResult)}
+            </p>
+            <p className="text-[11px] font-semibold text-slate-400 mt-0.5">Net cash surplus today</p>
+          </div>
+        </section>
+
+        {/* ── 2-Column Master Layout ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* ══════════════════════════════════════════════════════════
+              LEFT COLUMN: Physical Cash Drawer & Reconciliation (7 cols)
+             ══════════════════════════════════════════════════════════ */}
+          <div className="lg:col-span-7 space-y-6">
+            {/* Cash Audit & Drawer Reconciliation Card */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card overflow-hidden">
+              <div className="px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center font-bold">
+                    <DollarSign className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">
+                      Physical Cash Drawer Reconciliation
+                    </h3>
+                    <p className="text-[11px] text-slate-400 font-medium">
+                      Live tally of cash collection vs physical register
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[11px] font-bold px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-slate-600 shadow-2xs">
+                  Step 1 of 2
+                </span>
+              </div>
+
+              <div className="p-6 space-y-3.5 text-xs">
+                {/* 1. Opening Cash */}
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-[10px]">
+                      1
                     </span>
-                    <div className="flex-1">
-                      <p className="font-bold text-slate-800">
-                        By {log.performed_by ?? '—'} · v{log.report_version}
-                      </p>
-                      <p className="text-slate-400 text-[11px] mt-0.5">
-                        {new Date(log.created_at).toLocaleString('en-IN')}
-                      </p>
-                      {log.reason && <p className="text-slate-600 mt-1 font-medium bg-slate-50 p-2 rounded-lg border border-slate-200/60">Reason: {log.reason}</p>}
+                    <span className="font-bold text-slate-700">Opening Cash in Drawer</span>
+                  </div>
+                  <span className="font-black text-slate-900 text-sm tabular-nums">
+                    ₹{fmtMoney(cashFlow?.opening_cash ?? settings?.opening_cash_balance ?? 10000)}
+                  </span>
+                </div>
+
+                {/* 2. Cash Collections */}
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-[10px]">
+                      +
+                    </span>
+                    <div>
+                      <span className="font-bold text-slate-700">Cash Collections Received</span>
+                      <span className="text-[10px] text-slate-400 block font-normal">Room tariffs & F&B cash bills</span>
                     </div>
                   </div>
-                ))}
+                  <span className="font-black text-emerald-600 text-sm tabular-nums">
+                    +₹{fmtMoney(payCash)}
+                  </span>
+                </div>
+
+                {/* 3. Cash Expenses */}
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 flex items-center justify-center font-bold text-[10px]">
+                      -
+                    </span>
+                    <div>
+                      <span className="font-bold text-slate-700">Direct Cash Expenses</span>
+                      <span className="text-[10px] text-slate-400 block font-normal">Housekeeping, maintenance & petty cash</span>
+                    </div>
+                  </div>
+                  <span className="font-black text-rose-600 text-sm tabular-nums">
+                    -₹{fmtMoney(totalExp)}
+                  </span>
+                </div>
+
+                {/* 4. Salary Advances */}
+                <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 flex items-center justify-center font-bold text-[10px]">
+                      -
+                    </span>
+                    <span className="font-bold text-slate-700">Staff Salary Advances Paid</span>
+                  </div>
+                  <span className="font-black text-rose-600 text-sm tabular-nums">
+                    -₹{fmtMoney(totalAdvances)}
+                  </span>
+                </div>
+
+                {/* 5. Handover to MD / Owner */}
+                {totalHandover > 0 && (
+                  <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 flex items-center justify-center font-bold text-[10px]">
+                        -
+                      </span>
+                      <span className="font-bold text-slate-700">Cash Handover to Owner/MD</span>
+                    </div>
+                    <span className="font-black text-rose-600 text-sm tabular-nums">
+                      -₹{fmtMoney(totalHandover)}
+                    </span>
+                  </div>
+                )}
+
+                {/* 6. Bank Cash Deposit */}
+                {totalBankDeposit > 0 && (
+                  <div className="flex items-center justify-between py-2 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-rose-100 text-rose-800 flex items-center justify-center font-bold text-[10px]">
+                        -
+                      </span>
+                      <span className="font-bold text-slate-700">Bank Cash Deposit (Contra)</span>
+                    </div>
+                    <span className="font-black text-rose-600 text-sm tabular-nums">
+                      -₹{fmtMoney(totalBankDeposit)}
+                    </span>
+                  </div>
+                )}
+
+                {/* ── System Calculated Cash Balance ── */}
+                <div className="mt-4 pt-4 border-t-2 border-slate-200 bg-slate-50/70 p-4 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-900 block">
+                      Calculated System Cash Closing
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      Exact amount that should be physically in the safe
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-xl font-black text-indigo-700 tracking-tight block">
+                      ₹{fmtMoney(calculatedCashClosing)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Stored Cash Audit Verification */}
+                {storedCashClosing !== null && (
+                  <div className={`p-4 rounded-2xl border ${cashMismatch ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'} space-y-2`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {cashMismatch ? (
+                          <AlertTriangle className="w-4 h-4 text-rose-600" />
+                        ) : (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        )}
+                        <span className={`font-bold text-xs ${cashMismatch ? 'text-rose-900' : 'text-emerald-900'}`}>
+                          {cashMismatch ? 'Cash Discrepancy Detected' : 'Physical Drawer Matched Perfectly'}
+                        </span>
+                      </div>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${cashMismatch ? 'bg-rose-200 text-rose-900' : 'bg-emerald-200 text-emerald-900'}`}>
+                        {cashMismatch ? `Diff: ₹${fmtMoney(cashDiff)}` : 'MATCHED 100%'}
+                      </span>
+                    </div>
+                    {cashMismatch && (
+                      <p className="text-[11px] text-rose-700 font-medium">
+                        Stored closing is ₹{fmtMoney(storedCashClosing)} while live calculation is ₹{fmtMoney(calculatedCashClosing)}. Day close requires Admin review or override remarks.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Validation Warnings & Pre-requisites Checklist */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-indigo-600" />
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">
+                    Pre-Closing Audit Verification
+                  </h3>
+                </div>
+                {warnings.length === 0 ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                    <Check className="w-3.5 h-3.5" /> All Checks Passed
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full">
+                    <AlertTriangle className="w-3.5 h-3.5" /> {warnings.length} Warnings Pending
+                  </span>
+                )}
+              </div>
+
+              {warnings.length > 0 && !isClosed ? (
+                <div className="space-y-2">
+                  {warnings.map((w, i) => (
+                    <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 text-xs font-semibold text-amber-900">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <span>{w}</span>
+                    </div>
+                  ))}
+                  {!showOverride && (
+                    <p className="text-xs text-slate-400 font-medium pt-1">
+                      Resolve these operational items, or authorize an Admin Override with justification remarks to freeze the accounts.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                  Zero pending checkout disputes or unrecorded cashier discrepancies. Day close is authorized and ready for audit lock.
+                </p>
+              )}
+
+              {/* Admin Override Form */}
+              {showOverride && hasBlockingWarnings && !isClosed && canClose && (
+                <div className="bg-amber-50/90 border border-amber-300 rounded-2xl p-4 space-y-3 animate-in fade-in">
+                  <div className="flex items-center gap-2 text-amber-900 font-black text-xs uppercase tracking-wider">
+                    <ShieldAlert className="w-4 h-4 text-amber-600" />
+                    <span>Admin Override Authorization Required</span>
+                  </div>
+                  <p className="text-xs text-amber-800 font-medium">
+                    Please provide an official justification remark for freezing the day with unresolved warnings:
+                  </p>
+                  <textarea
+                    value={overrideRemarks}
+                    onChange={(e) => setOverrideRemarks(e.target.value)}
+                    placeholder="e.g., Room 102 late guest departure approved by GM; cash verified in drawer manually."
+                    rows={2}
+                    className="w-full p-3 border border-amber-300 rounded-xl bg-white text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20 shadow-2xs resize-none"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ══════════════════════════════════════════════════════════
+              RIGHT COLUMN: Payment Modes & Audit Trail (5 cols)
+             ══════════════════════════════════════════════════════════ */}
+          <div className="lg:col-span-5 space-y-6">
+            {/* Multi-Channel Payment Breakup */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Wallet className="w-5 h-5 text-teal-600" />
+                  <h3 className="font-black text-sm text-slate-900 uppercase tracking-wider">
+                    Payment Mode Breakdown
+                  </h3>
+                </div>
+                <span className="text-xs font-bold text-slate-400">
+                  Total ₹{fmtMoney(totalPayments)}
+                </span>
+              </div>
+
+              <div className="space-y-3.5 text-xs">
+                {/* Cash */}
+                <div>
+                  <div className="flex items-center justify-between font-bold mb-1">
+                    <span className="text-slate-700">Cash Payment</span>
+                    <span className="text-slate-900 tabular-nums">₹{fmtMoney(payCash)}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-emerald-500 h-2 rounded-full transition-all"
+                      style={{ width: `${totalPayments > 0 ? (payCash / totalPayments) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* UPI */}
+                <div>
+                  <div className="flex items-center justify-between font-bold mb-1">
+                    <span className="text-slate-700">UPI / QR Code</span>
+                    <span className="text-slate-900 tabular-nums">₹{fmtMoney(payUpi)}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-brand-500 h-2 rounded-full transition-all"
+                      style={{ width: `${totalPayments > 0 ? (payUpi / totalPayments) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Card */}
+                <div>
+                  <div className="flex items-center justify-between font-bold mb-1">
+                    <span className="text-slate-700">Debit / Credit Card</span>
+                    <span className="text-slate-900 tabular-nums">₹{fmtMoney(payCard)}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-purple-500 h-2 rounded-full transition-all"
+                      style={{ width: `${totalPayments > 0 ? (payCard / totalPayments) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Bank */}
+                <div>
+                  <div className="flex items-center justify-between font-bold mb-1">
+                    <span className="text-slate-700">Direct Bank Transfer / NEFT</span>
+                    <span className="text-slate-900 tabular-nums">₹{fmtMoney(payBank)}</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-sky-500 h-2 rounded-full transition-all"
+                      style={{ width: `${totalPayments > 0 ? (payBank / totalPayments) * 100 : 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Tax Collection Badge */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs bg-slate-50/60 p-3 rounded-xl font-bold">
+                <span className="text-slate-600">GST Collected (CGST + SGST):</span>
+                <span className="text-indigo-700 tabular-nums">₹{fmtMoney(toNum(activeReport.gst_collected))}</span>
+              </div>
+            </div>
+
+            {/* Audit History Log */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-card overflow-hidden">
+              <button
+                onClick={() => setShowAudit(!showAudit)}
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition cursor-pointer text-left"
+              >
+                <div className="flex items-center gap-2.5">
+                  <History className="w-4 h-4 text-slate-500" />
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Audit Trail & History ({auditLog.length})
+                  </span>
+                </div>
+                {showAudit ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+
+              {showAudit && (
+                <div className="px-6 pb-5 space-y-3 border-t border-slate-100 pt-3 text-xs">
+                  {auditLog.length === 0 ? (
+                    <p className="text-slate-400 text-xs">No closing audit entries for this date.</p>
+                  ) : (
+                    auditLog.map((log) => (
+                      <div key={log.id} className="p-3 bg-slate-50 rounded-2xl border border-slate-200/70 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
+                            log.action === 'close' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {log.action === 'close' ? 'CLOSED & FROZEN' : 'REOPENED REVISION'}
+                          </span>
+                          <span className="text-[10px] font-semibold text-slate-400">
+                            {new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <p className="font-bold text-slate-800 text-xs">
+                          By: {log.performed_by ?? 'Admin'} · Report v{log.report_version}
+                        </p>
+                        {log.reason && (
+                          <p className="text-slate-600 bg-white p-2 rounded-xl border border-slate-200 text-[11px] font-medium">
+                            Remarks: {log.reason}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Reopen Modal Popup */}
+            {showReopen && isClosed && canReopen && (
+              <div className="bg-amber-50 border border-amber-300 rounded-3xl p-5 space-y-3.5 shadow-xl">
+                <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+                  <Unlock className="w-4 h-4 text-amber-600" />
+                  <span>Reopen Business Date</span>
+                </div>
+                <p className="text-xs text-amber-800 font-medium">
+                  Reopening unlocks the day for ledger corrections. A new report version will be recorded in the audit trail.
+                </p>
+                <textarea
+                  value={reopenReason}
+                  onChange={(e) => setReopenReason(e.target.value)}
+                  placeholder="Enter reason for reopening (e.g. Correcting invoice #1024 bill amount)..."
+                  rows={2}
+                  className="w-full p-3 border border-amber-300 rounded-xl bg-white text-slate-900 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20 resize-none shadow-2xs"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setShowReopen(false); setReopenReason(''); }}
+                    className="flex-1 px-4 py-2 bg-white border border-slate-200 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-50 transition cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleReopen}
+                    disabled={actionLoading || !reopenReason.trim()}
+                    className="flex-1 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    {actionLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    Confirm Reopen
+                  </button>
+                </div>
               </div>
             )}
           </div>
-        )}
-
-        {/* Reopen panel */}
-        {isClosed && canReopen && !showReopen && (
-          <button
-            onClick={() => setShowReopen(true)}
-            className="w-full flex items-center justify-center gap-2 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold py-3.5 rounded-2xl border border-amber-200/80 shadow-xs transition active:scale-[0.99]"
-          >
-            <Unlock className="w-4 h-4" /> Reopen This Day
-          </button>
-        )}
-
-        {showReopen && isClosed && canReopen && (
-          <div className="bg-amber-50 border border-amber-300/80 rounded-2xl p-5 space-y-4 shadow-card">
-            <div className="flex items-center gap-2.5">
-              <Unlock className="w-5 h-5 text-amber-600" />
-              <p className="text-base font-bold text-amber-900">Reopen Business Date</p>
-            </div>
-            <p className="text-xs font-medium text-amber-700">
-              Reopening will unlock the day for corrections. A new report version will be created and the old snapshot preserved. This action is audit-logged.
-            </p>
-            <textarea
-              value={reopenReason}
-              onChange={(e) => setReopenReason(e.target.value)}
-              placeholder="Enter reason for reopening (required)…"
-              rows={2}
-              className="w-full p-3 border border-amber-300 rounded-xl bg-white text-slate-900 text-xs font-medium resize-none focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-            />
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setShowReopen(false); setReopenReason(''); }}
-                className="flex-1 bg-white border border-slate-200 text-slate-700 font-bold py-2.5 rounded-xl text-xs hover:bg-slate-50 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleReopen}
-                disabled={actionLoading || !reopenReason.trim()}
-                className="flex-1 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition"
-              >
-                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Unlock className="w-4 h-4" />}
-                Confirm Reopen
-              </button>
-            </div>
-          </div>
-        )}
+        </div>
       </main>
 
-      {/* Sticky action bar */}
+      {/* ── Sticky Bottom Action Bar ── */}
       {!isClosed && canClose && (
-        <div className="sticky bottom-0 bg-white/95 backdrop-blur-md border-t border-slate-200/80 p-4 sm:p-5 z-20 shadow-lg mt-6 -mx-4 sm:-mx-6 px-4 sm:px-6">
-          <div className="max-w-2xl mx-auto">
-            <button
-              onClick={handleClose}
-              disabled={actionLoading}
-              className="w-full flex items-center justify-center gap-2.5 bg-brand-600 hover:bg-brand-700 disabled:opacity-60 text-white font-bold text-base h-[54px] sm:h-[58px] rounded-2xl shadow-soft-blue hover:shadow-md transition active:scale-[0.99]"
-            >
-              {actionLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Lock className="w-5 h-5" />}
-              {showOverride ? 'Override & Close Day' : 'Close Business Day'}
-            </button>
-          </div>
-        </div>
-      )}
+        <div className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-xl border-t border-slate-200/80 p-4 z-40 shadow-2xl">
+          <div className="max-w-7xl mx-auto flex items-center justify-between gap-4 flex-wrap">
+            <div className="hidden sm:flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">
+                ✓
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-900">
+                  Ready to finalize accounts for {new Date(businessDate + 'T00:00:00').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Closing freezes all financial transactions and carries cash forward to tomorrow.
+                </p>
+              </div>
+            </div>
 
-      {!canClose && !isClosed && (
-        <div className="sticky bottom-0 bg-white/95 backdrop-blur-md border-t border-slate-200/80 p-4 sm:p-5 z-20 shadow-lg mt-6 -mx-4 sm:-mx-6 px-4 sm:px-6">
-          <div className="max-w-2xl mx-auto">
-            <p className="text-center text-xs font-semibold text-slate-400">Only Hotel Admin can close the business day.</p>
+            <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+              <button
+                onClick={handleClose}
+                disabled={actionLoading}
+                className="w-full sm:w-auto px-7 py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-black text-sm rounded-2xl shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                <span>{showOverride ? 'Authorize Override & Close Day' : 'Close & Freeze Business Day'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -457,21 +811,3 @@ function buildCashFlowFromReport(r: DerivedReport): CashFlowData {
     r,
   );
 }
-
-const CashRow = ({ label, value, positive, negative }: { label: string; value: number; positive?: boolean; negative?: boolean }) => {
-  const sign = negative ? '-' : positive ? '+' : '';
-  const color = negative ? 'text-rose-600' : positive ? 'text-emerald-600' : 'text-slate-700';
-  return (
-    <div className="flex items-baseline justify-between py-1.5 border-b border-slate-100 last:border-0">
-      <span className="text-xs font-medium text-slate-600">{label}</span>
-      <span className={`text-xs font-bold tabular-nums ${color}`}>{sign}₹{fmtMoney(value)}</span>
-    </div>
-  );
-};
-
-const SummaryRow = ({ label, value, strong }: { label: string; value: string; strong?: boolean }) => (
-  <div className={`flex items-baseline justify-between py-1.5 ${strong ? 'pt-2.5 mt-1 border-t border-slate-200' : 'border-b border-slate-100 last:border-0'}`}>
-    <span className={`text-xs ${strong ? 'font-bold text-slate-900' : 'font-medium text-slate-600'}`}>{label}</span>
-    <span className={`text-xs font-bold tabular-nums ${strong ? 'text-brand-700 text-sm' : 'text-slate-800'}`}>{value}</span>
-  </div>
-);

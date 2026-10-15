@@ -46,7 +46,7 @@ export const History = ({ initialDate, onBack, onNavigate }: HistoryProps) => {
   const byDate = new Map<string, RoomChartEntry[]>();
   for (let day = 1; day <= lastDay; day++) {
     const dStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayEntries = entries.filter((e) => isStayOccupiedOnDate(e, dStr) || e.report_date === dStr);
+    const dayEntries = entries.filter((e) => isStayOccupiedOnDate(e, dStr));
     if (dayEntries.length > 0) {
       byDate.set(dStr, dayEntries);
     }

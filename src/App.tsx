@@ -12,7 +12,17 @@ import { supabase } from '@/lib/supabase';
 import { triggerLiveSync } from '@/lib/externalChannelSyncService';
 
 
-type PublicView = 'landing' | 'login' | 'signup' | 'otp-verify' | 'hotel-details' | 'checkout' | 'payment-success';
+type PublicView =
+  | 'landing'
+  | 'login'
+  | 'signup'
+  | 'otp-verify'
+  | 'hotel-details'
+  | 'checkout'
+  | 'payment-success'
+  | 'privacy-policy'
+  | 'data-deletion'
+  | 'terms';
 
 
 // Lazy-loaded screens — each becomes a separate chunk loaded on demand
@@ -24,6 +34,9 @@ const RecoveryScreen = lazy(() => import('@/screens/RecoveryScreen').then(m => (
 const LandingPage = lazy(() => import('@/screens/LandingPage').then(m => ({ default: m.LandingPage })));
 const CheckoutScreen = lazy(() => import('@/screens/CheckoutScreen').then(m => ({ default: m.CheckoutScreen })));
 const PaymentSuccessScreen = lazy(() => import('@/screens/PaymentSuccessScreen').then(m => ({ default: m.PaymentSuccessScreen })));
+const PrivacyPolicyScreen = lazy(() => import('@/screens/PrivacyPolicyScreen').then(m => ({ default: m.PrivacyPolicyScreen })));
+const DataDeletionScreen = lazy(() => import('@/screens/DataDeletionScreen').then(m => ({ default: m.DataDeletionScreen })));
+const TermsOfServiceScreen = lazy(() => import('@/screens/TermsOfServiceScreen').then(m => ({ default: m.TermsOfServiceScreen })));
 const SubscriptionExpiredScreen = lazy(() => import('@/screens/SubscriptionExpiredScreen').then(m => ({ default: m.SubscriptionExpiredScreen })));
 const Dashboard = lazy(() => import('@/screens/Dashboard').then(m => ({ default: m.Dashboard })));
 const SuperAdminPanel = lazy(() => import('@/screens/SuperAdminPanel').then(m => ({ default: m.SuperAdminPanel })));
@@ -35,6 +48,7 @@ const PeriodView = lazy(() => import('@/screens/PeriodView').then(m => ({ defaul
 const WhatsAppScreen = lazy(() => import('@/screens/WhatsAppScreen').then(m => ({ default: m.WhatsAppScreen })));
 const History = lazy(() => import('@/screens/History').then(m => ({ default: m.History })));
 const Settings = lazy(() => import('@/screens/Settings').then(m => ({ default: m.Settings })));
+const UserManagementScreen = lazy(() => import('@/screens/UserManagementScreen').then(m => ({ default: m.UserManagementScreen })));
 const DailyEntryTabs = lazy(() => import('@/screens/DailyEntryTabs').then(m => ({ default: m.DailyEntryTabs })));
 const PropertyMaster = lazy(() => import('@/screens/PropertyMaster').then(m => ({ default: m.PropertyMaster })));
 const OtherEntries = lazy(() => import('@/screens/OtherEntries').then(m => ({ default: m.OtherEntries })));
@@ -109,7 +123,7 @@ const PostingRulesScreen = lazy(() => import('@/screens/finance/FinanceSettingsS
 
 type Screen =
   | 'dashboard' | 'entry' | 'report' | 'mtd' | 'ytd' | 'whatsapp' | 'history'
-  | 'settings' | 'roomchart' | 'other' | 'ledger' | 'pdf' | 'property'
+  | 'settings' | 'users' | 'roomchart' | 'other' | 'ledger' | 'pdf' | 'property'
   | 'finance' | 'expense-entry' | 'expense-ledger' | 'staff' | 'salary-advance'
   | 'salary-settlement' | 'electricity' | 'utility-bills' | 'laundry'
   | 'monthly-bills' | 'profitability' | 'gst-report' | 'subscription' | 'housekeeping'
@@ -147,21 +161,238 @@ function ScreenLoader() {
 
 
 
+const SCREEN_TO_HASH: Record<string, string> = {
+  'operations': 'operations-board',
+  'dashboard': 'dashboard',
+  'reservations': 'reservations',
+  'arrivals': 'arrivals',
+  'departures': 'departures',
+  'inhouse': 'inhouse',
+  'channel-manager': 'channel-manager',
+  'roomchart': 'daily-entry',
+  'property': 'property-master',
+  'other': 'other-entries',
+  'ledger': 'company-ledger',
+  'entry': 'entry-form',
+  'report': 'daily-report',
+  'mtd': 'mtd-report',
+  'ytd': 'ytd-report',
+  'mis-report': 'mis-report',
+  'pdf': 'pdf-reports',
+  'whatsapp': 'whatsapp',
+  'history': 'history',
+  'settings': 'settings',
+  'users': 'staff-roles',
+  'subscription': 'subscription',
+  'finance': 'finance',
+  'close-day': 'close-day',
+  'housekeeping': 'housekeeping',
+  'laundry-linen': 'laundry-linen',
+  'crm': 'crm',
+  'crm-directory': 'guest-directory',
+  'crm-corporate': 'corporate-guests',
+  'crm-vip': 'vip-guests',
+  'crm-agents': 'travel-agents',
+  'crm-loyalty': 'loyalty',
+  'analytics': 'analytics',
+  'owner-dashboard': 'owner-dashboard',
+  'expense-entry': 'expense-entry',
+  'expense-ledger': 'expense-ledger',
+  'staff': 'staff-master',
+  'salary-advance': 'salary-advance',
+  'salary-settlement': 'salary-settlement',
+  'electricity': 'electricity',
+  'utility-bills': 'utility-bills',
+  'laundry': 'laundry',
+  'monthly-bills': 'monthly-bills',
+  'profitability': 'profitability',
+  'gst-report': 'gst-report',
+  'ledgers': 'ledgers',
+  'pl-report': 'profit-loss',
+  'finance-dashboard': 'finance-dashboard',
+  'chart-of-accounts': 'chart-of-accounts',
+  'journals': 'journals',
+  'cash-book': 'cash-book',
+  'bank-book': 'bank-book',
+  'vouchers': 'vouchers',
+  'receivables': 'receivables',
+  'payables': 'payables',
+  'vendor-ledger': 'vendor-ledger',
+  'accounting-pl': 'accounting-pl',
+  'trial-balance': 'trial-balance',
+  'balance-sheet': 'balance-sheet',
+  'reconciliation': 'reconciliation',
+  'finance-exceptions': 'finance-exceptions',
+  'opening-balances': 'opening-balances',
+  'budgets': 'budgets',
+  'historical-posting': 'historical-posting',
+  'posting-rules': 'posting-rules',
+  'pos-dashboard': 'pos-dashboard',
+  'pos-new-order': 'pos-new-order',
+  'pos-kds': 'pos-kds',
+  'pos-billing': 'pos-billing',
+  'pos-tables': 'pos-tables',
+  'pos-menu': 'pos-menu',
+  'pos-reports': 'pos-reports',
+  'reservations-board': 'reservations-board',
+  'reservations-groups': 'reservations-groups',
+  'reservations-rates': 'reservations-rates',
+  'reservations-waitlist': 'reservations-waitlist',
+  'reservations-reports': 'reservations-reports',
+  'analytics-booking': 'analytics-booking',
+  'analytics-category': 'analytics-category',
+  'analytics-payment': 'analytics-payment',
+  'analytics-gst': 'analytics-gst',
+  'analytics-expense': 'analytics-expense',
+  'analytics-occupancy': 'analytics-occupancy',
+  'analytics-revenue': 'analytics-revenue',
+};
+
+const HASH_TO_SCREEN: Record<string, string> = {
+  'operations-board': 'operations',
+  'operations': 'operations',
+  'dashboard': 'dashboard',
+  'reservations': 'reservations',
+  'arrivals': 'arrivals',
+  'departures': 'departures',
+  'inhouse': 'inhouse',
+  'channel-manager': 'channel-manager',
+  'daily-entry': 'roomchart',
+  'roomchart': 'roomchart',
+  'property-master': 'property',
+  'property': 'property',
+  'other-entries': 'other',
+  'other': 'other',
+  'company-ledger': 'ledger',
+  'ledger': 'ledger',
+  'entry-form': 'entry',
+  'entry': 'entry',
+  'daily-report': 'report',
+  'report': 'report',
+  'staff-roles': 'users',
+  'users': 'users',
+  'mtd-report': 'mtd',
+  'mtd': 'mtd',
+  'ytd-report': 'ytd',
+  'ytd': 'ytd',
+  'mis-report': 'mis-report',
+  'pdf-reports': 'pdf',
+  'pdf': 'pdf',
+  'whatsapp': 'whatsapp',
+  'history': 'history',
+  'settings': 'settings',
+  'subscription': 'subscription',
+  'finance': 'finance',
+  'close-day': 'close-day',
+  'housekeeping': 'housekeeping',
+  'laundry-linen': 'laundry-linen',
+  'crm': 'crm',
+  'guest-directory': 'crm-directory',
+  'corporate-guests': 'crm-corporate',
+  'vip-guests': 'crm-vip',
+  'travel-agents': 'crm-agents',
+  'loyalty': 'crm-loyalty',
+  'analytics': 'analytics',
+  'owner-dashboard': 'owner-dashboard',
+  'expense-entry': 'expense-entry',
+  'expense-ledger': 'expense-ledger',
+  'staff-master': 'staff',
+  'staff': 'staff',
+  'salary-advance': 'salary-advance',
+  'salary-settlement': 'salary-settlement',
+  'electricity': 'electricity',
+  'utility-bills': 'utility-bills',
+  'laundry': 'laundry',
+  'monthly-bills': 'monthly-bills',
+  'profitability': 'profitability',
+  'gst-report': 'gst-report',
+  'ledgers': 'ledgers',
+  'profit-loss': 'pl-report',
+  'pl-report': 'pl-report',
+  'finance-dashboard': 'finance-dashboard',
+  'chart-of-accounts': 'chart-of-accounts',
+  'journals': 'journals',
+  'cash-book': 'cash-book',
+  'bank-book': 'bank-book',
+  'vouchers': 'vouchers',
+  'receivables': 'receivables',
+  'payables': 'payables',
+  'vendor-ledger': 'vendor-ledger',
+  'accounting-pl': 'accounting-pl',
+  'trial-balance': 'trial-balance',
+  'balance-sheet': 'balance-sheet',
+  'reconciliation': 'reconciliation',
+  'finance-exceptions': 'finance-exceptions',
+  'opening-balances': 'opening-balances',
+  'budgets': 'budgets',
+  'historical-posting': 'historical-posting',
+  'posting-rules': 'posting-rules',
+  'pos-dashboard': 'pos-dashboard',
+  'pos-new-order': 'pos-new-order',
+  'pos-kds': 'pos-kds',
+  'pos-billing': 'pos-billing',
+  'pos-tables': 'pos-tables',
+  'pos-menu': 'pos-menu',
+  'pos-reports': 'pos-reports',
+  'reservations-board': 'reservations-board',
+  'reservations-groups': 'reservations-groups',
+  'reservations-rates': 'reservations-rates',
+  'reservations-waitlist': 'reservations-waitlist',
+  'reservations-reports': 'reservations-reports',
+  'analytics-booking': 'analytics-booking',
+  'analytics-category': 'analytics-category',
+  'analytics-payment': 'analytics-payment',
+  'analytics-gst': 'analytics-gst',
+  'analytics-expense': 'analytics-expense',
+  'analytics-occupancy': 'analytics-occupancy',
+  'analytics-revenue': 'analytics-revenue',
+};
+
 function AppInner() {
-  const { user, loading, profileLoaded, profileError, role, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
+  const { user, loading, profileLoaded, profileError, role, permissions, subscriptionStatus, hotelName: authHotelName, signOut, refreshProfile, recoveryMode } = useAuth();
   const { hotelId, hotel, isSuperAdmin, status: hotelStatus, error: hotelError, setSelectedHotel } = useHotel();
   const [showSuperAdminHotelSelector, setShowSuperAdminHotelSelector] = useState(false);
   const [nav, setNav] = useState<NavState>(() => {
     try {
-      const st = window.history.state;
-      if (st && st.screen) {
-        return { screen: st.screen as Screen, date: st.date ?? getTodayLocal() };
+      const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      if (hash) {
+        if (hash.startsWith('cm-')) {
+          return { screen: 'channel-manager', date: getTodayLocal() };
+        }
+        if (HASH_TO_SCREEN[hash]) {
+          return { screen: HASH_TO_SCREEN[hash] as Screen, date: getTodayLocal() };
+        }
+      }
+      const st = typeof window !== 'undefined' ? window.history?.state : null;
+      if (st && st.screen && HASH_TO_SCREEN[st.screen]) {
+        return { screen: (HASH_TO_SCREEN[st.screen] || st.screen) as Screen, date: st.date ?? getTodayLocal() };
       }
     } catch {}
     return { screen: 'dashboard', date: getTodayLocal() };
   });
+
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
-  const [publicView, setPublicView] = useState<PublicView>('landing');
+  const [publicView, setPublicView] = useState<PublicView>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const path = window.location.pathname.toLowerCase();
+        const hash = window.location.hash.replace(/^#/, '').trim().toLowerCase();
+
+        if (path === '/privacy-policy' || path === '/privacy' || hash === 'privacy-policy' || hash === 'privacy') return 'privacy-policy';
+        if (path === '/data-deletion' || path === '/deletion' || hash === 'data-deletion' || hash === 'deletion') return 'data-deletion';
+        if (path === '/terms' || path === '/terms-and-conditions' || hash === 'terms') return 'terms';
+
+        if (hash === 'login') return 'login';
+        if (hash === 'signup') return 'signup';
+        if (hash === 'checkout') return 'checkout';
+        if (hash === 'otp-verify') return 'otp-verify';
+        if (hash === 'hotel-details') return 'hotel-details';
+        if (hash === 'payment-success') return 'payment-success';
+      }
+    } catch {}
+    return 'landing';
+  });
+
   const [selectedPlanId, setSelectedPlanId] = useState<string>('pro');
   const [registeredEmail, setRegisteredEmail] = useState<string>('');
   const [signupData, setSignupData] = useState<{ fullName: string; email: string; mobile: string; password: string } | null>(null);
@@ -169,10 +400,6 @@ function AppInner() {
   const [features, setFeatures] = useState<Record<string, boolean> | null>(null);
   
   const [superAdminMode, setSuperAdminMode] = useState<'panel' | 'dashboard'>('panel');
-  
-  // NOTE: Removed the useEffect that changed superAdminMode on mount
-  // to avoid race conditions. superAdminMode starts as 'panel' so the 
-  // user immediately sees EnterpriseHQ.
 
   useEffect(() => {
     if (user && profileLoaded && role && role !== 'super_admin' && role !== 'company_user' && hotelId) {
@@ -185,6 +412,34 @@ function AppInner() {
       }).catch(() => setFeatures(null));
     }
   }, [user, profileLoaded, role, hotelId]);
+
+  // Role-Based Screen Enforcement (Housekeeping, Accounts, Reception)
+  useEffect(() => {
+    if (user && profileLoaded && role) {
+      if (role === 'housekeeping') {
+        const canLaundry = Boolean(permissions?.canLaundry);
+        if (nav.screen !== 'housekeeping' && !(canLaundry && nav.screen === 'laundry-linen')) {
+          setNav({ screen: 'housekeeping', date: getTodayLocal() });
+          window.history.replaceState({ screen: 'housekeeping', date: getTodayLocal() }, '', '#housekeeping');
+        }
+      } else if (role === 'accounts') {
+        const allowedAccountsScreens = [
+          'finance', 'close-day', 'ledgers', 'pl-report', 'mtd', 'ytd', 'pdf',
+          'mis-report', 'expense-entry', 'expense-ledger', 'staff', 'salary-advance',
+          'salary-settlement', 'electricity', 'utility-bills', 'laundry', 'monthly-bills',
+          'profitability', 'gst-report', 'finance-dashboard', 'chart-of-accounts',
+          'journals', 'cash-book', 'bank-book', 'vouchers', 'receivables', 'payables',
+          'vendor-ledger', 'accounting-pl', 'trial-balance', 'balance-sheet',
+          'reconciliation', 'finance-exceptions', 'opening-balances', 'budgets',
+          'historical-posting', 'posting-rules', 'report'
+        ];
+        if (!allowedAccountsScreens.includes(nav.screen)) {
+          setNav({ screen: 'finance', date: getTodayLocal() });
+          window.history.replaceState({ screen: 'finance', date: getTodayLocal() }, '', '#finance');
+        }
+      }
+    }
+  }, [user, profileLoaded, role, nav.screen, permissions?.canLaundry]);
 
   // Automatic non-blocking live OTA sync on application/page open when hotel context is ready
   useEffect(() => {
@@ -234,6 +489,17 @@ function AppInner() {
           );
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
+        (payload) => {
+          window.dispatchEvent(
+            new CustomEvent('hotel_mantri_availability_updated', {
+              detail: { source: 'realtime_channel_inventory_restrictions', payload },
+            })
+          );
+        }
+      )
       .subscribe();
 
     return () => {
@@ -241,34 +507,147 @@ function AppInner() {
     };
   }, [hotelId, hotelStatus]);
 
-
-  // Keep browser history in sync with internal nav state so Back/Forward work naturally
+  // Handle URL hash synchronization for public landing views
   useEffect(() => {
-    // Replace initial history entry with current nav if it doesn't have our state
+    if (loading) return;
     try {
-      if (!window.history.state || !window.history.state.screen) {
-        window.history.replaceState({ screen: nav.screen, date: nav.date }, '');
+      const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      const isAppScreenHash = Boolean(HASH_TO_SCREEN[rawHash] || rawHash.startsWith('cm-'));
+      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success', 'privacy-policy', 'privacy', 'data-deletion', 'deletion', 'terms'].includes(rawHash);
+
+      if (publicView === 'privacy-policy') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/privacy-policy') {
+          window.history.replaceState(null, '', '/privacy-policy');
+        }
+      } else if (publicView === 'data-deletion') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/data-deletion') {
+          window.history.replaceState(null, '', '/data-deletion' + window.location.search);
+        }
+      } else if (publicView === 'terms') {
+        if (typeof window !== 'undefined' && window.location.pathname !== '/terms') {
+          window.history.replaceState(null, '', '/terms');
+        }
+      } else if (!user) {
+        if (publicView === 'landing') {
+          if (isAppScreenHash || isPublicHash) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+        } else if (publicView === 'login' && rawHash !== 'login') {
+          window.history.replaceState(null, '', '#login');
+        } else if (publicView === 'signup' && rawHash !== 'signup') {
+          window.history.replaceState(null, '', '#signup');
+        } else if (publicView === 'checkout' && rawHash !== 'checkout') {
+          window.history.replaceState(null, '', '#checkout');
+        }
+      }
+    } catch {}
+  }, [user, loading, publicView]);
+
+  // Keep browser history in sync with internal nav state when authenticated
+  useEffect(() => {
+    if (loading || !user || !profileLoaded) return;
+    if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') return;
+
+    try {
+      const currentHash = SCREEN_TO_HASH[nav.screen] || nav.screen;
+      const rawHash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim() : '';
+      const isPublicHash = ['login', 'signup', 'checkout', 'otp-verify', 'hotel-details', 'payment-success', 'privacy-policy', 'privacy', 'data-deletion', 'deletion', 'terms'].includes(rawHash);
+
+      // If on channel-manager and sub-tab hash exists (#cm-...), preserve it
+      if (nav.screen === 'channel-manager' && rawHash.startsWith('cm-')) {
+        // preserve current cm- sub-tab
+      } else if (!rawHash || rawHash === '#' || isPublicHash) {
+        window.history.replaceState({ screen: nav.screen, date: nav.date }, '', '#' + currentHash);
+      } else if (HASH_TO_SCREEN[rawHash] && HASH_TO_SCREEN[rawHash] !== nav.screen) {
+        window.history.replaceState({ screen: nav.screen, date: nav.date }, '', '#' + currentHash);
       }
     } catch {
       // ignore
     }
+  }, [user, profileLoaded, loading, nav.screen, nav.date, publicView]);
 
-    const onPop = (e: PopStateEvent) => {
-      const st = e.state as { screen?: string; date?: string } | null;
-      if (st && st.screen) {
-        setNav({ screen: st.screen as Screen, date: st.date });
-      }
+  // Listen to browser Back/Forward (popstate) and hash changes
+  useEffect(() => {
+    const handleLocationChange = (e?: Event) => {
+      try {
+        const path = typeof window !== 'undefined' ? window.location.pathname.toLowerCase() : '';
+        const hash = typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '').trim().toLowerCase() : '';
+
+        // Universal compliance routes accessible across all auth states
+        if (path === '/privacy-policy' || path === '/privacy' || hash === 'privacy-policy' || hash === 'privacy') {
+          setPublicView('privacy-policy');
+          return;
+        }
+        if (path === '/data-deletion' || path === '/deletion' || hash === 'data-deletion' || hash === 'deletion') {
+          setPublicView('data-deletion');
+          return;
+        }
+        if (path === '/terms' || path === '/terms-and-conditions' || hash === 'terms') {
+          setPublicView('terms');
+          return;
+        }
+
+        if (!user) {
+          if (hash === 'login') setPublicView('login');
+          else if (hash === 'signup') setPublicView('signup');
+          else if (hash === 'checkout') setPublicView('checkout');
+          else if (hash === 'otp-verify') setPublicView('otp-verify');
+          else if (hash === 'hotel-details') setPublicView('hotel-details');
+          else if (hash === 'payment-success') setPublicView('payment-success');
+          else if (HASH_TO_SCREEN[hash] || hash.startsWith('cm-')) {
+            setPublicView('landing');
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          } else {
+            setPublicView('landing');
+          }
+          return;
+        }
+
+        if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') {
+          setPublicView('landing');
+        }
+
+        if (role === 'housekeeping') {
+          const canLaundry = Boolean(permissions?.canLaundry);
+          if (hash === 'laundry-linen' && canLaundry) {
+            setNav((prev) => (prev.screen === 'laundry-linen' ? prev : { screen: 'laundry-linen', date: prev.date }));
+            return;
+          }
+          setNav((prev) => (prev.screen === 'housekeeping' ? prev : { screen: 'housekeeping', date: prev.date }));
+          window.history.replaceState({ screen: 'housekeeping', date: getTodayLocal() }, '', '#housekeeping');
+          return;
+        }
+
+        if (hash && hash.startsWith('cm-')) {
+          setNav((prev) => (prev.screen === 'channel-manager' ? prev : { screen: 'channel-manager', date: prev.date }));
+          return;
+        }
+        if (hash && HASH_TO_SCREEN[hash]) {
+          const matched = HASH_TO_SCREEN[hash] as Screen;
+          setNav((prev) => (prev.screen === matched ? prev : { screen: matched, date: prev.date }));
+          return;
+        }
+        const st = (e && 'state' in e ? (e as PopStateEvent).state : null) as { screen?: string; date?: string } | null;
+        if (st && st.screen && HASH_TO_SCREEN[st.screen]) {
+          const matched = (HASH_TO_SCREEN[st.screen] || st.screen) as Screen;
+          setNav({ screen: matched, date: st.date });
+        }
+      } catch {}
     };
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
+  }, [user]);
 
   if (loading || (user && !profileLoaded)) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
         <div className="flex flex-col items-center gap-4 bg-slate-800/80 border border-slate-700 p-8 rounded-3xl shadow-2xl">
-          <BrandLogo variant="sidebar" />
+          <BrandLogo variant="sidebar" onDark />
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping" />
             <p className="text-slate-300 text-sm font-semibold tracking-wide">Loading HotelMantri…</p>
@@ -283,6 +662,67 @@ function AppInner() {
     return (
       <Suspense fallback={<ScreenLoader />}>
         <RecoveryScreen />
+      </Suspense>
+    );
+  }
+
+  // Universal Public Compliance Pages (Privacy Policy, Data Deletion, Terms)
+  if (publicView === 'privacy-policy' || publicView === 'data-deletion' || publicView === 'terms') {
+    const handleReturn = () => {
+      if (user) {
+        setPublicView('landing');
+        const targetHash = SCREEN_TO_HASH[nav.screen] || 'dashboard';
+        window.history.pushState(null, '', '#' + targetHash);
+      } else {
+        setPublicView('landing');
+        window.history.pushState(null, '', '/');
+      }
+    };
+
+    return (
+      <Suspense fallback={<ScreenLoader />}>
+        {publicView === 'privacy-policy' && (
+          <PrivacyPolicyScreen
+            onNavigateHome={handleReturn}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
+        {publicView === 'data-deletion' && (
+          <DataDeletionScreen
+            onNavigateHome={handleReturn}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
+        {publicView === 'terms' && (
+          <TermsOfServiceScreen
+            onNavigateHome={handleReturn}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            isAuthenticated={Boolean(user)}
+          />
+        )}
       </Suspense>
     );
   }
@@ -341,6 +781,18 @@ function AppInner() {
               if (planId) setSelectedPlanId(planId);
               setPublicView('signup');
             }}
+            onNavigatePrivacy={() => {
+              setPublicView('privacy-policy');
+              window.history.pushState(null, '', '/privacy-policy');
+            }}
+            onNavigateDeletion={() => {
+              setPublicView('data-deletion');
+              window.history.pushState(null, '', '/data-deletion');
+            }}
+            onNavigateTerms={() => {
+              setPublicView('terms');
+              window.history.pushState(null, '', '/terms');
+            }}
           />
         )}
       </Suspense>
@@ -379,7 +831,7 @@ function AppInner() {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
         <div className="flex flex-col items-center gap-4 bg-slate-800/80 border border-slate-700 p-8 rounded-3xl shadow-2xl">
-          <BrandLogo variant="sidebar" />
+          <BrandLogo variant="sidebar" onDark />
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-brand-500 animate-ping" />
             <p className="text-slate-300 text-sm font-semibold tracking-wide">Resolving hotel property…</p>
@@ -430,15 +882,40 @@ function AppInner() {
       return;
     }
 
-    if (role === 'hotel_staff') {
+    if (role === 'housekeeping') {
+      const canLaundry = Boolean(permissions?.canLaundry);
+      if (screen !== 'housekeeping' && !(canLaundry && screen === 'laundry-linen')) {
+        go('housekeeping', { date: nav.date });
+        return;
+      }
+    }
+
+    if (role === 'accounts') {
+      const allowedAccountsScreens = [
+        'finance', 'close-day', 'ledgers', 'pl-report', 'mtd', 'ytd', 'pdf',
+        'mis-report', 'expense-entry', 'expense-ledger', 'staff', 'salary-advance',
+        'salary-settlement', 'electricity', 'utility-bills', 'laundry', 'monthly-bills',
+        'profitability', 'gst-report', 'finance-dashboard', 'chart-of-accounts',
+        'journals', 'cash-book', 'bank-book', 'vouchers', 'receivables', 'payables',
+        'vendor-ledger', 'accounting-pl', 'trial-balance', 'balance-sheet',
+        'reconciliation', 'finance-exceptions', 'opening-balances', 'budgets',
+        'historical-posting', 'posting-rules', 'report'
+      ];
+      if (!allowedAccountsScreens.includes(screen)) {
+        go('finance', { date: nav.date });
+        return;
+      }
+    }
+
+    if (role === 'reception' || role === 'hotel_staff') {
       const restrictedScreens = [
-        'finance', 'property', 'settings', 'close-day', 'ledgers', 'pl-report',
+        'finance', 'property', 'settings', 'users', 'close-day', 'ledgers', 'pl-report',
         'mtd', 'ytd', 'pdf', 'channel-manager', 'mis-report', 'analytics', 'owner-dashboard',
         'expense-entry', 'expense-ledger', 'staff', 'salary-advance', 'salary-settlement',
         'electricity', 'utility-bills', 'laundry', 'monthly-bills', 'profitability', 'gst-report',
       ];
       if (restrictedScreens.includes(screen)) {
-        go('dashboard', { date: nav.date });
+        go('operations', { date: nav.date });
         return;
       }
     }
@@ -469,7 +946,10 @@ function AppInner() {
     const date = (payload as { date?: string } | undefined)?.date;
     const next = { screen: screen as Screen, date: date ?? nav.date };
     try {
-      window.history.pushState({ screen: next.screen, date: next.date }, '');
+      const targetHash = screen === 'channel-manager' && window.location.hash.startsWith('#cm-')
+        ? window.location.hash
+        : '#' + (SCREEN_TO_HASH[screen] || screen);
+      window.history.pushState({ screen: next.screen, date: next.date }, '', targetHash);
       (window as any)._hotelMantriHasHistory = true; // Track that we've pushed at least once
     } catch {
       // ignore
@@ -556,7 +1036,10 @@ function AppInner() {
             <History initialDate={nav.date} onBack={back} onNavigate={go} />
           )}
           {nav.screen === 'settings' && (
-            <Settings onBack={back} />
+            <Settings onBack={back} onNavigate={go} />
+          )}
+          {nav.screen === 'users' && (
+            <UserManagementScreen onBack={back} />
           )}
           {nav.screen === 'subscription' && (
             <HotelSubscriptionBilling onBack={back} />
@@ -569,7 +1052,7 @@ function AppInner() {
           {nav.screen === 'finance' && (
             <FinanceHub onBack={back} onNavigate={(s) => setNav({ screen: s as Screen })} />
           )}
-          {nav.screen === 'expense-entry' && <ExpenseEntryScreen onBack={backToFinance} />}
+          {nav.screen === 'expense-entry' && <ExpenseEntryScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
           {nav.screen === 'expense-ledger' && <ExpenseLedgerScreen onBack={backToFinance} />}
           {nav.screen === 'staff' && <StaffMasterScreen onBack={backToFinance} />}
           {nav.screen === 'salary-advance' && <SalaryAdvanceScreen onBack={backToFinance} />}
@@ -592,8 +1075,8 @@ function AppInner() {
           {nav.screen === 'cash-book' && <CashBookScreen onBack={backToFinance} />}
           {nav.screen === 'bank-book' && <BankBookScreen onBack={backToFinance} />}
           {nav.screen === 'vouchers' && <VouchersScreen onBack={backToFinance} />}
-          {nav.screen === 'receivables' && <ReceivablesScreen onBack={backToFinance} />}
-          {nav.screen === 'payables' && <PayablesScreen onBack={backToFinance} />}
+          {nav.screen === 'receivables' && <ReceivablesScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
+          {nav.screen === 'payables' && <PayablesScreen onBack={backToFinance} onNavigate={(s) => setNav({ screen: s as Screen })} />}
           {nav.screen === 'vendor-ledger' && <VendorLedgerScreen onBack={backToFinance} />}
           {nav.screen === 'accounting-pl' && <AccountingProfitLossScreen onBack={backToFinance} />}
           {nav.screen === 'trial-balance' && <AccountingTrialBalanceScreen onBack={backToFinance} />}
@@ -622,7 +1105,7 @@ function AppInner() {
           {nav.screen === 'analytics-revenue' && <RevenueAnalytics onBack={backToAnalytics} />}
 
           {nav.screen === 'operations' && nav.date && (
-            <OperationsBoard date={nav.date} onBack={back} onSaved={() => go('dashboard')} onNavigate={go} />
+            <OperationsBoard date={nav.date} onBack={back} onSaved={() => {}} onNavigate={go} />
           )}
 
           {nav.screen === 'housekeeping' && (
@@ -707,15 +1190,17 @@ function AppInner() {
             <PosReportsScreen onBack={back} />
           )}
         </Suspense>
+          </div>
+        </AppShell>
       </div>
-    </AppShell>
-  </div>
-  <HotelSelectorModal
-    isOpen={showSuperAdminHotelSelector}
-    onClose={() => setShowSuperAdminHotelSelector(false)}
-  />
-</div>
-);
+      {isSuperAdmin && (
+        <HotelSelectorModal
+          isOpen={showSuperAdminHotelSelector}
+          onClose={() => setShowSuperAdminHotelSelector(false)}
+        />
+      )}
+    </div>
+  );
 }
 
 function SuperAdminRouter({ onSignOut, onViewDashboard }: { onSignOut: () => void; onViewDashboard?: (hotelId?: string) => void }) {

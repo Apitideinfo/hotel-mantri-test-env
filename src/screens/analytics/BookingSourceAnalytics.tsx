@@ -3,7 +3,7 @@ import { Users, Loader2, Download } from 'lucide-react';
 import type { HotelSettings, RoomChartEntry, SourceCategory } from '@/lib/types';
 import { getSettings, getRoomChartForMonth } from '@/lib/api';
 import { getRoomChartForDateRange } from '@/lib/api-reservations';
-import { toNum, fmtMoney, fmtInt, calcArr } from '@/lib/calc';
+import { toNum, fmtMoney, fmtInt, calcArr, getNightlyRoomRevenue, generateOccupiedStayNights } from '@/lib/calc';
 import { BarChart, DonutChart, LineChart } from '@/components/charts';
 import { ScreenHeader, SectionCard, Banner } from '@/components/finance-ui';
 
@@ -43,10 +43,21 @@ export const BookingSourceAnalytics = ({ onBack }: { onBack: () => void }) => {
     for (const s of sources) map.set(s, { source: s, bookings: 0, revenue: 0, avgRate: 0, occContribution: 0 });
     for (const e of entries) {
       if (e.is_complimentary) continue;
-      const amt = toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate);
       const src = e.source_category ?? 'Direct/Walking';
       const st = map.get(src) ?? { source: src, bookings: 0, revenue: 0, avgRate: 0, occContribution: 0 };
-      st.bookings += 1; st.revenue += amt;
+      const ci = (e.arrival || e.report_date).slice(0, 10);
+      const co = (e.departure || e.report_date).slice(0, 10);
+      const occupiedNights = generateOccupiedStayNights(ci, co);
+      let nightsInPeriod = 0;
+      for (const d of occupiedNights) {
+        if (d < fromDate || d > toDate) continue;
+        nightsInPeriod += 1;
+        const nightly = getNightlyRoomRevenue(e, d);
+        st.revenue += nightly;
+      }
+      if (nightsInPeriod > 0) {
+        st.bookings += 1;
+      }
       map.set(src, st);
     }
     const totalBookings = Array.from(map.values()).reduce((s, v) => s + v.bookings, 0);
@@ -55,7 +66,7 @@ export const BookingSourceAnalytics = ({ onBack }: { onBack: () => void }) => {
       v.occContribution = totalBookings > 0 ? (v.bookings / totalBookings) * 100 : 0;
       return v;
     }).filter((v) => v.bookings > 0).sort((a, b) => b.revenue - a.revenue);
-  }, [entries]);
+  }, [entries, fromDate, toDate]);
 
   const donutData = stats.map((s) => ({ label: s.source, value: Math.round(s.revenue), color: SOURCE_COLORS[s.source] ?? '#64748b' }));
   const barData = stats.map((s) => ({ label: s.source.split('/')[0], value: s.bookings }));
@@ -64,12 +75,17 @@ export const BookingSourceAnalytics = ({ onBack }: { onBack: () => void }) => {
     const byDate = new Map<string, Record<string, number>>();
     for (const e of entries) {
       if (e.is_complimentary) continue;
-      const d = e.report_date;
-      const day = byDate.get(d) ?? { 'OTA': 0, 'Direct/Walking': 0, 'Corporate/Agent': 0, 'Phonebook': 0 };
-      const amt = toNum(e.total) > 0 ? toNum(e.total) : toNum(e.room_rate);
       const src = e.source_category ?? 'Direct/Walking';
-      day[src] = (day[src] ?? 0) + amt;
-      byDate.set(d, day);
+      const ci = (e.arrival || e.report_date).slice(0, 10);
+      const co = (e.departure || e.report_date).slice(0, 10);
+      const occupiedNights = generateOccupiedStayNights(ci, co);
+      for (const d of occupiedNights) {
+        if (d < fromDate || d > toDate) continue;
+        const day = byDate.get(d) ?? { 'OTA': 0, 'Direct/Walking': 0, 'Corporate/Agent': 0, 'Phonebook': 0 };
+        const nightly = getNightlyRoomRevenue(e, d);
+        day[src] = (day[src] ?? 0) + nightly;
+        byDate.set(d, day);
+      }
     }
     const sorted = Array.from(byDate.entries()).sort((a, b) => a[0] < b[0] ? -1 : 1);
     return [
@@ -77,7 +93,7 @@ export const BookingSourceAnalytics = ({ onBack }: { onBack: () => void }) => {
       { name: 'Direct', color: SOURCE_COLORS['Direct/Walking'], points: sorted.map(([d, v]) => ({ label: d.slice(5), value: Math.round(v['Direct/Walking'] ?? 0) })) },
       { name: 'Corporate', color: SOURCE_COLORS['Corporate/Agent'], points: sorted.map(([d, v]) => ({ label: d.slice(5), value: Math.round(v['Corporate/Agent'] ?? 0) })) },
     ];
-  }, [entries]);
+  }, [entries, fromDate, toDate]);
 
   return (
     <div className="min-h-screen bg-slate-50 pb-12">

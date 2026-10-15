@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
-import { calcStayNights } from './calc';
+import { toNum, calcStayNights, isStayOverlapping } from './calc';
+import { dispatchChannelEvent } from './api-channel';
+import { apiFetch } from './api-fetch';
 import type { RoomChartEntry } from './types';
 import type {
   Reservation, ReservationInput, ReservationStatus,
@@ -8,9 +10,83 @@ import type {
   RatePlan, RatePlanInput, RatePlanType,
   WaitlistEntry, WaitlistInput, WaitlistStatus,
   RoomBlock, RoomBlockInput, BlockType,
+  ReservationConfirmationData,
 } from './types-reservations';
+import { isValidEmail } from './types-reservations';
+import { getSourceCategoryFromType } from './sourceClassification';
 
 export { getRoomChartForDateRange };
+
+/**
+ * Authoritative set of PostgreSQL columns in the 'reservations' table.
+ * Strips client-only flags (allowEmptyEmail), category hold markers (room_category_id),
+ * and virtual/generated properties before executing Supabase/PostgREST queries.
+ */
+export const RESERVATION_DB_COLUMNS = new Set<string>([
+  'hotel_id',
+  'room_id',
+  'room_no',
+  'guest_name',
+  'guest_phone',
+  'guest_email',
+  'guest_address',
+  'guest_type',
+  'company_gst',
+  'check_in_date',
+  'check_out_date',
+  'rate',
+  'source_category',
+  'source_name',
+  'payment_mode',
+  'advance_paid',
+  'pay_cash',
+  'pay_upi',
+  'pay_card',
+  'pay_bank',
+  'payment_ref',
+  'discount',
+  'meal_plan',
+  'gst_type',
+  'gst_slab',
+  'gst_amount',
+  'taxable_amount',
+  'invoice_total',
+  'adults',
+  'children',
+  'remarks',
+  'internal_note',
+  'created_by',
+  'status',
+  'room_chart_entry_id',
+  'group_id',
+  'rate_plan',
+  'parent_reservation_id',
+  'guest_id',
+  'created_at',
+  'updated_at',
+]);
+
+export const sanitizeReservationPayload = (raw: Record<string, any>): Record<string, any> => {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (RESERVATION_DB_COLUMNS.has(key) && val !== undefined) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
+/**
+ * Definition of an active reservation status that blocks room inventory.
+ * Confirmed and Checked-in block rooms.
+ * Checked-out, Cancelled, and No-show do NOT block rooms.
+ */
+export const isReservationRoomBlocking = (status?: string | null): boolean => {
+  if (!status) return false;
+  const s = status.toLowerCase().trim();
+  return s === 'confirmed' || s === 'checked_in';
+};
 
 export const getReservations = async (
   fromDate?: string,
@@ -55,6 +131,8 @@ export const getReservationsForDateRange = async (
     .from('reservations')
     .select('*')
     .eq('hotel_id', hotelId)
+    .lte('check_in_date', endDate)
+    .gte('check_out_date', startDate)
     .order('check_in_date', { ascending: true });
   if (error) {
     console.error('[getReservationsForDateRange] Supabase query error:', error);
@@ -93,11 +171,116 @@ export const saveReservation = async (
   id?: string,
 ): Promise<Reservation> => {
   const hotelId = getCurrentHotelId();
-  const rawPayload = { ...input, hotel_id: hotelId };
+  const ci = (input.check_in_date || '').slice(0, 10);
+  const co = (input.check_out_date || '').slice(0, 10);
 
-  // Remove generated/virtual fields that PostgreSQL generated columns forbid inserting into
-  delete (rawPayload as { id?: string }).id;
-  delete (rawPayload as { nights?: number }).nights;
+  if (!ci || !co) {
+    throw new Error('Please select check-in and check-out dates.');
+  }
+  if (ci >= co) {
+    throw new Error('Check-out date must be strictly after check-in date.');
+  }
+
+  const isNew = !id || id.trim() === '';
+  const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+  const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
+  const cleanEmail = (input.guest_email ?? '').trim();
+
+  if (isNew && !isOta && !allowEmptyEmail) {
+    if (!cleanEmail) {
+      throw new Error('Guest email is required.');
+    }
+    if (!isValidEmail(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
+  }
+
+  const normRoom = (input.room_no || '').trim().toLowerCase();
+  const isPhysical = normRoom && normRoom !== 'unassigned' && normRoom !== 'tbd';
+
+  if (isPhysical) {
+    const isAvail = await checkRoomAvailability(input.room_no, ci, co, id);
+    if (!isAvail) {
+      throw new Error(`Room ${input.room_no} is already booked for part of this stay. Please choose another room or change the dates.`);
+    }
+  }
+
+  // Try authoritative backend endpoint
+  try {
+    if (id && id.trim() !== '') {
+      const res = await apiFetch(`/api/reservations/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(input),
+      });
+      if (res?.reservation) {
+        dispatchChannelEvent('RESERVATION_MODIFIED', {
+          startDate: res.reservation.check_in_date,
+          endDate: res.reservation.check_out_date,
+          room_no: res.reservation.room_no,
+          room_id: res.reservation.room_id,
+        }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+        }
+        return {
+          ...res.reservation,
+          _emailDelivery: res.emailDelivery,
+          _emailStatus: res.emailStatus,
+        };
+      }
+    } else {
+      const res = await apiFetch('/api/reservations', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+      if (res?.reservation) {
+        dispatchChannelEvent('RESERVATION_CREATED', {
+          startDate: res.reservation.check_in_date,
+          endDate: res.reservation.check_out_date,
+          room_no: res.reservation.room_no,
+          room_id: res.reservation.room_id,
+        }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+        }
+        return {
+          ...res.reservation,
+          _emailDelivery: res.emailDelivery,
+          _emailStatus: res.emailStatus,
+        };
+      }
+    }
+  } catch (err: any) {
+    if (
+      err?.code === 'ROOM_ALREADY_BOOKED' ||
+      err?.code === 'ROOM_ASSIGNMENT_CONFLICT' ||
+      err?.code === 'INVALID_STAY_DATES' ||
+      err?.code === 'RESERVATION_DUPLICATE' ||
+      err?.code === 'GUEST_EMAIL_REQUIRED' ||
+      err?.code === 'INVALID_GUEST_EMAIL' ||
+      err?.status === 409 ||
+      err?.status === 422
+    ) {
+      throw new Error(err.message || 'Validation error');
+    }
+    console.warn('[saveReservation] Backend call deferred to direct database update:', err?.message || err);
+  }
+
+  // Direct Supabase fallback
+  const rawPayload = sanitizeReservationPayload({ ...input, hotel_id: hotelId });
+
+  if (isNew && !isOta && !allowEmptyEmail) {
+    if (!cleanEmail) {
+      throw new Error('Guest email is required.');
+    }
+    if (!isValidEmail(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
+  }
 
   // Sync guest into guests master table if name or phone provided
   try {
@@ -154,14 +337,87 @@ export const saveReservation = async (
   }
 
   if (id && id.trim() !== '') {
+    const updatePayload = sanitizeReservationPayload({ ...rawPayload, updated_at: new Date().toISOString() });
     const { data, error } = await supabase
       .from('reservations')
-      .update({ ...rawPayload, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', id)
       .select('*')
       .single();
-    if (error) throw error;
-    return data as Reservation;
+    if (error) {
+      if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+        throw new Error('Check-out date must be after check-in date.');
+      }
+      if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+        throw new Error(`Room ${rawPayload.room_no} is already booked for part of this stay. Please choose another room.`);
+      }
+      throw error;
+    }
+    const res = data as Reservation;
+    dispatchChannelEvent('RESERVATION_MODIFIED', {
+      startDate: res.check_in_date,
+      endDate: res.check_out_date,
+      room_no: res.room_no,
+      room_id: res.room_id,
+    }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+
+    if (toNum(res.advance_paid) > 0) {
+      const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+      const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
+      (async () => {
+        try {
+          const { data: existingEvents } = await supabase
+            .from('booking_timeline')
+            .select('id, event_data')
+            .eq('reservation_id', res.id)
+            .eq('event_type', 'advance_payment')
+            .limit(1);
+
+          if (existingEvents && existingEvents.length > 0) {
+            await supabase
+              .from('booking_timeline')
+              .update({
+                event_description: `Advance payment for reservation: ${res.guest_name} (${paymentMethod})`,
+                event_amount: toNum(res.advance_paid),
+                event_data: {
+                  ...(existingEvents[0].event_data || {}),
+                  payment_date: paymentDate,
+                  business_date: paymentDate,
+                  payment_method: paymentMethod,
+                  pay_cash: res.pay_cash ?? 0,
+                  pay_bank: res.pay_bank ?? 0,
+                  pay_upi: res.pay_upi ?? 0,
+                  pay_card: res.pay_card ?? 0,
+                  updated_at: new Date().toISOString(),
+                },
+              })
+              .eq('id', existingEvents[0].id);
+          } else {
+            await supabase.from('booking_timeline').insert({
+              hotel_id: hotelId,
+              reservation_id: res.id,
+              event_type: 'advance_payment',
+              event_description: `Advance payment for reservation: ${res.guest_name} (${paymentMethod})`,
+              event_amount: toNum(res.advance_paid),
+              event_data: {
+                payment_date: paymentDate,
+                business_date: paymentDate,
+                payment_method: paymentMethod,
+                pay_cash: res.pay_cash ?? 0,
+                pay_bank: res.pay_bank ?? 0,
+                pay_upi: res.pay_upi ?? 0,
+                pay_card: res.pay_card ?? 0,
+              },
+              performed_by: 'STAFF',
+            });
+          }
+        } catch (e) {
+          console.warn('[saveReservation] Timeline advance sync error:', e);
+        }
+      })().catch(() => {});
+    }
+
+    return res;
   }
 
   const { data, error } = await supabase
@@ -169,8 +425,199 @@ export const saveReservation = async (
     .insert(rawPayload)
     .select('*')
     .single();
-  if (error) throw error;
-  return data as Reservation;
+  if (error) {
+    if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+      throw new Error('Check-out date must be after check-in date.');
+    }
+    if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      throw new Error(`Room ${rawPayload.room_no} is already booked for part of this stay. Please choose another room.`);
+    }
+    throw error;
+  }
+  const res = data as Reservation;
+  dispatchChannelEvent('RESERVATION_CREATED', {
+    startDate: res.check_in_date,
+    endDate: res.check_out_date,
+    room_no: res.room_no,
+    room_id: res.room_id,
+  }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+  }
+
+  if (toNum(res.advance_paid) > 0) {
+    const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+    const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
+    Promise.resolve(supabase.from('booking_timeline').insert({
+      hotel_id: hotelId,
+      reservation_id: res.id,
+      event_type: 'advance_payment',
+      event_description: `Advance payment for reservation: ${res.guest_name}`,
+      event_amount: toNum(res.advance_paid),
+      event_data: {
+        payment_date: paymentDate,
+        business_date: paymentDate,
+        payment_method: paymentMethod,
+        pay_cash: res.pay_cash ?? 0,
+        pay_bank: res.pay_bank ?? 0,
+        pay_upi: res.pay_upi ?? 0,
+        pay_card: res.pay_card ?? 0,
+      },
+      performed_by: 'STAFF',
+    })).catch(() => {});
+  }
+
+  return res;
+};
+
+export const saveReservations = async (
+  inputs: ReservationInput[],
+): Promise<Reservation[]> => {
+  if (!inputs || inputs.length === 0) return [];
+  if (inputs.length === 1) {
+    const single = await saveReservation(inputs[0]);
+    return [single];
+  }
+
+  // Deduplicate physical rooms in batch inputs
+  const seenPhysicalRooms = new Set<string>();
+  const sanitizedInputs: ReservationInput[] = [];
+  for (const input of inputs) {
+    const norm = (input.room_no || '').trim().toLowerCase();
+    if (norm && norm !== 'unassigned' && norm !== 'tbd') {
+      if (seenPhysicalRooms.has(norm)) {
+        console.warn(`[saveReservations] Dropping duplicate room entry for Room ${input.room_no} in multi-room batch`);
+        continue;
+      }
+      seenPhysicalRooms.add(norm);
+    }
+    sanitizedInputs.push({
+      ...input,
+      room_no: (input.room_no || '').trim() || 'Unassigned',
+    });
+  }
+
+  if (sanitizedInputs.length === 1) {
+    const single = await saveReservation(sanitizedInputs[0]);
+    return [single];
+  }
+
+  const hotelId = getCurrentHotelId();
+
+  // Validate dates & emails for all items in batch
+  for (const input of sanitizedInputs) {
+    const ci = (input.check_in_date || '').slice(0, 10);
+    const co = (input.check_out_date || '').slice(0, 10);
+    if (!ci || !co) throw new Error('Please select check-in and check-out dates.');
+    if (ci >= co) throw new Error('Check-out date must be strictly after check-in date.');
+
+    const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+    const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
+    const cleanEmail = (input.guest_email ?? '').trim();
+    if (!isOta && !allowEmptyEmail) {
+      if (!cleanEmail) throw new Error('Guest email is required.');
+    }
+    if (cleanEmail && !isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
+  }
+
+  // Ensure all share the exact same group_id
+  const sharedGroupId = sanitizedInputs[0].group_id || (sanitizedInputs.length > 1 ? crypto.randomUUID() : undefined);
+  const normalizedInputs = sanitizedInputs.map((i) => ({
+    ...i,
+    group_id: sharedGroupId,
+  }));
+
+  // Try authoritative batch backend endpoint
+  try {
+    const res = await apiFetch('/api/reservations', {
+      method: 'POST',
+      body: JSON.stringify(normalizedInputs),
+    });
+    if (res?.reservations && Array.isArray(res.reservations) && res.reservations.length > 0) {
+      for (const r of res.reservations) {
+        dispatchChannelEvent('RESERVATION_CREATED', {
+          startDate: r.check_in_date,
+          endDate: r.check_out_date,
+          room_no: r.room_no,
+          room_id: r.room_id,
+        }).catch((e) => console.warn('[saveReservations] Auto-sync warning:', e));
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+      }
+      return res.reservations.map((r: any, idx: number) => ({
+        ...r,
+        _emailDelivery: idx === 0 ? res.emailDelivery : undefined,
+        _emailStatus: idx === 0 ? res.emailStatus : undefined,
+        confirmationToken: idx === 0 ? res.confirmationToken : undefined,
+        _confirmationToken: idx === 0 ? res.confirmationToken : undefined,
+      }));
+    }
+  } catch (err: any) {
+    if (
+      err?.code === 'ROOM_ALREADY_BOOKED' ||
+      err?.code === 'ROOM_ASSIGNMENT_CONFLICT' ||
+      err?.code === 'INVALID_STAY_DATES' ||
+      err?.code === 'RESERVATION_DUPLICATE' ||
+      err?.code === 'GUEST_EMAIL_REQUIRED' ||
+      err?.code === 'INVALID_GUEST_EMAIL' ||
+      err?.code === 'DUPLICATE_ROOM_IN_BOOKING' ||
+      err?.status === 409 ||
+      err?.status === 422
+    ) {
+      throw new Error(err.message || 'Validation error');
+    }
+    console.warn('[saveReservations] Backend call deferred to direct database update:', err?.message || err);
+  }
+
+  // Fallback: Direct batch Supabase insert (only if not already created)
+  if (sharedGroupId) {
+    const { data: existingGroup } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('group_id', sharedGroupId);
+
+    if (existingGroup && existingGroup.length >= normalizedInputs.length) {
+      console.log(`[saveReservations] Found ${existingGroup.length} reservations already created for group ${sharedGroupId}`);
+      return existingGroup as Reservation[];
+    }
+  }
+
+  const rawPayloads = normalizedInputs.map((input) =>
+    sanitizeReservationPayload({ ...input, hotel_id: hotelId })
+  );
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .insert(rawPayloads)
+    .select('*');
+
+  if (error) {
+    if (error.code === '23P01' || error.message?.includes('INVALID_STAY_DATES')) {
+      throw new Error('Check-out date must be after check-in date.');
+    }
+    if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      throw new Error('One or more selected rooms are already booked for these dates.');
+    }
+    throw error;
+  }
+
+  const created = (data as Reservation[]) ?? [];
+  for (const r of created) {
+    dispatchChannelEvent('RESERVATION_CREATED', {
+      startDate: r.check_in_date,
+      endDate: r.check_out_date,
+      room_no: r.room_no,
+      room_id: r.room_id,
+    }).catch((e) => console.warn('[saveReservations] Auto-sync warning:', e));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+  }
+
+  return created;
 };
 
 export const updateReservationStatus = async (
@@ -187,73 +634,453 @@ export const updateReservationStatus = async (
     .select('*')
     .single();
   if (error) throw error;
-  return data as Reservation;
+  const res = data as Reservation;
+  const eventType = status === 'cancelled' ? 'RESERVATION_CANCELLED' :
+    status === 'checked_in' ? 'CHECK_IN' :
+    status === 'checked_out' ? 'CHECK_OUT' : 'RESERVATION_MODIFIED';
+  dispatchChannelEvent(eventType, {
+    startDate: res.check_in_date,
+    endDate: res.check_out_date,
+    room_no: res.room_no,
+    room_id: res.room_id,
+  }).catch(e => console.warn('[updateReservationStatus] Auto-sync warning:', e));
+  return res;
 };
 
-export const deleteReservation = async (id: string): Promise<void> => {
+export interface DeleteReservationsResult {
+  count: number;
+  deleted: Reservation[];
+}
+
+export const deleteReservation = async (id: string): Promise<Reservation | null> => {
+  const { data: existing } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+
+  // 1. Unlink room chart entry if pointing to this reservation
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('reservation_id', id);
+
+  // 2. Delete linked alerts
+  await supabase
+    .from('reservation_alerts')
+    .delete()
+    .eq('reservation_id', id);
+
+  // 3. Delete reservation
   const { error } = await supabase.from('reservations').delete().eq('id', id);
   if (error) throw error;
+
+  if (existing) {
+    dispatchChannelEvent('RESERVATION_CANCELLED', {
+      startDate: existing.check_in_date,
+      endDate: existing.check_out_date,
+      room_no: existing.room_no,
+    }).catch(e => console.warn('[deleteReservation] Auto-sync warning:', e));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return existing as Reservation | null;
+};
+
+export const deleteAllReservations = async (): Promise<DeleteReservationsResult> => {
+  const hotelId = getCurrentHotelId();
+
+  // 1. Fetch count and list of active reservations before deletion (for undo restoration)
+  const { data: list } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId);
+
+  const count = list?.length || 0;
+  if (count === 0) return { count: 0, deleted: [] };
+
+  // 2. Unlink any room chart entries pointing to reservations
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('hotel_id', hotelId);
+
+  // 3. Delete linked alerts and groups
+  await supabase.from('reservation_alerts').delete().eq('hotel_id', hotelId);
+  await supabase.from('reservation_groups').delete().eq('hotel_id', hotelId);
+
+  // 4. Delete all reservations for this hotel
+  const { error } = await supabase
+    .from('reservations')
+    .delete()
+    .eq('hotel_id', hotelId);
+  if (error) throw error;
+
+  // 5. Notify channels & dispatch local sync events
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return { count, deleted: (list as Reservation[]) || [] };
+};
+
+export const bulkDeleteReservations = async (ids: string[]): Promise<DeleteReservationsResult> => {
+  if (!ids.length) return { count: 0, deleted: [] };
+  const hotelId = getCurrentHotelId();
+
+  // 1. Fetch records first so they can be restored via undo
+  const { data: existing } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('id', ids);
+
+  // 2. Unlink any room chart entries pointing to these reservations
+  await supabase
+    .from('room_chart_entries')
+    .update({ reservation_id: null })
+    .eq('hotel_id', hotelId)
+    .in('reservation_id', ids);
+
+  // 3. Delete linked alerts
+  await supabase
+    .from('reservation_alerts')
+    .delete()
+    .eq('hotel_id', hotelId)
+    .in('reservation_id', ids);
+
+  // 4. Delete reservations
+  const { error } = await supabase
+    .from('reservations')
+    .delete()
+    .eq('hotel_id', hotelId)
+    .in('id', ids);
+  if (error) throw error;
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return { count: ids.length, deleted: (existing as Reservation[]) || [] };
+};
+
+export const restoreReservations = async (records: Reservation[]): Promise<Reservation[]> => {
+  if (!records || !records.length) return [];
+  const hotelId = getCurrentHotelId();
+
+  // Valid columns in PostgreSQL reservations table (nights is GENERATED ALWAYS so must be omitted)
+  const validDbFields = new Set([
+    'id', 'hotel_id', 'room_id', 'room_no', 'guest_name', 'guest_phone',
+    'guest_email', 'guest_address', 'guest_type', 'company_gst',
+    'check_in_date', 'check_out_date', 'rate', 'source_category',
+    'source_name', 'payment_mode', 'advance_paid', 'pay_cash',
+    'pay_upi', 'pay_card', 'pay_bank', 'payment_ref', 'discount',
+    'meal_plan', 'gst_type', 'gst_slab', 'gst_amount', 'taxable_amount',
+    'invoice_total', 'adults', 'children', 'remarks', 'internal_note',
+    'created_by', 'status', 'room_chart_entry_id', 'group_id',
+    'rate_plan', 'parent_reservation_id', 'guest_id', 'created_at', 'updated_at'
+  ]);
+
+  const payloads = records.map((r) => {
+    const raw: any = { ...r };
+    delete raw.nights;
+    const clean: any = {};
+    for (const key of Object.keys(raw)) {
+      if (validDbFields.has(key)) {
+        clean[key] = raw[key];
+      }
+    }
+    if (!clean.hotel_id) clean.hotel_id = hotelId;
+    return clean;
+  });
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .insert(payloads)
+    .select('*');
+
+  if (error) {
+    console.error('[restoreReservations] Supabase insert error:', error);
+    throw error;
+  }
+
+  for (const r of records) {
+    dispatchChannelEvent('RESERVATION_CREATED', {
+      startDate: r.check_in_date,
+      endDate: r.check_out_date,
+      room_no: r.room_no,
+      room_id: r.room_id,
+    }).catch(e => console.warn('[restoreReservations] Auto-sync warning:', e));
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
+
+  return (data as Reservation[]) || [];
+};
+
+export interface CategoryAvailabilityResult {
+  available: boolean;
+  totalRooms: number;
+  availableRooms: number;
+  unavailableRooms: number;
+  availableRoomNos: string[];
+  availableRoomDetails?: Array<{
+    id: string;
+    roomNo: string;
+    categoryId: string;
+    floor?: number;
+    roomStatus?: string;
+    housekeepingStatus?: string;
+  }>;
+  unavailableRoomNos: string[];
+  message?: string;
+}
+
+export const getCategoryAvailability = async (params: {
+  hotelId?: string;
+  categoryId?: string | null;
+  checkIn: string;
+  checkOut: string;
+  excludeReservationId?: string | null;
+}): Promise<CategoryAvailabilityResult> => {
+  const hotelId = params.hotelId || getCurrentHotelId();
+  const ci = (params.checkIn || '').slice(0, 10);
+  const co = (params.checkOut || '').slice(0, 10);
+
+  if (!ci || !co || ci >= co) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      message: 'Check-out date must be strictly after check-in date.',
+    };
+  }
+
+  // 1. Try authoritative backend endpoint
+  try {
+    const res = await apiFetch('/api/reservations/category-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        categoryId: params.categoryId || null,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: params.excludeReservationId || null,
+      }),
+    });
+
+    if (res && res.success !== false && typeof res.availableRooms === 'number') {
+      return {
+        available: Boolean(res.available),
+        totalRooms: res.totalRooms ?? 0,
+        availableRooms: res.availableRooms ?? 0,
+        unavailableRooms: res.unavailableRooms ?? 0,
+        availableRoomNos: res.availableRoomNos || [],
+        availableRoomDetails: res.availableRoomDetails || [],
+        unavailableRoomNos: res.unavailableRoomNos || [],
+        message: res.message,
+      };
+    }
+  } catch (err) {
+    console.warn('[getCategoryAvailability] Backend call fallback to direct DB:', err);
+  }
+
+  // 2. Direct Supabase Fallback (strictly scoped to hotelId)
+  try {
+    let roomQ = supabase
+      .from('rooms')
+      .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+      .eq('hotel_id', hotelId)
+      .eq('is_active', true)
+      .order('room_no', { ascending: true });
+
+    if (params.categoryId) {
+      roomQ = roomQ.eq('category_id', params.categoryId);
+    }
+
+    const { data: rooms } = await roomQ;
+    if (!rooms || rooms.length === 0) {
+      return {
+        available: false,
+        totalRooms: 0,
+        availableRooms: 0,
+        unavailableRooms: 0,
+        availableRoomNos: [],
+        availableRoomDetails: [],
+        unavailableRoomNos: [],
+        message: 'No physical rooms found.',
+      };
+    }
+
+    const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+    const availableRoomNos: string[] = [];
+    const availableRoomDetails: any[] = [];
+    const unavailableRoomNos: string[] = [];
+
+    for (const r of rooms) {
+      if (nonAssignable.has(String(r.room_status || '').toLowerCase())) {
+        unavailableRoomNos.push(r.room_no);
+        continue;
+      }
+
+      const isAvail = await checkRoomAvailability(r.room_no, ci, co, params.excludeReservationId || undefined);
+      if (isAvail) {
+        availableRoomNos.push(r.room_no);
+        availableRoomDetails.push({
+          id: r.id,
+          roomNo: r.room_no,
+          categoryId: r.category_id,
+          floor: r.floor,
+          roomStatus: r.room_status,
+          housekeepingStatus: r.housekeeping_status,
+        });
+      } else {
+        unavailableRoomNos.push(r.room_no);
+      }
+    }
+
+    return {
+      available: availableRoomNos.length > 0,
+      totalRooms: rooms.length,
+      availableRooms: availableRoomNos.length,
+      unavailableRooms: unavailableRoomNos.length,
+      availableRoomNos,
+      availableRoomDetails,
+      unavailableRoomNos,
+      message: `${availableRoomNos.length} of ${rooms.length} rooms available.`,
+    };
+  } catch {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+    };
+  }
 };
 
 export const checkRoomAvailability = async (
   roomNo: string,
   checkIn: string,
   checkOut: string,
-  excludeId?: string,
+  excludeId?: string | string[],
 ): Promise<boolean> => {
+  const roomKey = (roomNo || '').trim().toLowerCase();
+  // Unassigned rooms do not block physical rooms
+  if (!roomKey || roomKey === 'unassigned' || roomKey === 'tbd') {
+    return true;
+  }
+
+  const ci = checkIn.slice(0, 10);
+  const co = checkOut.slice(0, 10);
+  if (ci >= co) return false;
+
+  // Try backend authoritative check first
+  try {
+    const res = await apiFetch('/api/reservations/check-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        roomNo,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: Array.isArray(excludeId) ? excludeId[0] : excludeId || null,
+      }),
+    });
+    if (res && typeof res.available === 'boolean') {
+      return res.available;
+    }
+  } catch {
+    // Fall back to direct Supabase query
+  }
+
   try {
     const hotelId = getCurrentHotelId();
-    const roomKey = roomNo.trim().toLowerCase();
+
+    // Resolve any linked IDs between reservations and room_chart_entries
+    const excludedResIds = new Set<string>();
+    const excludedEntryIds = new Set<string>();
+
+    const rawExcludeList = Array.isArray(excludeId) ? excludeId : excludeId ? [excludeId] : [];
+    for (const rawId of rawExcludeList) {
+      if (!rawId) continue;
+      excludedResIds.add(rawId);
+      excludedEntryIds.add(rawId);
+
+      // Query reservations by id or room_chart_entry_id
+      const { data: exResList } = await supabase
+        .from('reservations')
+        .select('id, room_chart_entry_id')
+        .or(`id.eq.${rawId},room_chart_entry_id.eq.${rawId}`);
+      if (exResList) {
+        for (const r of exResList) {
+          excludedResIds.add(r.id);
+          if (r.room_chart_entry_id) excludedEntryIds.add(r.room_chart_entry_id);
+        }
+      }
+
+      // Query room_chart_entries by id or reservation_id
+      const { data: exEntryList } = await supabase
+        .from('room_chart_entries')
+        .select('id, reservation_id')
+        .or(`id.eq.${rawId},reservation_id.eq.${rawId}`);
+      if (exEntryList) {
+        for (const e of exEntryList) {
+          excludedEntryIds.add(e.id);
+          if (e.reservation_id) excludedResIds.add(e.reservation_id);
+        }
+      }
+    }
 
     // 1. Check active reservations for overlap
-    let resQ = supabase
+    const { data: resData } = await supabase
       .from('reservations')
       .select('id, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
       .eq('hotel_id', hotelId)
       .in('status', ['confirmed', 'checked_in']);
-    if (excludeId) resQ = resQ.neq('id', excludeId);
-
-    const { data: resData } = await resQ;
-
-    // Find if excludeId has an associated room_chart_entry_id
-    let excludeEntryId: string | null = null;
-    if (excludeId) {
-      const { data: exRes } = await supabase
-        .from('reservations')
-        .select('room_chart_entry_id')
-        .eq('id', excludeId)
-        .maybeSingle();
-      if (exRes?.room_chart_entry_id) {
-        excludeEntryId = exRes.room_chart_entry_id;
-      }
-    }
 
     const resOverlap = (resData ?? []).some((r) => {
+      if (excludedResIds.has(r.id)) return false;
+      if (r.room_chart_entry_id && excludedEntryIds.has(r.room_chart_entry_id)) return false;
       if ((r.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
-      const ci = (r.check_in_date ?? '').slice(0, 10);
-      const co = (r.check_out_date ?? '').slice(0, 10);
-      if (!ci || !co) return false;
-      return ci < checkOut && co > checkIn;
+      const rCi = (r.check_in_date ?? '').slice(0, 10);
+      const rCo = (r.check_out_date ?? '').slice(0, 10);
+      if (!rCi || !rCo) return false;
+      return isStayOverlapping(ci, co, rCi, rCo);
     });
 
     if (resOverlap) return false;
 
-    // 2. Check room_chart entries for overlap (excluding this reservation's own entry)
+    // 2. Check room_chart entries for overlap
     const { data: entryData } = await supabase
       .from('room_chart_entries')
-      .select('id, room_no, arrival, departure, reservation_id')
-      .eq('hotel_id', hotelId);
+      .select('id, room_no, arrival, departure, report_date, reservation_id')
+      .eq('hotel_id', hotelId)
+      .is('checked_out_at', null);
 
     const entryOverlap = (entryData ?? []).some((e: { id?: string; room_no?: string; arrival?: string; departure?: string; report_date?: string; reservation_id?: string }) => {
+      if (e.id && excludedEntryIds.has(e.id)) return false;
+      if (e.reservation_id && excludedResIds.has(e.reservation_id)) return false;
       if ((e.room_no ?? '').trim().toLowerCase() !== roomKey) return false;
-      // Exclude if entry belongs to the reservation being extended/moved
-      if (excludeId && e.reservation_id === excludeId) return false;
-      if (excludeEntryId && e.id === excludeEntryId) return false;
 
       const a = (e.arrival ?? e.report_date ?? '').slice(0, 10);
       const d = (e.departure ?? e.report_date ?? '').slice(0, 10);
       if (!a || !d) return false;
-      return a < checkOut && d > checkIn;
+      return isStayOverlapping(ci, co, a, d);
     });
 
     return !entryOverlap;
@@ -262,11 +1089,138 @@ export const checkRoomAvailability = async (
   }
 };
 
+export const assignPhysicalRoom = async (
+  reservationId: string,
+  roomNo: string,
+  roomId?: string | null,
+): Promise<Reservation> => {
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/assign-room`, {
+      method: 'POST',
+      body: JSON.stringify({ roomNo, roomId }),
+    });
+    if (res?.reservation) {
+      dispatchChannelEvent('ROOM_TRANSFER', {
+        startDate: res.reservation.check_in_date,
+        endDate: res.reservation.check_out_date,
+        room_no: res.reservation.room_no,
+      }).catch(e => console.warn('[assignPhysicalRoom] Auto-sync warning:', e));
+      return res.reservation;
+    }
+  } catch (err: any) {
+    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'ROOM_ASSIGNMENT_CONFLICT') {
+      throw new Error(err.message || `Room ${roomNo} is already occupied for these dates.`);
+    }
+  }
+
+  // Client-side fallback
+  const { data: current, error: fetchErr } = await supabase
+    .from('reservations')
+    .select('check_in_date, check_out_date')
+    .eq('id', reservationId)
+    .single();
+  if (fetchErr || !current) throw new Error('Reservation not found.');
+
+  const norm = roomNo.trim().toLowerCase();
+  if (norm && norm !== 'unassigned' && norm !== 'tbd') {
+    const available = await checkRoomAvailability(roomNo, current.check_in_date, current.check_out_date, reservationId);
+    if (!available) {
+      throw new Error(`Room ${roomNo} is no longer available for these dates. Another reservation was assigned to this room. Please choose another room.`);
+    }
+  }
+
+  const { data: updated, error } = await supabase
+    .from('reservations')
+    .update({
+      room_no: roomNo,
+      room_id: roomId || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', reservationId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  const r = updated as Reservation;
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: r.check_in_date,
+    endDate: r.check_out_date,
+    room_no: r.room_no,
+  }).catch(e => console.warn('[assignPhysicalRoom] Auto-sync warning:', e));
+  return r;
+};
+
+export const extractUnassignedReason = (reservation: any): string => {
+  const note = reservation?.internal_note || reservation?.remarks || '';
+  const match = note.match(/\[UNASSIGNED_REASON:\s*([^\]]+)\]/i);
+  if (match) return match[1].trim();
+  const room = String(reservation?.room_no || '').trim().toLowerCase();
+  if (room === 'tbd' || room === 'unassigned' || !room) {
+    return 'UNASSIGNED';
+  }
+  return '';
+};
+
+
+export const getAutoAssignSetting = async (): Promise<boolean> => {
+  try {
+    const res = await apiFetch('/api/reservations/auto-assign-setting');
+    return res?.enabled !== false;
+  } catch {
+    return true; // Default ON
+  }
+};
+
+export const setAutoAssignSetting = async (enabled: boolean): Promise<boolean> => {
+  try {
+    const res = await apiFetch('/api/reservations/auto-assign-setting', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    return res?.enabled !== false;
+  } catch {
+    return enabled;
+  }
+};
+
+export const checkInReservation = async (reservationId: string): Promise<Reservation> => {
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/check-in`, {
+      method: 'POST',
+    });
+    if (res?.reservation) return res.reservation;
+  } catch (err: any) {
+    throw new Error(err?.message || 'Check-in blocked due to room conflict.');
+  }
+
+  // Fallback
+  return updateReservationStatus(reservationId, 'checked_in');
+};
+
 export const extendReservation = async (params: {
   reservationId: string;
   newCheckOut: string;
 }): Promise<Reservation> => {
   const { reservationId, newCheckOut } = params;
+
+  try {
+    const res = await apiFetch(`/api/reservations/${reservationId}/extend`, {
+      method: 'POST',
+      body: JSON.stringify({ newCheckOut }),
+    });
+    if (res?.reservation) {
+      dispatchChannelEvent('STAY_EXTENDED', {
+        startDate: res.reservation.check_in_date,
+        endDate: res.reservation.check_out_date,
+        room_no: res.reservation.room_no,
+      }).catch(e => console.warn('[extendReservation] Auto-sync warning:', e));
+      return res.reservation;
+    }
+  } catch (err: any) {
+    if (err?.code === 'ROOM_ALREADY_BOOKED' || err?.code === 'INVALID_STAY_DATES') {
+      throw new Error(err.message);
+    }
+  }
 
   const { data: current, error: fetchErr } = await supabase
     .from('reservations')
@@ -316,6 +1270,12 @@ export const extendReservation = async (params: {
       /* non-critical fallback */
     }
   }
+
+  dispatchChannelEvent('STAY_EXTENDED', {
+    startDate: res.check_in_date,
+    endDate: newCheckOut,
+    room_no: res.room_no,
+  }).catch(e => console.warn('[extendReservation] Auto-sync warning:', e));
 
   return updated as Reservation;
 };
@@ -373,6 +1333,13 @@ export const moveReservation = async (params: {
     .select('*')
     .single();
   if (error) throw error;
+
+  dispatchChannelEvent('ROOM_TRANSFER', {
+    startDate: checkIn,
+    endDate: checkOut,
+    room_no: roomNo,
+  }).catch(e => console.warn('[moveReservation] Auto-sync warning:', e));
+
   return updated as Reservation;
 };
 
@@ -544,7 +1511,17 @@ export const getGroupReservations = async (groupId: string): Promise<Reservation
     .eq('group_id', groupId)
     .order('room_no', { ascending: true });
   if (error) throw error;
-  return (data as Reservation[]) ?? [];
+  const raw = (data as Reservation[]) ?? [];
+  const isPhysical = (rm?: string | null) => {
+    const norm = (rm || '').trim().toLowerCase();
+    return Boolean(norm && norm !== 'unassigned' && norm !== 'tbd');
+  };
+  return raw.filter((r, idx, arr) => {
+    if (isPhysical(r.room_no)) {
+      return arr.findIndex((x) => (x.room_no || '').trim().toLowerCase() === (r.room_no || '').trim().toLowerCase()) === idx;
+    }
+    return arr.findIndex((x) => x.id === r.id) === idx;
+  });
 };
 
 // ── Phase 9: Rate Plans ──
@@ -681,12 +1658,32 @@ export const createRoomBlock = async (input: RoomBlockInput): Promise<RoomBlock>
     .select('*')
     .single();
   if (error) throw error;
-  return data as RoomBlock;
+  const block = data as RoomBlock;
+  dispatchChannelEvent('ROOM_BLOCKED', {
+    startDate: block.start_date,
+    endDate: block.end_date,
+    room_no: block.room_no,
+  }).catch(e => console.warn('[createRoomBlock] Auto-sync warning:', e));
+  return block;
 };
 
 export const deleteRoomBlock = async (id: string): Promise<void> => {
+  const { data: existing } = await supabase
+    .from('room_blocks')
+    .select('start_date, end_date, room_no')
+    .eq('id', id)
+    .maybeSingle();
+
   const { error } = await supabase.from('room_blocks').delete().eq('id', id);
   if (error) throw error;
+
+  if (existing) {
+    dispatchChannelEvent('ROOM_UNBLOCKED', {
+      startDate: existing.start_date,
+      endDate: existing.end_date,
+      room_no: existing.room_no,
+    }).catch(e => console.warn('[deleteRoomBlock] Auto-sync warning:', e));
+  }
 };
 
 // ── Phase 9: Bulk Operations ──
@@ -732,39 +1729,53 @@ export const getReservationAlerts = async (reservations: Reservation[]): Promise
   const alerts: ReservationAlert[] = [];
   const today = new Date().toISOString().slice(0, 10);
 
-  // Group by room+date to detect overbooking
-  const roomDateMap = new Map<string, Reservation[]>();
-  for (const r of reservations) {
-    if (r.status !== 'confirmed' && r.status !== 'checked_in') continue;
-    const key = `${r.room_no}|${r.check_in_date}`;
-    if (!roomDateMap.has(key)) roomDateMap.set(key, []);
-    roomDateMap.get(key)!.push(r);
+  // Physical room overbooking detection (ignoring unassigned/TBD)
+  const physicalReservations = reservations.filter((r) => {
+    if (!isReservationRoomBlocking(r.status)) return false;
+    const room = (r.room_no || '').trim().toLowerCase();
+    return room && room !== 'unassigned' && room !== 'tbd';
+  });
+
+  const roomGroups = new Map<string, Reservation[]>();
+  for (const r of physicalReservations) {
+    const key = r.room_no.trim();
+    if (!roomGroups.has(key)) roomGroups.set(key, []);
+    roomGroups.get(key)!.push(r);
   }
-  for (const [key, resList] of roomDateMap) {
-    if (resList.length > 1) {
-      const [roomNo, date] = key.split('|');
-      alerts.push({
-        type: 'overbooking',
-        message: `Room ${roomNo} has ${resList.length} overlapping reservations on ${date}`,
-        roomNo,
-        severity: 'error',
-      });
+
+  for (const [roomNo, list] of roomGroups) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          alerts.push({
+            type: 'overbooking',
+            message: `Room ${roomNo} has overlapping bookings: ${a.guest_name} (${a.check_in_date} to ${a.check_out_date}) and ${b.guest_name} (${b.check_in_date} to ${b.check_out_date})`,
+            roomNo,
+            reservationId: a.id,
+            severity: 'error',
+          });
+        }
+      }
     }
   }
 
-  // Duplicate reservation detection (same guest, same dates)
-  const guestDateMap = new Map<string, Reservation[]>();
+  // Duplicate reservation detection: only if same guest, same dates AND same physical room
+  // (Legitimate multiple room bookings for same guest on different rooms are allowed)
+  const guestRoomMap = new Map<string, Reservation[]>();
   for (const r of reservations) {
-    if (r.status !== 'confirmed' && r.status !== 'checked_in') continue;
-    const key = `${r.guest_name.toLowerCase()}|${r.check_in_date}|${r.check_out_date}`;
-    if (!guestDateMap.has(key)) guestDateMap.set(key, []);
-    guestDateMap.get(key)!.push(r);
+    if (!isReservationRoomBlocking(r.status)) continue;
+    const room = (r.room_no || '').trim().toLowerCase();
+    const key = `${r.guest_name.toLowerCase().trim()}|${r.check_in_date}|${r.check_out_date}|${room}`;
+    if (!guestRoomMap.has(key)) guestRoomMap.set(key, []);
+    guestRoomMap.get(key)!.push(r);
   }
-  for (const [, resList] of guestDateMap) {
+  for (const [, resList] of guestRoomMap) {
     if (resList.length > 1) {
       alerts.push({
         type: 'duplicate',
-        message: `Duplicate reservation: ${resList[0].guest_name} has ${resList.length} bookings for the same dates`,
+        message: `Duplicate reservation: ${resList[0].guest_name} has multiple bookings for Room ${resList[0].room_no || 'Unassigned'} on the same dates`,
         reservationId: resList[0].id,
         severity: 'warning',
       });
@@ -991,3 +2002,652 @@ export const quickReservation = async (params: {
     rate_plan: 'Walk-in',
   });
 };
+
+// ── Phase 10: Server-side Paginated Reservations & Conflict Diagnostic ──
+
+export interface ReservationFilterParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  fromDate?: string;
+  toDate?: string;
+  status?: string;
+  sourceCategory?: string;
+  assignedStatus?: 'all' | 'assigned' | 'unassigned';
+  roomNo?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface PaginatedReservationsResult {
+  reservations: Reservation[];
+  totalCount: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  metrics?: {
+    totalBookings: number;
+    confirmed: number;
+    checkedIn: number;
+    unassigned: number;
+    totalRevenue: number;
+  };
+}
+
+export const getReservationsPaginated = async (
+  params: ReservationFilterParams = {}
+): Promise<PaginatedReservationsResult> => {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', String(params.page));
+  if (params.pageSize) query.set('pageSize', String(params.pageSize));
+  if (params.search) query.set('search', params.search);
+  if (params.fromDate) query.set('fromDate', params.fromDate);
+  if (params.toDate) query.set('toDate', params.toDate);
+  if (params.status) query.set('status', params.status);
+  if (params.sourceCategory) query.set('sourceCategory', params.sourceCategory);
+  if (params.assignedStatus) query.set('assignedStatus', params.assignedStatus);
+  if (params.roomNo) query.set('roomNo', params.roomNo);
+  if (params.sortBy) query.set('sortBy', params.sortBy);
+  if (params.sortOrder) query.set('sortOrder', params.sortOrder);
+
+  try {
+    const res = await apiFetch(`/api/reservations?${query.toString()}`);
+    if (res && res.success) {
+      let metrics = res.metrics || {};
+      
+      // Polyfill for stale backend not returning totalRevenue
+      if (metrics.totalRevenue === undefined) {
+        const hotelId = getCurrentHotelId();
+        const { data: allHotelRes } = await supabase
+          .from('reservations')
+          .select('id, group_id, status, room_no, invoice_total, rate, nights')
+          .eq('hotel_id', hotelId);
+
+        const seenMetricsKeys = new Set<string>();
+        let pipelineTariff = 0;
+
+        for (const r of (allHotelRes || [])) {
+          const roomKey = (r.room_no || '').trim().toLowerCase();
+          const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+          const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+          const key = dedupeKey || r.id;
+
+          if (!seenMetricsKeys.has(key)) {
+            seenMetricsKeys.add(key);
+            const invoiceTotal = Number(r.invoice_total) || 0;
+            const rate = Number(r.rate) || 0;
+            const nights = Number(r.nights) || 1;
+            pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+          }
+        }
+        metrics.totalRevenue = pipelineTariff;
+      }
+
+      return {
+        reservations: res.reservations || [],
+        totalCount: res.totalCount || 0,
+        page: res.page || 1,
+        pageSize: res.pageSize || 5,
+        totalPages: res.totalPages || 1,
+        metrics,
+      };
+    }
+  } catch (err) {
+    console.warn('[getReservationsPaginated] Backend endpoint fallback to Supabase query:', err);
+  }
+
+  // Fallback to direct Supabase query
+  const hotelId = getCurrentHotelId();
+  const pageNum = params.page || 1;
+  const limit = params.pageSize || 5;
+  const offset = (pageNum - 1) * limit;
+
+  let q = supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId);
+
+  if (params.status && params.status !== 'all') {
+    q = q.eq('status', params.status);
+  }
+  if (params.sourceCategory && params.sourceCategory !== 'all') {
+    const dbCat = getSourceCategoryFromType(params.sourceCategory as any) || params.sourceCategory;
+    q = q.eq('source_category', dbCat);
+  }
+  if (params.roomNo && params.roomNo !== 'all') {
+    q = q.ilike('room_no', params.roomNo.trim());
+  }
+  if (params.assignedStatus === 'unassigned') {
+    q = q.or('room_no.is.null,room_no.eq.,room_no.ilike.unassigned,room_no.ilike.tbd');
+  } else if (params.assignedStatus === 'assigned') {
+    q = q.not('room_no', 'is', null).neq('room_no', '').not('room_no', 'ilike', 'unassigned').not('room_no', 'ilike', 'tbd');
+  }
+  if (params.fromDate && params.toDate) {
+    q = q.lt('check_in_date', params.toDate).gt('check_out_date', params.fromDate);
+  } else if (params.fromDate) {
+    q = q.gte('check_out_date', params.fromDate);
+  } else if (params.toDate) {
+    q = q.lte('check_in_date', params.toDate);
+  }
+  if (params.search && params.search.trim()) {
+    const s = params.search.trim();
+    q = q.or(`guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%,guest_email.ilike.%${s}%,room_no.ilike.%${s}%,payment_ref.ilike.%${s}%`);
+  }
+
+  const isAsc = params.sortOrder === 'asc';
+  q = q.order(params.sortBy || 'check_in_date', { ascending: isAsc });
+
+  const { data, error } = await q;
+  if (error) throw error;
+
+  const rawList = (data as Reservation[]) || [];
+  const seenGroupRooms = new Set<string>();
+  const cleanList: Reservation[] = [];
+  const duplicateIdsToDelete: string[] = [];
+
+  for (const r of rawList) {
+    const roomKey = (r.room_no || '').trim().toLowerCase();
+    const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+    const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+    if (dedupeKey) {
+      if (seenGroupRooms.has(dedupeKey)) {
+        duplicateIdsToDelete.push(r.id);
+        continue;
+      }
+      seenGroupRooms.add(dedupeKey);
+    }
+    cleanList.push(r);
+  }
+
+  if (duplicateIdsToDelete.length > 0) {
+    console.log(`[getReservationsPaginated] Auto-purging ${duplicateIdsToDelete.length} duplicate reservation rows:`, duplicateIdsToDelete);
+    supabase.from('reservations').delete().in('id', duplicateIdsToDelete).then(() => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+      }
+    });
+  }
+
+  // Grouping BEFORE pagination
+  const groupsMap = new Map<string, Reservation[]>();
+  const groupOrder: string[] = [];
+
+  for (const r of cleanList) {
+    const normalizedName = (r.guest_name || '').trim().toLowerCase();
+    const key = (r.group_id && r.group_id.trim() !== '') 
+      ? r.group_id 
+      : (normalizedName ? `${normalizedName}::${r.check_in_date}::${r.check_out_date}` : r.id);
+
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+      groupOrder.push(key);
+    }
+    groupsMap.get(key)!.push(r);
+  }
+
+  const totalGroupsCount = groupOrder.length;
+  const paginatedGroupKeys = groupOrder.slice(offset, offset + limit);
+  const paginatedReservations: Reservation[] = [];
+  for (const k of paginatedGroupKeys) {
+    paginatedReservations.push(...groupsMap.get(k)!);
+  }
+
+  // Calculate Global Metrics independent of filters & pagination
+  const { data: allHotelRes } = await supabase
+    .from('reservations')
+    .select('id, group_id, status, room_no, invoice_total, rate, nights')
+    .eq('hotel_id', hotelId);
+
+  const seenMetricsKeys = new Set<string>();
+  let totalBookings = 0;
+  let confirmedCount = 0;
+  let checkedInCount = 0;
+  let unassignedCount = 0;
+  let pipelineTariff = 0;
+
+  for (const r of (allHotelRes || [])) {
+    const roomKey = (r.room_no || '').trim().toLowerCase();
+    const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+    const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+    const key = dedupeKey || r.id;
+
+    if (!seenMetricsKeys.has(key)) {
+      seenMetricsKeys.add(key);
+      totalBookings++;
+      if (r.status === 'confirmed') confirmedCount++;
+      if (r.status === 'checked_in') checkedInCount++;
+      if (!isPhysical) unassignedCount++;
+      const invoiceTotal = Number(r.invoice_total) || 0;
+      const rate = Number(r.rate) || 0;
+      const nights = Number(r.nights) || 1;
+      pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+    }
+  }
+
+  return {
+    reservations: paginatedReservations,
+    totalCount: totalGroupsCount,
+    page: pageNum,
+    pageSize: limit,
+    totalPages: Math.ceil(totalGroupsCount / limit),
+    metrics: {
+      totalBookings,
+      confirmed: confirmedCount,
+      checkedIn: checkedInCount,
+      unassigned: unassignedCount,
+      totalRevenue: pipelineTariff
+    }
+  };
+};
+
+export const getReservationConflicts = async (): Promise<any[]> => {
+  try {
+    const res = await apiFetch('/api/reservations/conflicts');
+    if (res && res.success) {
+      return res.conflicts || [];
+    }
+  } catch (err) {
+    console.warn('[getReservationConflicts] Fallback to client check:', err);
+  }
+
+  // Client-side detection fallback
+  const hotelId = getCurrentHotelId();
+  const { data: res } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('hotel_id', hotelId)
+    .in('status', ['confirmed', 'checked_in'])
+    .order('check_in_date', { ascending: true });
+
+  const list = (res as Reservation[]) || [];
+  const conflicts: any[] = [];
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i];
+      const b = list[j];
+      const rA = (a.room_no || '').trim().toLowerCase();
+      const rB = (b.room_no || '').trim().toLowerCase();
+      if (!rA || rA === 'unassigned' || rA === 'tbd' || !rB || rB === 'unassigned' || rB === 'tbd') continue;
+      if (rA === rB || (a.room_id && b.room_id && a.room_id === b.room_id)) {
+        if (isStayOverlapping(a.check_in_date, a.check_out_date, b.check_in_date, b.check_out_date)) {
+          // If a and b are identical duplicate records in the same group, auto-purge the duplicate!
+          if (a.group_id && b.group_id && a.group_id === b.group_id) {
+            console.log(`[getReservationConflicts] Auto-purging duplicate reservation ${b.id} for Room ${rB} in group ${a.group_id}`);
+            supabase.from('reservations').delete().eq('id', b.id).then(() => {
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
+              }
+            });
+            continue;
+          }
+
+          conflicts.push({
+            type: 'physical_room_overlap',
+            roomNo: a.room_no,
+            reservationA: a,
+            reservationB: b,
+          });
+        }
+      }
+    }
+  }
+  return conflicts;
+};
+
+/**
+ * Authoritative Reservation Confirmation Data Service (Section 16)
+ * Single authoritative source of truth for PDF, Print, Email, and WhatsApp.
+ */
+export const getReservationConfirmationData = async (
+  reservationId: string
+): Promise<ReservationConfirmationData> => {
+  if (!reservationId) {
+    throw new Error('Reservation ID is required.');
+  }
+
+  // 1. Try fetching authoritative reservation record
+  let reservation: Reservation | null = null;
+  const { data: resData } = await supabase
+    .from('reservations')
+    .select('*')
+    .eq('id', reservationId)
+    .maybeSingle();
+
+  if (resData) {
+    reservation = resData as Reservation;
+  } else {
+    // Check if reservationId is actually a room_chart_entry id
+    const { data: entryData } = await supabase
+      .from('room_chart_entries')
+      .select('*')
+      .eq('id', reservationId)
+      .maybeSingle();
+
+    if (entryData) {
+      if (entryData.reservation_id) {
+        const { data: linkedRes } = await supabase
+          .from('reservations')
+          .select('*')
+          .eq('id', entryData.reservation_id)
+          .maybeSingle();
+        if (linkedRes) {
+          reservation = linkedRes as Reservation;
+        }
+      }
+
+      // If no linked reservation exists, synthesize authoritative reservation from entry
+      if (!reservation) {
+        const advance = toNum(entryData.pay_cash) + toNum(entryData.pay_upi) + toNum(entryData.pay_card) + toNum(entryData.pay_bank);
+        reservation = {
+          id: entryData.id,
+          hotel_id: entryData.hotel_id,
+          room_id: null,
+          room_no: entryData.room_no || 'Unassigned',
+          guest_name: entryData.guest_name || 'Valued Guest',
+          guest_phone: '',
+          guest_email: '',
+          guest_address: '',
+          guest_type: entryData.source_category || 'Direct',
+          company_gst: '',
+          check_in_date: entryData.arrival || entryData.report_date,
+          check_out_date: entryData.departure || entryData.report_date,
+          nights: entryData.nights || 1,
+          rate: toNum(entryData.room_rate),
+          source_category: entryData.source_category || 'Direct',
+          source_name: entryData.company || 'Direct',
+          payment_mode: entryData.pay_mode || 'Cash',
+          advance_paid: advance,
+          pay_cash: toNum(entryData.pay_cash),
+          pay_upi: toNum(entryData.pay_upi),
+          pay_card: toNum(entryData.pay_card),
+          pay_bank: toNum(entryData.pay_bank),
+          payment_ref: '',
+          discount: 0,
+          meal_plan: entryData.meal_plan || 'EP',
+          gst_type: entryData.gst_type || 'No Scope',
+          gst_slab: 0,
+          gst_amount: toNum(entryData.gst_amount),
+          taxable_amount: toNum(entryData.taxable_amount) || toNum(entryData.total),
+          invoice_total: toNum(entryData.invoice_total) || toNum(entryData.total),
+          adults: 1,
+          children: 0,
+          remarks: entryData.remarks || '',
+          internal_note: '',
+          created_by: 'STAFF',
+          status: entryData.checked_out_at ? 'checked_out' : 'checked_in',
+          room_chart_entry_id: entryData.id,
+          group_id: null,
+          rate_plan: 'Standard',
+          parent_reservation_id: null,
+          guest_id: null,
+          created_at: entryData.created_at || new Date().toISOString(),
+          updated_at: entryData.updated_at || new Date().toISOString(),
+        };
+      }
+    }
+  }
+
+  if (!reservation) {
+    throw new Error('Reservation record not found.');
+  }
+
+  const hotelId = reservation.hotel_id || getCurrentHotelId();
+
+  // 2. Load linked guest record if available
+  let guest = {
+    id: reservation.guest_id || undefined,
+    name: reservation.guest_name || 'Valued Guest',
+    phone: reservation.guest_phone || '',
+    email: reservation.guest_email || '',
+    address: reservation.guest_address || '',
+  };
+
+  if (reservation.guest_id) {
+    const { data: g } = await supabase
+      .from('guests')
+      .select('*')
+      .eq('id', reservation.guest_id)
+      .maybeSingle();
+    if (g) {
+      guest = {
+        id: g.id,
+        name: g.name || guest.name,
+        phone: g.phone || guest.phone,
+        email: g.email || guest.email,
+        address: g.address || guest.address,
+      };
+    }
+  }
+
+  // 3. Load hotel settings and hotel record
+  const [{ data: settingsData }, { data: hotelData }] = await Promise.all([
+    supabase.from('hotel_settings').select('*').eq('id', hotelId).maybeSingle(),
+    supabase.from('hotels').select('*').eq('id', hotelId).maybeSingle(),
+  ]);
+
+  const hotelSettings = settingsData || {};
+  const hotelInfo = hotelData || {};
+
+  const hotelName = hotelSettings.hotel_name || hotelInfo.hotel_name || 'Hotel Mantri';
+  const hotelPhone = hotelSettings.phone || hotelInfo.phone || '';
+  const hotelEmail = hotelSettings.email || hotelInfo.email || '';
+  const hotelAddress = [
+    hotelSettings.address || hotelInfo.address,
+    hotelSettings.city,
+    hotelSettings.state_name,
+    hotelSettings.pin_code,
+  ].filter(Boolean).join(', ');
+
+  const hotel = {
+    id: hotelId,
+    hotel_name: hotelName,
+    phone: hotelPhone,
+    email: hotelEmail,
+    address: hotelAddress,
+    city: hotelSettings.city || '',
+    state_name: hotelSettings.state_name || '',
+    pin_code: hotelSettings.pin_code || '',
+    gst_number: hotelSettings.gst_number || '',
+    logo_url: hotelSettings.logo_url,
+    check_in_time: hotelSettings.check_in_time || '12:00 Hrs',
+    check_out_time: hotelSettings.check_out_time || '10:00 Hrs',
+    cancellation_policy: hotelSettings.cancellation_policy || 'Standard cancellation policy applies.',
+    important_notes: hotelSettings.important_notes || '',
+  };
+
+  // 4. Resolve room category
+  let roomCategory = reservation.rate_plan || (reservation as any).room_category || 'Standard';
+  let roomId = reservation.room_id || undefined;
+  if (reservation.room_no && reservation.room_no !== 'Unassigned') {
+    const { data: rooms } = await supabase.from('rooms').select('*').eq('hotel_id', hotelId);
+    const room = (rooms || []).find((r: any) => r.room_no?.trim().toLowerCase() === reservation.room_no?.trim().toLowerCase());
+    if (room) {
+      roomId = room.id;
+      if (room.category_id) {
+        const { data: cat } = await supabase.from('room_categories').select('*').eq('id', room.category_id).maybeSingle();
+        if (cat?.name) {
+          roomCategory = cat.name;
+        }
+      }
+    }
+  }
+
+  // 5. Calculate stay dates (Hotel-local dates inclusive check-in, exclusive check-out)
+  const checkIn = String(reservation.check_in_date || '').slice(0, 10);
+  const checkOut = String(reservation.check_out_date || '').slice(0, 10);
+  const nights = calcStayNights(checkIn, checkOut);
+  const bookingDate = reservation.created_at || new Date().toISOString();
+
+  // 6. Calculate authoritative charges
+  const rate = Number(reservation.rate) || 0;
+  const roomCharges = rate * nights;
+  const taxableAmount = Number(reservation.taxable_amount) || roomCharges;
+  const gstAmount = Number(reservation.gst_amount) || 0;
+  const totalAmount = Number(reservation.invoice_total) || (taxableAmount + gstAmount);
+
+  // 7. Calculate authoritative payments and balance
+  const advancePaid = Number(reservation.advance_paid) || 0;
+  const balance = Math.max(0, totalAmount - advancePaid);
+  const paymentStatus = (balance === 0 ? 'Paid' : (advancePaid > 0 ? 'Partially Paid' : 'Pending')) as 'Paid' | 'Partially Paid' | 'Pending';
+  const paymentMode = reservation.payment_mode || 'Cash';
+
+  // 8. Resolve booking source & OTA details
+  const rawNote = `${reservation.internal_note || ''} ${reservation.remarks || ''}`;
+  const otaMatch = rawNote.match(/\[OTA_BOOKING_ID:\s*([^\]]+)\]/i) || rawNote.match(/\[AIOSELL_BOOKING_ID:\s*([^\]]+)\]/i);
+  const otaBookingId = otaMatch && otaMatch[1] ? otaMatch[1].trim() : '';
+  const catStr = String(reservation.source_category || '').toLowerCase();
+  const nameStr = String(reservation.source_name || '').toLowerCase();
+
+  const isOta = !!(otaBookingId || catStr.includes('ota') || String(reservation.guest_type || '').toUpperCase() === 'OTA' ||
+    nameStr.includes('agoda') || nameStr.includes('makemytrip') || nameStr.includes('booking') || nameStr.includes('goibibo'));
+
+  const sourceType = (isOta ? 'OTA' : 'MANUAL') as 'OTA' | 'MANUAL';
+  const sourceName = reservation.source_name || reservation.source_category || (isOta ? 'OTA' : 'Direct');
+  const shortId = (reservation.id || '').slice(0, 8).toUpperCase();
+  const confirmationNumber = otaBookingId || `HM-RES-${shortId}`;
+
+  // 9. Resolve contacts according to Section 12 rule:
+  // Manual -> Guest email. OTA -> Owner email.
+  const targetEmail = isOta ? (hotelEmail || null) : (guest.email || null);
+  const targetPhone = guest.phone || hotelPhone || null;
+
+  return {
+    hotel,
+    guest,
+    reservation,
+    room: {
+      room_no: reservation.room_no || 'Unassigned',
+      room_id: roomId,
+      room_category: roomCategory,
+      rate_plan: reservation.rate_plan || 'Standard',
+      meal_plan: reservation.meal_plan || 'EP',
+    },
+    dates: {
+      checkIn,
+      checkOut,
+      nights,
+      bookingDate,
+    },
+    charges: {
+      rate,
+      roomCharges,
+      taxableAmount,
+      gstAmount,
+      totalAmount,
+    },
+    payments: {
+      advancePaid,
+      paymentMode,
+      paymentStatus,
+    },
+    balance,
+    source: {
+      sourceType,
+      sourceName,
+      otaBookingId,
+      confirmationNumber,
+    },
+    contacts: {
+      guestContact: {
+        name: guest.name,
+        phone: guest.phone,
+        email: guest.email,
+      },
+      ownerContact: {
+        name: hotelName,
+        phone: hotelPhone,
+        email: hotelEmail,
+      },
+      targetEmail,
+      targetPhone,
+    },
+  };
+};
+
+/**
+ * Builds the authoritative WhatsApp confirmation message (Section 15)
+ */
+export const buildWhatsAppConfirmationText = (data: ReservationConfirmationData): string => {
+  const hotelName = data.hotel.hotel_name || 'Hotel Mantri';
+  const lines = [
+    `*${hotelName} Reservation Confirmation*`,
+    '',
+    `Guest: ${data.guest.name}`,
+    `Booking ID: ${data.source.confirmationNumber}`,
+    `Room: ${data.room.room_no} - ${data.room.room_category}`,
+    `Check-in: ${data.dates.checkIn}`,
+    `Check-out: ${data.dates.checkOut}`,
+    `Nights: ${data.dates.nights}`,
+    '',
+    `Grand Total: ₹${Math.round(data.charges.totalAmount).toLocaleString('en-IN')}`,
+    `Received: ₹${Math.round(data.payments.advancePaid).toLocaleString('en-IN')}`,
+    `Balance: ₹${Math.round(data.balance).toLocaleString('en-IN')}`,
+  ];
+  return lines.join('\n');
+};
+
+/**
+ * Sends reservation confirmation via Whinta WhatsApp Business API (server-side)
+ */
+export const sendReservationConfirmationWhatsApp = async (
+  reservationId: string,
+  phoneNumberOverride?: string
+): Promise<{ success: boolean; message: string; messageId?: string; whatsappDirectUrl?: string }> => {
+  const res = await apiFetch(`/api/reservations/${reservationId}/confirmation/send-whatsapp`, {
+    method: 'POST',
+    body: JSON.stringify({
+      phoneNumber: phoneNumberOverride?.trim() || undefined,
+    }),
+  });
+
+  if (!res.success) {
+    throw new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
+  }
+
+  return res;
+};
+
+/**
+ * Dispatches WhatsApp reservation confirmation via Whinta (Section 15)
+ */
+export const openWhatsAppConfirmation = async (
+  data: ReservationConfirmationData
+): Promise<{ success: boolean; message: string; messageId?: string }> => {
+  const targetPhone = data.contacts.targetPhone || data.contacts.guestContact.phone || data.contacts.ownerContact.phone;
+  return sendReservationConfirmationWhatsApp(data.reservation.id, targetPhone);
+};
+
+/**
+ * Sends reservation confirmation email via server SMTP service (Section 11-14)
+ */
+export const sendReservationConfirmationEmail = async (
+  data: ReservationConfirmationData,
+  recipientEmailOverride?: string
+): Promise<{ success: boolean; message: string; messageId?: string }> => {
+  const isOta = data.source.sourceType === 'OTA';
+  const target = (recipientEmailOverride || (isOta ? data.contacts.ownerContact.email : data.guest.email) || '').trim();
+
+  // Section 12 requirement: If guest email missing on manual/direct booking
+  if (!isOta && (!target || !isValidEmail(target))) {
+    throw new Error('Guest email is required to send the confirmation.');
+  }
+
+  // If OTA and owner email missing
+  if (isOta && (!target || !isValidEmail(target))) {
+    throw new Error('Hotel owner email is required to send notification for OTA bookings.');
+  }
+
+  const res = await apiFetch(`/api/reservations/${data.reservation.id}/confirmation/send-email`, {
+    method: 'POST',
+    body: JSON.stringify({
+      recipientEmail: target || undefined,
+    }),
+  });
+
+  if (!res.success) {
+    throw new Error(res.message || 'Failed to send confirmation email.');
+  }
+
+  return res;
+};
+

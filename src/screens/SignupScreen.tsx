@@ -299,6 +299,21 @@ export const SignupScreen: React.FC<SignupScreenProps> = ({ onNavigateToLogin, o
                 Already registered? <span className="text-[#1a68fb] font-bold hover:underline">Sign In</span>
               </button>
             </div>
+
+            {/* Compliance Links */}
+            <div className="mt-4 flex items-center justify-center gap-3 text-[11px] text-slate-400 font-medium">
+              <a href="/privacy-policy" className="hover:text-slate-600 transition underline-offset-2 hover:underline">
+                Privacy Policy
+              </a>
+              <span>•</span>
+              <a href="/data-deletion" className="hover:text-slate-600 transition underline-offset-2 hover:underline">
+                Data Deletion
+              </a>
+              <span>•</span>
+              <a href="/terms" className="hover:text-slate-600 transition underline-offset-2 hover:underline">
+                Terms of Service
+              </a>
+            </div>
           </div>
         </div>
       </div>

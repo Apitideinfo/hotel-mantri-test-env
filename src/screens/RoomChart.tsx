@@ -287,18 +287,35 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     }
   };
 
-  const agg = useMemo(() => aggregateRoomChart(entries, selectedDate), [entries, selectedDate]);
+  const agg = useMemo(() => {
+    const baseAgg = aggregateRoomChart(entries, selectedDate);
+    if (derived && derived.report_date === selectedDate) {
+      return {
+        ...baseAgg,
+        cash: derived.cash,
+        bank: derived.bank,
+        payCash: derived.pay_cash,
+        payBank: derived.pay_bank,
+        payUpi: derived.pay_upi,
+        payCard: derived.pay_card,
+        roomRevenue: derived.room_sale_amount,
+      };
+    }
+    return baseAgg;
+  }, [entries, selectedDate, derived]);
   const occupiedTotal = agg.roomsOccupied + agg.complimentary;
   const occ = calcOcc(occupiedTotal, totalRooms);
   const closingRooms = calcClosingRooms(occupiedTotal, totalRooms);
 
   const todayExpensesTotal = expenses.reduce((s, e) => s + toNum(e.amount), 0);
   const otherRevenueTotal = revenues.reduce((s, r) => s + toNum(r.amount), 0);
-  const roomRevenue = agg.roomRevenue;
-  const grossRevenue = roomRevenue + otherRevenueTotal;
+  const roomRevenueBeforeGst = agg.taxableRevenue > 0 ? agg.taxableRevenue : (agg.roomRevenue - agg.gstCollected);
+  const roomRevenueInclGst = roomRevenueBeforeGst + agg.gstCollected;
+  const roomRevenue = gstEnabled ? roomRevenueBeforeGst : agg.roomRevenue;
+  const grossRevenue = (gstEnabled ? roomRevenueInclGst : agg.roomRevenue) + otherRevenueTotal;
   const netOperatingProfit = grossRevenue - todayExpensesTotal;
 
-  const totalCollection = agg.cash + agg.bank + (gstEnabled ? agg.payUpi + agg.payCard : 0);
+  const totalCollection = (agg.payCash || agg.cash) + (agg.payBank || agg.bank) + (agg.payUpi || 0) + (agg.payCard || 0);
 
   // Build room cards from Property Master inventory, overlaid with today's entries.
   const roomCards = useMemo(() => {
@@ -631,12 +648,12 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
     catch (e) { setError(e instanceof Error ? e.message : 'Failed to delete revenue'); }
   };
 
-  // Load derived report when switching to review tab
+  // Load derived report when switching to review tab or date changes
   useEffect(() => {
-    if (tab === 'review' && !derived && !derivedLoading) {
+    if (tab === 'review') {
       loadDerived(selectedDate);
     }
-  }, [tab, derived, derivedLoading, selectedDate, loadDerived]);
+  }, [tab, selectedDate, loadDerived]);
 
   const totalReceived = panelRow
     ? toNum(panelRow.pay_cash) + toNum(panelRow.pay_upi) + toNum(panelRow.pay_card) + toNum(panelRow.pay_bank)
@@ -713,7 +730,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <KpiCard icon={<Bed className="w-4 h-4" />} label="Occupied" value={`${fmtInt(occupiedTotal)}`} sub={`${fmtInt(closingRooms)} vacant`} color="emerald" />
             <KpiCard icon={<BedDouble className="w-4 h-4" />} label="Vacant" value={fmtInt(closingRooms)} sub="Available" color="slate" />
-            <KpiCard icon={<DollarSign className="w-4 h-4" />} label="Room Revenue" value={`₹${fmtMoney(roomRevenue)}`} sub={`ARR ₹${fmtMoney(agg.roomsOccupied > 0 ? roomRevenue / agg.roomsOccupied : 0)}`} color="sky" />
+            <KpiCard icon={<IndianRupee className="w-4 h-4" />} label="Room Revenue" value={`₹${fmtMoney(roomRevenue)}`} sub={`ARR ₹${fmtMoney(agg.roomsOccupied > 0 ? roomRevenue / agg.roomsOccupied : 0)}`} color="sky" />
             <KpiCard icon={<Wallet className="w-4 h-4" />} label="Collection" value={`₹${fmtMoney(totalCollection)}`} sub="Today" color="amber" />
             <KpiCard icon={<TrendingUp className="w-4 h-4" />} label="Other Rev" value={`₹${fmtMoney(otherRevenueTotal)}`} sub={`${revenues.length} entries`} color="violet" />
           </div>
@@ -727,11 +744,10 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Collection Breakdown</span>
             </div>
             <div className="flex flex-wrap gap-3 text-xs">
-              <CollChip icon={<Banknote className="w-3 h-3" />} label="Cash" amount={agg.cash} color="text-emerald-600" />
+              <CollChip icon={<Banknote className="w-3 h-3" />} label="Cash" amount={agg.payCash || agg.cash} color="text-emerald-600" />
+              <CollChip icon={<Building2 className="w-3 h-3" />} label="Bank" amount={agg.payBank || agg.bank} color="text-amber-600" />
               <CollChip icon={<Smartphone className="w-3 h-3" />} label="UPI" amount={agg.payUpi} color="text-sky-600" />
-              <CollChip icon={<CreditCard className="w-3 h-3" />} label="Card" amount={agg.payCard} color="text-violet-600" />
-              <CollChip icon={<Building2 className="w-3 h-3" />} label="Bank" amount={agg.bank} color="text-amber-600" />
-              <CollChip icon={<Building2 className="w-3 h-3" />} label="OTA" amount={agg.ota} color="text-orange-600" />
+              <CollChip icon={<CreditCard className="w-3 h-3" />} label="Card POS" amount={agg.payCard} color="text-violet-600" />
             </div>
           </div>
         )}
@@ -1033,11 +1049,11 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                 )}
                 <ReviewRow label="Other Revenue" value={`₹${fmtMoney(otherRevenueTotal)}`} />
                 <div className="border-t border-slate-100 pt-3">
-                  <ReviewRow label="Gross Revenue" value={`₹${fmtMoney(grossRevenue + (gstEnabled ? agg.gstCollected : 0))}`} bold />
+                  <ReviewRow label="Gross Revenue" value={`₹${fmtMoney(grossRevenue)}`} bold />
                 </div>
                 <ReviewRow label="Total Expenses" value={`- ₹${fmtMoney(todayExpensesTotal)}`} negative />
                 <div className="border-t-2 border-slate-200 pt-3">
-                  <ReviewRow label="Net Operating Profit" value={`₹${fmtMoney(netOperatingProfit + (gstEnabled ? agg.gstCollected : 0))}`} bold />
+                  <ReviewRow label="Net Operating Profit" value={`₹${fmtMoney(netOperatingProfit)}`} bold />
                 </div>
               </div>
             </div>
@@ -1049,14 +1065,10 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                 <h2 className="text-sm font-bold text-amber-800">Cash Collection</h2>
               </div>
               <div className="p-4 space-y-2">
-                <ReviewRow label="Cash" value={`₹${fmtMoney(agg.cash)}`} />
-                <ReviewRow label="Bank" value={`₹${fmtMoney(agg.bank)}`} />
-                {gstEnabled && (
-                  <>
-                    <ReviewRow label="UPI" value={`₹${fmtMoney(agg.payUpi)}`} />
-                    <ReviewRow label="Card" value={`₹${fmtMoney(agg.payCard)}`} />
-                  </>
-                )}
+                <ReviewRow label="Cash" value={`₹${fmtMoney(agg.payCash || agg.cash)}`} />
+                <ReviewRow label="Bank" value={`₹${fmtMoney(agg.payBank || agg.bank)}`} />
+                <ReviewRow label="UPI" value={`₹${fmtMoney(agg.payUpi)}`} />
+                <ReviewRow label="Card POS" value={`₹${fmtMoney(agg.payCard)}`} />
                 <div className="border-t border-slate-100 pt-2">
                   <ReviewRow label="Total Collection" value={`₹${fmtMoney(totalCollection)}`} bold />
                 </div>

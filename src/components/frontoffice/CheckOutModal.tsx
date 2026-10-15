@@ -45,6 +45,14 @@ export const CheckOutModal = ({ entry, roomNo, role, onClose, onCheckedOut }: Ch
   const canAnyway = role === 'admin' || role === 'super_admin';
 
   useEffect(() => {
+    const orig = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = orig;
+    };
+  }, []);
+
+  useEffect(() => {
     getFolioCharges(entry.id).then((c) => {
       setCharges(c);
       setLoading(false);

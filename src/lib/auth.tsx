@@ -4,7 +4,25 @@ import { supabase, isPlaceholderSupabase } from './supabase';
 import { setCurrentHotelId } from './api';
 
 
-export type UserRole = 'super_admin' | 'hotel_admin' | 'hotel_staff' | 'company_user';
+export type UserRole =
+  | 'super_admin'
+  | 'hotel_admin'
+  | 'owner'
+  | 'manager'
+  | 'reception'
+  | 'accounts'
+  | 'housekeeping'
+  | 'hotel_staff'
+  | 'company_user';
+
+export interface UserPermissions {
+  canLaundry?: boolean;
+  canMaintenance?: boolean;
+  canApproveInspection?: boolean;
+  assignedFloor?: string;
+  assignedCategoryId?: string;
+  shift?: string;
+}
 
 export type CompanyRole =
   | 'founder' | 'company_admin'
@@ -19,6 +37,7 @@ export interface AuthContext {
   profileLoaded: boolean;
   profileError: string | null;
   role: UserRole | null;
+  permissions: UserPermissions;
   companyRole: CompanyRole | null;
   hotelId: string | null;
   hotelName: string | null;
@@ -53,6 +72,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [permissions, setPermissions] = useState<UserPermissions>({});
   const [companyRole, setCompanyRole] = useState<CompanyRole | null>(null);
   const [hotelId, setHotelId] = useState<string | null>(null);
   const [hotelName, setHotelName] = useState<string | null>(null);
@@ -200,7 +220,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         const profile = adminRow as ProfileRow;
 
-        setRole(profile.role as UserRole);
+        const metaRole = u.user_metadata?.role as UserRole | undefined;
+        let effectiveRole = (metaRole || profile.role) as UserRole;
+        if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+
+        const userPerms: UserPermissions = {
+          canLaundry: Boolean(u.user_metadata?.can_laundry),
+          canMaintenance: u.user_metadata?.can_maintenance !== false,
+          canApproveInspection: Boolean(u.user_metadata?.can_approve_inspection),
+          assignedFloor: u.user_metadata?.assigned_floor || '',
+          assignedCategoryId: u.user_metadata?.assigned_category_id || '',
+          shift: u.user_metadata?.shift || 'General',
+        };
+
+        setRole(effectiveRole);
+        setPermissions(userPerms);
         setCompanyRole(null);
         setHotelId(profile.hotel_id || null);
         setCurrentHotelId(profile.hotel_id || null);
@@ -307,6 +341,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setCurrentHotelId(null);
         setProfileLoaded(false);
         profileLoadedRef.current = null;
+        try {
+          localStorage.removeItem('hotel_mantri_selected_hotel_id');
+          localStorage.removeItem('hotelmantri_demo_user');
+          sessionStorage.clear();
+        } catch {}
       } else {
         setSession(sess);
         setUser(sess.user);
@@ -390,6 +429,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       localStorage.removeItem('hotel_mantri_selected_hotel_id');
       localStorage.removeItem('hotelmantri_demo_user');
+      sessionStorage.clear();
+      if (typeof window !== 'undefined' && window.history?.replaceState) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
     } catch {
       // Ignore localStorage error
     }
@@ -431,7 +474,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   return (
-    <Ctx.Provider value={{ user, session, loading, profileLoaded, profileError, role, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile, recoveryMode, clearRecoveryMode }}>
+    <Ctx.Provider value={{ user, session, loading, profileLoaded, profileError, role, permissions, companyRole, hotelId, hotelName, subscriptionStatus, signIn, signOut, resetPassword, changePassword, updateUserProfile, refreshProfile, recoveryMode, clearRecoveryMode }}>
       {children}
     </Ctx.Provider>
   );

@@ -393,14 +393,14 @@ export const BillingSettings = () => {
                 invoice={sampleInvoice}
                 items={sampleItems}
                 settings={settings}
-                hotelName="Hotel Gopal Devbhumi Dwarka"
+                hotelName="Hotel Mantri Premier"
                 hotelAddress="Dwarka, Gujarat"
                 hotelCity="Dwarka"
                 hotelState="Gujarat"
-                hotelPropertyCode="HMGDDW"
-                hotelAdminEmail="owner@hotelgopal.com"
+                hotelPropertyCode="HMPREM"
+                hotelAdminEmail="admin@hotelmantri.com"
                 hotelMobile="+91 98765 43210"
-                hotelOwnerName="Gopal Patel"
+                hotelOwnerName="Hotel Manager"
                 planName="Premium Plan"
                 preview
                 scale={previewScale}

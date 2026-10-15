@@ -38,7 +38,7 @@ const STORAGE_KEY = 'hotel_mantri_selected_hotel_id';
 const HotelCtx = createContext<HotelContextValue | undefined>(undefined);
 
 export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, session, role, loading: authLoading, profileLoaded } = useAuth();
+  const { user, role, loading: authLoading, profileLoaded } = useAuth();
 
   const [hotelId, setHotelIdState] = useState<string | null>(null);
   const [hotel, setHotel] = useState<HotelSummary | null>(null);
@@ -49,17 +49,21 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isSuperAdmin = role === 'super_admin' || role === 'company_user';
   const resolvingUserRef = useRef<string | null>(null);
 
-  const applyHotelSelection = useCallback((h: HotelSummary | null) => {
+  const applyHotelSelection = useCallback((h: HotelSummary | null, forSuperAdmin: boolean = false) => {
     if (h) {
       setHotelIdState(h.id);
       setHotel(h);
       setCurrentHotelId(h.id);
       setStatus('HOTEL_CONTEXT_READY');
       setError(null);
-      try {
-        localStorage.setItem(STORAGE_KEY, h.id);
-      } catch {
-        // Ignore localStorage error
+      if (forSuperAdmin) {
+        try {
+          localStorage.setItem(STORAGE_KEY, h.id);
+        } catch {}
+      } else {
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch {}
       }
     } else {
       setHotelIdState(null);
@@ -69,17 +73,22 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setError(null);
       try {
         localStorage.removeItem(STORAGE_KEY);
-      } catch {
-        // Ignore localStorage error
-      }
+      } catch {}
     }
   }, []);
 
   const clearSelectedHotel = useCallback(() => {
-    applyHotelSelection(null);
-  }, [applyHotelSelection]);
+    applyHotelSelection(null, isSuperAdmin);
+  }, [applyHotelSelection, isSuperAdmin]);
 
   const setSelectedHotel = useCallback(async (selectedId: string) => {
+    // Hotel Owners/Admins cannot arbitrarily select or switch hotels
+    if (!isSuperAdmin) {
+      console.warn('[HotelContext] Non-superadmin attempted to select an arbitrary hotel:', selectedId);
+      setError('You are not authorized to switch hotels.');
+      return;
+    }
+
     try {
       setStatus('HOTEL_CONTEXT_LOADING');
       setError(null);
@@ -95,17 +104,18 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error(hotelErr?.message || 'Selected hotel does not exist.');
       }
 
-      applyHotelSelection(data as HotelSummary);
+      applyHotelSelection(data as HotelSummary, true);
     } catch (err: any) {
       console.error('Failed to set selected hotel:', err);
       setError(err instanceof Error ? err.message : String(err));
       setStatus('HOTEL_CONTEXT_ERROR');
     }
-  }, [applyHotelSelection]);
+  }, [isSuperAdmin, applyHotelSelection]);
 
   const resolveHotelContext = useCallback(async () => {
     if (!user || !profileLoaded) {
-      applyHotelSelection(null);
+      applyHotelSelection(null, false);
+      setAvailableHotels([]);
       setStatus(authLoading ? 'HOTEL_CONTEXT_LOADING' : 'HOTEL_CONTEXT_EMPTY');
       return;
     }
@@ -131,24 +141,22 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setAvailableHotels(hotelsList);
 
         if (hotelsList.length === 0) {
-          applyHotelSelection(null);
+          applyHotelSelection(null, true);
           setStatus('HOTEL_CONTEXT_EMPTY');
           setError('No active hotels registered in the system.');
           return;
         }
 
-        // 2. Check persistent UI preference
+        // 2. Check persistent UI preference for Super Admin
         let storedId: string | null = null;
         try {
           storedId = localStorage.getItem(STORAGE_KEY);
-        } catch {
-          // Ignore
-        }
+        } catch {}
 
         if (storedId) {
           const match = hotelsList.find((h) => h.id === storedId);
           if (match) {
-            applyHotelSelection(match);
+            applyHotelSelection(match, true);
             return;
           } else {
             try {
@@ -159,17 +167,22 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         // 3. If exactly 1 hotel exists, auto-select it
         if (hotelsList.length === 1) {
-          applyHotelSelection(hotelsList[0]);
+          applyHotelSelection(hotelsList[0], true);
           return;
         }
 
         // 4. Multiple hotels exist and none is selected
-        applyHotelSelection(null);
+        applyHotelSelection(null, true);
         setStatus('HOTEL_CONTEXT_EMPTY');
         return;
       }
 
-      // HOTEL ADMIN FLOW:
+      // HOTEL OWNER / HOTEL ADMIN / STAFF FLOW:
+      // Clear any stored preference from localStorage for strict isolation
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+
       // Resolve assigned hotel from hotel_admins
       const { data: adminRows, error: adminErr } = await supabase
         .from('hotel_admins')
@@ -194,7 +207,7 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (matchedHotel) {
           const assignedHotel = matchedHotel as HotelSummary;
           setAvailableHotels([assignedHotel]);
-          applyHotelSelection(assignedHotel);
+          applyHotelSelection(assignedHotel, false);
           return;
         }
       }
@@ -203,8 +216,9 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setHotelIdState(null);
         setHotel(null);
         setCurrentHotelId(null);
+        setAvailableHotels([]);
         setStatus('HOTEL_CONTEXT_ERROR');
-        setError('Your account is not assigned to any active hotel. Please contact an administrator.');
+        setError('No hotel is associated with this account. Please contact an administrator.');
         return;
       }
 
@@ -219,33 +233,52 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setHotelIdState(null);
         setHotel(null);
         setCurrentHotelId(null);
+        setAvailableHotels([]);
         setStatus('HOTEL_CONTEXT_ERROR');
         setError('Assigned hotel could not be loaded from database.');
         return;
       }
 
       const assignedHotel = hotelData as HotelSummary;
+      // Hotel Owner ONLY sees their single authorized hotel
       setAvailableHotels([assignedHotel]);
-      applyHotelSelection(assignedHotel);
+      applyHotelSelection(assignedHotel, false);
     } catch (err: any) {
       console.error('Failed to resolve hotel context:', err);
       setHotelIdState(null);
       setHotel(null);
       setCurrentHotelId(null);
+      setAvailableHotels([]);
       setStatus('HOTEL_CONTEXT_ERROR');
       setError(err instanceof Error ? err.message : String(err));
     }
   }, [user, profileLoaded, isSuperAdmin, authLoading, applyHotelSelection]);
 
+  // Clean state on logout
   useEffect(() => {
-    if (!authLoading) {
+    if (!user) {
+      setHotelIdState(null);
+      setHotel(null);
+      setCurrentHotelId(null);
+      setAvailableHotels([]);
+      setStatus('HOTEL_CONTEXT_EMPTY');
+      setError(null);
+      resolvingUserRef.current = null;
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!authLoading && profileLoaded) {
       const userKey = user ? `${user.id}-${role}` : 'no-user';
       if (resolvingUserRef.current !== userKey) {
         resolvingUserRef.current = userKey;
         resolveHotelContext();
       }
     }
-  }, [authLoading, user, role, resolveHotelContext]);
+  }, [authLoading, profileLoaded, user, role, resolveHotelContext]);
 
   return (
     <HotelCtx.Provider

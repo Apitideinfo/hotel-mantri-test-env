@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Save, Lock, Plus, Trash2, Building2, Upload, X, Eye,
   Phone, Mail, Globe, MapPin, FileText, User, Landmark, CreditCard,
-  CheckCircle2, AlertCircle, Pencil, ChevronUp, ChevronDown, UtensilsCrossed,
+  CheckCircle2, AlertCircle, Pencil, ChevronUp, ChevronDown, UtensilsCrossed, Clock,
+  Users, Shield,
 } from 'lucide-react';
 import type { HotelSettings, CompanySource, SourceCategory, GstMode, GstType, GstSlab, RoomCategory } from '@/lib/types';
 import { SOURCE_CATEGORIES, GST_SLABS, GST_MODES, GST_TYPES } from '@/lib/types';
@@ -11,12 +12,14 @@ import {
   upsertCompanySource, deleteCompanySource, uploadHotelLogo,
   getRoomCategories, upsertRoomCategory, deleteRoomCategory, reorderRoomCategories,
 } from '@/lib/api';
+import { apiFetch } from '@/lib/api-fetch';
 import { getPosEnabled, setPosEnabled } from '@/lib/api-pos';
 import { getHotSeasons, addHotSeason, deleteHotSeason } from '@/lib/api-calendar';
 import type { HotSeason } from '@/lib/types';
 
 interface SettingsProps {
   onBack: () => void;
+  onNavigate?: (screen: string) => void;
 }
 
 /* ── tiny sub-components ─────────────────────────────────────── */
@@ -31,26 +34,26 @@ const Field = ({ children }: { children: React.ReactNode }) => (
 );
 
 const input =
-  'w-full px-3 py-2.5 border border-slate-300 rounded-lg bg-white text-slate-900 text-sm focus:ring-2 focus:ring-sky-500 focus:border-transparent transition placeholder:text-slate-400';
+  'w-full px-3.5 py-2.5 border border-slate-200/90 rounded-xl bg-white text-slate-900 text-sm focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 transition-all placeholder:text-slate-400 shadow-2xs font-medium';
 const inputDisabled =
-  'w-full px-3 py-2.5 border border-slate-200 rounded-lg bg-slate-50 text-slate-500 text-sm cursor-not-allowed';
+  'w-full px-3.5 py-2.5 border border-slate-200 rounded-xl bg-slate-50 text-slate-500 text-sm cursor-not-allowed font-medium';
 
 const SectionCard = ({
   title, icon, children, accent = 'bg-white',
 }: { title: string; icon: React.ReactNode; children: React.ReactNode; accent?: string }) => (
-  <div className={`rounded-2xl border border-slate-200 overflow-hidden shadow-sm ${accent}`}>
-    <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+  <div className={`rounded-2xl border border-slate-200/80 overflow-hidden shadow-xs hover:border-slate-300/80 transition-all duration-200 ${accent}`}>
+    <div className="px-4 sm:px-5 py-3.5 bg-slate-50/80 border-b border-slate-200/60 flex items-center gap-2.5">
       <span className="text-sky-600">{icon}</span>
-      <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">{title}</h2>
+      <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">{title}</h2>
     </div>
-    <div className="p-4 space-y-3">{children}</div>
+    <div className="p-4 sm:p-5 space-y-4">{children}</div>
   </div>
 );
 
 const CURRENT_YEAR = new Date().getFullYear();
 
 /* ── main component ──────────────────────────────────────────── */
-export const Settings = ({ onBack }: SettingsProps) => {
+export const Settings = ({ onBack, onNavigate }: SettingsProps) => {
   /* core */
   const [settings, setSettings] = useState<HotelSettings | null>(null);
   const [loading, setLoading] = useState(true);
@@ -105,6 +108,16 @@ export const Settings = ({ onBack }: SettingsProps) => {
   const [logoError, setLogoError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /* Dynamic Branding & Policies */
+  const [checkInTime, setCheckInTime] = useState('12:00 Hrs');
+  const [checkOutTime, setCheckOutTime] = useState('10:00 Hrs');
+  const [cancellationPolicy, setCancellationPolicy] = useState(
+    'Cancellation requests must be received 24 hours prior to check-in for a full refund. Cancellations made within 24 hours are subject to standard retention charges.'
+  );
+  const [importantNotes, setImportantNotes] = useState(
+    'Valid Government Photo ID (Aadhaar / Passport / Driving Licence) required at check-in for all adult guests. PAN Card is not accepted as address proof.'
+  );
+
   /* Company sources */
   const [sources, setSources] = useState<CompanySource[]>([]);
 
@@ -136,9 +149,23 @@ export const Settings = ({ onBack }: SettingsProps) => {
     let mounted = true;
     (async () => {
       try {
-        const [s, srcs, cats, posOn, seasons] = await Promise.all([getSettings(), getCompanySources(), getRoomCategories(), getPosEnabled(), getHotSeasons()]);
+        const [s, srcs, cats, posOn, seasons, brandRes] = await Promise.all([
+          getSettings(),
+          getCompanySources(),
+          getRoomCategories(),
+          getPosEnabled(),
+          getHotSeasons(),
+          apiFetch('/api/hotel-branding').catch(() => null),
+        ]);
         if (!mounted) return;
         applySettings(s);
+        if (brandRes?.branding) {
+          if (brandRes.branding.checkInTime) setCheckInTime(brandRes.branding.checkInTime);
+          if (brandRes.branding.checkOutTime) setCheckOutTime(brandRes.branding.checkOutTime);
+          if (brandRes.branding.cancellationPolicy) setCancellationPolicy(brandRes.branding.cancellationPolicy);
+          if (brandRes.branding.importantNotes) setImportantNotes(brandRes.branding.importantNotes);
+          if (brandRes.branding.logoUrl && !s.logo_url) setLogoUrl(brandRes.branding.logoUrl);
+        }
         setSources(srcs);
         setCategories(cats);
         setPosEnabledState(posOn);
@@ -183,6 +210,10 @@ export const Settings = ({ onBack }: SettingsProps) => {
     setAccountNumber(s.account_number ?? '');
     setIfsc(s.ifsc_code ?? '');
     setLogoUrl(s.logo_url ?? '');
+    if (s.check_in_time) setCheckInTime(s.check_in_time);
+    if (s.check_out_time) setCheckOutTime(s.check_out_time);
+    if (s.cancellation_policy) setCancellationPolicy(s.cancellation_policy);
+    if (s.important_notes) setImportantNotes(s.important_notes);
   };
 
   /* save */
@@ -222,6 +253,28 @@ export const Settings = ({ onBack }: SettingsProps) => {
         account_number: accountNumber.trim(),
         ifsc_code: ifsc.trim(),
       });
+
+      // Synchronize dynamic branding, stay timings and policies
+      await apiFetch('/api/hotel-branding', {
+        method: 'PUT',
+        body: JSON.stringify({
+          hotel_name: hotelName.trim() || settings.hotel_name,
+          logo_url: logoUrl,
+          check_in_time: checkInTime.trim(),
+          check_out_time: checkOutTime.trim(),
+          cancellation_policy: cancellationPolicy.trim(),
+          important_notes: importantNotes.trim(),
+          address: address.trim(),
+          city: city.trim(),
+          state_name: stateName.trim(),
+          pin_code: pinCode.trim(),
+          phone: phone.trim(),
+          email: email.trim(),
+          website: website.trim(),
+          gst_number: gst.trim(),
+        }),
+      }).catch((e) => console.warn('Could not sync hotel branding API:', e.message));
+
       applySettings(updated);
       setSavedOk(true);
       setUnlocked(false);
@@ -394,13 +447,13 @@ export const Settings = ({ onBack }: SettingsProps) => {
   return (
     <div className="min-h-screen bg-slate-50 pb-28">
       {/* header */}
-      <header className="sticky top-0 z-10 bg-sky-800 text-white px-4 py-3 flex items-center gap-3 shadow-md">
-        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-sky-700 rounded-lg transition">
-          <ArrowLeft className="w-5 h-5" />
+      <header className="sticky top-0 z-10 bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 text-white px-4 py-3.5 flex items-center gap-3 shadow-md border-b border-slate-800">
+        <button onClick={onBack} className="p-1.5 -ml-1.5 hover:bg-white/10 rounded-xl transition cursor-pointer">
+          <ArrowLeft className="w-5 h-5 text-slate-300 hover:text-white" />
         </button>
         <div className="flex-1">
-          <h1 className="text-base font-bold leading-tight">Hotel Configuration</h1>
-          <p className="text-sky-300 text-xs">Settings · Reports · Branding</p>
+          <h1 className="text-base font-black leading-tight tracking-tight">Hotel Configuration</h1>
+          <p className="text-blue-300 text-xs font-semibold">Settings · Reports · Branding</p>
         </div>
       </header>
 
@@ -562,6 +615,53 @@ export const Settings = ({ onBack }: SettingsProps) => {
               </div>
             </SectionCard>
 
+            {/* ── 2b. HOTEL STAY TIMINGS & CONFIRMATION POLICIES ── */}
+            <SectionCard title="Stay Timings & Confirmation Policies" icon={<Clock className="w-4 h-4" />}>
+              <p className="text-xs text-slate-500 mb-2">
+                These timings and policies dynamically appear on all official Reservation Confirmation PDFs.
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <Label>Standard Check-In Time</Label>
+                  <input
+                    className={input}
+                    value={checkInTime}
+                    onChange={(e) => setCheckInTime(e.target.value)}
+                    placeholder="e.g. 12:00 Hrs"
+                  />
+                </Field>
+                <Field>
+                  <Label>Standard Check-Out Time</Label>
+                  <input
+                    className={input}
+                    value={checkOutTime}
+                    onChange={(e) => setCheckOutTime(e.target.value)}
+                    placeholder="e.g. 10:00 Hrs"
+                  />
+                </Field>
+              </div>
+              <Field>
+                <Label>Cancellation & Retention Policy</Label>
+                <textarea
+                  className={`${input} resize-none`}
+                  rows={3}
+                  value={cancellationPolicy}
+                  onChange={(e) => setCancellationPolicy(e.target.value)}
+                  placeholder="e.g. Cancellation requests must be received 24 hours prior to check-in for a full refund."
+                />
+              </Field>
+              <Field>
+                <Label>Check-in Instructions & ID Requirements</Label>
+                <textarea
+                  className={`${input} resize-none`}
+                  rows={2}
+                  value={importantNotes}
+                  onChange={(e) => setImportantNotes(e.target.value)}
+                  placeholder="e.g. Valid Government Photo ID required at check-in for all adult guests. PAN Card not accepted."
+                />
+              </Field>
+            </SectionCard>
+
             {/* ── 3. CONTACT DETAILS ── */}
             <SectionCard title="Contact & Branding" icon={<MapPin className="w-4 h-4" />}>
               <Field>
@@ -711,6 +811,28 @@ export const Settings = ({ onBack }: SettingsProps) => {
                 <input className={input} value={adminName} onChange={(e) => setAdminName(e.target.value)}
                   placeholder="Full name" />
               </Field>
+            </SectionCard>
+
+            {/* ── 5b. STAFF & ROLE-BASED ACCESS CONTROL ── */}
+            <SectionCard title="Staff & Role-Based Access Control" icon={<Users className="w-4 h-4" />}>
+              <p className="text-xs text-slate-500 mb-2">
+                Manage staff logins and enforce strict workspace access permissions. Staff with role <strong>Housekeeping</strong> are restricted to cleaning boards, room statuses, and tasks.
+              </p>
+              <div className="flex flex-wrap gap-1.5 mb-3">
+                <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-md">Housekeeping</span>
+                <span className="text-[10px] font-bold bg-sky-50 text-sky-700 border border-sky-200 px-2 py-0.5 rounded-md">Reception</span>
+                <span className="text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-md">Accounts</span>
+                <span className="text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-md">Manager</span>
+                <span className="text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md">Owner</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate?.('users')}
+                className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl text-xs transition cursor-pointer shadow-sm"
+              >
+                <Shield className="w-4 h-4 text-blue-400" />
+                Manage Staff Accounts & Role Permissions
+              </button>
             </SectionCard>
 
             {/* ── 6. BANK DETAILS ── */}

@@ -21,3 +21,10 @@ dist-ssr
 *.sln
 *.sw?
 .env
+server/data/
+scratch/
+.vercel
+vite.config.*.timestamp-*
+supabase/.temp/
+dashboard_screenshot_*.jpeg
+MIS-Report-*.pdf

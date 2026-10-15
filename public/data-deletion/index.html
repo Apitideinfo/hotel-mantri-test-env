@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>User Data Deletion & Privacy Instructions — HotelMantri</title>
+  <meta name="description" content="Official instructions and interactive portal for requesting user data deletion, WhatsApp opt-outs, and tracking deletion request status on HotelMantri.">
+  <link rel="canonical" href="https://www.hotelmantri.com/data-deletion">
+  <link rel="icon" type="image/png" href="/hotel-mantri-icon-clean.png">
+  <meta property="og:title" content="User Data Deletion Instructions — HotelMantri">
+  <meta property="og:description" content="Official instructions and tracking portal for user data deletion and WhatsApp opt-outs on HotelMantri.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://www.hotelmantri.com/data-deletion">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid #e2e8f0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo-text {
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      text-decoration: none;
+    }
+    .hero-banner {
+      background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+      color: #ffffff;
+      padding: 50px 20px;
+      border-bottom: 1px solid #334155;
+    }
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      background: rgba(225, 29, 72, 0.15);
+      border: 1px solid rgba(225, 29, 72, 0.35);
+      color: #fda4af;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      font-size: 36px;
+      font-weight: 900;
+      letter-spacing: -1px;
+      margin-bottom: 12px;
+    }
+    .hero-subtitle {
+      color: #cbd5e1;
+      font-size: 16px;
+      max-width: 800px;
+    }
+    main { padding: 40px 0; }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    h2 { font-size: 20px; font-weight: 800; margin-bottom: 10px; color: #0f172a; }
+    p { margin-bottom: 14px; color: #334155; font-size: 14.5px; }
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .step-card {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 18px;
+      border-radius: 12px;
+    }
+    .step-num {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: #ede9fe;
+      color: #6d28d9;
+      font-weight: 800;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+    .step-card h3 { font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 6px; }
+    .step-card p { font-size: 13px; color: #475569; margin: 0; }
+    .alert-box {
+      background: #fffbeb;
+      border: 1px solid #fef3c7;
+      border-left: 4px solid #f59e0b;
+      padding: 16px;
+      border-radius: 0 12px 12px 0;
+      font-size: 13.5px;
+      color: #78350f;
+      margin: 18px 0;
+    }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; color: #334155; }
+    input[type="text"], input[type="email"], input[type="tel"], select, textarea {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 14px;
+      background: #ffffff;
+      outline: none;
+      font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus {
+      border-color: #7c3aed;
+      box-shadow: 0 0 0 2px rgba(124, 58, 237, 0.15);
+    }
+    .btn {
+      display: inline-block;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 700;
+      text-decoration: none;
+      border-radius: 10px;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-danger { background: #e11d48; color: #ffffff; }
+    .btn-primary { background: #7c3aed; color: #ffffff; }
+    .btn-outline { border: 1px solid #cbd5e1; color: #334155; background: #ffffff; }
+    .status-lookup-bar {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    @media (max-width: 640px) {
+      .status-lookup-bar { flex-direction: column; }
+    }
+    footer {
+      background: #0f172a;
+      color: #94a3b8;
+      padding: 30px 20px;
+      text-align: center;
+      font-size: 13px;
+      border-top: 1px solid #1e293b;
+    }
+    footer a { color: #cbd5e1; text-decoration: none; margin: 0 10px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-inner">
+      <a href="/" class="logo-text">
+        <span style="color:#7B5CF5;">Hotel</span><span style="color:#22B8CF;">Mantri</span>
+      </a>
+      <div style="display:flex; gap:12px;">
+        <a href="/" class="btn btn-outline">Back to Home</a>
+        <a href="/privacy-policy" class="btn btn-primary">Privacy Policy</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="hero-banner">
+    <div class="container">
+      <span class="badge">Meta Platform & Statutory Deletion Framework</span>
+      <h1>User Data Deletion & Privacy Instructions</h1>
+      <p class="hero-subtitle">
+        In accordance with Meta Platform policies, the Indian Digital Personal Data Protection Act (DPDP Act), and international privacy standards, this page explains how hotel guests, staff, and WhatsApp recipients can request deletion of personal information.
+      </p>
+    </div>
+  </div>
+
+  <main>
+    <div class="container">
+
+      <!-- Status Lookup -->
+      <section class="card" id="lookup-section">
+        <h2>Check Deletion Request Status</h2>
+        <p>If you uninstalled the HotelMantri app or submitted a deletion request, enter your Confirmation Code below to check real-time status.</p>
+        <form id="status-form" class="status-lookup-bar" onsubmit="handleStatusCheck(event)">
+          <input type="text" id="status-code-input" placeholder="e.g. HM-DEL-20261015-9F4B182C" style="flex:1; text-transform:uppercase; font-family:monospace;">
+          <button type="submit" class="btn btn-primary">Check Status</button>
+        </form>
+        <div id="status-result" style="margin-top:16px; display:none;"></div>
+      </section>
+
+      <!-- Step by Step -->
+      <section class="card">
+        <h2>How Data Deletion Works at HotelMantri</h2>
+        <div class="steps-grid">
+          <div class="step-card">
+            <span class="step-num">Step 1</span>
+            <h3>Submit Request</h3>
+            <p>Provide your contact email/phone, relationship (guest, staff, or WhatsApp recipient), and details via the form below or email <a href="mailto:privacy@hotelmantri.com">privacy@hotelmantri.com</a>.</p>
+          </div>
+          <div class="step-card">
+            <span class="step-num">Step 2</span>
+            <h3>Identity Verification</h3>
+            <p>Our compliance desk confirms the request originates from the actual data subject to prevent malicious third-party deletions.</p>
+          </div>
+          <div class="step-card">
+            <span class="step-num">Step 3</span>
+            <h3>Purge & Confirmation</h3>
+            <p>Non-financial PII is permanently erased or pseudonymized within 30 days, and an auditable confirmation record is maintained.</p>
+          </div>
+        </div>
+
+        <div class="alert-box">
+          <strong>Statutory Tax & Accounting Retention Exceptions</strong>
+          <p style="margin-top:6px; margin-bottom:0;">
+            Under <strong>Section 44AA of the Indian Income Tax Act</strong> and <strong>Section 36 of the CGST Act</strong>, hotel establishments and processors are legally required to preserve accounting books and tax invoices for <strong>6 to 8 years</strong>. Financial invoice numbers and transaction ledgers are restricted under statutory retention, while contact numbers and personal marketing details are permanently scrubbed.
+          </p>
+        </div>
+      </section>
+
+      <!-- Web Deletion Form -->
+      <section class="card">
+        <h2>Submit a Data Deletion Request</h2>
+        <p>Complete this form to register an auditable deletion ticket. You will receive an instant Confirmation Code.</p>
+
+        <form id="deletion-form" onsubmit="handleFormSubmit(event)">
+          <div class="form-group">
+            <label>Full Legal Name *</label>
+            <input type="text" id="req-name" required placeholder="e.g. Rahul Sharma">
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+            <div class="form-group">
+              <label>Email Address</label>
+              <input type="email" id="req-email" placeholder="name@example.com">
+            </div>
+            <div class="form-group">
+              <label>Mobile Number with Country Code</label>
+              <input type="tel" id="req-phone" placeholder="+91 99259 58831">
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+            <div class="form-group">
+              <label>Your Role *</label>
+              <select id="req-role">
+                <option value="guest">Hotel Guest</option>
+                <option value="whatsapp_recipient">WhatsApp Notification Recipient</option>
+                <option value="staff">Former Staff Member</option>
+                <option value="hotel_owner">Former Hotel Client</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Request Type *</label>
+              <select id="req-type">
+                <option value="full_deletion">Full Personal Data Deletion & Anonymization</option>
+                <option value="whatsapp_opt_out">WhatsApp Opt-Out & Number Purge</option>
+                <option value="staff_account_deletion">Staff Profile Deletion</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Hotel Name or Booking Reference (if known)</label>
+            <input type="text" id="req-ref" placeholder="e.g. Hotel Mantri / HM-BK-2026-0042">
+          </div>
+
+          <div class="form-group">
+            <label>Additional Notes</label>
+            <textarea id="req-reason" rows="3" placeholder="Describe any specific phone numbers, stays, or records to delete."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label style="font-weight:normal; display:flex; gap:8px; align-items:flex-start;">
+              <input type="checkbox" id="req-confirm" required style="margin-top:3px;">
+              <span style="font-size:12.5px; color:#475569;">
+                I certify that I am the data subject. I understand that statutory tax invoices are restricted under Indian GST/Income Tax laws and preserved for legal compliance.
+              </span>
+            </label>
+          </div>
+
+          <button type="submit" id="submit-btn" class="btn btn-danger">Submit Deletion Request</button>
+        </form>
+
+        <div id="form-msg" style="margin-top:16px; display:none;"></div>
+      </section>
+
+      <!-- Contact -->
+      <section class="card" style="background:#f1f5f9;">
+        <h2>Questions or Appeals Concerning Data Deletion?</h2>
+        <p>Contact our dedicated compliance desk for verification inquiries or appeals:</p>
+        <p style="margin-bottom:6px;">• Compliance Email: <a href="mailto:privacy@hotelmantri.com" style="color:#7c3aed; font-weight:700;">privacy@hotelmantri.com</a></p>
+        <p style="margin-bottom:6px;">• Support Helpline: <a href="tel:+919925958831" style="color:#0f172a; font-weight:700;">+91 99259 58831</a></p>
+        <p style="margin-bottom:0;">• Grievance Desk Address: Sector 17, Vashi, Navi Mumbai, Maharashtra 400703, India</p>
+      </section>
+
+    </div>
+  </main>
+
+  <footer>
+    <p>© 2026 HotelMantri (Apitide Information Technologies). All rights reserved.</p>
+    <div style="margin-top:10px;">
+      <a href="/privacy-policy">Privacy Policy</a> •
+      <a href="/data-deletion">Data Deletion</a> •
+      <a href="/terms">Terms of Service</a>
+    </div>
+  </footer>
+
+  <script>
+    // Auto-check URL query param code
+    window.addEventListener('DOMContentLoaded', function() {
+      var params = new URLSearchParams(window.location.search);
+      var code = params.get('code');
+      if (code) {
+        document.getElementById('status-code-input').value = code;
+        lookupStatus(code);
+      }
+    });
+
+    async function lookupStatus(code) {
+      var resultDiv = document.getElementById('status-result');
+      resultDiv.style.display = 'block';
+      resultDiv.innerHTML = '<p style="color:#64748b;">Checking request status...</p>';
+
+      try {
+        var res = await fetch('/api/meta/deletion-status/' + encodeURIComponent(code));
+        var data = await res.json();
+        if (!res.ok || !data.success) {
+          resultDiv.innerHTML = '<div style="padding:12px; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; border-radius:10px; font-size:13px;">' + (data.message || 'No deletion request found for this code.') + '</div>';
+          return;
+        }
+
+        resultDiv.innerHTML = '<div style="padding:16px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; font-size:13px; color:#14532d;">' +
+          '<strong>Status: ' + (data.statusLabel || data.status) + '</strong><br>' +
+          '<span style="font-family:monospace;">Confirmation Code: ' + data.confirmationCode + '</span><br>' +
+          '<span>Submitted: ' + new Date(data.submittedAt).toLocaleString() + '</span><br>' +
+          '<p style="margin-top:8px; margin-bottom:0; font-size:12px; color:#166534;">' + data.dispositionNotes + '</p>' +
+          '</div>';
+      } catch (err) {
+        resultDiv.innerHTML = '<div style="padding:12px; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; border-radius:10px; font-size:13px;">Failed to connect to verification server.</div>';
+      }
+    }
+
+    function handleStatusCheck(e) {
+      e.preventDefault();
+      var code = document.getElementById('status-code-input').value.trim();
+      if (!code) return;
+      lookupStatus(code);
+    }
+
+    async function handleFormSubmit(e) {
+      e.preventDefault();
+      var msgDiv = document.getElementById('form-msg');
+      var submitBtn = document.getElementById('submit-btn');
+      var name = document.getElementById('req-name').value.trim();
+      var email = document.getElementById('req-email').value.trim();
+      var phone = document.getElementById('req-phone').value.trim();
+      var role = document.getElementById('req-role').value;
+      var reqType = document.getElementById('req-type').value;
+      var ref = document.getElementById('req-ref').value.trim();
+      var reason = document.getElementById('req-reason').value.trim();
+      var confirm = document.getElementById('req-confirm').checked;
+
+      if (!email && !phone) {
+        msgDiv.style.display = 'block';
+        msgDiv.innerHTML = '<div style="padding:12px; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; border-radius:10px; font-size:13px;">Please provide either an email or phone number.</div>';
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.innerText = 'Submitting Request...';
+
+      try {
+        var res = await fetch('/api/compliance/deletion-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name,
+            email: email,
+            phone: phone,
+            role: role,
+            requestType: reqType,
+            bookingRef: ref,
+            reason: reason,
+            confirmedAccuracy: confirm
+          })
+        });
+        var data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || data.message || 'Submission failed');
+        }
+
+        msgDiv.style.display = 'block';
+        msgDiv.innerHTML = '<div style="padding:16px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; font-size:13px; color:#14532d;">' +
+          '<strong>Request Registered Successfully!</strong><br>' +
+          'Your Confirmation Code is: <strong style="font-family:monospace; font-size:15px;">' + data.confirmationCode + '</strong><br>' +
+          '<span>' + data.statutoryNotice + '</span>' +
+          '</div>';
+
+        document.getElementById('status-code-input').value = data.confirmationCode;
+        lookupStatus(data.confirmationCode);
+      } catch (err) {
+        msgDiv.style.display = 'block';
+        msgDiv.innerHTML = '<div style="padding:12px; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; border-radius:10px; font-size:13px;">' + err.message + '</div>';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerText = 'Submit Deletion Request';
+      }
+    }
+  </script>
+</body>
+</html>

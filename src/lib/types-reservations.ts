@@ -85,6 +85,8 @@ export interface ReservationInput {
   rate_plan?: string;
   parent_reservation_id?: string | null;
   guest_id?: string | null;
+  room_category_id?: string | null;
+  allowEmptyEmail?: boolean;
 }
 
 // ── Phase 9: Group Bookings ──
@@ -232,3 +234,86 @@ export const RESERVATION_STATUS_COLORS: Record<ReservationStatus, string> = {
   'cancelled': 'bg-red-100 text-red-700',
   'no_show': 'bg-orange-100 text-orange-700',
 };
+
+const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+
+export const isValidEmail = (email?: string | null): boolean => {
+  if (!email || typeof email !== 'string') return false;
+  const trimmed = email.trim();
+  if (!trimmed) return false;
+  return EMAIL_REGEX.test(trimmed);
+};
+
+export interface ReservationConfirmationData {
+  hotel: {
+    id: string;
+    hotel_name: string;
+    phone: string;
+    email: string;
+    address: string;
+    city: string;
+    state_name: string;
+    pin_code: string;
+    gst_number: string;
+    logo_url?: string;
+    check_in_time: string;
+    check_out_time: string;
+    cancellation_policy: string;
+    important_notes?: string;
+  };
+  guest: {
+    id?: string;
+    name: string;
+    phone: string;
+    email: string;
+    address?: string;
+  };
+  reservation: Reservation;
+  room: {
+    room_no: string;
+    room_id?: string;
+    room_category: string;
+    rate_plan?: string;
+    meal_plan?: string;
+  };
+  dates: {
+    checkIn: string;
+    checkOut: string;
+    nights: number;
+    bookingDate: string;
+  };
+  charges: {
+    rate: number;
+    roomCharges: number;
+    taxableAmount: number;
+    gstAmount: number;
+    totalAmount: number;
+  };
+  payments: {
+    advancePaid: number;
+    paymentMode: string;
+    paymentStatus: 'Paid' | 'Partially Paid' | 'Pending';
+  };
+  balance: number;
+  source: {
+    sourceType: 'OTA' | 'MANUAL';
+    sourceName: string;
+    otaBookingId: string;
+    confirmationNumber: string;
+  };
+  contacts: {
+    guestContact: {
+      name: string;
+      phone: string;
+      email: string;
+    };
+    ownerContact: {
+      name: string;
+      phone: string;
+      email: string;
+    };
+    targetEmail: string | null;
+    targetPhone: string | null;
+  };
+}
+

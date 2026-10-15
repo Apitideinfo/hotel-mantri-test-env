@@ -7,9 +7,17 @@ import { supabase } from './supabase';
  * and structured error responses.
  */
 
-// In production on Vercel, requests use same-origin relative paths.
-// In development, Vite proxies /api to the local backend if configured.
-const API_BASE = import.meta.env.VITE_API_URL || '';
+// In production on Vercel, requests use same-origin relative paths (/api/...).
+const rawApiBase = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL ? import.meta.env.VITE_API_URL : '').trim();
+
+// Normalize API_BASE:
+// Strip accidental '/Test', '/test', or /Test suffixes that cause 405 Method Not Allowed on static SPA fallback
+const cleanApiBase = rawApiBase
+  .replace(/^\/?test\/?$/i, '')
+  .replace(/\/+test\/?$/i, '')
+  .replace(/\/+$/, '');
+
+const API_BASE = cleanApiBase;
 
 export interface ApiError {
   success: false;
@@ -38,6 +46,11 @@ export const apiFetch = async (
   } catch {
     // If hotel context is not yet loaded, do not crash here; backend will validate if route requires it
   }
+  if (!hotelId && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      hotelId = localStorage.getItem('hotel_mantri_selected_hotel_id');
+    } catch {}
+  }
   
   // Get Supabase session token for backend verification
   let token: string | undefined;
@@ -51,9 +64,14 @@ export const apiFetch = async (
   }
   
   // Ensure the endpoint starts with a slash
-  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+  // Strip accidental /Test or /test prefix from endpoint if present
+  if (cleanEndpoint.startsWith('/Test/api/') || cleanEndpoint.startsWith('/test/api/')) {
+    cleanEndpoint = cleanEndpoint.replace(/^\/[Tt]est\/api\//, '/api/');
+  }
   
-  // Only prepend API_BASE if it's explicitly set (e.g. in dev), otherwise use relative path
+  // Only prepend API_BASE if it's explicitly set to an external origin, otherwise use relative path
   const url = API_BASE ? `${API_BASE}${cleanEndpoint}` : cleanEndpoint;
 
   const headers: HeadersInit = {
@@ -127,11 +145,13 @@ export const apiFetch = async (
         status: response.status
       } as ApiError;
     }
+    const reqId = response.headers.get('x-request-id') || response.headers.get('x-vercel-id');
     if (response.status >= 500) {
       throw {
         success: false,
         error: 'SERVER_ERROR',
-        message: 'Server error occurred (HTML response returned).',
+        message: reqId ? `Backend returned an unexpected server error. Request ID: ${reqId}` : 'Backend returned an unexpected server error.',
+        requestId: reqId || undefined,
         status: response.status
       } as ApiError;
     }
