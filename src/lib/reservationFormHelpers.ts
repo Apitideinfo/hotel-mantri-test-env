@@ -8,6 +8,7 @@ export interface ReservationValidationInput {
   roomNos: string[];
   checkIn: string;
   checkOut: string;
+  allowEmptyEmail?: boolean;
 }
 
 export interface ValidationResult {
@@ -18,7 +19,8 @@ export interface ValidationResult {
 
 /**
  * Validates reservation form fields authoritatively.
- * Enforces mandatory email, guest name, stay dates, and room selection.
+ * Enforces guest name, stay dates, and room selection.
+ * Email is enforced only when allowEmptyEmail is false.
  */
 export const validateReservationForm = (input: ReservationValidationInput): ValidationResult => {
   if (!input.guestName || !input.guestName.trim()) {
@@ -26,12 +28,16 @@ export const validateReservationForm = (input: ReservationValidationInput): Vali
   }
 
   const cleanEmail = (input.email || '').trim();
-  if (!cleanEmail) {
-    const msg = 'Guest email is required.';
-    return { valid: false, error: msg, emailError: msg };
-  }
-
-  if (!isValidEmail(cleanEmail)) {
+  if (!input.allowEmptyEmail) {
+    if (!cleanEmail) {
+      const msg = 'Guest email is required.';
+      return { valid: false, error: msg, emailError: msg };
+    }
+    if (!isValidEmail(cleanEmail)) {
+      const msg = 'Please enter a valid email address.';
+      return { valid: false, error: msg, emailError: msg };
+    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
     const msg = 'Please enter a valid email address.';
     return { valid: false, error: msg, emailError: msg };
   }
@@ -50,6 +56,17 @@ export const validateReservationForm = (input: ReservationValidationInput): Vali
 
   return { valid: true, error: null, emailError: null };
 };
+
+export interface RoomDetailConfig {
+  roomNo?: string;
+  roomId?: string | null;
+  categoryId?: string | null;
+  categoryName?: string;
+  rate?: number;
+  mealPlan?: MealPlan;
+  adults?: number;
+  children?: number;
+}
 
 export interface BuildReservationInputsParams {
   roomNos: string[];
@@ -83,48 +100,69 @@ export interface BuildReservationInputsParams {
   remarks: string;
   internalNote: string;
   createdBy: string;
+  status?: 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled' | 'no_show';
+  allowEmptyEmail?: boolean;
   rooms: Room[];
   categories: RoomCategory[];
+  roomDetails?: RoomDetailConfig[];
 }
 
 /**
  * Builds normalized ReservationInput array for single or multi-room reservations.
- * Deduplicates room numbers, handles group UUID linking, distributes advance payments,
- * and calculates authoritative tariff & GST amounts.
+ * Deduplicates physical room numbers, handles category-based unassigned holds, group UUID linking,
+ * distributes advance payments, and calculates authoritative tariff & GST amounts.
  */
 export const buildReservationInputs = (params: BuildReservationInputsParams): ReservationInput[] => {
-  // Deduplicate room numbers case-insensitively
-  const seen = new Set<string>();
-  const cleanRoomNos: string[] = [];
-  for (const no of params.roomNos) {
-    const trimmed = (no || '').trim();
-    const k = trimmed.toLowerCase();
-    if (trimmed && !seen.has(k)) {
-      seen.add(k);
-      cleanRoomNos.push(trimmed);
+  // If structured roomDetails are provided, prioritize them
+  const hasDetails = params.roomDetails && params.roomDetails.length > 0;
+  
+  // Deduplicate only physical rooms
+  const seenPhysical = new Set<string>();
+  const rawList: RoomDetailConfig[] = hasDetails
+    ? (params.roomDetails || [])
+    : params.roomNos.map(no => ({ roomNo: no }));
+
+  const validItems: RoomDetailConfig[] = [];
+  for (const item of rawList) {
+    const rawNo = (item.roomNo || '').trim();
+    const k = rawNo.toLowerCase();
+    const isPhysical = k && k !== 'unassigned' && k !== 'tbd';
+    if (isPhysical) {
+      if (seenPhysical.has(k)) continue;
+      seenPhysical.add(k);
     }
+    validItems.push(item);
   }
 
-  const groupId = cleanRoomNos.length > 1 ? crypto.randomUUID() : undefined;
+  const groupId = validItems.length > 1 ? crypto.randomUUID() : undefined;
   const fullPhone = params.phone.trim() ? `${params.countryCode} ${params.phone.trim()}` : '';
 
   // 1. Calculate each room's invoice total first so we can properly allocate payments
-  const roomCalculations = cleanRoomNos.map((no) => {
-    const room = params.rooms.find(
-      (r) => (r.room_no || '').trim().toLowerCase() === no.toLowerCase()
-    );
-    const roomCat = params.categories.find((c) => c.id === room?.category_id);
+  const roomCalculations = validItems.map((item, idx) => {
+    const rawNo = (item.roomNo || '').trim();
+    const isPhysical = rawNo && rawNo.toLowerCase() !== 'unassigned' && rawNo.toLowerCase() !== 'tbd';
+
+    const room = isPhysical
+      ? params.rooms.find((r) => (r.room_no || '').trim().toLowerCase() === rawNo.toLowerCase())
+      : (item.roomId ? params.rooms.find((r) => r.id === item.roomId) : undefined);
+
+    const catId = item.categoryId || room?.category_id;
+    const roomCat = params.categories.find((c) => c.id === catId);
+
     const fallbackTariff =
       toNum(params.rate) > 0
         ? toNum(params.rate)
         : (roomCat?.default_tariff ?? room?.default_tariff ?? 0);
+
     const individualRate =
-      params.roomRates[no] !== undefined && toNum(params.roomRates[no]) > 0
-        ? toNum(params.roomRates[no])
+      item.rate !== undefined && toNum(item.rate) > 0
+        ? toNum(item.rate)
+        : rawNo && params.roomRates[rawNo] !== undefined && toNum(params.roomRates[rawNo]) > 0
+        ? toNum(params.roomRates[rawNo])
         : fallbackTariff;
 
     const roomSubtotal = individualRate * params.nights;
-    const roomDiscount = toNum(params.discount) / (cleanRoomNos.length || 1);
+    const roomDiscount = toNum(params.discount) / (validItems.length || 1);
     const roomAfterDiscount = Math.max(0, roomSubtotal - roomDiscount);
     const {
       taxable: rTaxable,
@@ -133,8 +171,12 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
     } = calcGstFull(roomAfterDiscount, params.gstType, params.gstSlab);
 
     return {
+      item,
+      idx,
+      rawNo,
+      isPhysical,
       room,
-      no,
+      catId,
       individualRate,
       roomDiscount,
       rTaxable,
@@ -148,7 +190,6 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
   const isFullyPaid = totalGroupInvoice > 0 && totalReceived >= (totalGroupInvoice - 0.01);
 
   // Sequential advance allocation across rooms so each room is marked paid up to its share
-  let remainingAdvanceToAllocate = totalReceived;
   let remainingCash = toNum(params.payCash);
   let remainingUpi = toNum(params.payUpi);
   let remainingCard = toNum(params.payCard);
@@ -162,20 +203,17 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
     let rPayBank = 0;
 
     if (isFullyPaid) {
-      // If the group is fully paid, mark every room's advance equal to its invoice total
       advancePaid = calc.rInvoiceTotal;
-      const ratio = totalGroupInvoice > 0 ? calc.rInvoiceTotal / totalGroupInvoice : 1 / cleanRoomNos.length;
-      rPayCash = idx === cleanRoomNos.length - 1 ? remainingCash : Math.round(toNum(params.payCash) * ratio * 100) / 100;
-      rPayUpi = idx === cleanRoomNos.length - 1 ? remainingUpi : Math.round(toNum(params.payUpi) * ratio * 100) / 100;
-      rPayCard = idx === cleanRoomNos.length - 1 ? remainingCard : Math.round(toNum(params.payCard) * ratio * 100) / 100;
-      rPayBank = idx === cleanRoomNos.length - 1 ? remainingBank : Math.round(toNum(params.payBank) * ratio * 100) / 100;
+      const ratio = totalGroupInvoice > 0 ? calc.rInvoiceTotal / totalGroupInvoice : 1 / (validItems.length || 1);
+      rPayCash = idx === validItems.length - 1 ? remainingCash : Math.round(toNum(params.payCash) * ratio * 100) / 100;
+      rPayUpi = idx === validItems.length - 1 ? remainingUpi : Math.round(toNum(params.payUpi) * ratio * 100) / 100;
+      rPayCard = idx === validItems.length - 1 ? remainingCard : Math.round(toNum(params.payCard) * ratio * 100) / 100;
+      rPayBank = idx === validItems.length - 1 ? remainingBank : Math.round(toNum(params.payBank) * ratio * 100) / 100;
       remainingCash -= rPayCash;
       remainingUpi -= rPayUpi;
       remainingCard -= rPayCard;
       remainingBank -= rPayBank;
     } else {
-      // Partial payment or single room: allocate to primary room first, or sequentially
-      // For primary room (idx === 0), it records totalReceived so group tracking reflects total paid
       advancePaid = idx === 0 ? totalReceived : 0;
       rPayCash = idx === 0 ? toNum(params.payCash) : 0;
       rPayUpi = idx === 0 ? toNum(params.payUpi) : 0;
@@ -185,7 +223,8 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
 
     return {
       room_id: calc.room?.id ?? null,
-      room_no: calc.room?.room_no?.trim() || calc.no,
+      room_no: calc.isPhysical ? (calc.room?.room_no?.trim() || calc.rawNo) : 'Unassigned',
+      room_category_id: calc.catId ?? null,
       guest_name: params.guestName.trim(),
       guest_phone: fullPhone,
       guest_email: params.email.trim(),
@@ -205,19 +244,20 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
       pay_bank: rPayBank,
       payment_ref: params.paymentRef.trim(),
       discount: calc.roomDiscount,
-      meal_plan: params.mealPlan,
+      meal_plan: calc.item.mealPlan || params.mealPlan,
       gst_type: params.gstType,
       gst_slab: params.gstSlab,
       gst_amount: calc.rGst,
       taxable_amount: calc.rTaxable,
       invoice_total: calc.rInvoiceTotal,
-      adults: toNum(params.adults),
-      children: toNum(params.children),
+      adults: calc.item.adults !== undefined ? toNum(calc.item.adults) : toNum(params.adults),
+      children: calc.item.children !== undefined ? toNum(calc.item.children) : toNum(params.children),
       remarks: params.remarks.trim(),
       internal_note: params.internalNote.trim(),
       created_by: params.createdBy.trim(),
-      status: 'confirmed',
+      status: params.status || 'confirmed',
       group_id: groupId,
+      allowEmptyEmail: params.allowEmptyEmail ?? true,
     };
   });
 };

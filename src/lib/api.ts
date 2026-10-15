@@ -295,7 +295,7 @@ export const classifyCompany = (
 
 // ---- Room chart & authoritative stay synthesis ----
 
-export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
+export const reservationToRoomChartEntry = (r: Reservation, overrideBalance?: number): RoomChartEntry => {
   const ci = (r.check_in_date ?? '').slice(0, 10);
   const co = (r.check_out_date ?? '').slice(0, 10);
   const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
@@ -306,6 +306,9 @@ export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
     r.payment_mode === 'Complimentary' ||
     (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
   );
+  const splitPayments = toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
+  const totalPaid = Math.max(toNum(r.advance_paid), splitPayments);
+  const defaultBalance = isComplimentary ? 0 : Math.max(0, invTotal - totalPaid);
 
   return {
     id: r.id,
@@ -340,7 +343,7 @@ export const reservationToRoomChartEntry = (r: Reservation): RoomChartEntry => {
     pay_card: toNum(r.pay_card),
     pay_bank: toNum(r.pay_bank),
     pay_advance: toNum(r.advance_paid),
-    pay_balance: Math.max(0, invTotal - (toNum(r.advance_paid) + toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank))),
+    pay_balance: overrideBalance !== undefined ? Math.max(0, overrideBalance) : defaultBalance,
     id_proof_type: '',
     id_proof_number: '',
     id_proof_verified: false,
@@ -367,9 +370,116 @@ export const mergeReservationsWithRoomChart = (
     return true;
   });
 
-  const synthesized = unlinkedResvs.map(reservationToRoomChartEntry);
-  return [...entries, ...synthesized];
+  // Reconcile group balances across all reservations (both linked and unlinked)
+  // so group payments logged on a master room cover member room balances
+  const getGroupKey = (r: Reservation): string => {
+    if (r.group_id) return `grp_${r.group_id}`;
+    if (r.parent_reservation_id) return `parent_${r.parent_reservation_id}`;
+    const gName = (r.guest_name || '').trim().toLowerCase();
+    const ci = (r.check_in_date || '').slice(0, 10);
+    if (gName && ci) return `guest_${gName}_${ci}`;
+    return `resv_${r.id}`;
+  };
+
+  const groupMap = new Map<string, Reservation[]>();
+  for (const r of reservations) {
+    const status = (r.status || '').toLowerCase();
+    if (status === 'cancelled' || status === 'no_show') continue;
+    const gk = getGroupKey(r);
+    const list = groupMap.get(gk) ?? [];
+    list.push(r);
+    groupMap.set(gk, list);
+  }
+
+  const groupBalanceMap = new Map<string, number>();
+  for (const [, groupList] of groupMap.entries()) {
+    if (groupList.length === 1) {
+      // Single reservation - standard balance
+      const r = groupList[0];
+      const isComp = Boolean(
+        (r as any).is_complimentary ||
+        r.payment_mode === 'Complimentary' ||
+        (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
+      );
+      if (isComp) {
+        groupBalanceMap.set(r.id, 0);
+        continue;
+      }
+      const ci = (r.check_in_date ?? '').slice(0, 10);
+      const co = (r.check_out_date ?? '').slice(0, 10);
+      const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
+      const inv = toNum(r.invoice_total) || (toNum(r.rate) * n);
+      const splitPaid = toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
+      const totalPaid = Math.max(toNum(r.advance_paid), splitPaid);
+      groupBalanceMap.set(r.id, Math.max(0, inv - totalPaid));
+      continue;
+    }
+
+    // Multi-room group: pool invoices and payments
+    const totalGroupInvoice = groupList.reduce((sum, r) => {
+      const isComp = Boolean(
+        (r as any).is_complimentary ||
+        r.payment_mode === 'Complimentary' ||
+        (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
+      );
+      if (isComp) return sum;
+      const ci = (r.check_in_date ?? '').slice(0, 10);
+      const co = (r.check_out_date ?? '').slice(0, 10);
+      const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
+      return sum + (toNum(r.invoice_total) || (toNum(r.rate) * n));
+    }, 0);
+
+    const totalGroupPaid = groupList.reduce((sum, r) => {
+      const splitPaid = toNum(r.pay_cash) + toNum(r.pay_upi) + toNum(r.pay_card) + toNum(r.pay_bank);
+      return sum + Math.max(toNum(r.advance_paid), splitPaid);
+    }, 0);
+
+    if (totalGroupPaid >= totalGroupInvoice) {
+      for (const r of groupList) {
+        groupBalanceMap.set(r.id, 0);
+      }
+    } else {
+      let pool = totalGroupPaid;
+      for (const r of groupList) {
+        const isComp = Boolean(
+          (r as any).is_complimentary ||
+          r.payment_mode === 'Complimentary' ||
+          (r.remarks && r.remarks.toLowerCase().includes('complimentary'))
+        );
+        if (isComp) {
+          groupBalanceMap.set(r.id, 0);
+          continue;
+        }
+        const ci = (r.check_in_date ?? '').slice(0, 10);
+        const co = (r.check_out_date ?? '').slice(0, 10);
+        const n = Math.max(1, toNum(r.nights) || calcStayNights(ci, co));
+        const inv = toNum(r.invoice_total) || (toNum(r.rate) * n);
+        const covered = Math.min(inv, pool);
+        groupBalanceMap.set(r.id, Math.max(0, inv - covered));
+        pool = Math.max(0, pool - covered);
+      }
+    }
+  }
+
+  // Update existing entries if they belong to a reconciled group
+  const updatedEntries = entries.map((e) => {
+    if (e.reservation_id && groupBalanceMap.has(e.reservation_id)) {
+      return {
+        ...e,
+        pay_balance: groupBalanceMap.get(e.reservation_id)!,
+      };
+    }
+    return e;
+  });
+
+  const synthesized = unlinkedResvs.map((r) => {
+    const overrideBal = groupBalanceMap.get(r.id);
+    return reservationToRoomChartEntry(r, overrideBal);
+  });
+
+  return [...updatedEntries, ...synthesized];
 };
+
 
 export const getRoomChart = async (date: string): Promise<RoomChartEntry[]> => {
   const hotelId = getCurrentHotelId();
@@ -539,10 +649,7 @@ export const saveOtherEntries = async (
 export const getPrevCashClosingDerived = async (
   date: string, openingBalance: number
 ): Promise<number> => {
-  const d = new Date(date + 'T00:00:00');
-  const prev = new Date(d);
-  prev.setDate(prev.getDate() - 1);
-  const prevStr = prev.toISOString().slice(0, 10);
+  const prevStr = addDays(date, -1);
   const hotelId = getCurrentHotelId();
 
   // If yesterday is already closed, respect the closed record's cash closing
@@ -591,10 +698,12 @@ export const getPrevCashClosingDerived = async (
     ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
   ]);
 
+  const allCombined = mergeReservationsWithRoomChart(allEntries, reservations);
+
   const paymentTransactions = reconcilePaymentLedger({
     timelineEvents: timelineEvents as any[],
     reservations: reservations as Reservation[],
-    roomChartEntries: allEntries,
+    roomChartEntries: allCombined,
     hotelId,
   });
 
@@ -614,14 +723,16 @@ export const getPrevCashClosingDerived = async (
     arr.push({ category: re.revenue_head, amount: re.amount });
     revenueByDate.set(re.entry_date, arr);
   }
-
-  const allCombined = mergeReservationsWithRoomChart(allEntries, reservations);
   const datesWithData: string[] = [];
-  for (let day = 1; day <= parseInt(prevStr.slice(8, 10), 10); day++) {
+  const maxDay = parseInt(prevStr.slice(8, 10), 10);
+  for (let day = 1; day <= maxDay; day++) {
     const ds = `${prevStr.slice(0, 8)}${String(day).padStart(2, '0')}`;
     const hasDayEntries = allCombined.some((e) => isStayOccupiedOnDate(e, ds));
     const hasPayment = paymentTransactions.some((tx) => tx.payment_date === ds);
-    if (hasDayEntries || hasPayment || otherByDate.has(ds)) {
+    const hasOther = otherByDate.has(ds);
+    const hasFinance = financeByDate.has(ds);
+    const hasRev = revenueByDate.has(ds);
+    if (hasDayEntries || hasPayment || hasOther || hasFinance || hasRev) {
       datesWithData.push(ds);
     }
   }
@@ -1664,7 +1775,65 @@ export const reopenDay = async (
   return result;
 };
 
-// Get MTD/YTD from store
+// Dynamically compute MTD and YTD if day close has not been run
+export const computeDynamicMtdYtd = async (
+  businessDate: string
+): Promise<{ mtd_data: MtdYtdData; ytd_data: MtdYtdData } | null> => {
+  const hotelId = getCurrentHotelId();
+  const settings = await getSettings();
+  const totalRooms = settings.total_rooms;
+  const openingBalance = settings.opening_cash_balance;
+
+  const year = parseInt(businessDate.slice(0, 4), 10);
+  const month = parseInt(businessDate.slice(5, 7), 10);
+
+  // Fetch month reports
+  const monthReports = await getDerivedReportsForMonth(year, month, totalRooms, openingBalance);
+  if (!monthReports || monthReports.length === 0) {
+    return null;
+  }
+
+  // Filter reports up to businessDate
+  const relevantReports = monthReports.filter((r) => r.report_date <= businessDate);
+  if (relevantReports.length === 0) {
+    return null;
+  }
+
+  // Find if there is an official mtd_ytd_store record on or before businessDate in the same month
+  const { data: storedRecords } = await supabase
+    .from('mtd_ytd_store')
+    .select('business_date, mtd_data, ytd_data')
+    .eq('hotel_id', hotelId)
+    .gte('business_date', `${businessDate.slice(0, 8)}01`)
+    .lte('business_date', businessDate)
+    .order('business_date', { ascending: false })
+    .limit(1);
+
+  const latestStored = storedRecords && storedRecords.length > 0 ? storedRecords[0] : null;
+
+  let currentMtd: MtdYtdData | null = latestStored ? (latestStored.mtd_data as MtdYtdData) : null;
+  let currentYtd: MtdYtdData | null = latestStored ? (latestStored.ytd_data as MtdYtdData) : null;
+  const startAfterDate = latestStored ? latestStored.business_date : '';
+
+  // Apply each day's report sequentially
+  for (const dr of relevantReports) {
+    if (startAfterDate && dr.report_date <= startAfterDate) {
+      continue;
+    }
+    const dayNum = parseInt(dr.report_date.slice(8, 10), 10);
+    const res = buildMtdYtdFromDaily(dr, currentMtd, currentYtd, totalRooms, dayNum, dayNum);
+    currentMtd = res.mtd;
+    currentYtd = res.ytd;
+  }
+
+  if (!currentMtd || !currentYtd) {
+    return null;
+  }
+
+  return { mtd_data: currentMtd, ytd_data: currentYtd };
+};
+
+// Get MTD/YTD from store with dynamic fallback
 export const getMtdYtd = async (businessDate: string): Promise<{ mtd_data: MtdYtdData; ytd_data: MtdYtdData } | null> => {
   const { data, error } = await supabase
     .from('mtd_ytd_store')
@@ -1673,8 +1842,8 @@ export const getMtdYtd = async (businessDate: string): Promise<{ mtd_data: MtdYt
     .eq('business_date', businessDate)
     .maybeSingle();
   if (error) throw error;
-  if (!data) return null;
-  return data as { mtd_data: MtdYtdData; ytd_data: MtdYtdData };
+  if (data && data.mtd_data) return data as { mtd_data: MtdYtdData; ytd_data: MtdYtdData };
+  return await computeDynamicMtdYtd(businessDate);
 };
 
 // Get daily report snapshot

@@ -231,6 +231,22 @@ export const calculateDayWiseRevenue = async ({
     return !linkedResvIds.has(r.id);
   });
 
+  // Group-level payment mode pooling for multi-room bookings
+  const groupModeMap = new Map();
+  for (const r of resvList) {
+    const key = r.group_id || r.parent_reservation_id || `${(r.guest_name || '').toLowerCase().trim()}::${(r.check_in_date || '').slice(0, 10)}`;
+    const currentMode = groupModeMap.get(key);
+    if (Number(r.pay_bank) > 0 || r.payment_mode === 'Bank') {
+      groupModeMap.set(key, 'Bank');
+    } else if (Number(r.pay_upi) > 0 || r.payment_mode === 'UPI') {
+      groupModeMap.set(key, 'UPI');
+    } else if (Number(r.pay_card) > 0 || r.payment_mode === 'Card') {
+      groupModeMap.set(key, 'Card');
+    } else if (Number(r.pay_cash) > 0 || r.payment_mode === 'Cash') {
+      if (!currentMode) groupModeMap.set(key, 'Cash');
+    }
+  }
+
   const allStays = [
     ...chartList.map((e) => ({
       id: e.id,
@@ -250,24 +266,29 @@ export const calculateDayWiseRevenue = async ({
       variable_nightly_rates: e.variable_nightly_rates || null,
       paymentMode: e.pay_mode || 'Cash',
     })),
-    ...unlinkedResvs.map((r) => ({
-      id: r.id,
-      reservationId: r.id,
-      bookingId: `HM-RES-${r.id.slice(0, 8).toUpperCase()}`,
-      guestName: r.guest_name || 'Guest',
-      roomNo: r.room_no || 'Unassigned',
-      categoryName: r.room_category || 'Room',
-      arrival: (r.check_in_date || '').slice(0, 10),
-      departure: (r.check_out_date || '').slice(0, 10),
-      rate: Number(r.rate || 0),
-      total: Number(r.invoice_total || 0),
-      nights: calcStayNights(r.check_in_date, r.check_out_date),
-      sourceName: r.source_name || r.source_category || 'OTA',
-      revenueCategory: 'Room Revenue',
-      is_complimentary: false,
-      variable_nightly_rates: null,
-      paymentMode: r.payment_mode || 'Bank',
-    })),
+    ...unlinkedResvs.map((r) => {
+      const key = r.group_id || r.parent_reservation_id || `${(r.guest_name || '').toLowerCase().trim()}::${(r.check_in_date || '').slice(0, 10)}`;
+      const resolvedMode = groupModeMap.get(key) ||
+        (Number(r.pay_cash) > 0 ? 'Cash' : Number(r.pay_bank) > 0 ? 'Bank' : Number(r.pay_upi) > 0 ? 'UPI' : Number(r.pay_card) > 0 ? 'Card' : r.payment_mode || 'Bank');
+      return {
+        id: r.id,
+        reservationId: r.id,
+        bookingId: `HM-RES-${r.id.slice(0, 8).toUpperCase()}`,
+        guestName: r.guest_name || 'Guest',
+        roomNo: r.room_no || 'Unassigned',
+        categoryName: r.room_category || 'Room',
+        arrival: (r.check_in_date || '').slice(0, 10),
+        departure: (r.check_out_date || '').slice(0, 10),
+        rate: Number(r.rate || 0),
+        total: Number(r.invoice_total || 0),
+        nights: calcStayNights(r.check_in_date, r.check_out_date),
+        sourceName: r.source_name || r.source_category || 'OTA',
+        revenueCategory: 'Room Revenue',
+        is_complimentary: false,
+        variable_nightly_rates: null,
+        paymentMode: resolvedMode,
+      };
+    }),
   ];
 
   // 6. Map other daily entries & daily revenue entries by date
@@ -304,6 +325,7 @@ export const calculateDayWiseRevenue = async ({
   };
 
   // 8a. From booking timeline payment events
+  const resvMap = new Map(resvList.map((r) => [r.id, r]));
   const timelineSeen = new Set();
   for (const evt of timelineEvents || []) {
     const isPaymentEvt = [
@@ -317,23 +339,56 @@ export const calculateDayWiseRevenue = async ({
     const amt = Number(evt.event_amount || 0);
     if (!isPaymentEvt || amt <= 0) continue;
     const ed = evt.event_data || {};
-    const pDate = ed.payment_date || ed.business_date || (evt.created_at ? evt.created_at.slice(0, 10) : null);
-    const pMethod = ed.payment_method || ed.payment_mode || 'Cash';
-    timelineSeen.add(evt.reservation_id);
-    addCollection(pDate, pMethod, amt);
+    let pDate = ed.payment_date || ed.business_date || (evt.created_at ? evt.created_at.slice(0, 10) : null);
+
+    const linkedResv = evt.reservation_id ? resvMap.get(evt.reservation_id) : null;
+    if (linkedResv && linkedResv.check_in_date) {
+      const createdDay = evt.created_at ? evt.created_at.slice(0, 10) : null;
+      // If payment_date matches later record creation date (backdated entry), attribute to stay check_in_date
+      if (!pDate || pDate === createdDay || pDate > linkedResv.check_in_date) {
+        pDate = linkedResv.check_in_date;
+      }
+    }
+
+    if (evt.reservation_id) timelineSeen.add(evt.reservation_id);
+
+    const cashAmt = Number(ed.pay_cash || 0);
+    const bankAmt = Number(ed.pay_bank || 0);
+    const upiAmt = Number(ed.pay_upi || 0);
+    const cardAmt = Number(ed.pay_card || 0);
+
+    if (cashAmt > 0 || bankAmt > 0 || upiAmt > 0 || cardAmt > 0) {
+      if (cashAmt > 0) addCollection(pDate, 'Cash', cashAmt);
+      if (bankAmt > 0) addCollection(pDate, 'Bank', bankAmt);
+      if (upiAmt > 0) addCollection(pDate, 'UPI', upiAmt);
+      if (cardAmt > 0) addCollection(pDate, 'Card', cardAmt);
+    } else {
+      let pMethod = ed.payment_method || ed.payment_mode;
+      if (!pMethod && linkedResv) {
+        pMethod = linkedResv.payment_mode || (Number(linkedResv.pay_bank) > 0 ? 'Bank' : Number(linkedResv.pay_upi) > 0 ? 'UPI' : Number(linkedResv.pay_card) > 0 ? 'Card' : 'Cash');
+      }
+      addCollection(pDate, pMethod || 'Cash', amt);
+    }
   }
 
   // 8b. From reservations advance paid if not captured in timeline
   for (const r of resvList) {
     if (!timelineSeen.has(r.id)) {
       const adv = Number(r.advance_paid || 0);
-      if (adv > 0 && r.created_at) {
-        addCollection(r.created_at.slice(0, 10), r.payment_mode || 'Bank', adv);
+      const effectiveDate = r.check_in_date || (r.created_at ? r.created_at.slice(0, 10) : null);
+      const cashAmt = Number(r.pay_cash || 0);
+      const bankAmt = Number(r.pay_bank || 0);
+      const upiAmt = Number(r.pay_upi || 0);
+      const cardAmt = Number(r.pay_card || 0);
+
+      if (cashAmt > 0 || bankAmt > 0 || upiAmt > 0 || cardAmt > 0) {
+        if (cashAmt > 0) addCollection(effectiveDate, 'Cash', cashAmt);
+        if (bankAmt > 0) addCollection(effectiveDate, 'Bank', bankAmt);
+        if (upiAmt > 0) addCollection(effectiveDate, 'UPI', upiAmt);
+        if (cardAmt > 0) addCollection(effectiveDate, 'Card', cardAmt);
+      } else if (adv > 0) {
+        addCollection(effectiveDate, r.payment_mode || 'Bank', adv);
       }
-      if (Number(r.pay_cash) > 0) addCollection(r.check_in_date, 'Cash', Number(r.pay_cash));
-      if (Number(r.pay_bank) > 0) addCollection(r.check_in_date, 'Bank', Number(r.pay_bank));
-      if (Number(r.pay_upi) > 0) addCollection(r.check_in_date, 'UPI', Number(r.pay_upi));
-      if (Number(r.pay_card) > 0) addCollection(r.check_in_date, 'Card', Number(r.pay_card));
     }
   }
 
@@ -418,6 +473,40 @@ export const calculateDayWiseRevenue = async ({
     const col = collectionsByDate.get(dStr) || { total: 0, payCash: 0, payBank: 0, payUpi: 0, payCard: 0 };
     const isClosed = closedDates.has(dStr);
 
+    // Calculate stay collections (stay revenue realization for this date)
+    let stayCash = 0;
+    let stayBank = 0;
+    let stayUpi = 0;
+    let stayCard = 0;
+    for (const stay of activeStays) {
+      if (!stay.is_complimentary) {
+        const nightly = getNightlyRoomRevenue(stay, dStr);
+        const mode = normalizePaymentMethod(stay.paymentMode);
+        if (mode === 'Cash') stayCash += nightly;
+        else if (mode === 'UPI') stayUpi += nightly;
+        else if (mode === 'Card') stayCard += nightly;
+        else stayBank += nightly;
+      }
+    }
+    const stayTotalCollections = Math.round((stayCash + stayBank + stayUpi + stayCard) * 100) / 100;
+
+    // Use stay collections if non-zero, otherwise fall back to cash-drawer collections
+    const effectiveCollections = stayTotalCollections > 0
+      ? {
+          total: stayTotalCollections,
+          cash: Math.round(stayCash * 100) / 100,
+          bank: Math.round(stayBank * 100) / 100,
+          upi: Math.round(stayUpi * 100) / 100,
+          card: Math.round(stayCard * 100) / 100,
+        }
+      : {
+          total: Math.round(col.total * 100) / 100,
+          cash: Math.round(col.payCash * 100) / 100,
+          bank: Math.round(col.payBank * 100) / 100,
+          upi: Math.round(col.payUpi * 100) / 100,
+          card: Math.round(col.payCard * 100) / 100,
+        };
+
     dailyBreakdown.push({
       date: dStr,
       roomRevenue: Math.round(dayRoomRevenue * 100) / 100,
@@ -431,12 +520,20 @@ export const calculateDayWiseRevenue = async ({
       arr: Math.round(dayArr * 100) / 100,
       revpar: Math.round(dayRevpar * 100) / 100,
       occupancyPercent: Math.round(dayOcc * 10) / 10,
-      collections: {
+      collections: effectiveCollections,
+      grossCollections: {
         total: Math.round(col.total * 100) / 100,
         cash: Math.round(col.payCash * 100) / 100,
         bank: Math.round(col.payBank * 100) / 100,
         upi: Math.round(col.payUpi * 100) / 100,
         card: Math.round(col.payCard * 100) / 100,
+      },
+      stayCollections: {
+        total: stayTotalCollections,
+        cash: Math.round(stayCash * 100) / 100,
+        bank: Math.round(stayBank * 100) / 100,
+        upi: Math.round(stayUpi * 100) / 100,
+        card: Math.round(stayCard * 100) / 100,
       },
       isClosed,
       businessDateStatus: isClosed ? 'closed' : 'open',

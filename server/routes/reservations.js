@@ -18,6 +18,7 @@ import {
 } from '../services/paymentSecurityService.js';
 import {
   checkRoomAvailability,
+  getCategoryPhysicalRoomAvailability,
   detectExistingConflicts,
 } from '../services/ReservationConflictService.js';
 import {
@@ -316,13 +317,68 @@ router.get('/conflicts', checkAuth, async (req, res) => {
 });
 
 /**
+ * POST /api/reservations/category-availability
+ * Authoritative category physical room availability check.
+ * Returns total rooms, available rooms, unavailable rooms, and available room numbers.
+ */
+router.post('/category-availability', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
+    }
+
+    const { categoryId, checkIn, checkOut, excludeReservationId } = req.body;
+    if (!checkIn || !checkOut) {
+      return res.status(400).json({ success: false, code: 'INVALID_STAY_DATES', message: 'Check-in and check-out dates are required.' });
+    }
+
+    const result = await getCategoryPhysicalRoomAvailability({
+      hotelId,
+      categoryId: categoryId || null,
+      checkIn,
+      checkOut,
+      excludeReservationId: excludeReservationId || null,
+    });
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (err) {
+    console.error('Error checking category availability:', err);
+    res.status(500).json({ success: false, code: 'AVAILABILITY_CHECK_FAILED', message: 'Failed to check category availability.' });
+  }
+});
+
+/**
  * POST /api/reservations/check-availability
- * Proactive check for frontend date/room selection before submit.
+ * Proactive check for frontend date/room/category selection before submit.
  */
 router.post('/check-availability', checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
-    const { roomNo, checkIn, checkOut, excludeReservationId } = req.body;
+    const { roomNo, categoryId, checkIn, checkOut, excludeReservationId } = req.body;
+
+    if (categoryId && !roomNo) {
+      const catResult = await getCategoryPhysicalRoomAvailability({
+        hotelId,
+        categoryId,
+        checkIn,
+        checkOut,
+        excludeReservationId,
+      });
+      return res.json({
+        success: true,
+        available: catResult.available,
+        totalRooms: catResult.totalRooms,
+        availableRooms: catResult.availableRooms,
+        unavailableRooms: catResult.unavailableRooms,
+        availableRoomNos: catResult.availableRoomNos,
+        availableRoomDetails: catResult.availableRoomDetails,
+        message: catResult.message,
+      });
+    }
 
     const result = await checkRoomAvailability({
       hotelId,
@@ -372,8 +428,9 @@ router.post('/', checkAuth, async (req, res) => {
       }
 
       const isOta = Boolean(item.is_ota || item.source_category === 'OTA');
+      const allowEmptyEmail = Boolean(req.body?.allowEmptyEmail || item.allowEmptyEmail);
       const cleanEmail = (item.guest_email || '').trim();
-      if (!isOta) {
+      if (!isOta && !allowEmptyEmail) {
         if (!cleanEmail) {
           return res.status(422).json({
             success: false,
@@ -381,13 +438,13 @@ router.post('/', checkAuth, async (req, res) => {
             message: 'Guest email is required to create a reservation.',
           });
         }
-        if (!isValidEmail(cleanEmail)) {
-          return res.status(422).json({
-            success: false,
-            code: 'INVALID_GUEST_EMAIL',
-            message: 'Please provide a valid guest email address.',
-          });
-        }
+      }
+      if (cleanEmail && !isValidEmail(cleanEmail)) {
+        return res.status(422).json({
+          success: false,
+          code: 'INVALID_GUEST_EMAIL',
+          message: 'Please provide a valid guest email address.',
+        });
       }
       cleanList.push(item);
     }
@@ -400,6 +457,7 @@ router.post('/', checkAuth, async (req, res) => {
       hotelId,
       inputs: cleanList,
       userId,
+      allowEmptyEmail: Boolean(req.body?.allowEmptyEmail || cleanList.some(i => i.allowEmptyEmail)),
       idempotencyKey,
     });
 

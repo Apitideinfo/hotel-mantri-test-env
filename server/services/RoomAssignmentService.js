@@ -16,9 +16,72 @@ import {
   checkCategoryCapacity,
   normalizePhysicalRoom,
   logBlockedConflict,
+  getCategoryPhysicalRoomAvailability,
+  findAvailablePhysicalRoomForCategory,
 } from './ReservationConflictService.js';
 import { checkManualDuplicate, withBookingLock } from './ReservationIdempotencyService.js';
 import { isValidEmail } from './emailService.js';
+
+/**
+ * Authoritative set of PostgreSQL columns in the 'reservations' table.
+ * Strips client-only flags (allowEmptyEmail), category hold markers (room_category_id),
+ * and virtual/generated properties before executing Supabase/PostgREST queries.
+ */
+export const RESERVATION_DB_COLUMNS = new Set([
+  'hotel_id',
+  'room_id',
+  'room_no',
+  'guest_name',
+  'guest_phone',
+  'guest_email',
+  'guest_address',
+  'guest_type',
+  'company_gst',
+  'check_in_date',
+  'check_out_date',
+  'rate',
+  'source_category',
+  'source_name',
+  'payment_mode',
+  'advance_paid',
+  'pay_cash',
+  'pay_upi',
+  'pay_card',
+  'pay_bank',
+  'payment_ref',
+  'discount',
+  'meal_plan',
+  'gst_type',
+  'gst_slab',
+  'gst_amount',
+  'taxable_amount',
+  'invoice_total',
+  'adults',
+  'children',
+  'remarks',
+  'internal_note',
+  'created_by',
+  'status',
+  'room_chart_entry_id',
+  'group_id',
+  'rate_plan',
+  'parent_reservation_id',
+  'guest_id',
+  'created_at',
+  'updated_at',
+]);
+
+export const sanitizeReservationPayload = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (RESERVATION_DB_COLUMNS.has(key) && val !== undefined) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
 
 /**
  * Upserts a guest in the PMS guests table.
@@ -93,6 +156,7 @@ export const upsertGuestMaster = async (hotelId, payload) => {
 export const createReservationsAtomically = async ({
   hotelId,
   inputs,
+  items,
   userId = null,
   allowEmptyEmail = false,
   idempotencyKey = null,
@@ -101,7 +165,11 @@ export const createReservationsAtomically = async ({
     throw { status: 400, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' };
   }
 
-  const rawList = Array.isArray(inputs) ? inputs : [inputs];
+  const rawList = Array.isArray(inputs)
+    ? inputs
+    : Array.isArray(items)
+    ? items
+    : (inputs ? [inputs] : (items ? [items] : []));
   if (rawList.length === 0) {
     throw { status: 400, code: 'EMPTY_INPUT', message: 'No reservation inputs provided.' };
   }
@@ -172,53 +240,26 @@ export const createReservationsAtomically = async ({
     }
 
     const item = rawList[index];
-    const norm = normalizePhysicalRoom(item.room_no);
+    let norm = normalizePhysicalRoom(item.room_no);
 
-    const checkAndInsert = async () => {
-      // Physical room availability check
-      if (norm) {
-        const availCheck = await checkRoomAvailability({
-          hotelId,
-          roomNo: norm,
-          checkIn: item.check_in_date,
-          checkOut: item.check_out_date,
-        });
+    // Resolve room category if physical room is not provided or auto-assign requested
+    let targetCategoryId = item.room_category_id || item.category_id || (item.roomDetails && item.roomDetails.categoryId) || null;
+    let targetCategoryName = item.categoryName || (item.roomDetails && item.roomDetails.categoryName) || null;
 
-        if (!availCheck.available) {
-          await logBlockedConflict({
-            hotelId,
-            userId,
-            roomNo: norm,
-            operation: 'RESERVATION_CREATE_BLOCKED',
-            reason: availCheck.message,
-            details: { checkIn: item.check_in_date, checkOut: item.check_out_date, guest: item.guest_name },
-          });
-
-          throw {
-            status: 409,
-            code: availCheck.code,
-            message: availCheck.message,
-            conflictingReservation: availCheck.conflictingReservation,
-          };
-        }
-      } else if (item.room_category_id) {
-        // Unassigned category capacity check
-        const capCheck = await checkCategoryCapacity({
-          hotelId,
-          categoryId: item.room_category_id,
-          checkIn: item.check_in_date,
-          checkOut: item.check_out_date,
-        });
-
-        if (!capCheck.available) {
-          throw {
-            status: 409,
-            code: capCheck.code,
-            message: capCheck.message,
-          };
-        }
+    if (!targetCategoryId && (item.rate_plan || item.room_category)) {
+      const resolved = await resolveHotelRoomCategory(hotelId, {
+        roomCode: item.rate_plan || item.room_category,
+        ratePlan: item.rate_plan,
+        roomName: item.room_category,
+      });
+      if (resolved) {
+        targetCategoryId = resolved.categoryId;
+        targetCategoryName = resolved.categoryName;
       }
+    }
 
+    // Helper to perform the actual database insert and post-insert hooks
+    const executeInsert = async ({ assignedRoomNo, assignedRoomId }) => {
       // Check manual duplicate
       const dupeCheck = await checkManualDuplicate(hotelId, {
         ...item,
@@ -250,13 +291,13 @@ export const createReservationsAtomically = async ({
         internalNote = internalNote ? `${internalNote} [CLIENT_IDEMP: ${derivedIdempKey}]` : `[CLIENT_IDEMP: ${derivedIdempKey}]`;
       }
 
-      const payload = {
+      const rawPayload = {
         ...item,
         hotel_id: hotelId,
         guest_email: item.guest_email || '',
         guest_phone: item.guest_phone || '',
-        room_no: norm || 'Unassigned',
-        room_id: norm ? item.room_id : null,
+        room_no: assignedRoomNo || 'Unassigned',
+        room_id: assignedRoomId || null,
         guest_id: guestId || null,
         internal_note: internalNote,
         status: item.status || 'confirmed',
@@ -264,10 +305,8 @@ export const createReservationsAtomically = async ({
         updated_at: new Date().toISOString(),
       };
 
-      // Strip PostgreSQL virtual / generated columns
-      delete payload.id;
-      delete payload.nights;
-      delete payload.room_categories;
+      // Strip PostgreSQL virtual / non-column fields via authoritative whitelist
+      const payload = sanitizeReservationPayload(rawPayload);
 
       const { data: inserted, error: insertErr } = await supabaseServiceRole
         .from('reservations')
@@ -285,7 +324,7 @@ export const createReservationsAtomically = async ({
           throw {
             status: 409,
             code: 'ROOM_ALREADY_BOOKED',
-            message: `Room ${norm || 'selected'} is already booked for part of this stay. Please choose another room.`,
+            message: `Room ${assignedRoomNo || 'selected'} is already booked for part of this stay. Please choose another room.`,
           };
         }
         throw { status: 500, code: 'RESERVATION_SAVE_FAILED', message: 'Failed to create reservation in database.' };
@@ -316,15 +355,111 @@ export const createReservationsAtomically = async ({
         }
       }
 
+      if (assignedRoomNo && assignedRoomNo !== 'Unassigned') {
+        assignedPhysicalRooms.add(assignedRoomNo.toLowerCase());
+        if (assignedRoomId) assignedPhysicalRooms.add(String(assignedRoomId).toLowerCase());
+      }
+
       createdRecords.push(inserted);
       return lockAndExecute(index + 1);
     };
 
-    if (norm) {
-      return withRoomLock(hotelId, norm, checkAndInsert);
-    } else {
-      return checkAndInsert();
+    // BRANCH 1: Explicit physical room requested
+    if (norm && !item.auto_assign) {
+      return withRoomLock(hotelId, norm, async () => {
+        const availCheck = await checkRoomAvailability({
+          hotelId,
+          roomNo: norm,
+          checkIn: item.check_in_date,
+          checkOut: item.check_out_date,
+        });
+
+        if (!availCheck.available) {
+          await logBlockedConflict({
+            hotelId,
+            userId,
+            roomNo: norm,
+            operation: 'RESERVATION_CREATE_BLOCKED',
+            reason: availCheck.message,
+            details: { checkIn: item.check_in_date, checkOut: item.check_out_date, guest: item.guest_name },
+          });
+
+          throw {
+            status: 409,
+            code: availCheck.code,
+            message: availCheck.message,
+            conflictingReservation: availCheck.conflictingReservation,
+          };
+        }
+
+        let assignedRoomId = item.room_id || null;
+        if (!assignedRoomId) {
+          const { data: rObj } = await supabaseServiceRole
+            .from('rooms')
+            .select('id')
+            .eq('hotel_id', hotelId)
+            .eq('room_no', norm)
+            .maybeSingle();
+          assignedRoomId = rObj?.id || null;
+        }
+
+        return await executeInsert({ assignedRoomNo: norm, assignedRoomId });
+      });
     }
+
+    // BRANCH 2: Automatic physical room assignment requested or room_no is unassigned
+    if (targetCategoryId) {
+      const availInfo = await getCategoryPhysicalRoomAvailability({
+        hotelId,
+        categoryId: targetCategoryId,
+        checkIn: item.check_in_date,
+        checkOut: item.check_out_date,
+        excludeRoomIds: Array.from(assignedPhysicalRooms),
+      });
+
+      if (availInfo.available && availInfo.availableRoomDetails.length > 0) {
+        // Try candidate rooms in deterministic order inside room lock
+        for (const candidate of availInfo.availableRoomDetails) {
+          const candidateKey = candidate.roomNo.toLowerCase();
+          if (assignedPhysicalRooms.has(candidateKey) || assignedPhysicalRooms.has(String(candidate.id).toLowerCase())) {
+            continue;
+          }
+
+          const acquired = await withRoomLock(hotelId, candidate.roomNo, async () => {
+            const recheck = await checkRoomAvailability({
+              hotelId,
+              roomNo: candidate.roomNo,
+              checkIn: item.check_in_date,
+              checkOut: item.check_out_date,
+            });
+            if (!recheck.available) return null;
+
+            return await executeInsert({
+              assignedRoomNo: candidate.roomNo,
+              assignedRoomId: candidate.id,
+            });
+          });
+
+          if (acquired) {
+            return acquired;
+          }
+        }
+      }
+    }
+
+    // If we reach here, no physical room could be automatically assigned
+    if (item.allow_unassigned || item.status === 'waitlist') {
+      // Explicit unassigned/waitlist workflow allowed
+      return await executeInsert({ assignedRoomNo: 'Unassigned', assignedRoomId: null });
+    }
+
+    // Throw clear 409 conflict
+    const catLabel = targetCategoryName || 'the selected category';
+    throw {
+      status: 409,
+      code: 'CATEGORY_CAPACITY_EXCEEDED',
+      message: `No rooms available for ${catLabel} from ${item.check_in_date} to ${item.check_out_date}.`,
+    };
   };
 
   try {
@@ -379,7 +514,9 @@ export const updateReservationAtomically = async ({
     throw { status: 400, code: 'INVALID_STAY_DATES', message: 'Check-out date must be strictly after check-in date.' };
   }
 
-  const normRoom = normalizePhysicalRoom(newRoomNo);
+  let effectiveRoomNo = newRoomNo;
+  let effectiveRoomId = updates.room_id !== undefined ? updates.room_id : current.room_id;
+  let normRoom = normalizePhysicalRoom(effectiveRoomNo);
 
   const performUpdate = async () => {
     // If status is blocking and a physical room is assigned, verify availability
@@ -393,35 +530,78 @@ export const updateReservationAtomically = async ({
       });
 
       if (!availCheck.available) {
-        await logBlockedConflict({
-          hotelId,
-          userId,
-          reservationId,
-          roomNo: normRoom,
-          operation: 'RESERVATION_UPDATE_BLOCKED',
-          reason: availCheck.message,
-        });
+        // If staff didn't explicitly specify a new room_no, try auto-reassigning to an available room in the same category
+        let reallocated = false;
+        if (updates.room_no === undefined) {
+          const { data: rm } = await supabaseServiceRole
+            .from('rooms')
+            .select('category_id')
+            .eq('hotel_id', hotelId)
+            .eq('room_no', normRoom)
+            .maybeSingle();
 
-        throw {
-          status: 409,
-          code: availCheck.code,
-          message: availCheck.message,
-          conflictingReservation: availCheck.conflictingReservation,
-        };
+          const catId = updates.room_category_id || rm?.category_id;
+          if (catId) {
+            const alt = await findAvailablePhysicalRoomForCategory({
+              hotelId,
+              categoryId: catId,
+              checkIn: newCheckIn,
+              checkOut: newCheckOut,
+              excludeReservationId: reservationId,
+            });
+            if (alt) {
+              normRoom = alt.roomNo;
+              effectiveRoomNo = alt.roomNo;
+              effectiveRoomId = alt.id;
+              reallocated = true;
+            }
+          }
+        }
+
+        if (!reallocated) {
+          await logBlockedConflict({
+            hotelId,
+            userId,
+            reservationId,
+            roomNo: normRoom,
+            operation: 'RESERVATION_UPDATE_BLOCKED',
+            reason: availCheck.message,
+          });
+
+          throw {
+            status: 409,
+            code: availCheck.code,
+            message: availCheck.message,
+            conflictingReservation: availCheck.conflictingReservation,
+          };
+        }
+      }
+    } else if ((newStatus === 'confirmed' || newStatus === 'checked_in') && !normRoom && updates.room_category_id) {
+      // Unassigned reservation being assigned via category during update
+      const alt = await findAvailablePhysicalRoomForCategory({
+        hotelId,
+        categoryId: updates.room_category_id,
+        checkIn: newCheckIn,
+        checkOut: newCheckOut,
+        excludeReservationId: reservationId,
+      });
+      if (alt) {
+        normRoom = alt.roomNo;
+        effectiveRoomNo = alt.roomNo;
+        effectiveRoomId = alt.id;
       }
     }
 
-    const payload = {
+    const rawPayload = {
       ...updates,
       room_no: normRoom || 'Unassigned',
-      room_id: normRoom ? updates.room_id ?? current.room_id : null,
+      room_id: normRoom ? effectiveRoomId : null,
       check_in_date: newCheckIn,
       check_out_date: newCheckOut,
       updated_at: new Date().toISOString(),
     };
 
-    delete payload.id;
-    delete payload.nights;
+    const payload = sanitizeReservationPayload(rawPayload);
     delete payload.hotel_id;
 
     const { data: updated, error: updateErr } = await supabaseServiceRole
@@ -524,7 +704,11 @@ export const extendReservationStay = async ({
   const updated = await updateReservationAtomically({
     hotelId,
     reservationId,
-    updates: { check_out_date: cleanOut },
+    updates: {
+      check_out_date: cleanOut,
+      room_no: current.room_no,
+      room_id: current.room_id,
+    },
     userId,
   });
 
@@ -1348,6 +1532,8 @@ export const processPendingRoomAllocations = async (hotelId) => {
 };
 
 export const batchAutoAssignReservations = processPendingRoomAllocations;
+export const findAvailablePhysicalRoom = findAvailablePhysicalRoomForCategory;
+export { findAvailablePhysicalRoomForCategory, getCategoryPhysicalRoomAvailability };
 
 export default {
   upsertGuestMaster,
@@ -1361,5 +1547,8 @@ export default {
   resolveHotelRoomCategory,
   autoAssignPhysicalRoom,
   batchAutoAssignReservations,
+  findAvailablePhysicalRoom,
+  findAvailablePhysicalRoomForCategory,
+  getCategoryPhysicalRoomAvailability,
 };
 

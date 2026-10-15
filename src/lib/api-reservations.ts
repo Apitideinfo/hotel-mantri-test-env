@@ -17,6 +17,66 @@ import { isValidEmail } from './types-reservations';
 export { getRoomChartForDateRange };
 
 /**
+ * Authoritative set of PostgreSQL columns in the 'reservations' table.
+ * Strips client-only flags (allowEmptyEmail), category hold markers (room_category_id),
+ * and virtual/generated properties before executing Supabase/PostgREST queries.
+ */
+export const RESERVATION_DB_COLUMNS = new Set<string>([
+  'hotel_id',
+  'room_id',
+  'room_no',
+  'guest_name',
+  'guest_phone',
+  'guest_email',
+  'guest_address',
+  'guest_type',
+  'company_gst',
+  'check_in_date',
+  'check_out_date',
+  'rate',
+  'source_category',
+  'source_name',
+  'payment_mode',
+  'advance_paid',
+  'pay_cash',
+  'pay_upi',
+  'pay_card',
+  'pay_bank',
+  'payment_ref',
+  'discount',
+  'meal_plan',
+  'gst_type',
+  'gst_slab',
+  'gst_amount',
+  'taxable_amount',
+  'invoice_total',
+  'adults',
+  'children',
+  'remarks',
+  'internal_note',
+  'created_by',
+  'status',
+  'room_chart_entry_id',
+  'group_id',
+  'rate_plan',
+  'parent_reservation_id',
+  'guest_id',
+  'created_at',
+  'updated_at',
+]);
+
+export const sanitizeReservationPayload = (raw: Record<string, any>): Record<string, any> => {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(raw)) {
+    if (RESERVATION_DB_COLUMNS.has(key) && val !== undefined) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+};
+
+/**
  * Definition of an active reservation status that blocks room inventory.
  * Confirmed and Checked-in block rooms.
  * Checked-out, Cancelled, and No-show do NOT block rooms.
@@ -120,19 +180,18 @@ export const saveReservation = async (
 
   const isNew = !id || id.trim() === '';
   const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+  const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
   const cleanEmail = (input.guest_email ?? '').trim();
 
-  if (isNew && !isOta) {
+  if (isNew && !isOta && !allowEmptyEmail) {
     if (!cleanEmail) {
       throw new Error('Guest email is required.');
     }
     if (!isValidEmail(cleanEmail)) {
       throw new Error('Please enter a valid email address.');
     }
-  } else if (!isNew && !isOta && input.guest_email !== undefined && input.guest_email !== null) {
-    if (cleanEmail && !isValidEmail(cleanEmail)) {
-      throw new Error('Please enter a valid email address.');
-    }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
   }
 
   const normRoom = (input.room_no || '').trim().toLowerCase();
@@ -207,17 +266,17 @@ export const saveReservation = async (
   }
 
   // Direct Supabase fallback
-  const rawPayload = { ...input, hotel_id: hotelId };
-  delete (rawPayload as { id?: string }).id;
-  delete (rawPayload as { nights?: number }).nights;
+  const rawPayload = sanitizeReservationPayload({ ...input, hotel_id: hotelId });
 
-  if (isNew && !isOta) {
+  if (isNew && !isOta && !allowEmptyEmail) {
     if (!cleanEmail) {
       throw new Error('Guest email is required.');
     }
     if (!isValidEmail(cleanEmail)) {
       throw new Error('Please enter a valid email address.');
     }
+  } else if (cleanEmail && !isValidEmail(cleanEmail)) {
+    throw new Error('Please enter a valid email address.');
   }
 
   // Sync guest into guests master table if name or phone provided
@@ -275,9 +334,10 @@ export const saveReservation = async (
   }
 
   if (id && id.trim() !== '') {
+    const updatePayload = sanitizeReservationPayload({ ...rawPayload, updated_at: new Date().toISOString() });
     const { data, error } = await supabase
       .from('reservations')
-      .update({ ...rawPayload, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', id)
       .select('*')
       .single();
@@ -299,7 +359,8 @@ export const saveReservation = async (
     }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
 
     if (toNum(res.advance_paid) > 0) {
-      const todayStr = (new Date()).toISOString().slice(0, 10);
+      const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+      const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
       Promise.resolve(supabase.from('booking_timeline').insert({
         hotel_id: hotelId,
         reservation_id: res.id,
@@ -307,9 +368,9 @@ export const saveReservation = async (
         event_description: `Advance payment for reservation: ${res.guest_name}`,
         event_amount: toNum(res.advance_paid),
         event_data: {
-          payment_date: todayStr,
-          business_date: todayStr,
-          payment_method: res.payment_mode || 'Cash',
+          payment_date: paymentDate,
+          business_date: paymentDate,
+          payment_method: paymentMethod,
           pay_cash: res.pay_cash ?? 0,
           pay_bank: res.pay_bank ?? 0,
           pay_upi: res.pay_upi ?? 0,
@@ -348,7 +409,8 @@ export const saveReservation = async (
   }
 
   if (toNum(res.advance_paid) > 0) {
-    const todayStr = (new Date()).toISOString().slice(0, 10);
+    const paymentDate = res.check_in_date || (new Date()).toISOString().slice(0, 10);
+    const paymentMethod = res.payment_mode || (toNum(res.pay_bank) > 0 ? 'Bank' : toNum(res.pay_upi) > 0 ? 'UPI' : toNum(res.pay_card) > 0 ? 'Card' : 'Cash');
     Promise.resolve(supabase.from('booking_timeline').insert({
       hotel_id: hotelId,
       reservation_id: res.id,
@@ -356,9 +418,9 @@ export const saveReservation = async (
       event_description: `Advance payment for reservation: ${res.guest_name}`,
       event_amount: toNum(res.advance_paid),
       event_data: {
-        payment_date: todayStr,
-        business_date: todayStr,
-        payment_method: res.payment_mode || 'Cash',
+        payment_date: paymentDate,
+        business_date: paymentDate,
+        payment_method: paymentMethod,
         pay_cash: res.pay_cash ?? 0,
         pay_bank: res.pay_bank ?? 0,
         pay_upi: res.pay_upi ?? 0,
@@ -413,11 +475,12 @@ export const saveReservations = async (
     if (ci >= co) throw new Error('Check-out date must be strictly after check-in date.');
 
     const isOta = Boolean((input as any).is_ota || input.source_category === 'OTA');
+    const allowEmptyEmail = Boolean((input as any).allowEmptyEmail);
     const cleanEmail = (input.guest_email ?? '').trim();
-    if (!isOta) {
+    if (!isOta && !allowEmptyEmail) {
       if (!cleanEmail) throw new Error('Guest email is required.');
-      if (!isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
     }
+    if (cleanEmail && !isValidEmail(cleanEmail)) throw new Error('Please enter a valid email address.');
   }
 
   // Ensure all share the exact same group_id
@@ -484,12 +547,9 @@ export const saveReservations = async (
     }
   }
 
-  const rawPayloads = normalizedInputs.map((input) => {
-    const p = { ...input, hotel_id: hotelId };
-    delete (p as { id?: string }).id;
-    delete (p as { nights?: number }).nights;
-    return p;
-  });
+  const rawPayloads = normalizedInputs.map((input) =>
+    sanitizeReservationPayload({ ...input, hotel_id: hotelId })
+  );
 
   const { data, error } = await supabase
     .from('reservations')
@@ -730,6 +790,153 @@ export const restoreReservations = async (records: Reservation[]): Promise<Reser
   return (data as Reservation[]) || [];
 };
 
+export interface CategoryAvailabilityResult {
+  available: boolean;
+  totalRooms: number;
+  availableRooms: number;
+  unavailableRooms: number;
+  availableRoomNos: string[];
+  availableRoomDetails?: Array<{
+    id: string;
+    roomNo: string;
+    categoryId: string;
+    floor?: number;
+    roomStatus?: string;
+    housekeepingStatus?: string;
+  }>;
+  unavailableRoomNos: string[];
+  message?: string;
+}
+
+export const getCategoryAvailability = async (params: {
+  hotelId?: string;
+  categoryId?: string | null;
+  checkIn: string;
+  checkOut: string;
+  excludeReservationId?: string | null;
+}): Promise<CategoryAvailabilityResult> => {
+  const hotelId = params.hotelId || getCurrentHotelId();
+  const ci = (params.checkIn || '').slice(0, 10);
+  const co = (params.checkOut || '').slice(0, 10);
+
+  if (!ci || !co || ci >= co) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      message: 'Check-out date must be strictly after check-in date.',
+    };
+  }
+
+  // 1. Try authoritative backend endpoint
+  try {
+    const res = await apiFetch('/api/reservations/category-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        categoryId: params.categoryId || null,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: params.excludeReservationId || null,
+      }),
+    });
+
+    if (res && res.success !== false && typeof res.availableRooms === 'number') {
+      return {
+        available: Boolean(res.available),
+        totalRooms: res.totalRooms ?? 0,
+        availableRooms: res.availableRooms ?? 0,
+        unavailableRooms: res.unavailableRooms ?? 0,
+        availableRoomNos: res.availableRoomNos || [],
+        availableRoomDetails: res.availableRoomDetails || [],
+        unavailableRoomNos: res.unavailableRoomNos || [],
+        message: res.message,
+      };
+    }
+  } catch (err) {
+    console.warn('[getCategoryAvailability] Backend call fallback to direct DB:', err);
+  }
+
+  // 2. Direct Supabase Fallback (strictly scoped to hotelId)
+  try {
+    let roomQ = supabase
+      .from('rooms')
+      .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+      .eq('hotel_id', hotelId)
+      .eq('is_active', true)
+      .order('room_no', { ascending: true });
+
+    if (params.categoryId) {
+      roomQ = roomQ.eq('category_id', params.categoryId);
+    }
+
+    const { data: rooms } = await roomQ;
+    if (!rooms || rooms.length === 0) {
+      return {
+        available: false,
+        totalRooms: 0,
+        availableRooms: 0,
+        unavailableRooms: 0,
+        availableRoomNos: [],
+        availableRoomDetails: [],
+        unavailableRoomNos: [],
+        message: 'No physical rooms found.',
+      };
+    }
+
+    const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+    const availableRoomNos: string[] = [];
+    const availableRoomDetails: any[] = [];
+    const unavailableRoomNos: string[] = [];
+
+    for (const r of rooms) {
+      if (nonAssignable.has(String(r.room_status || '').toLowerCase())) {
+        unavailableRoomNos.push(r.room_no);
+        continue;
+      }
+
+      const isAvail = await checkRoomAvailability(r.room_no, ci, co, params.excludeReservationId || undefined);
+      if (isAvail) {
+        availableRoomNos.push(r.room_no);
+        availableRoomDetails.push({
+          id: r.id,
+          roomNo: r.room_no,
+          categoryId: r.category_id,
+          floor: r.floor,
+          roomStatus: r.room_status,
+          housekeepingStatus: r.housekeeping_status,
+        });
+      } else {
+        unavailableRoomNos.push(r.room_no);
+      }
+    }
+
+    return {
+      available: availableRoomNos.length > 0,
+      totalRooms: rooms.length,
+      availableRooms: availableRoomNos.length,
+      unavailableRooms: unavailableRoomNos.length,
+      availableRoomNos,
+      availableRoomDetails,
+      unavailableRoomNos,
+      message: `${availableRoomNos.length} of ${rooms.length} rooms available.`,
+    };
+  } catch {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+    };
+  }
+};
+
 export const checkRoomAvailability = async (
   roomNo: string,
   checkIn: string,
@@ -745,6 +952,24 @@ export const checkRoomAvailability = async (
   const ci = checkIn.slice(0, 10);
   const co = checkOut.slice(0, 10);
   if (ci >= co) return false;
+
+  // Try backend authoritative check first
+  try {
+    const res = await apiFetch('/api/reservations/check-availability', {
+      method: 'POST',
+      body: JSON.stringify({
+        roomNo,
+        checkIn: ci,
+        checkOut: co,
+        excludeReservationId: Array.isArray(excludeId) ? excludeId[0] : excludeId || null,
+      }),
+    });
+    if (res && typeof res.available === 'boolean') {
+      return res.available;
+    }
+  } catch {
+    // Fall back to direct Supabase query
+  }
 
   try {
     const hotelId = getCurrentHotelId();

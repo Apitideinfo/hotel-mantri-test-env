@@ -294,6 +294,18 @@ export const checkCategoryCapacity = async ({
 
   const { data: resList } = await q;
 
+  // Filter active reservations to only those occupying rooms in this category
+  let relevantResList = resList || [];
+  if (categoryId) {
+    const targetRoomIds = new Set((rooms || []).map((r) => r.id).filter(Boolean));
+    const targetRoomNos = new Set((rooms || []).map((r) => (r.room_no || '').trim().toLowerCase()).filter(Boolean));
+    relevantResList = relevantResList.filter((r) => {
+      const idMatch = r.room_id && targetRoomIds.has(r.room_id);
+      const noMatch = r.room_no && targetRoomNos.has((r.room_no || '').trim().toLowerCase());
+      return idMatch || noMatch;
+    });
+  }
+
   // Check each night
   const inD = new Date(cleanCheckIn + 'T00:00:00');
   const outD = new Date(cleanCheckOut + 'T00:00:00');
@@ -302,7 +314,7 @@ export const checkCategoryCapacity = async ({
   let maxOccupiedOnAnyNight = 0;
   while (currentD < outD) {
     const nightStr = currentD.toISOString().slice(0, 10);
-    const nightOccupied = (resList || []).filter(
+    const nightOccupied = relevantResList.filter(
       (r) => r.check_in_date <= nightStr && r.check_out_date > nightStr
     ).length;
     if (nightOccupied > maxOccupiedOnAnyNight) {
@@ -432,6 +444,192 @@ export const logBlockedConflict = async ({
   }
 };
 
+/**
+ * Authoritative category-level physical room availability service.
+ * Returns physical rooms, available count, booked/blocked rooms, and room numbers.
+ */
+export const getCategoryPhysicalRoomAvailability = async ({
+  hotelId,
+  categoryId = null,
+  checkIn,
+  checkOut,
+  excludeReservationId = null,
+  excludeRoomIds = [],
+}) => {
+  if (!hotelId || !checkIn || !checkOut) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      code: 'MISSING_PARAMS',
+      message: 'Hotel context, check-in, and check-out dates are required.',
+    };
+  }
+
+  const cleanCheckIn = String(checkIn).slice(0, 10);
+  const cleanCheckOut = String(checkOut).slice(0, 10);
+
+  if (cleanCheckIn >= cleanCheckOut) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      code: 'INVALID_STAY_DATES',
+      message: 'Check-out date must be strictly after check-in date.',
+    };
+  }
+
+  const supabase = supabaseServiceRole;
+
+  // 1. Fetch active physical rooms for this hotel and (optional) category
+  let roomQ = supabase
+    .from('rooms')
+    .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+    .eq('hotel_id', hotelId)
+    .eq('is_active', true)
+    .order('room_no', { ascending: true });
+
+  if (categoryId) {
+    roomQ = roomQ.eq('category_id', categoryId);
+  }
+
+  const { data: physicalRooms, error: roomsErr } = await roomQ;
+  if (roomsErr || !physicalRooms || physicalRooms.length === 0) {
+    return {
+      available: false,
+      totalRooms: 0,
+      availableRooms: 0,
+      unavailableRooms: 0,
+      availableRoomNos: [],
+      availableRoomDetails: [],
+      unavailableRoomNos: [],
+      code: 'NO_ROOMS_IN_CATEGORY',
+      message: 'No active physical rooms configured for this category.',
+    };
+  }
+
+  const totalRooms = physicalRooms.length;
+  const nonAssignableStatuses = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
+  const excludeSet = new Set((excludeRoomIds || []).map((r) => String(r).toLowerCase().trim()));
+
+  // Stable sort:
+  // 1. Vacant / Clean first
+  // 2. Numeric / lexicographical room_no ascending
+  const sortedRooms = [...physicalRooms].sort((a, b) => {
+    const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
+    const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
+    if (aVacant && !bVacant) return -1;
+    if (!aVacant && bVacant) return 1;
+
+    const numA = parseInt(a.room_no, 10);
+    const numB = parseInt(b.room_no, 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return (a.room_no || '').localeCompare(b.room_no || '');
+  });
+
+  const availableRoomNos = [];
+  const availableRoomDetails = [];
+  const unavailableRoomNos = [];
+
+  for (const room of sortedRooms) {
+    const roomKey = (room.room_no || '').toLowerCase().trim();
+    const roomIdKey = String(room.id).toLowerCase().trim();
+
+    if (excludeSet.has(roomKey) || excludeSet.has(roomIdKey)) {
+      unavailableRoomNos.push(room.room_no);
+      continue;
+    }
+
+    if (nonAssignableStatuses.has(String(room.room_status || '').toLowerCase())) {
+      unavailableRoomNos.push(room.room_no);
+      continue;
+    }
+
+    const availCheck = await checkRoomAvailability({
+      hotelId,
+      roomNo: room.room_no,
+      checkIn: cleanCheckIn,
+      checkOut: cleanCheckOut,
+      excludeReservationId,
+    });
+
+    if (availCheck.available) {
+      availableRoomNos.push(room.room_no);
+      availableRoomDetails.push({
+        id: room.id,
+        roomNo: room.room_no,
+        categoryId: room.category_id,
+        floor: room.floor,
+        roomStatus: room.room_status,
+        housekeepingStatus: room.housekeeping_status,
+      });
+    } else {
+      unavailableRoomNos.push(room.room_no);
+    }
+  }
+
+  const availableRoomsCount = availableRoomNos.length;
+  const unavailableRoomsCount = unavailableRoomNos.length;
+
+  return {
+    available: availableRoomsCount > 0,
+    totalRooms,
+    availableRooms: availableRoomsCount,
+    unavailableRooms: unavailableRoomsCount,
+    availableRoomNos,
+    availableRoomDetails,
+    unavailableRoomNos,
+    message: availableRoomsCount > 0
+      ? `${availableRoomsCount} of ${totalRooms} rooms available.`
+      : 'No rooms available for the selected category and dates.',
+  };
+};
+
+/**
+ * Finds the first eligible, conflict-free physical room for a category.
+ * Used during automatic room assignment.
+ */
+export const findAvailablePhysicalRoomForCategory = async ({
+  hotelId,
+  categoryId,
+  checkIn,
+  checkOut,
+  excludeReservationId = null,
+  excludeRoomIds = [],
+  preferredRoomNo = null,
+}) => {
+  const result = await getCategoryPhysicalRoomAvailability({
+    hotelId,
+    categoryId,
+    checkIn,
+    checkOut,
+    excludeReservationId,
+    excludeRoomIds,
+  });
+
+  if (!result.available || result.availableRoomDetails.length === 0) {
+    return null;
+  }
+
+  if (preferredRoomNo) {
+    const prefNorm = String(preferredRoomNo).trim().toLowerCase();
+    const matchPref = result.availableRoomDetails.find(
+      (r) => (r.roomNo || '').toLowerCase() === prefNorm
+    );
+    if (matchPref) return matchPref;
+  }
+
+  return result.availableRoomDetails[0];
+};
+
 export default {
   withRoomLock,
   isReservationRoomBlocking,
@@ -439,6 +637,8 @@ export default {
   normalizePhysicalRoom,
   checkRoomAvailability,
   checkCategoryCapacity,
+  getCategoryPhysicalRoomAvailability,
+  findAvailablePhysicalRoomForCategory,
   detectExistingConflicts,
   logBlockedConflict,
 };
