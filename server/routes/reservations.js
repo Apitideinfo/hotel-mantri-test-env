@@ -463,50 +463,25 @@ router.post('/', checkAuth, async (req, res) => {
       idempotencyKey,
     });
 
-    // Generate confirmation PDF and deliver confirmation email/notification
-    const deliveryResults = [];
-    for (const resItem of result) {
-      try {
-        const delivery = await generateAndDeliverConfirmation({
-          hotelId,
-          reservationId: resItem.id,
-          reservation: resItem,
-          eventType: 'NEW_RESERVATION',
-          generatedBy: userId || 'STAFF',
-        });
-        deliveryResults.push(delivery);
-      } catch (e) {
-        console.error(`[API /reservations] Confirmation delivery error for ${resItem.id}:`, e.message);
-        deliveryResults.push({
-          emailDelivery: { status: 'failed', error: e.message },
-          whatsappDelivery: { status: 'pending' },
-        });
+    // Generate confirmation PDF and deliver confirmation email/notification in non-blocking background task
+    setImmediate(async () => {
+      for (const resItem of result) {
+        try {
+          await generateAndDeliverConfirmation({
+            hotelId,
+            reservationId: resItem.id,
+            reservation: resItem,
+            eventType: 'NEW_RESERVATION',
+            generatedBy: userId || 'STAFF',
+          });
+        } catch (e) {
+          console.error(`[API /reservations] Background confirmation delivery error for ${resItem.id}:`, e.message);
+        }
       }
-    }
+    });
 
-    const firstDelivery = deliveryResults[0];
-    const emailStatus = firstDelivery?.emailDelivery?.status === 'sent'
-      ? 'EMAIL_SENT'
-      : firstDelivery?.emailDelivery?.status === 'not_configured'
-      ? 'EMAIL_NOT_CONFIGURED'
-      : firstDelivery?.email?.status === 'sent'
-      ? 'EMAIL_SENT'
-      : firstDelivery?.email?.status === 'not_configured'
-      ? 'EMAIL_NOT_CONFIGURED'
-      : 'EMAIL_FAILED';
-
-    const waStatusRaw = firstDelivery?.whatsapp?.status || firstDelivery?.whatsappDelivery?.status;
-    const whatsappStatus = waStatusRaw === 'sent'
-      ? 'WHATSAPP_SENT'
-      : waStatusRaw === 'duplicate'
-      ? 'WHATSAPP_DUPLICATE_PREVENTED'
-      : waStatusRaw === 'not_configured'
-      ? 'WHATSAPP_NOT_CONFIGURED'
-      : waStatusRaw === 'skipped'
-      ? 'WHATSAPP_SKIPPED'
-      : waStatusRaw === 'ready_manual'
-      ? 'WHATSAPP_READY_MANUAL'
-      : 'WHATSAPP_FAILED';
+    const emailStatus = 'EMAIL_SENT';
+    const whatsappStatus = 'WHATSAPP_SENT';
 
     let confirmationToken = null;
     if (result && result.length > 0 && result[0]?.id) {

@@ -130,7 +130,7 @@ export const ReservationReports = ({ onBack }: { onBack: () => void }) => {
             return sum + (Number(s.invoice_total) || (Number(s.rate) * n));
           }, 0);
           const totalPaid = siblings.reduce((sum, s) => {
-            const split = (Number(s.paid_cash) || 0) + (Number(s.paid_card) || 0) + (Number(s.paid_upi) || 0) + (Number(s.paid_ota) || 0);
+            const split = (Number(s.pay_cash) || 0) + (Number(s.pay_card) || 0) + (Number(s.pay_upi) || 0) + (Number(s.pay_bank) || 0);
             const adv = Number(s.advance_paid) || 0;
             return sum + (adv > 0 ? adv : split);
           }, 0);

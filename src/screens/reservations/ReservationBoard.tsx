@@ -860,8 +860,8 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   return (
     <div className="space-y-5 select-none pb-12">
       {/* ── Top Header Card ── */}
-      <div className="bg-white/95 backdrop-blur-xl rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-card flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
-        <div className="flex items-center gap-4">
+      <div className="bg-white/95 backdrop-blur-xl rounded-3xl border border-slate-200/80 p-4 sm:p-5 shadow-card flex flex-col xl:flex-row xl:items-center justify-between gap-4 transition-all">
+        <div className="flex items-center gap-3 sm:gap-4 min-w-0">
           <button
             onClick={onBack}
             className="w-10 h-10 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition cursor-pointer shrink-0 shadow-2xs"
@@ -869,35 +869,34 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <div>
+          <div className="min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 shrink-0">
                 <CalendarClock className="w-5 h-5" />
               </div>
-              <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-black text-slate-900 tracking-tight truncate">
                 Reservation Command Center
               </h1>
-              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1">
+              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200/80 flex items-center gap-1 shrink-0">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 Live Matrix
               </span>
             </div>
-            <p className="text-xs sm:text-sm font-semibold text-slate-500 mt-1">
+            <p className="text-xs sm:text-sm font-semibold text-slate-500 mt-0.5 truncate">
               Manage front-desk bookings, channel allocations, room assignments, and confirmations.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap sm:flex-nowrap shrink-0 justify-end">
           {conflicts.length > 0 && (
             <button
               onClick={() => setShowConflictsModal(true)}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-2xl text-xs font-bold transition shadow-2xs animate-pulse cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-xl text-xs font-bold transition shadow-2xs animate-pulse cursor-pointer whitespace-nowrap"
               title="Review physical room conflicts"
             >
-              <AlertTriangle className="w-4 h-4 text-amber-600" />
-              <span>{conflicts.length} Room Conflict{conflicts.length > 1 ? 's' : ''}</span>
-              <span className="underline ml-0.5">Resolve</span>
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+              <span>{conflicts.length} Conflict{conflicts.length > 1 ? 's' : ''}</span>
             </button>
           )}
 
@@ -905,25 +904,25 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
             <button
               onClick={handleUndo}
               disabled={isRestoring}
-              className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-2xl transition active:scale-95 cursor-pointer shadow-2xs animate-in fade-in"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-xl transition active:scale-95 cursor-pointer shadow-2xs animate-in fade-in whitespace-nowrap"
               title={`Undo last deletion (${recentDeleted.length} items)`}
             >
               {isRestoring ? (
-                <Loader2 className="w-4 h-4 animate-spin text-amber-600" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
               ) : (
-                <RotateCcw className="w-4 h-4 text-amber-600" />
+                <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
               )}
-              <span>Undo Delete ({recentDeleted.length})</span>
+              <span>Undo ({recentDeleted.length})</span>
             </button>
           )}
 
           <button
             onClick={() => setShowDeleteAllModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/90 rounded-2xl transition active:scale-95 cursor-pointer shadow-2xs"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/90 rounded-xl transition active:scale-95 cursor-pointer shadow-2xs whitespace-nowrap"
             title="Delete all reservation entries"
           >
-            <Trash2 className="w-4 h-4 text-rose-600" />
-            <span>Delete All Entries</span>
+            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+            <span>Delete All</span>
           </button>
 
           <button
@@ -931,9 +930,10 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               setBookFullHotelPreset(false);
               setShowNewBookingModal(true);
             }}
-            className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-2xl shadow-lg shadow-indigo-500/25 transition active:scale-95 cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 rounded-xl shadow-md shadow-indigo-500/20 transition active:scale-95 cursor-pointer whitespace-nowrap"
           >
-            <Plus className="w-4 h-4" /> New Reservation
+            <Plus className="w-4 h-4" />
+            <span>New Reservation</span>
           </button>
 
           <button
@@ -941,22 +941,21 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               setBookFullHotelPreset(true);
               setShowNewBookingModal(true);
             }}
-            className="flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-amber-950 bg-gradient-to-r from-amber-200 via-amber-300 to-amber-200 hover:from-amber-300 hover:to-amber-400 border border-amber-400/80 rounded-2xl shadow-md shadow-amber-500/20 transition active:scale-95 cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-amber-950 bg-gradient-to-r from-amber-200 via-amber-300 to-amber-200 hover:from-amber-300 hover:to-amber-400 border border-amber-400/80 rounded-xl shadow-sm transition active:scale-95 cursor-pointer whitespace-nowrap"
             title="Book Entire Hotel (All Rooms)"
           >
-            <Building2 className="w-4 h-4 text-amber-800" />
-            <span className="hidden sm:inline">Book Full Hotel</span>
-            <span className="sm:hidden">Full Hotel</span>
+            <Building2 className="w-3.5 h-3.5 text-amber-800" />
+            <span>Book Full Hotel</span>
           </button>
 
           <button
             onClick={refreshAll}
             disabled={busy || loading}
             aria-label="Refresh reservations"
-            className="w-10 h-10 flex items-center justify-center text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200/90 rounded-2xl shadow-2xs transition active:scale-95 disabled:opacity-50 cursor-pointer"
+            className="w-9 h-9 flex items-center justify-center text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200/90 rounded-xl shadow-2xs transition active:scale-95 disabled:opacity-50 cursor-pointer shrink-0"
             title="Refresh All"
           >
-            <RefreshCw className={`w-4 h-4 ${busy || loading ? 'animate-spin text-indigo-600' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${busy || loading ? 'animate-spin text-indigo-600' : ''}`} />
           </button>
         </div>
       </div>
@@ -1115,6 +1114,8 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
               <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
+                name="reservation_search"
+                autoComplete="off"
                 placeholder="Search guest, mobile, room no, ID…"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
@@ -2004,11 +2005,20 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onClose={() => {
             setShowNewBookingModal(false);
             setBookFullHotelPreset(false);
+            // Reset search and filters so newly created booking is immediately visible
+            setSearch('');
+            setDebouncedSearch('');
+            setFilterStatus('all');
+            setFilterSource('all');
+            setFilterAssigned('all');
+            setFilterRoomNo('all');
+            setPage(1);
+            setSuccessMsg('Reservation created successfully.');
+            refreshAll();
           }}
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
             const created = await saveReservations(list);
-            refreshAll();
             return created;
           }}
         />

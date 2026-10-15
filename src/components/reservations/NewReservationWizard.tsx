@@ -451,7 +451,9 @@ export const NewReservationWizard = ({
             alreadyAllocated.add(String(candidate.id).toLowerCase());
           }
 
-          const candidateTariff = toNum(candidate?.default_tariff) > 0
+          const candidateTariff = toNum(defaultRate) > 0
+            ? toNum(defaultRate)
+            : toNum(candidate?.default_tariff) > 0
             ? toNum(candidate?.default_tariff)
             : toNum(cat?.default_tariff) > 0
             ? toNum(cat?.default_tariff)
@@ -468,7 +470,7 @@ export const NewReservationWizard = ({
             adults: Math.max(0, adults),
             children: Math.max(0, children),
             mealPlan: globalMealPlan,
-            rate: toNum(defaultRate) > 0 ? toNum(defaultRate) : candidateTariff,
+            rate: candidateTariff,
           });
         }
         return [...otherRows, ...currentRowsForCat, ...newRows];
@@ -704,62 +706,6 @@ export const NewReservationWizard = ({
         setError('Check-out date must be strictly after check-in date.');
         return false;
       }
-      // If no rooms have been selected yet and numRooms > 0, prepare default rows according to numRooms with auto-assigned physical rooms
-      if (numRooms > 0 && roomRows.length === 0 && categories.length > 0) {
-        const firstCat = categories[0];
-        const catId = firstCat.id;
-        setCategoryQuantities({ [catId]: numRooms });
-
-        const catRooms = rooms.filter((r) => r.category_id === catId && r.is_active);
-        const nonAssignable = new Set(['blocked', 'maintenance', 'out of service', 'out of order']);
-        const eligibleRooms = catRooms
-          .filter((r) => {
-            const st = String(r.room_status || '').toLowerCase();
-            if (nonAssignable.has(st)) return false;
-            const k = (r.room_no || '').trim().toLowerCase();
-            if (bookedRoomNos.has(k)) return false;
-            return true;
-          })
-          .sort((a, b) => {
-            const aVacant = String(a.room_status || '').toLowerCase() === 'vacant' || String(a.housekeeping_status || '').toLowerCase() === 'vacant clean';
-            const bVacant = String(b.room_status || '').toLowerCase() === 'vacant' || String(b.housekeeping_status || '').toLowerCase() === 'vacant clean';
-            if (aVacant && !bVacant) return -1;
-            if (!aVacant && bVacant) return 1;
-            const numA = parseInt(a.room_no, 10);
-            const numB = parseInt(b.room_no, 10);
-            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
-            return (a.room_no || '').localeCompare(b.room_no || '');
-          });
-
-        const rows: SelectedRoomRow[] = [];
-        const assignedIds = new Set<string>();
-        for (let i = 0; i < numRooms; i++) {
-          const candidate = eligibleRooms.find((r) => !assignedIds.has(r.id));
-          if (candidate) assignedIds.add(candidate.id);
-
-          const tariff = toNum(candidate?.default_tariff) > 0
-            ? toNum(candidate?.default_tariff)
-            : toNum(firstCat.default_tariff) > 0
-            ? toNum(firstCat.default_tariff)
-            : toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff) > 0
-            ? toNum(rooms.find((r) => r.category_id === catId && toNum(r.default_tariff) > 0)?.default_tariff)
-            : (toNum((settings as any)?.default_room_tariff) || 0);
-
-          rows.push({
-            uid: crypto.randomUUID(),
-            categoryId: catId,
-            categoryName: firstCat.name,
-            roomNo: candidate ? candidate.room_no : 'Unassigned',
-            roomId: candidate ? candidate.id : null,
-            adults: Math.max(0, adults),
-            children: Math.max(0, children),
-            mealPlan: 'EP',
-            rate: tariff,
-          });
-        }
-        setRoomRows(rows);
-        if (rows[0]?.rate) setDefaultRate(rows[0].rate);
-      }
       return true;
     }
 
@@ -941,7 +887,8 @@ export const NewReservationWizard = ({
         window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
       }
 
-      setSuccess(inputs);
+      // Close popup immediately and return to updated board
+      onClose();
     } catch (err: any) {
       console.error('[NewReservationWizard] Save error:', err);
       setError(err?.message || 'Failed to create reservation. Please verify room availability.');
@@ -1565,7 +1512,16 @@ export const NewReservationWizard = ({
                             <input
                               type="number" min={0} step="any"
                               value={defaultRate}
-                              onChange={(e) => setDefaultRate(e.target.value === '' ? '' : Number(e.target.value))}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/^0+(?=\d)/, '');
+                                const val = raw === '' ? '' : Number(raw);
+                                setDefaultRate(val);
+                                // Auto-apply non-zero rate to all room rows immediately
+                                if (val !== '' && !isNaN(val) && Number(val) > 0) {
+                                  const rateNum = Number(val);
+                                  setRoomRows((rows) => rows.map((r) => ({ ...r, rate: rateNum })));
+                                }
+                              }}
                               placeholder="Tariff"
                               className="w-full pl-6 pr-2 py-1.5 text-xs font-bold text-slate-900 bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
                             />
