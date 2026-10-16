@@ -887,8 +887,9 @@ export const NewReservationWizard = ({
         window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
       }
 
-      // Close popup immediately and return to updated board
-      onClose();
+      // Display success modal with voucher, WhatsApp, and confirmation actions
+      const successPayload = savedList.length > 0 ? (savedList as any) : inputs;
+      setSuccess(successPayload);
     } catch (err: any) {
       console.error('[NewReservationWizard] Save error:', err);
       setError(err?.message || 'Failed to create reservation. Please verify room availability.');
@@ -900,7 +901,8 @@ export const NewReservationWizard = ({
 
   /* ── Action: Download Voucher PDF ── */
   const handleDownloadVoucher = async () => {
-    if (!savedReservationId) return;
+    const resId = savedReservationId || (success && (success[0] as any)?.id);
+    if (!resId) return;
     setDownloadingVoucher(true);
     try {
       let token: string | undefined;
@@ -916,7 +918,7 @@ export const NewReservationWizard = ({
         params.set('token', confirmationToken);
       }
       const qs = params.toString();
-      const url = `/api/reservations/${savedReservationId}/confirmation/pdf${qs ? `?${qs}` : ''}`;
+      const url = `/api/reservations/${resId}/confirmation/pdf${qs ? `?${qs}` : ''}`;
       const res = await fetch(url, { headers });
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
@@ -926,7 +928,7 @@ export const NewReservationWizard = ({
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = `Hotel-Mantri-Voucher-${savedReservationId.slice(0, 8).toUpperCase()}.pdf`;
+      a.download = `Hotel-Mantri-Voucher-${resId.slice(0, 8).toUpperCase()}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -940,11 +942,12 @@ export const NewReservationWizard = ({
 
   /* ── Action: Print Voucher ── */
   const handlePrintVoucher = () => {
-    if (!savedReservationId) {
+    const resId = savedReservationId || (success && (success[0] as any)?.id);
+    if (!resId) {
       window.print();
       return;
     }
-    const printWindow = window.open(`/api/reservations/${savedReservationId}/confirmation/pdf`, '_blank');
+    const printWindow = window.open(`/api/reservations/${resId}/confirmation/pdf`, '_blank');
     if (printWindow) {
       printWindow.focus();
     } else {
@@ -956,7 +959,8 @@ export const NewReservationWizard = ({
   const handleWhatsAppGuest = () => {
     const cleanMob = phone.replace(/\D/g, '');
     const fullWaPhone = cleanMob.startsWith('91') ? cleanMob : `91${cleanMob}`;
-    const bookingCode = savedReservationId ? `HM-${savedReservationId.slice(0, 8).toUpperCase()}` : 'CONFIRMED';
+    const resId = savedReservationId || (success && (success[0] as any)?.id);
+    const bookingCode = resId ? `HM-${resId.slice(0, 8).toUpperCase()}` : 'CONFIRMED';
     const roomSummaryText = roomRows.map((r, i) => `Room ${i + 1}: ${r.categoryName} (${r.roomNo !== 'Unassigned' ? r.roomNo : 'Allocated at Check-in'})`).join('\n• ');
 
     const waMsg = encodeURIComponent(
@@ -978,10 +982,11 @@ export const NewReservationWizard = ({
 
   /* ── Action: Retry Confirmation Email ── */
   const handleRetryEmail = async () => {
-    if (!savedReservationId) return;
+    const resId = savedReservationId || (success && (success[0] as any)?.id);
+    if (!resId) return;
     setRetryingEmail(true);
     try {
-      const res = await apiFetch(`/api/reservations/${savedReservationId}/confirmation/send-email`, {
+      const res = await apiFetch(`/api/reservations/${resId}/confirmation/send-email`, {
         method: 'POST', body: JSON.stringify({}),
       });
       if (res.success) {
@@ -1024,23 +1029,26 @@ export const NewReservationWizard = ({
      SUCCESS VIEW (AFTER CONFIRMATION)
      ═════════════════════════════════════════════════ */
   if (success) {
-    const bookingIdentifier = savedReservationId || success[0].group_id || '';
+    const targetReservationId = savedReservationId || (success[0] as any)?.id || '';
+    const bookingIdentifier = targetReservationId || success[0].group_id || '';
     const shortId = bookingIdentifier ? bookingIdentifier.slice(0, 8).toUpperCase() : '';
     const confirmNo = shortId ? `HM-${shortId}` : 'CONFIRMED';
     const recipientEmail = emailDelivery?.recipientEmail || email.trim();
     const isMultiRoom = success.length > 1;
 
-    // Authoritative totals from success / created reservation objects
-    const successTotalAmount = success.reduce((sum, s) => {
+    // Authoritative totals from success / created reservation objects with fallback to form state
+    const calculatedSuccessTotal = success.reduce((sum, s) => {
       const inv = toNum((s as any).invoice_total);
       if (inv > 0) return sum + inv;
       const r = toNum((s as any).rate);
       return sum + (r > 0 ? r * nights : 0);
-    }, 0) || grandTotal;
+    }, 0);
+    const successTotalAmount = calculatedSuccessTotal > 0 ? calculatedSuccessTotal : grandTotal;
 
-    const successAdvancePaid = success.reduce((sum, s) => {
+    const calculatedSuccessAdvance = success.reduce((sum, s) => {
       return sum + toNum((s as any).advance_paid);
-    }, 0) || effectiveAdvancePaid;
+    }, 0);
+    const successAdvancePaid = calculatedSuccessAdvance > 0 ? calculatedSuccessAdvance : effectiveAdvancePaid;
 
     const successBalanceDue = Math.max(0, successTotalAmount - successAdvancePaid);
 
