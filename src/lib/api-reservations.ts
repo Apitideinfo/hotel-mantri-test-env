@@ -420,6 +420,24 @@ export const saveReservation = async (
     return res;
   }
 
+  if (!id) {
+    const { data: existingRecent } = await supabase
+      .from('reservations')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('room_no', rawPayload.room_no)
+      .eq('check_in_date', rawPayload.check_in_date)
+      .eq('check_out_date', rawPayload.check_out_date)
+      .eq('guest_name', rawPayload.guest_name)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (existingRecent && existingRecent.length > 0) {
+      console.log('[saveReservation] Found existing reservation already created:', existingRecent[0].id);
+      return existingRecent[0] as Reservation;
+    }
+  }
+
   const { data, error } = await supabase
     .from('reservations')
     .insert(rawPayload)
@@ -430,6 +448,19 @@ export const saveReservation = async (
       throw new Error('Check-out date must be after check-in date.');
     }
     if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      const { data: existingSame } = await supabase
+        .from('reservations')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .eq('room_no', rawPayload.room_no)
+        .eq('check_in_date', rawPayload.check_in_date)
+        .eq('check_out_date', rawPayload.check_out_date)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (existingSame && existingSame.length > 0 && existingSame[0].guest_name === rawPayload.guest_name) {
+        return existingSame[0] as Reservation;
+      }
       throw new Error(`Room ${rawPayload.room_no} is already booked for part of this stay. Please choose another room.`);
     }
     throw error;
@@ -598,6 +629,17 @@ export const saveReservations = async (
       throw new Error('Check-out date must be after check-in date.');
     }
     if (error.code === '23P02' || error.message?.includes('ROOM_ALREADY_BOOKED')) {
+      if (sharedGroupId) {
+        const { data: existingGroup } = await supabase
+          .from('reservations')
+          .select('*')
+          .eq('hotel_id', hotelId)
+          .eq('group_id', sharedGroupId);
+
+        if (existingGroup && existingGroup.length >= normalizedInputs.length) {
+          return existingGroup as Reservation[];
+        }
+      }
       throw new Error('One or more selected rooms are already booked for these dates.');
     }
     throw error;
