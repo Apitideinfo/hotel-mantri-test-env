@@ -495,6 +495,9 @@ router.post('/', checkAuth, async (req, res) => {
       }
     }
 
+    const firstGuestEmail = cleanList[0]?.guest_email ? String(cleanList[0].guest_email).trim() : null;
+    const firstGuestPhone = cleanList[0]?.guest_phone ? String(cleanList[0].guest_phone).trim() : null;
+
     res.status(201).json({
       success: true,
       message: 'Reservation created successfully.',
@@ -502,10 +505,10 @@ router.post('/', checkAuth, async (req, res) => {
       reservation: result[0],
       confirmationToken,
       emailStatus,
-      emailDelivery: firstDelivery?.email || firstDelivery?.emailDelivery || null,
+      emailDelivery: firstGuestEmail ? { recipientEmail: firstGuestEmail } : null,
       whatsappStatus,
-      whatsappDelivery: firstDelivery?.whatsapp || firstDelivery?.whatsappDelivery || null,
-      pdfDocument: firstDelivery?.pdf || firstDelivery?.document || null,
+      whatsappDelivery: firstGuestPhone ? { recipientPhone: firstGuestPhone } : null,
+      pdfDocument: null,
     });
   } catch (err) {
     if (err.idempotentReplay && err.existingReservation) {
