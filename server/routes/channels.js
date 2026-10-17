@@ -261,6 +261,17 @@ router.post('/events/dispatch', checkAuth, async (req, res) => {
       requestId: req.requestId
     });
   } catch (err) {
+    if (err.code === 'ROOM_MAPPING_REQUIRED' || err.code === 'RATE_VALUES_MISSING' || err.code === 'EMPTY_INVENTORY_UPDATES' || err.status === 422) {
+      console.log(`[POST /api/channels/events/dispatch] Event ${eventName} skipped: ${err.message}`);
+      return res.json({
+        success: true,
+        skipped: true,
+        event: eventName,
+        code: err.code || 'SYNC_SKIPPED',
+        message: err.message,
+        requestId: req.requestId
+      });
+    }
     console.error(`[POST /api/channels/events/dispatch] Error handling ${eventName}:`, err);
     res.status(err.status || 500).json({
       success: false,

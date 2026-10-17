@@ -195,6 +195,21 @@ export class WhintaProvider {
         };
       }
 
+      // Check for upstream provider failure payload wrapped inside HTTP 200
+      if (resData?.data?.success === false || resData?.success === false || resData?.data?.data?.error) {
+        const errObj = resData?.data?.data?.error || resData?.data?.error || resData?.error;
+        const safeMessage = resData?.data?.message || resData?.message || errObj?.message || 'Whinta API rejected message dispatch';
+        const metaCode = errObj?.code;
+        return {
+          ok: false,
+          status: 400,
+          errorCode: metaCode ? `META_${metaCode}` : WHATSAPP_ERRORS.PROVIDER_ERROR,
+          error: metaCode ? `META_${metaCode}` : WHATSAPP_ERRORS.PROVIDER_ERROR,
+          message: safeMessage,
+          data: resData,
+        };
+      }
+
       return {
         ok: true,
         status: response.status,
@@ -292,14 +307,24 @@ export class WhintaProvider {
     }
 
     const templates = Array.isArray(res.data?.data)
-      ? res.data.data.map((t) => ({
-          uuid: t.uuid,
-          name: t.metadata?.name || t.name,
-          language: t.metadata?.language || t.language || 'en',
-          category: t.metadata?.category || t.category,
-          status: t.status || 'APPROVED',
-          components: t.metadata?.components || t.components || [],
-        }))
+      ? res.data.data.map((t) => {
+          let meta = t.metadata;
+          if (typeof meta === 'string') {
+            try {
+              meta = JSON.parse(meta);
+            } catch {
+              meta = {};
+            }
+          }
+          return {
+            uuid: t.uuid,
+            name: meta?.name || t.name,
+            language: meta?.language || t.language || 'en',
+            category: meta?.category || t.category,
+            status: meta?.status || t.status || 'APPROVED',
+            components: meta?.components || t.components || [],
+          };
+        })
       : [];
 
     return {
