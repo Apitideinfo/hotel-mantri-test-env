@@ -31,7 +31,7 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
-    const el = document.getElementById(id);
+    const el = document.getElementById(id) || (id === 'pricing' ? document.getElementById('overview') : null);
     if (el) el.scrollIntoView({ behavior: 'smooth' });
   };
 
@@ -40,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin }) => {
     { label: 'Platform', id: 'overview', hasDropdown: true },
     { label: 'Services', id: 'integrations', hasDropdown: true },
     { label: 'Resources', id: 'testimonials', hasDropdown: true },
-    { label: 'Pricing', id: 'overview', hasDropdown: false },
+    { label: 'Pricing', id: 'pricing', hasDropdown: false },
   ];
 
   return (
