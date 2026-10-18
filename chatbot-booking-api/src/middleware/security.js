@@ -143,35 +143,44 @@ export const bookingRateLimiter = createRateLimiter({
 });
 
 /**
- * Optional server-to-server bot provider token authentication.
- * If CHATBOT_API_SECRET is configured, verifies Bearer token.
+ * Dedicated server-to-server bot provider and n8n token authentication.
+ * Accepts Authorization: Bearer <token> or X-API-Key: <token>.
+ * Validates against N8N_API_TOKEN or CHATBOT_API_SECRET using constant-time comparison.
  */
 export const requireBotProviderAuth = (req, res, next) => {
-  const expectedSecret = config().security.chatbotApiSecret;
+  const expectedSecret = config().n8n?.apiToken || config().security?.chatbotApiSecret;
   if (!expectedSecret) {
     // If not configured, public API mode is active
     return next();
   }
 
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  const apiKeyHeader = req.headers['x-api-key'];
+
+  let token = null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1].trim();
+  } else if (typeof apiKeyHeader === 'string') {
+    token = apiKeyHeader.trim();
+  }
+
+  if (!token) {
     return res.status(401).json({
       success: false,
       error: {
         code: 'BOT_AUTH_REQUIRED',
-        message: 'Authorization header with Bearer token is required.',
+        message: 'Authentication required. Provide "Authorization: Bearer <N8N_API_TOKEN>" or "X-API-Key: <N8N_API_TOKEN>".',
         requestId: req.requestId,
       },
     });
   }
 
-  const token = authHeader.split(' ')[1];
   if (!timingSafeEqual(token, expectedSecret)) {
     return res.status(403).json({
       success: false,
       error: {
         code: 'BOT_AUTH_INVALID',
-        message: 'Invalid chatbot integration API token.',
+        message: 'Invalid chatbot/n8n integration API token.',
         requestId: req.requestId,
       },
     });
@@ -179,6 +188,8 @@ export const requireBotProviderAuth = (req, res, next) => {
 
   next();
 };
+
+export const requireN8nAuth = requireBotProviderAuth;
 
 /**
  * Sanitizes sensitive secrets, URLs, and tokens from error messages.

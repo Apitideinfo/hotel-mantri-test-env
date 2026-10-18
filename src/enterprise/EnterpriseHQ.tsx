@@ -51,7 +51,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, perm: 'dashboard', group: 'Overview' },
   { key: 'hotels', label: 'Hotels', icon: <Building2 className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
-  { key: 'channel-manager', label: 'Channel Manager', icon: <Radio className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
+  { key: 'channel-manager', label: 'OTA Configuration', icon: <Radio className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
   { key: 'subscriptions', label: 'Subscriptions', icon: <CreditCard className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },
   { key: 'invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, perm: 'invoices.read', group: 'Management' },
   { key: 'renewals', label: 'Renewals', icon: <RefreshCw className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },

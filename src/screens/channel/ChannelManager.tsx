@@ -6,7 +6,11 @@ import {
   Radio, Loader2, Ban, Save, Eye, ArrowRight, Filter, Activity,
   TrendingUp, AlertCircle, Plug, KeyRound, Server, Trash2,
   LogIn, LogOut as LogOutIcon, RotateCw, ChevronDown, CalendarDays,
-  RefreshCcw, Download, Info } from 'lucide-react';
+  RefreshCcw, Download, Info, Tag, Lock } from 'lucide-react';
+import { OwnerChannelStatusHeader } from './components/owner/OwnerChannelStatusHeader';
+import { OwnerRatePushTab } from './components/owner/OwnerRatePushTab';
+import { OwnerInventoryPushTab } from './components/owner/OwnerInventoryPushTab';
+import { OwnerSyncLogsTab } from './components/owner/OwnerSyncLogsTab';
 import {
   getChannelManagerOverview, getInventoryRestrictions, upsertInventoryRestriction,
   bulkUpdateInventory, applyBulkInventoryPatch, saveChannelConnection, deleteChannelConnection,
@@ -45,11 +49,11 @@ interface ChannelManagerProps {
   mode?: 'hotel_owner' | 'super_admin';
 }
 
-type Tab = 'overview' | 'channels' | 'inventory' | 'reservations' | 'mapping' | 'logs' | 'settings' | 'diagnostics';
+type Tab = 'rate_push' | 'inventory_push' | 'logs' | 'overview' | 'channels' | 'inventory' | 'reservations' | 'mapping' | 'settings' | 'diagnostics';
 
 const TAB_KEY = 'cm_active_tab';
 
-const HOTEL_OWNER_TABS: Tab[] = ['overview', 'channels', 'inventory', 'reservations', 'mapping', 'logs'];
+const HOTEL_OWNER_TABS: Tab[] = ['rate_push', 'inventory_push', 'logs'];
 
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
@@ -115,11 +119,12 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   const isHotelOwner = mode === 'hotel_owner';
   const { hotelId, hotel, isSuperAdmin: isSuperAdminUser, status: hotelStatus, error: hotelError, refreshHotelContext } = useHotel();
   const [showHotelSelector, setShowHotelSelector] = useState(false);
+  const [ownerNotice, setOwnerNotice] = useState<string | null>(null);
 
   const [tab, setTab] = useState<Tab>(() => {
     const saved = typeof window !== 'undefined' ? sessionStorage.getItem(TAB_KEY) : null;
-    const initial = (saved as Tab) ?? 'overview';
-    if (isHotelOwner && !HOTEL_OWNER_TABS.includes(initial)) return 'overview';
+    const initial = (saved as Tab) ?? (isHotelOwner ? 'rate_push' : 'overview');
+    if (isHotelOwner && !HOTEL_OWNER_TABS.includes(initial)) return 'rate_push';
     return initial;
   });
   const [overview, setOverview] = useState<ChannelManagerOverview | null>(null);
@@ -181,11 +186,18 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     const match = hash.match(/^#cm-(\w+)$/);
     if (match) {
       const t = match[1] as Tab;
-      const validTabs: Tab[] = isHotelOwner
-        ? HOTEL_OWNER_TABS
-        : ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics'];
-      if (validTabs.includes(t)) {
-        setTab(t);
+      if (isHotelOwner) {
+        if (['mapping', 'settings', 'channels', 'diagnostics', 'overview', 'reservations', 'inventory'].includes(t)) {
+          setTab('rate_push');
+          setOwnerNotice('OTA channel configuration is managed centrally by Super Admin. Contact support to request channel changes.');
+        } else if (HOTEL_OWNER_TABS.includes(t)) {
+          setTab(t);
+        }
+      } else {
+        const validTabs: Tab[] = ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics', 'rate_push', 'inventory_push'];
+        if (validTabs.includes(t)) {
+          setTab(t);
+        }
       }
     }
   }, [isHotelOwner]);
@@ -197,11 +209,18 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
       const match = hash.match(/^#cm-(\w+)$/);
       if (match) {
         const t = match[1] as Tab;
-        const validTabs: Tab[] = isHotelOwner
-          ? HOTEL_OWNER_TABS
-          : ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics'];
-        if (validTabs.includes(t)) {
-          setTab(t);
+        if (isHotelOwner) {
+          if (['mapping', 'settings', 'channels', 'diagnostics', 'overview', 'reservations', 'inventory'].includes(t)) {
+            setTab('rate_push');
+            setOwnerNotice('OTA channel configuration is managed centrally by Super Admin. Contact support to request channel changes.');
+          } else if (HOTEL_OWNER_TABS.includes(t)) {
+            setTab(t);
+          }
+        } else {
+          const validTabs: Tab[] = ['overview', 'inventory', 'reservations', 'channels', 'mapping', 'logs', 'settings', 'diagnostics', 'rate_push', 'inventory_push'];
+          if (validTabs.includes(t)) {
+            setTab(t);
+          }
         }
       }
     };
@@ -209,7 +228,13 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     return () => window.removeEventListener('popstate', onPop);
   }, [isHotelOwner]);
 
-  const allTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  const ownerTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+    { key: 'rate_push', label: 'Rate Push', icon: <Tag className="w-4 h-4" /> },
+    { key: 'inventory_push', label: 'Inventory Push', icon: <Calendar className="w-4 h-4" /> },
+    { key: 'logs', label: 'Sync Logs', icon: <Zap className="w-4 h-4" /> },
+  ];
+
+  const adminTabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Overview', icon: <Radio className="w-4 h-4" /> },
     { key: 'channels', label: 'Channels', icon: <Wifi className="w-4 h-4" /> },
     { key: 'inventory', label: 'Inventory & Rates', icon: <Calendar className="w-4 h-4" /> },
@@ -220,9 +245,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     { key: 'settings', label: 'Connection Settings', icon: <SettingsIcon className="w-4 h-4" /> },
   ];
 
-  const tabs = isHotelOwner
-    ? allTabs.filter((t) => HOTEL_OWNER_TABS.includes(t.key))
-    : allTabs;
+  const tabs = isHotelOwner ? ownerTabs : adminTabs;
 
   if (hotelStatus === 'HOTEL_CONTEXT_LOADING') {
     return (
@@ -393,6 +416,43 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
         </div>
       )}
 
+      {/* If Hotel Owner, render the compact read-only channel status header */}
+      {isHotelOwner && overview && (
+        <OwnerChannelStatusHeader
+          connections={overview.connections}
+          mappings={overview.mappings}
+          categories={overview.categories}
+          syncLogs={overview.syncLogs}
+          isLiveMode={overview.isLiveMode}
+          onSyncNow={async () => {
+            if (!hotelId) return;
+            setSyncingHeader(true);
+            try {
+              const { triggerLiveSync } = await import('../../lib/externalChannelSyncService');
+              await triggerLiveSync(hotelId, { force: true });
+              await load();
+            } catch (e: any) {
+              alert(`Sync failed: ${e?.message || 'Error syncing reservations'}`);
+            } finally {
+              setSyncingHeader(false);
+            }
+          }}
+          isSyncing={syncingHeader}
+        />
+      )}
+
+      {ownerNotice && (
+        <div className="bg-amber-50 border border-amber-300 text-amber-900 text-xs rounded-xl p-3.5 flex items-center justify-between gap-3 shadow-xs font-semibold">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>{ownerNotice}</span>
+          </div>
+          <button onClick={() => setOwnerNotice(null)} className="text-slate-400 hover:text-slate-600 font-bold">
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Tabs — horizontally scrollable on mobile */}
       <div className="flex items-center gap-1.5 overflow-x-auto border-b-2 border-amber-200/80 pb-px -mx-1 px-1">
         {tabs.map((t) => (
@@ -416,28 +476,60 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           <Loader2 className="w-6 h-6 text-brand-600 animate-spin" />
         </div>
       ) : overview ? (
-        <>
-          {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
-          {tab === 'channels' && (
-            <ChannelsDashboard
-              key={hotelId || 'channels'}
-              connections={overview.connections}
-              categories={overview.categories}
-              ratePlans={overview.ratePlans}
-              mappings={overview.mappings}
-              reservations={overview.otaReservations}
-              syncLogs={overview.syncLogs}
-              onRefresh={load}
-              loading={loading}
-            />
-          )}
-          {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
-          {tab === 'reservations' && <ReservationsTab key={hotelId || 'reservations'} reservations={overview.otaReservations} onChanged={load} />}
-          {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
-          {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
-          {tab === 'diagnostics' && <DiagnosticsTab key={hotelId || 'diagnostics'} />}
-          {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} onChanged={load} />}
-        </>
+        isHotelOwner ? (
+          <>
+            {tab === 'rate_push' && (
+              <OwnerRatePushTab
+                key={hotelId || 'rate_push'}
+                categories={overview.categories}
+                ratePlans={overview.ratePlans}
+                connections={overview.connections}
+                mappings={overview.mappings}
+                onRefresh={load}
+              />
+            )}
+            {tab === 'inventory_push' && (
+              <OwnerInventoryPushTab
+                key={hotelId || 'inventory_push'}
+                categories={overview.categories}
+                connections={overview.connections}
+                mappings={overview.mappings}
+                onRefresh={load}
+              />
+            )}
+            {tab === 'logs' && (
+              <OwnerSyncLogsTab
+                key={hotelId || 'logs'}
+                logs={overview.syncLogs}
+                connections={overview.connections}
+                onRefresh={load}
+              />
+            )}
+          </>
+        ) : (
+          <>
+            {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
+            {tab === 'channels' && (
+              <ChannelsDashboard
+                key={hotelId || 'channels'}
+                connections={overview.connections}
+                categories={overview.categories}
+                ratePlans={overview.ratePlans}
+                mappings={overview.mappings}
+                reservations={overview.otaReservations}
+                syncLogs={overview.syncLogs}
+                onRefresh={load}
+                loading={loading}
+              />
+            )}
+            {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
+            {tab === 'reservations' && <ReservationsTab key={hotelId || 'reservations'} reservations={overview.otaReservations} onChanged={load} />}
+            {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
+            {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
+            {tab === 'diagnostics' && <DiagnosticsTab key={hotelId || 'diagnostics'} />}
+            {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} onChanged={load} />}
+          </>
+        )
       ) : null}
 
       {isSuperAdminUser && (

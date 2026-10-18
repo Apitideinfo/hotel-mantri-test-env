@@ -438,11 +438,13 @@ export const createBookingAttempt = async ({
 /**
  * Retrieves safe guest-facing booking details by reference.
  */
-export const getBookingByReference = async ({ bookingReference, guestToken }) => {
+export const getBookingByReference = async ({ bookingReference, guestToken, isBotAuthorized = false }) => {
   const hotelId = getConfiguredHotelId();
 
-  // 1. Verify guest authorization token
-  verifyGuestAccessToken(guestToken, bookingReference);
+  // 1. Verify guest authorization token (unless caller has valid bot credentials)
+  if (!isBotAuthorized) {
+    verifyGuestAccessToken(guestToken, bookingReference);
+  }
 
   // 2. Fetch reservation
   const refMarker = `[CHATBOT_REF: ${bookingReference}]`;

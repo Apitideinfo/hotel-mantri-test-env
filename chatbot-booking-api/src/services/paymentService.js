@@ -58,17 +58,29 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
     .ilike('internal_note', `%${refMarker}%`)
     .limit(1);
 
-  if (error || !resvs || resvs.length === 0) {
-    const err = new Error(`Booking reference ${bookingReference} not found for payment creation.`);
-    err.status = 404;
-    err.code = 'BOOKING_NOT_FOUND';
-    throw err;
+  let resv = resvs?.[0];
+  let hold = null;
+
+  if (error || !resv) {
+    // Check booking_holds table
+    const { data: holdRecord } = await supabase
+      .from('booking_holds')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .eq('booking_reference', bookingReference)
+      .maybeSingle();
+
+    if (!holdRecord) {
+      const err = new Error(`Booking reference ${bookingReference} not found for payment creation.`);
+      err.status = 404;
+      err.code = 'BOOKING_NOT_FOUND';
+      throw err;
+    }
+    hold = holdRecord;
   }
 
-  const resv = resvs[0];
-
   // If already fully paid, reject order creation
-  if (Number(resv.advance_paid) >= Number(resv.invoice_total) && Number(resv.invoice_total) > 0) {
+  if (resv && Number(resv.advance_paid) >= Number(resv.invoice_total) && Number(resv.invoice_total) > 0) {
     const err = new Error(`Booking ${bookingReference} is already fully paid.`);
     err.status = 400;
     err.code = 'BOOKING_ALREADY_PAID';
@@ -76,20 +88,34 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
   }
 
   // Check hold expiration
-  const expMatch = resv.internal_note.match(/\[HOLD_EXP:\s*([^\]]+)\]/);
-  if (expMatch) {
-    const expiresAt = new Date(expMatch[1].trim()).getTime();
-    if (Date.now() > expiresAt && Number(resv.advance_paid) <= 0) {
+  if (hold) {
+    const expiresAt = new Date(hold.expires_at).getTime();
+    if (Date.now() > expiresAt && hold.status === 'held') {
       const err = new Error('Booking hold has expired. Please initiate a new booking attempt.');
       err.status = 410;
       err.code = 'BOOKING_HOLD_EXPIRED';
       throw err;
     }
+  } else if (resv) {
+    const expMatch = resv.internal_note.match(/\[HOLD_EXP:\s*([^\]]+)\]/);
+    if (expMatch) {
+      const expiresAt = new Date(expMatch[1].trim()).getTime();
+      if (Date.now() > expiresAt && Number(resv.advance_paid) <= 0) {
+        const err = new Error('Booking hold has expired. Please initiate a new booking attempt.');
+        err.status = 410;
+        err.code = 'BOOKING_HOLD_EXPIRED';
+        throw err;
+      }
+    }
   }
 
   // Authoritative amount in paise (1 INR = 100 paise)
-  const dueInr = Math.max(0, Number(resv.invoice_total) - Number(resv.advance_paid));
-  const amountPaise = Math.round(dueInr * 100);
+  const dueInr = hold
+    ? Math.round((Number(hold.total_amount_paise) / 100) * 100) / 100
+    : Math.max(0, Number(resv.invoice_total) - Number(resv.advance_paid));
+  const amountPaise = hold
+    ? Number(hold.total_amount_paise)
+    : Math.round(dueInr * 100);
 
   if (amountPaise < 100) {
     const err = new Error('Payment amount must be at least ₹1 (100 paise).');
@@ -98,13 +124,16 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
     throw err;
   }
 
-  // Check if active Razorpay order is already associated
-  const existingOrderMatch = resv.internal_note.match(/\[RAZORPAY_ORDER:\s*([^\]]+)\]/);
-  if (existingOrderMatch) {
-    const existingOrderId = existingOrderMatch[1].trim();
-    // Return existing order ID for retry safety
+  // Check if active Razorpay order or link is already associated
+  const existingOrder = hold?.razorpay_order_id || resv?.internal_note?.match(/\[RAZORPAY_ORDER:\s*([^\]]+)\]/)?.[1];
+  const existingLinkMatch = resv?.internal_note?.match(/\[RAZORPAY_PAYMENT_URL:\s*([^\]]+)\]/);
+
+  if (existingOrder) {
+    const existingOrderId = String(existingOrder).trim();
+    const existingUrl = existingLinkMatch ? existingLinkMatch[1].trim() : `https://rzp.io/i/${existingOrderId}`;
     return {
       orderId: existingOrderId,
+      paymentUrl: existingUrl,
       amountPaise,
       amountInr: dueInr,
       currency: 'INR',
@@ -124,7 +153,7 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
     notes: {
       platform: 'HotelMantriChatbot',
       bookingReference,
-      reservationId: resv.id,
+      reservationId: resv?.id || hold?.reservation_id || '',
       hotelId,
       expectedAmountPaise: String(amountPaise),
     },
@@ -132,12 +161,62 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
 
   const order = await gateway.orders.create(orderOptions);
 
-  // Bind order ID to reservation internal_note
-  const updatedNote = `${resv.internal_note} [RAZORPAY_ORDER: ${order.id}]`.trim();
-  await supabase
-    .from('reservations')
-    .update({ internal_note: updatedNote, updated_at: new Date().toISOString() })
-    .eq('id', resv.id);
+  // Generate mobile-friendly clickable payment link for WhatsApp guest checkout
+  let paymentUrl = `https://rzp.io/i/${order.id}`;
+  let paymentLinkId = null;
+  try {
+    if (gateway.paymentLink && typeof gateway.paymentLink.create === 'function') {
+      const guestName = resv?.guest_name || hold?.guest_name || 'Guest';
+      const guestPhone = (resv?.guest_phone || hold?.guest_phone || '').replace(/\D/g, '') || undefined;
+      const guestEmail = resv?.guest_email || hold?.guest_email || undefined;
+
+      const plink = await gateway.paymentLink.create({
+        amount: amountPaise,
+        currency: 'INR',
+        accept_partial: false,
+        reference_id: bookingReference,
+        description: `Reservation at Hotel Mantri (${bookingReference})`,
+        customer: {
+          name: guestName,
+          contact: guestPhone,
+          email: guestEmail,
+        },
+        notify: {
+          sms: false,
+          email: false,
+        },
+        reminder_enable: false,
+        notes: {
+          platform: 'HotelMantriChatbot',
+          bookingReference,
+          orderId: order.id,
+          hotelId,
+        },
+      });
+      if (plink && (plink.short_url || plink.url)) {
+        paymentUrl = plink.short_url || plink.url;
+        paymentLinkId = plink.id;
+      }
+    }
+  } catch (linkErr) {
+    console.warn('[PaymentService] Razorpay payment link fallback:', linkErr.message);
+  }
+
+  // Bind order ID and payment URL to reservation or hold
+  if (resv) {
+    const updatedNote = `${resv.internal_note} [RAZORPAY_ORDER: ${order.id}] [RAZORPAY_PAYMENT_URL: ${paymentUrl}]`.trim();
+    await supabase
+      .from('reservations')
+      .update({ internal_note: updatedNote, updated_at: new Date().toISOString() })
+      .eq('id', resv.id);
+  }
+
+  if (hold) {
+    await supabase
+      .from('booking_holds')
+      .update({ razorpay_order_id: order.id, updated_at: new Date().toISOString() })
+      .eq('booking_reference', bookingReference);
+  }
 
   // Record audit log
   try {
@@ -149,6 +228,8 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
       metadata: {
         booking_reference: bookingReference,
         order_id: order.id,
+        payment_link_id: paymentLinkId,
+        payment_url: paymentUrl,
         amount_paise: amountPaise,
       },
       severity: 'info',
@@ -159,6 +240,8 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
 
   return {
     orderId: order.id,
+    paymentLinkId,
+    paymentUrl,
     amountPaise: order.amount,
     amountInr: dueInr,
     currency: order.currency,
@@ -274,6 +357,22 @@ export const settleVerifiedPaymentDurable = async ({
     });
 
     if (!rpcErr && rpcRes && rpcRes.success) {
+      if (!rpcRes.idempotent) {
+        dispatchN8nPaymentConfirmationWebhook({
+          bookingReference,
+          reservation: {
+            ...resv,
+            advance_paid: Math.max(Number(resv.advance_paid) || 0, paidInr),
+            payment_ref: pId,
+            status: 'confirmed',
+          },
+          orderId: oId,
+          paymentId: pId,
+          amountPaise,
+          metadata,
+        }).catch((err) => console.warn('[PaymentService] n8n webhook background error:', err.message));
+      }
+
       return {
         success: true,
         idempotent: Boolean(rpcRes.idempotent),
@@ -382,6 +481,21 @@ export const settleVerifiedPaymentDurable = async ({
     console.warn('[PaymentService] Audit log insert warning:', err.message);
   }
 
+  // Asynchronously dispatch n8n confirmation webhook
+  dispatchN8nPaymentConfirmationWebhook({
+    bookingReference,
+    reservation: {
+      ...resv,
+      advance_paid: newAdvancePaid,
+      payment_ref: pId,
+      status: 'confirmed',
+    },
+    orderId: oId,
+    paymentId: pId,
+    amountPaise,
+    metadata,
+  }).catch((err) => console.warn('[PaymentService] n8n webhook background error:', err.message));
+
   return {
     success: true,
     idempotent: false,
@@ -468,3 +582,174 @@ export const verifyAndSettlePayment = async ({
     },
   });
 };
+
+/**
+ * Dispatches an authenticated, HMAC-signed payment confirmation event to n8n Cloud.
+ * Non-blocking: failure to reach n8n logs a warning and audit record without aborting payment.
+ */
+export const dispatchN8nPaymentConfirmationWebhook = async ({
+  bookingReference,
+  reservation = {},
+  orderId,
+  paymentId,
+  amountPaise,
+  metadata = {},
+}) => {
+  const n8nCfg = config().n8n;
+  const webhookUrl = n8nCfg?.paymentWebhookUrl;
+  if (!webhookUrl) {
+    console.log('[PaymentService] N8N_PAYMENT_WEBHOOK_URL not configured. Skipping automated n8n webhook dispatch.');
+    return { dispatched: false, reason: 'URL_NOT_CONFIGURED' };
+  }
+
+  const hotelId = getConfiguredHotelId();
+  const eventId = `evt_${Date.now().toString(36)}_${crypto.randomBytes(6).toString('hex')}`;
+  const timestamp = new Date().toISOString();
+
+  // Normalize guest details and phone for Whinta
+  const guestName = reservation.guest_name || 'Guest';
+  const rawPhone = String(reservation.guest_phone || reservation.phone || '').trim();
+  const cleanDigits = rawPhone.replace(/\D/g, '');
+  const recipientPhone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
+  const checkIn = reservation.check_in_date || reservation.check_in || '';
+  const checkOut = reservation.check_out_date || reservation.check_out || '';
+  const roomCategory = reservation.room_category || 'Standard Room';
+  const roomNumber = reservation.room_no && reservation.room_no !== 'Unassigned' ? reservation.room_no : roomCategory;
+  const totalAmountInr = Number(reservation.invoice_total) || (Number(amountPaise) / 100);
+  const formattedTotal = Math.round(totalAmountInr).toLocaleString('en-IN');
+  const invoiceUrl = 'https://www.hotelmantri.com';
+
+  const payload = {
+    event: 'booking.payment_confirmed',
+    eventId,
+    timestamp,
+    hotelId,
+    hotelName: 'Hotel Mantri',
+    data: {
+      bookingReference,
+      reservationId: reservation.id || null,
+      guestName,
+      guestPhone: rawPhone,
+      recipientPhone,
+      guestEmail: reservation.guest_email || null,
+      checkIn,
+      checkOut,
+      nights: reservation.nights || 1,
+      roomCategory,
+      roomNumber: reservation.room_no || 'Unassigned',
+      totalAmount: totalAmountInr,
+      advancePaid: Number(reservation.advance_paid) || totalAmountInr,
+      paymentId,
+      orderId,
+      status: 'confirmed',
+      paymentMethod: metadata.payment_method || 'Razorpay',
+    },
+    // Pre-mapped for Whinta / Meta Cloud API Template: hotel_mantri_reservation_confirmation_
+    whintaTemplate: {
+      templateName: process.env.WHINTA_RESERVATION_TEMPLATE || 'hotel_mantri_reservation_confirmation_',
+      language: 'en',
+      recipientPhone,
+      bodyParameters: [
+        guestName,
+        bookingReference,
+        roomNumber,
+        checkIn,
+        checkOut,
+        formattedTotal,
+        invoiceUrl,
+      ],
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: String(guestName).slice(0, 60) },
+            { type: 'text', text: String(bookingReference).slice(0, 40) },
+            { type: 'text', text: String(roomNumber).slice(0, 30) },
+            { type: 'text', text: String(checkIn).slice(0, 30) },
+            { type: 'text', text: String(checkOut).slice(0, 30) },
+            { type: 'text', text: String(formattedTotal).slice(0, 30) },
+            { type: 'text', text: String(invoiceUrl).slice(0, 500) },
+          ],
+        },
+      ],
+    },
+  };
+
+  const rawJson = JSON.stringify(payload);
+  const headers = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'HotelMantri-PaymentService/1.0',
+    'X-Event-Id': eventId,
+    'X-Timestamp': timestamp,
+  };
+
+  // Sign with HMAC-SHA256 if webhookSecret is configured
+  if (n8nCfg.webhookSecret) {
+    const signature = crypto.createHmac('sha256', n8nCfg.webhookSecret).update(rawJson).digest('hex');
+    headers['X-HotelMantri-Signature'] = `sha256=${signature}`;
+    headers['X-Signature-SHA256'] = signature;
+  }
+
+  // Include Bearer token if n8n API token is configured
+  if (n8nCfg.apiToken) {
+    headers['Authorization'] = `Bearer ${n8nCfg.apiToken}`;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers,
+      body: rawJson,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const isOk = response.ok;
+    console.log(`[PaymentService] n8n confirmation webhook dispatched: status=${response.status} eventId=${eventId}`);
+
+    // Audit log
+    await supabase.from('audit_logs').insert({
+      hotel_id: hotelId,
+      action: isOk ? 'CHATBOT_N8N_WEBHOOK_DISPATCHED' : 'CHATBOT_N8N_WEBHOOK_HTTP_ERROR',
+      module: 'notification',
+      record_id: reservation.id || bookingReference,
+      metadata: {
+        event_id: eventId,
+        booking_reference: bookingReference,
+        status_code: response.status,
+        webhook_url: webhookUrl.replace(/\/\/[^@]+@/, '//[REDACTED]@'),
+      },
+      severity: isOk ? 'info' : 'warning',
+    }).then(() => {}).catch(() => {});
+
+    return {
+      dispatched: isOk,
+      statusCode: response.status,
+      eventId,
+    };
+  } catch (netErr) {
+    console.warn(`[PaymentService] n8n webhook dispatch failed: ${netErr.message}`);
+    await supabase.from('audit_logs').insert({
+      hotel_id: hotelId,
+      action: 'CHATBOT_N8N_WEBHOOK_NETWORK_ERROR',
+      module: 'notification',
+      record_id: reservation.id || bookingReference,
+      metadata: {
+        event_id: eventId,
+        booking_reference: bookingReference,
+        error_message: netErr.message,
+      },
+      severity: 'warning',
+    }).then(() => {}).catch(() => {});
+
+    return {
+      dispatched: false,
+      error: netErr.message,
+      eventId,
+    };
+  }
+};
+

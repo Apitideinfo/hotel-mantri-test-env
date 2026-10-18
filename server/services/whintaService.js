@@ -613,6 +613,11 @@ export class WhintaProvider {
             templateComponents: templateComponentsToSend,
           });
 
+          // If Meta reports account/number display name approval is required, do not attempt fallbacks
+          if (!result.success && /display name approval|131037/i.test(result.message || '')) {
+            return result;
+          }
+
           // 2. Dynamic Document Header Fallback:
           // If template send failed due to component mismatch (e.g. template was approved in Whinta/Meta
           // WITHOUT a document header or with a text header), safely retry body-only template send

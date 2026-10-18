@@ -16,8 +16,9 @@ import { getPublicRoomCategories, checkLiveAvailability } from '../services/avai
 import { generateServerQuote } from '../services/quoteEngine.js';
 import { createBookingAttempt, getBookingByReference } from '../services/bookingService.js';
 import { createPaymentOrderForBooking, verifyAndSettlePayment } from '../services/paymentService.js';
-import { publicRateLimiter, bookingRateLimiter, requireBotProviderAuth } from '../middleware/security.js';
+import { publicRateLimiter, bookingRateLimiter, requireBotProviderAuth, timingSafeEqual } from '../middleware/security.js';
 import { getPublicHotelProfile } from '../services/hotelConfigService.js';
+import { config } from '../config/environment.js';
 
 const router = express.Router();
 
@@ -198,25 +199,45 @@ router.post('/bookings', bookingRateLimiter, requireBotProviderAuth, async (req,
 
 /**
  * 4.5 GET /v1/public/bookings/:reference
- * Minimal guest-facing booking status.
- * Requires guestToken in Authorization header or query parameter.
+ * Minimal booking status.
+ * Accepts either:
+ * 1. n8n / bot authentication via Authorization: Bearer <N8N_API_TOKEN> or X-API-Key: <token>
+ * 2. Guest authorization token via Authorization: Bearer <guestToken>, X-Guest-Token, or ?token=...
  */
 router.get('/bookings/:reference', publicRateLimiter, async (req, res, next) => {
   try {
     const bookingReference = req.params.reference;
     const authHeader = req.headers.authorization;
+    const apiKeyHeader = req.headers['x-api-key'];
+    const guestTokenHeader = req.headers['x-guest-token'];
     const queryToken = req.query.token;
 
-    const guestToken = (authHeader && authHeader.startsWith('Bearer '))
-      ? authHeader.split(' ')[1]
-      : queryToken;
+    let bearerToken = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      bearerToken = authHeader.split(' ')[1].trim();
+    }
 
-    if (!guestToken) {
+    const expectedSecret = config().n8n?.apiToken || config().security?.chatbotApiSecret;
+    let isBotAuthorized = false;
+
+    // Check if bearerToken or apiKey matches bot secret
+    if (expectedSecret) {
+      if (bearerToken && timingSafeEqual(bearerToken, expectedSecret)) {
+        isBotAuthorized = true;
+      } else if (typeof apiKeyHeader === 'string' && timingSafeEqual(apiKeyHeader.trim(), expectedSecret)) {
+        isBotAuthorized = true;
+      }
+    }
+
+    // If not bot-authorized, candidate guest token comes from guestTokenHeader, bearerToken, or queryToken
+    const candidateGuestToken = isBotAuthorized ? null : (guestTokenHeader || bearerToken || queryToken);
+
+    if (!isBotAuthorized && !candidateGuestToken) {
       return res.status(401).json({
         success: false,
         error: {
           code: 'GUEST_TOKEN_REQUIRED',
-          message: 'Guest authorization token is required (provide in Authorization: Bearer <token> or ?token=...).',
+          message: 'Guest authorization token or N8N_API_TOKEN is required.',
           requestId: req.requestId,
         },
       });
@@ -224,7 +245,8 @@ router.get('/bookings/:reference', publicRateLimiter, async (req, res, next) => 
 
     const booking = await getBookingByReference({
       bookingReference,
-      guestToken,
+      guestToken: candidateGuestToken,
+      isBotAuthorized,
     });
 
     res.status(200).json({
@@ -241,7 +263,7 @@ router.get('/bookings/:reference', publicRateLimiter, async (req, res, next) => 
  * 6.1 POST /v1/public/bookings/:reference/payment
  * Creates a Razorpay order bound to the booking attempt and verified amount.
  */
-router.post('/bookings/:reference/payment', bookingRateLimiter, async (req, res, next) => {
+router.post('/bookings/:reference/payment', bookingRateLimiter, requireBotProviderAuth, async (req, res, next) => {
   try {
     const bookingReference = req.params.reference;
 

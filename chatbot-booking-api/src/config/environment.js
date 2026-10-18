@@ -101,6 +101,9 @@ export const getEnvironmentConfig = () => {
   );
 
   const chatbotApiSecret = (process.env.CHATBOT_API_SECRET || '').trim();
+  const n8nApiToken = (process.env.N8N_API_TOKEN || process.env.CHATBOT_API_SECRET || '').trim();
+  const n8nPaymentWebhookUrl = (process.env.N8N_PAYMENT_WEBHOOK_URL || '').trim();
+  const n8nWebhookSecret = (process.env.N8N_WEBHOOK_SECRET || '').trim();
 
   if (errors.length > 0 && !isTest) {
     console.error('FATAL [ChatbotBookingAPI]: Environment configuration validation failed:');
@@ -134,6 +137,11 @@ export const getEnvironmentConfig = () => {
       bookingHoldTtlSeconds,
       allowedOrigins,
       chatbotApiSecret,
+    },
+    n8n: {
+      apiToken: n8nApiToken,
+      paymentWebhookUrl: n8nPaymentWebhookUrl,
+      webhookSecret: n8nWebhookSecret,
     },
   };
 };

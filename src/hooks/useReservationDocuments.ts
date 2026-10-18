@@ -28,8 +28,10 @@ export interface UseReservationDocumentsResult {
   activeDocAction: 'pdf' | 'print' | 'email' | 'whatsapp' | null;
   docSuccess: string | null;
   docError: string | null;
+  docFallbackUrl: string | null;
   setDocSuccess: React.Dispatch<React.SetStateAction<string | null>>;
   setDocError: React.Dispatch<React.SetStateAction<string | null>>;
+  setDocFallbackUrl: React.Dispatch<React.SetStateAction<string | null>>;
   handleDocPdf: () => Promise<void>;
   handleDocPrint: () => Promise<void>;
   handleDocEmail: () => Promise<void>;
@@ -57,10 +59,12 @@ export const useReservationDocuments = ({
   const [activeDocAction, setActiveDocAction] = useState<'pdf' | 'print' | 'email' | 'whatsapp' | null>(null);
   const [docSuccess, setDocSuccess] = useState<string | null>(null);
   const [docError, setDocError] = useState<string | null>(null);
+  const [docFallbackUrl, setDocFallbackUrl] = useState<string | null>(null);
 
   const clearDocMessages = () => {
     setDocSuccess(null);
     setDocError(null);
+    setDocFallbackUrl(null);
   };
 
   const handleDocPdf = async () => {
@@ -127,23 +131,26 @@ export const useReservationDocuments = ({
     setActiveDocAction('whatsapp');
     setDocError(null);
     setDocSuccess(null);
+    setDocFallbackUrl(null);
     try {
       const res = await sendReservationConfirmationWhatsApp(targetResId, phone);
       setDocSuccess(res.message || 'Confirmation dispatched via Whinta WhatsApp.');
     } catch (err: any) {
-      // Fallback: If Whinta is unconfigured or failed, offer manual wa.me link
+      // Do NOT auto open WhatsApp Web! Report the exact Whinta / Meta error
       const cleanPhone = (phone || '').replace(/\D/g, '');
-      if (cleanPhone) {
+      let fallbackUrl: string | null = null;
+      if (err?.whatsappDirectUrl) {
+        fallbackUrl = err.whatsappDirectUrl;
+      } else if (cleanPhone) {
         const msg = `Dear ${guestName},\n\nYour reservation details at ${hotelName}:\n🏨 Room: ${roomNo} (${roomCategoryName || 'Room'})\n📅 Check-In: ${fmtDate(checkIn)}\n📅 Check-Out: ${fmtDate(checkOut)}\n🌙 Nights: ${nights}\n💰 Rate: ₹${fmtInt(rate)}/night\n💵 Total: ₹${fmtInt(rate * nights)}\n\nWe look forward to hosting you!`;
         const waPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-        window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`, '_blank');
-        setDocSuccess('Opened WhatsApp Web/App as fallback.');
-      } else {
-        setDocError(err.message || 'Failed to send WhatsApp confirmation via Whinta.');
+        fallbackUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`;
       }
+      setDocFallbackUrl(fallbackUrl);
+      setDocError(err.message || 'Failed to send WhatsApp confirmation via Whinta.');
     } finally {
       setActiveDocAction(null);
-      setTimeout(() => setDocSuccess(null), 5000);
+      setTimeout(() => setDocSuccess(null), 6000);
     }
   };
 
@@ -151,8 +158,10 @@ export const useReservationDocuments = ({
     activeDocAction,
     docSuccess,
     docError,
+    docFallbackUrl,
     setDocSuccess,
     setDocError,
+    setDocFallbackUrl,
     handleDocPdf,
     handleDocPrint,
     handleDocEmail,
