@@ -51,7 +51,8 @@ export const OccupancyAnalytics = ({ onBack }: { onBack: () => void }) => {
       }
     }
     const uniqueDays = byDate.size || Math.max(1, new Set(entries.map((e) => e.report_date)).size);
-    const avgOcc = uniqueDays > 0 && totalRooms > 0 ? (occupied / (totalRooms * uniqueDays)) * 100 : 0;
+    const totalOccupied = occupied + complimentary;
+    const avgOcc = uniqueDays > 0 && totalRooms > 0 ? (totalOccupied / (totalRooms * uniqueDays)) * 100 : 0;
     return { occupied, complimentary, totalEntries, uniqueDays, avgOcc };
   }, [entries, totalRooms, fromDate, toDate]);
 
