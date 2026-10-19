@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import {
   Tag, Calendar, CheckCircle2, AlertTriangle, AlertCircle,
-  RotateCw, ArrowRight, Loader2, DollarSign, Shield, XCircle, Info
+  RotateCw, ArrowRight, Loader2, DollarSign, Shield, XCircle, Info, Layers
 } from 'lucide-react';
 import type { ChannelConnection, ChannelRateMapping } from '@/lib/api-channel';
 import type { RoomCategory } from '@/lib/types';
@@ -16,6 +16,7 @@ interface OwnerRatePushTabProps {
   connections: ChannelConnection[];
   mappings: ChannelRateMapping[];
   onRefresh: () => void;
+  onBulkUpdate?: () => void;
 }
 
 type RangePreset = 'today' | '7days' | '30days' | 'custom';
@@ -25,7 +26,8 @@ export const OwnerRatePushTab: React.FC<OwnerRatePushTabProps> = ({
   ratePlans,
   connections,
   mappings,
-  onRefresh
+  onRefresh,
+  onBulkUpdate
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const addDays = (d: string, n: number) => {
@@ -158,14 +160,26 @@ export const OwnerRatePushTab: React.FC<OwnerRatePushTabProps> = ({
     <div className="space-y-6">
       {/* Rate Push Configuration Card */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
-        <div>
-          <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-            <Tag className="w-5 h-5 text-amber-600" />
-            Push Hotel Rates to OTAs
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Select room type, rate plan, and dates to update pricing across all authorized channels in real-time.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <Tag className="w-5 h-5 text-amber-600" />
+              Push Hotel Rates to OTAs
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Select room type, rate plan, and dates to update pricing across all authorized channels in real-time.
+            </p>
+          </div>
+          {onBulkUpdate && (
+            <button
+              type="button"
+              onClick={onBulkUpdate}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-all active:scale-[0.98] cursor-pointer self-start sm:self-auto"
+            >
+              <Layers className="w-4 h-4" />
+              Bulk Update Rates & Inventory
+            </button>
+          )}
         </div>
 
         {/* 1. Room Category & Rate Plan Selector */}
@@ -434,7 +448,7 @@ export const OwnerRatePushTab: React.FC<OwnerRatePushTabProps> = ({
               Rate Push Execution Results
             </h3>
             <span className="text-xs text-slate-500 font-semibold">
-              {pushResults.summary.succeeded} Succeeded · {pushResults.summary.failed} Failed · {pushResults.summary.skipped} Skipped
+              {pushResults.summary?.succeeded ?? 0} Succeeded · {pushResults.summary?.failed ?? 0} Failed · {pushResults.summary?.skipped ?? 0} Skipped
             </span>
           </div>
 
