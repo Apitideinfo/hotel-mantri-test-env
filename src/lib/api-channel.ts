@@ -1043,6 +1043,74 @@ export interface OtaPushSummary {
   skipped: number;
 }
 
+/**
+ * Normalizes a per-OTA status string from the backend to the frontend enum.
+ * Backend may send 'successful'/'warning'; frontend expects 'success'/'failed'/'skipped'.
+ */
+const normalizeOtaStatus = (s: string | undefined): 'success' | 'failed' | 'skipped' => {
+  if (!s) return 'failed';
+  const lower = s.toLowerCase();
+  if (lower === 'success' || lower === 'successful' || lower === 'ok') return 'success';
+  if (lower === 'skipped' || lower === 'skip') return 'skipped';
+  return 'failed'; // 'warning', 'error', 'failed', or anything else
+};
+
+/**
+ * Normalizes a raw push response from the backend into the shape the UI components expect.
+ * Computes `summary` from `perOtaResults` if the backend didn't include it (the root cause
+ * of the production crash where `res.summary` was undefined).
+ */
+const normalizePushResponse = (
+  raw: any
+): { success: boolean; summary: OtaPushSummary; perOtaResults: OtaPushResult[]; error?: string } => {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      success: false,
+      summary: { total: 0, succeeded: 0, failed: 0, skipped: 0 },
+      perOtaResults: [],
+      error: 'Empty or invalid response from server',
+    };
+  }
+
+  // Normalize perOtaResults array
+  const rawResults: any[] = Array.isArray(raw.perOtaResults) ? raw.perOtaResults : [];
+  const perOtaResults: OtaPushResult[] = rawResults.map((r: any) => ({
+    channelId: r?.channelId || 'unknown',
+    channelName: r?.channelName || r?.channelType || 'Unknown Channel',
+    channelType: r?.channelType || 'unknown',
+    status: normalizeOtaStatus(r?.status),
+    message: r?.message || (normalizeOtaStatus(r?.status) === 'success' ? 'Synchronized successfully' : 'Operation completed'),
+    durationMs: typeof r?.durationMs === 'number' ? r.durationMs : 0,
+    datesCount: typeof r?.datesCount === 'number' ? r.datesCount : 0,
+  }));
+
+  // Use backend summary if provided, otherwise compute from perOtaResults
+  let summary: OtaPushSummary;
+  if (raw.summary && typeof raw.summary === 'object' && typeof raw.summary.total === 'number') {
+    summary = {
+      total: raw.summary.total,
+      succeeded: typeof raw.summary.succeeded === 'number' ? raw.summary.succeeded : 0,
+      failed: typeof raw.summary.failed === 'number' ? raw.summary.failed : 0,
+      skipped: typeof raw.summary.skipped === 'number' ? raw.summary.skipped : 0,
+    };
+  } else {
+    // Compute summary from normalized perOtaResults
+    summary = {
+      total: perOtaResults.length,
+      succeeded: perOtaResults.filter(r => r.status === 'success').length,
+      failed: perOtaResults.filter(r => r.status === 'failed').length,
+      skipped: perOtaResults.filter(r => r.status === 'skipped').length,
+    };
+  }
+
+  const success = typeof raw.success === 'boolean' ? raw.success : summary.failed === 0;
+  const error = typeof raw.error === 'string' ? raw.error
+    : (typeof raw.message === 'string' && !raw.success) ? raw.message
+    : undefined;
+
+  return { success, summary, perOtaResults, error };
+};
+
 export const pushRatesToChannels = async (payload: {
   startDate: string;
   endDate: string;
@@ -1060,10 +1128,11 @@ export const pushRatesToChannels = async (payload: {
   perOtaResults: OtaPushResult[];
   error?: string;
 }> => {
-  return await apiFetch('/api/channels/sync/rates', {
+  const raw = await apiFetch('/api/channels/sync/rates', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
+  return normalizePushResponse(raw);
 };
 
 export const pushInventoryToChannels = async (payload: {
@@ -1078,11 +1147,13 @@ export const pushInventoryToChannels = async (payload: {
   perOtaResults: OtaPushResult[];
   error?: string;
 }> => {
-  return await apiFetch('/api/channels/sync/inventory', {
+  const raw = await apiFetch('/api/channels/sync/inventory', {
     method: 'POST',
     body: JSON.stringify(payload)
   });
+  return normalizePushResponse(raw);
 };
+
 
 // ── Composite fetch for Channel Manager overview ──
 

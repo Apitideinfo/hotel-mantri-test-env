@@ -559,9 +559,15 @@ router.post('/sync/rates', checkAuth, async (req, res) => {
       channelId: c.id,
       channelName: c.channel_name || c.channel_type,
       channelType: c.channel_type,
-      status: !c.is_enabled ? 'skipped' : (result.verified ? 'successful' : 'warning'),
-      message: !c.is_enabled ? 'Channel is disabled in settings' : (result.message || 'Rates synchronized successfully')
+      status: !c.is_enabled ? 'skipped' : (result.verified ? 'success' : 'failed'),
+      message: !c.is_enabled ? 'Channel is disabled in settings' : (result.message || 'Rates synchronized successfully'),
+      durationMs: 0,
+      datesCount: 0
     }));
+
+    const succeeded = perOtaResults.filter(r => r.status === 'success').length;
+    const failed = perOtaResults.filter(r => r.status === 'failed').length;
+    const skipped = perOtaResults.filter(r => r.status === 'skipped').length;
 
     res.json({
       success: true,
@@ -570,6 +576,7 @@ router.post('/sync/rates', checkAuth, async (req, res) => {
       recordsAttempted: result.recordsAttempted,
       recordsVerified: result.recordsVerified,
       discrepancies: result.discrepancies,
+      summary: { total: perOtaResults.length, succeeded, failed, skipped },
       perOtaResults,
       result,
       requestId: req.requestId
@@ -659,9 +666,15 @@ router.post('/sync/inventory', checkAuth, async (req, res) => {
       channelId: c.id,
       channelName: c.channel_name || c.channel_type,
       channelType: c.channel_type,
-      status: !c.is_enabled ? 'skipped' : (result.verified ? 'successful' : 'warning'),
-      message: !c.is_enabled ? 'Channel is disabled in settings' : (result.message || 'Inventory synchronized successfully')
+      status: !c.is_enabled ? 'skipped' : (result.verified ? 'success' : 'failed'),
+      message: !c.is_enabled ? 'Channel is disabled in settings' : (result.message || 'Inventory synchronized successfully'),
+      durationMs: 0,
+      datesCount: 0
     }));
+
+    const succeeded = perOtaResults.filter(r => r.status === 'success').length;
+    const failed = perOtaResults.filter(r => r.status === 'failed').length;
+    const skipped = perOtaResults.filter(r => r.status === 'skipped').length;
 
     res.json({
       success: true,
@@ -670,6 +683,7 @@ router.post('/sync/inventory', checkAuth, async (req, res) => {
       recordsAttempted: result.recordsAttempted,
       recordsVerified: result.recordsVerified,
       discrepancies: result.discrepancies,
+      summary: { total: perOtaResults.length, succeeded, failed, skipped },
       perOtaResults,
       result,
       requestId: req.requestId

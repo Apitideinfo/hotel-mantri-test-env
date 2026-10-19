@@ -131,6 +131,8 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [syncingHeader, setSyncingHeader] = useState(false);
+  const [ownerBulkOpen, setOwnerBulkOpen] = useState(false);
+  const [ownerSyncNotice, setOwnerSyncNotice] = useState<{ title: string; message: string; type: 'success' | 'warning' | 'error' | 'info'; details?: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!hotelId) {
@@ -486,6 +488,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
                 connections={overview.connections}
                 mappings={overview.mappings}
                 onRefresh={load}
+                onBulkUpdate={() => setOwnerBulkOpen(true)}
               />
             )}
             {tab === 'inventory_push' && (
@@ -495,7 +498,90 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
                 connections={overview.connections}
                 mappings={overview.mappings}
                 onRefresh={load}
+                onBulkUpdate={() => setOwnerBulkOpen(true)}
               />
+            )}
+            {ownerBulkOpen && (
+              <BulkUpdateDrawer
+                categories={overview.categories}
+                defaultStart={new Date().toISOString().slice(0, 10)}
+                defaultEnd={addDays(new Date().toISOString().slice(0, 10), 6)}
+                hotelId={hotelId}
+                onClose={() => setOwnerBulkOpen(false)}
+                onSuccess={async (result?: any) => {
+                  await load();
+                  if (!result) {
+                    setOwnerBulkOpen(false);
+                    return;
+                  }
+                  const extSync = result.externalSync;
+                  const status = extSync?.status;
+                  if (status === 'VERIFIED' || (result.allVerified && extSync?.success)) {
+                    setOwnerBulkOpen(false);
+                    setOwnerSyncNotice({
+                      title: 'Inventory & Rates Updated and Verified',
+                      message: result.message || 'Authoritative rates and inventory were saved to PMS and verified with the external channel manager.',
+                      type: 'success'
+                    });
+                  } else if (status === 'NOT_CONFIGURED') {
+                    setOwnerBulkOpen(false);
+                    setOwnerSyncNotice({
+                      title: 'PMS Saved (Local Only)',
+                      message: 'Authoritative inventory and rates were saved to the PMS database. Channel manager integration is not configured for this hotel, so external channels were not updated.',
+                      type: 'info'
+                    });
+                  } else if (status === 'PARTIAL_SUCCESS') {
+                    setOwnerBulkOpen(false);
+                    setOwnerSyncNotice({
+                      title: 'Partial Success',
+                      message: extSync?.message || result.message || 'Some updates were applied but not all could be verified with the channel manager.',
+                      type: 'warning'
+                    });
+                  } else if (extSync && !extSync.success) {
+                    setOwnerBulkOpen(false);
+                    setOwnerSyncNotice({
+                      title: 'Saved Locally — Channel Sync Failed',
+                      message: extSync.message || result.message || 'Data was saved to PMS but could not be pushed to external channels.',
+                      type: 'warning',
+                      details: extSync.failureReasons?.join('\n') || undefined
+                    });
+                  } else {
+                    setOwnerBulkOpen(false);
+                    setOwnerSyncNotice({
+                      title: 'Bulk Update Saved',
+                      message: result.message || `${result.updatedCount || 0} records updated successfully.`,
+                      type: 'success'
+                    });
+                  }
+                }}
+              />
+            )}
+            {ownerSyncNotice && (
+              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+                <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-scale-in">
+                  <div className="flex items-center gap-3">
+                    {ownerSyncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
+                    {ownerSyncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
+                    {ownerSyncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+                    {ownerSyncNotice.type === 'info' && <Info className="w-6 h-6 text-blue-600 flex-shrink-0" />}
+                    <h4 className="text-base font-bold text-slate-900">{ownerSyncNotice.title}</h4>
+                  </div>
+                  <p className="text-sm text-slate-600 leading-relaxed">{ownerSyncNotice.message}</p>
+                  {ownerSyncNotice.details && (
+                    <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono whitespace-pre-wrap">
+                      {ownerSyncNotice.details}
+                    </pre>
+                  )}
+                  <div className="flex justify-end pt-2">
+                    <button
+                      onClick={() => setOwnerSyncNotice(null)}
+                      className="px-4 py-2 text-xs font-semibold rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
             {tab === 'logs' && (
               <OwnerSyncLogsTab

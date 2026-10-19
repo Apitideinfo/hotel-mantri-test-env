@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   Calendar, CheckCircle2, AlertTriangle, AlertCircle,
   RotateCw, ArrowRight, Loader2, BedDouble, Plus, Minus,
-  Shield, XCircle, Info, Lock
+  Shield, XCircle, Info, Lock, Layers
 } from 'lucide-react';
 import type { ChannelConnection, ChannelRateMapping } from '@/lib/api-channel';
 import type { RoomCategory } from '@/lib/types';
@@ -14,6 +14,7 @@ interface OwnerInventoryPushTabProps {
   connections: ChannelConnection[];
   mappings: ChannelRateMapping[];
   onRefresh: () => void;
+  onBulkUpdate?: () => void;
 }
 
 type RangePreset = 'today' | '7days' | '30days' | 'custom';
@@ -22,7 +23,8 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
   categories,
   connections,
   mappings,
-  onRefresh
+  onRefresh,
+  onBulkUpdate
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const addDays = (d: string, n: number) => {
@@ -195,14 +197,26 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
     <div className="space-y-6">
       {/* Inventory Push Card */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
-        <div>
-          <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
-            <BedDouble className="w-5 h-5 text-amber-600" />
-            Push Room Inventory to OTAs
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Review room availability matrix, apply quick overrides or stop-sells, and push live counts to connected OTAs.
-          </p>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <BedDouble className="w-5 h-5 text-amber-600" />
+              Push Room Inventory to OTAs
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Review room availability matrix, apply quick overrides or stop-sells, and push live counts to connected OTAs.
+            </p>
+          </div>
+          {onBulkUpdate && (
+            <button
+              type="button"
+              onClick={onBulkUpdate}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-all active:scale-[0.98] cursor-pointer self-start sm:self-auto"
+            >
+              <Layers className="w-4 h-4" />
+              Bulk Update Rates & Inventory
+            </button>
+          )}
         </div>
 
         {/* 1. Category & Date Filters */}
@@ -475,7 +489,7 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
               Inventory Push Execution Results
             </h3>
             <span className="text-xs text-slate-500 font-semibold">
-              {pushResults.summary.succeeded} Succeeded · {pushResults.summary.failed} Failed · {pushResults.summary.skipped} Skipped
+              {pushResults.summary?.succeeded ?? 0} Succeeded · {pushResults.summary?.failed ?? 0} Failed · {pushResults.summary?.skipped ?? 0} Skipped
             </span>
           </div>
 
