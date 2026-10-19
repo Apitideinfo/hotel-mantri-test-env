@@ -548,6 +548,16 @@ export const syncInventory = async ({
       : Object.keys(categoryToExtCode);
 
     if (targetCategoryIds.length === 0) {
+      if (triggeredBy && triggeredBy !== 'manual') {
+        console.log(`[ChannelSyncEngine] Skipping inventory sync for ${hotelId} (${triggeredBy}): No active room mappings configured.`);
+        return {
+          success: true,
+          skipped: true,
+          status: 'SKIPPED',
+          code: 'ROOM_MAPPING_REQUIRED',
+          message: 'No active room mappings found for this channel. Synchronization skipped.'
+        };
+      }
       const err = new Error('No active room mappings found for this channel.');
       err.status = 422;
       err.code = 'ROOM_MAPPING_REQUIRED';

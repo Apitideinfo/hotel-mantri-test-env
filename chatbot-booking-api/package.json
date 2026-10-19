@@ -1,0 +1,31 @@
+{
+  "name": "hotel-mantri-chatbot-booking-api",
+  "version": "1.0.0",
+  "description": "Production-Ready External Chatbot Reservation & Payment API for Hotel Mantri",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/*.test.js",
+    "test:unit": "node --test tests/quoteEngine.test.js tests/paymentSecurity.test.js",
+    "test:integration": "node --test tests/availability.test.js tests/bookingAndIdempotency.test.js tests/tenantIsolation.test.js",
+    "test:concurrency": "node --test tests/concurrency.test.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "razorpay": "^2.9.8"
+  },
+  "keywords": [
+    "hotel-mantri",
+    "chatbot",
+    "reservation-api",
+    "razorpay",
+    "supabase"
+  ],
+  "author": "Hotel Mantri Engineering",
+  "license": "UNLICENSED"
+}

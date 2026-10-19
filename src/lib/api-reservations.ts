@@ -2707,7 +2707,10 @@ export const sendReservationConfirmationWhatsApp = async (
   });
 
   if (!res.success) {
-    throw new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
+    const error: any = new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
+    error.whatsappDirectUrl = res.whatsappDirectUrl;
+    error.code = res.code;
+    throw error;
   }
 
   return res;

@@ -139,6 +139,7 @@ export const BookingDetailPanel = ({
     activeDocAction,
     docSuccess,
     docError,
+    docFallbackUrl,
     setDocSuccess,
     setDocError,
     handleDocPdf,
@@ -523,6 +524,34 @@ export const BookingDetailPanel = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Feedback banner for Document Actions (Whinta WhatsApp, Email, PDF) */}
+                {(docSuccess || docError) && (
+                  <div className={`rounded-xl p-2.5 text-xs font-semibold flex flex-col gap-1.5 animate-in fade-in duration-150 ${
+                    docSuccess ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-rose-50 border border-rose-200 text-rose-800'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      {docSuccess ? (
+                        <><CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /><span>{docSuccess}</span></>
+                      ) : (
+                        <><AlertCircle className="w-4 h-4 text-rose-600 shrink-0" /><span className="leading-snug">{docError}</span></>
+                      )}
+                    </div>
+                    {docError && docFallbackUrl && (
+                      <div className="pt-1.5 border-t border-rose-200/80 flex items-center justify-between text-[11px]">
+                        <span className="text-rose-700 font-normal">Need to message manually?</span>
+                        <a
+                          href={docFallbackUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-bold text-emerald-700 hover:text-emerald-900 underline"
+                        >
+                          Open WhatsApp Web
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Primary Operations Buttons */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">

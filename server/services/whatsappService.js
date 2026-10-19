@@ -197,13 +197,19 @@ export const buildMetaBookingConfirmationTemplate = ({
   const cleanRoom = roomNo || roomNumber || (roomDetails ? String(roomDetails).replace(/^.*Room\s*([0-9A-Za-z-]+).*$/i, '$1') : '') || roomCategory || 'Unassigned';
 
   const curr = currency || '₹';
-  const formattedAmount = typeof totalAmount === 'number'
-    ? `${curr}${Math.round(totalAmount).toLocaleString('en-IN')}`
-    : String(totalAmount).startsWith(curr)
-    ? totalAmount
-    : `${curr}${totalAmount}`;
+  const cleanNumericAmount = typeof totalAmount === 'number'
+    ? Math.round(totalAmount).toLocaleString('en-IN')
+    : String(totalAmount).replace(/[^\d.,]/g, '');
 
-  const resolvedInvoiceUrl = invoiceUrl || documentUrl || '—';
+  const formattedAmount = name.includes('hotel_mantri_reservation_confirmation')
+    ? (cleanNumericAmount || '0')
+    : (typeof totalAmount === 'number'
+      ? `${curr}${Math.round(totalAmount).toLocaleString('en-IN')}`
+      : String(totalAmount).startsWith(curr)
+      ? totalAmount
+      : `${curr}${totalAmount}`);
+
+  const resolvedInvoiceUrl = invoiceUrl || documentUrl || 'https://www.hotelmantri.com';
 
   const components = [];
 

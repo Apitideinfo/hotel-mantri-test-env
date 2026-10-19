@@ -44,6 +44,10 @@ export interface ChannelRateMapping {
   external_room_name?: string | null;
   external_rate_plan_code?: string | null;
   external_rate_plan_name?: string | null;
+  channel_room_code?: string | null;
+  channel_room_name?: string | null;
+  channel_rate_plan_code?: string | null;
+  channel_rate_plan_name?: string | null;
   status: 'mapped' | 'unmapped' | 'error';
   is_active: boolean;
   mapping_error: string | null;
@@ -96,11 +100,16 @@ export interface ChannelSyncLog {
   id: string;
   hotel_id: string;
   channel_connection_id: string | null;
+  channel_name?: string | null;
   log_type: string;
   direction: string;
   status: string;
   message: string | null;
   error_detail: string | null;
+  error_details?: string | null;
+  duration_ms?: number | null;
+  attempt_count?: number;
+  payload?: any;
   room_category_id: string | null;
   date_range: string | null;
   created_at: string;
@@ -178,29 +187,31 @@ export const saveChannelConnection = async (
   input: Omit<ChannelConnection, 'id' | 'hotel_id' | 'created_at' | 'updated_at'>,
   id?: string
 ): Promise<ChannelConnection> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId() };
   if (id) {
-    const { data, error } = await supabase
-      .from('channel_connections')
-      .update({ ...payload, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    return data as ChannelConnection;
+    const res = await apiFetch(`/api/channels/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        externalChannelId: input.external_channel_id,
+        isEnabled: input.is_enabled,
+        status: input.status,
+        connectionStatus: input.connection_status
+      })
+    });
+    return res as ChannelConnection;
   }
-  const { data, error } = await supabase
-    .from('channel_connections')
-    .insert(payload)
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data as ChannelConnection;
+  const res: any = await apiFetch('/api/channels', {
+    method: 'POST',
+    body: JSON.stringify({
+      channelType: input.channel_type,
+      displayName: input.channel_name,
+      externalChannelId: input.external_channel_id
+    })
+  });
+  return res.channel;
 };
 
 export const deleteChannelConnection = async (id: string): Promise<void> => {
-  const { error } = await supabase.from('channel_connections').delete().eq('id', id);
-  if (error) throw error;
+  await apiFetch(`/api/channels/${id}`, { method: 'DELETE' });
 };
 
 // ── Rate Plan Mappings ──
@@ -219,24 +230,25 @@ export const saveChannelRateMapping = async (
   input: Omit<ChannelRateMapping, 'id' | 'hotel_id' | 'created_at' | 'updated_at'>,
   id?: string
 ): Promise<ChannelRateMapping> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId() };
-  if (id) {
-    const { data, error } = await supabase
-      .from('channel_rate_mappings')
-      .update({ ...payload, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-    return data as ChannelRateMapping;
+  const channelConnectionId = input.channel_connection_id;
+  if (!channelConnectionId) {
+    throw new Error('channel_connection_id is required to save rate mapping');
   }
-  const { data, error } = await supabase
-    .from('channel_rate_mappings')
-    .insert(payload)
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data as ChannelRateMapping;
+  const payload = {
+    id,
+    roomCategoryId: input.room_category_id,
+    ratePlanId: input.rate_plan_id,
+    externalRoomCode: input.external_room_code,
+    externalRoomName: input.external_room_name,
+    externalRatePlanCode: input.external_rate_plan_code,
+    externalRatePlanName: input.external_rate_plan_name,
+    isActive: input.is_active
+  };
+  const res: any = await apiFetch(`/api/channels/${channelConnectionId}/mappings`, {
+    method: 'POST',
+    body: JSON.stringify({ mappings: [payload] })
+  });
+  return res.mappings[0];
 };
 
 export const deleteChannelRateMapping = async (id: string): Promise<void> => {
@@ -844,54 +856,60 @@ export const insertSyncLog = async (
   if (error) throw error;
 };
 
-export const retrySyncLog = async (log: ChannelSyncLog): Promise<void> => {
-  const { error: updateError } = await supabase
-    .from('channel_sync_logs')
-    .update({ retry_status: 'retried', retry_count: (log.retry_count ?? 0) + 1 })
-    .eq('id', log.id)
-    .eq('hotel_id', getCurrentHotelId());
-  if (updateError) throw updateError;
-  await insertSyncLog({
-    channel_connection_id: log.channel_connection_id,
-    log_type: log.log_type,
-    direction: log.direction,
-    status: 'pending',
-    message: `Retry requested${log.message ? `: ${log.message}` : ''}`,
-    error_detail: null,
-    room_category_id: log.room_category_id,
-    date_range: log.date_range,
-    retry_status: 'queued',
-    retry_count: 0,
+export const retrySyncLog = async (logOrId: string | ChannelSyncLog): Promise<any> => {
+  const logId = typeof logOrId === 'string' ? logOrId : logOrId.id;
+  return await apiFetch(`/api/channels/sync/retry/${logId}`, {
+    method: 'POST'
   });
 };
 
-// ── Channel Settings ──
+// ── Channel Settings (Backend Secured) ──
 
 export const getChannelSettings = async (): Promise<ChannelSettings | null> => {
-  const { data, error } = await supabase
-    .from('channel_settings')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .maybeSingle();
-  if (error) throw error;
-  return data as ChannelSettings | null;
+  try {
+    const res: any = await apiFetch('/api/channels/settings');
+    if (!res || !res.settings) return null;
+    const s = res.settings;
+    return {
+      id: s.id || '',
+      hotel_id: s.hotelId || getCurrentHotelId(),
+      api_base_url: s.apiBaseUrl || '',
+      api_key_secret_name: null,
+      property_id: s.hotelCode || null,
+      environment: s.environment || 'production',
+      status: s.status || 'disconnected',
+      last_tested_at: s.lastTestedAt || null,
+      last_test_result: s.lastTestResult || null,
+      created_at: '',
+      updated_at: '',
+      aiosell_hotel_code: s.hotelCode || null,
+      aiosell_partner_id: s.partnerId || null,
+      aiosell_environment: s.environment || 'production',
+      aiosell_status: s.status || 'disconnected'
+    } as any;
+  } catch (err) {
+    console.warn('[api-channel] Failed to fetch channel settings from API:', err);
+    return null;
+  }
 };
 
 export const saveChannelSettings = async (
-  input: Omit<ChannelSettings, 'id' | 'hotel_id' | 'created_at' | 'updated_at' | 'last_tested_at' | 'last_test_result'>
-): Promise<ChannelSettings> => {
-  // Extract and omit `id` if it was accidentally passed in through spread
-  const { id, ...cleanInput } = input as any;
-  const payload = { ...cleanInput, hotel_id: getCurrentHotelId(), updated_at: new Date().toISOString() };
-  
-  const { data, error } = await supabase
-    .from('channel_settings')
-    .upsert(payload, { onConflict: 'hotel_id' })
-    .select('*')
-    .single();
-    
-  if (error) throw error;
-  return data as ChannelSettings;
+  input: {
+    hotelCode?: string;
+    partnerId?: string;
+    environment?: 'test' | 'production';
+    apiBaseUrl?: string;
+  } | any
+): Promise<any> => {
+  const hotelCode = input.hotelCode || input.aiosell_hotel_code || input.property_id;
+  const partnerId = input.partnerId || input.aiosell_partner_id;
+  const environment = input.environment || input.aiosell_environment || 'production';
+  const apiBaseUrl = input.apiBaseUrl || input.api_base_url;
+
+  return await apiFetch('/api/channels/settings', {
+    method: 'POST',
+    body: JSON.stringify({ hotelCode, partnerId, environment, apiBaseUrl })
+  });
 };
 
 export const updateChannelSettingsStatus = async (
@@ -908,6 +926,45 @@ export const updateChannelSettingsStatus = async (
   if (testResult !== undefined) payload.last_test_result = testResult;
   const { error } = await supabase.from('channel_settings').update(payload).eq('id', existing.id);
   if (error) throw error;
+};
+
+export const fetchMappingValidation = async (channelId: string): Promise<{
+  success: boolean;
+  channelId: string;
+  mappingStatus: string;
+  isComplete: boolean;
+  canPush: boolean;
+  totalCategories: number;
+  mappedCategories: number;
+  unmappedCategories: number;
+  missingCategories: { id: string; name: string }[];
+  missingRatePlans: { id: string; name: string }[];
+  validationErrors: string[];
+}> => {
+  return await apiFetch(`/api/channels/${channelId}/mapping-validation`);
+};
+
+export const fetchChannelAuditHistory = async (): Promise<any[]> => {
+  const res: any = await apiFetch('/api/channels/audit-history');
+  return res.logs || [];
+};
+
+export const fetchSyncLogsPaginated = async (params: {
+  channelId?: string;
+  logType?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ logs: ChannelSyncLog[]; totalCount: number }> => {
+  const q = new URLSearchParams();
+  if (params.channelId) q.set('channelId', params.channelId);
+  if (params.logType) q.set('logType', params.logType);
+  if (params.status) q.set('status', params.status);
+  if (params.limit) q.set('limit', String(params.limit));
+  if (params.offset) q.set('offset', String(params.offset));
+
+  const res: any = await apiFetch(`/api/channels/sync/logs?${q.toString()}`);
+  return { logs: res.logs || [], totalCount: res.totalCount || 0 };
 };
 
 // ── Aiosell Endpoints (Proxy to Backend) ──
@@ -966,6 +1023,64 @@ export const getInventoryMatrix = async (startDate: string, endDate: string): Pr
   return apiFetch('/api/aiosell/inventory/matrix', {
     method: 'POST',
     body: JSON.stringify({ startDate, endDate })
+  });
+};
+
+export interface OtaPushResult {
+  channelId: string;
+  channelName: string;
+  channelType: string;
+  status: 'success' | 'failed' | 'skipped';
+  message: string;
+  durationMs: number;
+  datesCount: number;
+}
+
+export interface OtaPushSummary {
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+}
+
+export const pushRatesToChannels = async (payload: {
+  startDate: string;
+  endDate: string;
+  channelIds?: string[];
+  rateOverrides?: Array<{
+    room_category_id: string;
+    rate_plan_id?: string;
+    base_rate: number;
+    min_nights?: number;
+    stop_sell?: boolean;
+  }>;
+}): Promise<{
+  success: boolean;
+  summary: OtaPushSummary;
+  perOtaResults: OtaPushResult[];
+  error?: string;
+}> => {
+  return await apiFetch('/api/channels/sync/rates', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
+};
+
+export const pushInventoryToChannels = async (payload: {
+  startDate: string;
+  endDate: string;
+  channelIds?: string[];
+  roomCategoryId?: string;
+  adjustments?: Record<string, { delta?: number; stopSell?: boolean }>;
+}): Promise<{
+  success: boolean;
+  summary: OtaPushSummary;
+  perOtaResults: OtaPushResult[];
+  error?: string;
+}> => {
+  return await apiFetch('/api/channels/sync/inventory', {
+    method: 'POST',
+    body: JSON.stringify(payload)
   });
 };
 
