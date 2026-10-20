@@ -425,7 +425,9 @@ const SidebarContent = ({
       items = items.filter((item) => !restricted.includes(item.id));
     }
 
-    if (enabledFeatures) {
+    const isSuperAdminRole = role === 'super_admin' || role === 'company_user';
+
+    if (enabledFeatures && !isSuperAdminRole) {
       items = items.filter((item) => {
         if (item.id === 'dashboard' && enabledFeatures.dashboard === false) return false;
         if (item.id === 'operations-board' && enabledFeatures.room_chart === false) return false;

@@ -6,7 +6,9 @@ import {
 import { getEnterpriseHotels, getChannelManagerHotelStatuses } from '../api';
 import type { EnterpriseHotel, ChannelManagerHotelStatus } from '../types';
 import { SuperAdminOtaConfig } from './SuperAdminOtaConfig';
+import { ChannelManager } from '@/screens/channel/ChannelManager';
 import { setCurrentHotelId } from '@/lib/api';
+import { useHotel } from '@/lib/hotel-context';
 import { PageHeader, Card, LoadingState, ErrorState } from '../ui';
 
 interface Props {
@@ -15,12 +17,14 @@ interface Props {
 }
 
 export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
+  const { setSelectedHotel } = useHotel();
   const [hotels, setHotels] = useState<EnterpriseHotel[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<Record<string, ChannelManagerHotelStatus>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [selectedHotelId, setSelectedHotelId] = useState<string | null>(initialHotelId ?? null);
+  const [propertyViewMode, setPropertyViewMode] = useState<'channel_manager' | 'ota_config'>('channel_manager');
 
   const loadData = useCallback(async () => {
     try {
@@ -48,16 +52,18 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
   useEffect(() => {
     if (selectedHotelId) {
       setCurrentHotelId(selectedHotelId);
+      setSelectedHotel(selectedHotelId).catch(console.error);
     } else {
       setCurrentHotelId(null);
     }
-  }, [selectedHotelId]);
+  }, [selectedHotelId, setSelectedHotel]);
 
   const selectedHotel = hotels.find((h) => h.id === selectedHotelId);
 
   const handleSelectHotel = (hotelId: string) => {
     setSelectedHotelId(hotelId);
     setCurrentHotelId(hotelId);
+    setSelectedHotel(hotelId).catch(console.error);
   };
 
   const handleDeselect = () => {
@@ -94,12 +100,106 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
   // If a hotel is selected, render Superadmin configuration view for that hotel
   if (selectedHotelId && selectedHotel) {
     return (
-      <SuperAdminOtaConfig
-        hotel={selectedHotel}
-        allHotels={hotels}
-        onSelectHotel={handleSelectHotel}
-        onBackToProperties={handleDeselect}
-      />
+      <div className="space-y-4">
+        {/* Superadmin Hotel Header & Switcher Bar */}
+        <div className="bg-gradient-to-r from-amber-100/90 via-amber-50/70 to-white border-2 border-amber-300/80 text-slate-900 rounded-2xl p-4 shadow-card flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleDeselect}
+              className="px-3.5 py-2 bg-gradient-to-r from-amber-500 via-amber-600 to-amber-700 text-white hover:from-amber-600 hover:to-amber-800 border border-amber-400/40 rounded-xl transition shadow-gold-glow flex items-center gap-1.5 text-xs font-extrabold cursor-pointer"
+            >
+              <ChevronLeft className="w-4 h-4 text-white" /> All Properties
+            </button>
+
+            <div className="h-6 w-px bg-amber-300/70 hidden sm:block" />
+
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-extrabold text-amber-950">{selectedHotel.hotel_name}</h2>
+                {selectedHotel.property_code && (
+                  <span className="text-[10px] font-mono bg-gradient-to-r from-amber-500 to-amber-600 text-white px-2.5 py-0.5 rounded-full font-extrabold shadow-xs">
+                    {selectedHotel.property_code}
+                  </span>
+                )}
+                <span className="text-[10px] uppercase font-black bg-purple-100 text-purple-800 border border-purple-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                  Super Admin Full Access
+                </span>
+              </div>
+              <p className="text-xs font-semibold text-amber-800/80">
+                {selectedHotel.city}, {selectedHotel.state} · Owner: <span className="font-extrabold text-slate-900">{selectedHotel.owner_name}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 ml-auto flex-wrap">
+            {/* View Mode Switcher */}
+            <div className="flex items-center bg-white/90 p-1 rounded-xl border border-amber-300/80 shadow-xs">
+              <button
+                type="button"
+                onClick={() => setPropertyViewMode('channel_manager')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition cursor-pointer ${
+                  propertyViewMode === 'channel_manager'
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-amber-900 hover:bg-amber-100/60'
+                }`}
+              >
+                Channel Manager (All Options)
+              </button>
+              <button
+                type="button"
+                onClick={() => setPropertyViewMode('ota_config')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition cursor-pointer ${
+                  propertyViewMode === 'ota_config'
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-amber-900 hover:bg-amber-100/60'
+                }`}
+              >
+                Central OTA & Credentials
+              </button>
+            </div>
+
+            {/* Quick Hotel Switcher Dropdown */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-amber-900 font-extrabold hidden md:inline">Switch:</span>
+              <select
+                value={selectedHotelId}
+                onChange={(e) => handleSelectHotel(e.target.value)}
+                className="bg-amber-50/80 text-slate-900 border border-amber-300 text-xs font-bold rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-xs max-w-[200px]"
+              >
+                {hotels.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.hotel_name} ({h.city})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={loadData}
+              className="p-2 bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 rounded-xl transition shadow-xs cursor-pointer"
+              title="Refresh Properties"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Selected Mode View */}
+        {propertyViewMode === 'channel_manager' ? (
+          <ChannelManager
+            mode="super_admin"
+            hotelId={selectedHotel.id}
+            onBack={handleDeselect}
+          />
+        ) : (
+          <SuperAdminOtaConfig
+            hotel={selectedHotel}
+            allHotels={hotels}
+            onSelectHotel={handleSelectHotel}
+            onBackToProperties={handleDeselect}
+          />
+        )}
+      </div>
     );
   }
 

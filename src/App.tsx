@@ -920,7 +920,8 @@ function AppInner() {
       }
     }
 
-    if (features) {
+    const isSuperAdminUser = role === 'super_admin' || role === 'company_user' || isSuperAdmin;
+    if (features && !isSuperAdminUser) {
       if (screen === 'dashboard' && features.dashboard === false) {
         go('operations', { date: nav.date });
         return;
@@ -1163,7 +1164,11 @@ function AppInner() {
             <ReservationBoard onBack={back} initialView="list" />
           )}
           {nav.screen === 'channel-manager' && (
-            <ChannelManager onBack={back} onNavigate={go} />
+            <ChannelManager
+              onBack={back}
+              onNavigate={go}
+              mode={(isSuperAdmin || role === 'super_admin' || role === 'company_user') ? 'super_admin' : 'hotel_owner'}
+            />
           )}
           {nav.screen === 'laundry-linen' && (
             <LaundryLinenScreen onBack={back} />
