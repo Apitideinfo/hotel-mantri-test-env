@@ -47,6 +47,7 @@ interface ChannelManagerProps {
   onBack?: () => void;
   onNavigate?: (screen: string, payload?: unknown) => void;
   mode?: 'hotel_owner' | 'super_admin';
+  hotelId?: string;
 }
 
 type Tab = 'rate_push' | 'inventory_push' | 'logs' | 'overview' | 'channels' | 'inventory' | 'reservations' | 'mapping' | 'settings' | 'diagnostics';
@@ -115,9 +116,23 @@ const availColor = (avail: number, total: number, stopSell: boolean): string => 
 // MAIN COMPONENT
 // ══════════════════════════════════════════════════════════════════
 
-export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: ChannelManagerProps) => {
-  const isHotelOwner = mode === 'hotel_owner';
-  const { hotelId, hotel, isSuperAdmin: isSuperAdminUser, status: hotelStatus, error: hotelError, refreshHotelContext } = useHotel();
+export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId }: ChannelManagerProps) => {
+  const { hotelId: contextHotelId, hotel, isSuperAdmin: isSuperAdminUser, status: hotelStatus, error: hotelError, refreshHotelContext } = useHotel();
+  const hotelId = propHotelId || contextHotelId;
+  const isSuperAdmin = isSuperAdminUser || mode === 'super_admin';
+  const [effectiveMode, setEffectiveMode] = useState<'hotel_owner' | 'super_admin'>(
+    mode ?? (isSuperAdmin ? 'super_admin' : 'hotel_owner')
+  );
+
+  useEffect(() => {
+    if (mode) {
+      setEffectiveMode(mode);
+    } else if (isSuperAdmin) {
+      setEffectiveMode('super_admin');
+    }
+  }, [mode, isSuperAdmin]);
+
+  const isHotelOwner = effectiveMode === 'hotel_owner' && !isSuperAdmin;
   const [showHotelSelector, setShowHotelSelector] = useState(false);
   const [ownerNotice, setOwnerNotice] = useState<string | null>(null);
 
@@ -240,6 +255,8 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
     { key: 'overview', label: 'Overview', icon: <Radio className="w-4 h-4" /> },
     { key: 'channels', label: 'Channels', icon: <Wifi className="w-4 h-4" /> },
     { key: 'inventory', label: 'Inventory & Rates', icon: <Calendar className="w-4 h-4" /> },
+    { key: 'rate_push', label: 'Rate Push', icon: <Tag className="w-4 h-4" /> },
+    { key: 'inventory_push', label: 'Inventory Push', icon: <Calendar className="w-4 h-4" /> },
     { key: 'reservations', label: 'OTA Reservations', icon: <FileText className="w-4 h-4" /> },
     { key: 'mapping', label: 'Room & Rate Mapping', icon: <Link2 className="w-4 h-4" /> },
     { key: 'logs', label: 'Sync Logs', icon: <Zap className="w-4 h-4" /> },
@@ -345,11 +362,43 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
                 </button>
               )}
             </div>
-            <p className="text-sm text-slate-400 mt-0.5">
-              Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Not Connected'}
-              {isHotelOwner && <span className="ml-2 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">Owner Access</span>}
-              {!isHotelOwner && <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Superadmin View</span>}
-            </p>
+            <div className="text-sm text-slate-400 mt-0.5 flex items-center flex-wrap gap-2">
+              <span>Channel integration · {overview?.isLiveMode ? 'Live Sync Active' : 'Not Connected'}</span>
+              {isHotelOwner && <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-medium">Owner Access</span>}
+              {!isHotelOwner && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded font-semibold">Super Admin (All Options)</span>}
+              {isSuperAdmin && (
+                <span className="inline-flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEffectiveMode('super_admin');
+                      setTab('overview');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+                      effectiveMode === 'super_admin'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Super Admin View
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEffectiveMode('hotel_owner');
+                      setTab('rate_push');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[11px] font-bold transition cursor-pointer ${
+                      effectiveMode === 'hotel_owner'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Owner View
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -501,88 +550,6 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
                 onBulkUpdate={() => setOwnerBulkOpen(true)}
               />
             )}
-            {ownerBulkOpen && (
-              <BulkUpdateDrawer
-                categories={overview.categories}
-                defaultStart={new Date().toISOString().slice(0, 10)}
-                defaultEnd={addDays(new Date().toISOString().slice(0, 10), 6)}
-                hotelId={hotelId}
-                onClose={() => setOwnerBulkOpen(false)}
-                onSuccess={async (result?: any) => {
-                  await load();
-                  if (!result) {
-                    setOwnerBulkOpen(false);
-                    return;
-                  }
-                  const extSync = result.externalSync;
-                  const status = extSync?.status;
-                  if (status === 'VERIFIED' || (result.allVerified && extSync?.success)) {
-                    setOwnerBulkOpen(false);
-                    setOwnerSyncNotice({
-                      title: 'Inventory & Rates Updated and Verified',
-                      message: result.message || 'Authoritative rates and inventory were saved to PMS and verified with the external channel manager.',
-                      type: 'success'
-                    });
-                  } else if (status === 'NOT_CONFIGURED') {
-                    setOwnerBulkOpen(false);
-                    setOwnerSyncNotice({
-                      title: 'PMS Saved (Local Only)',
-                      message: 'Authoritative inventory and rates were saved to the PMS database. Channel manager integration is not configured for this hotel, so external channels were not updated.',
-                      type: 'info'
-                    });
-                  } else if (status === 'PARTIAL_SUCCESS') {
-                    setOwnerBulkOpen(false);
-                    setOwnerSyncNotice({
-                      title: 'Partial Success',
-                      message: extSync?.message || result.message || 'Some updates were applied but not all could be verified with the channel manager.',
-                      type: 'warning'
-                    });
-                  } else if (extSync && !extSync.success) {
-                    setOwnerBulkOpen(false);
-                    setOwnerSyncNotice({
-                      title: 'Saved Locally — Channel Sync Failed',
-                      message: extSync.message || result.message || 'Data was saved to PMS but could not be pushed to external channels.',
-                      type: 'warning',
-                      details: extSync.failureReasons?.join('\n') || undefined
-                    });
-                  } else {
-                    setOwnerBulkOpen(false);
-                    setOwnerSyncNotice({
-                      title: 'Bulk Update Saved',
-                      message: result.message || `${result.updatedCount || 0} records updated successfully.`,
-                      type: 'success'
-                    });
-                  }
-                }}
-              />
-            )}
-            {ownerSyncNotice && (
-              <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
-                <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-scale-in">
-                  <div className="flex items-center gap-3">
-                    {ownerSyncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
-                    {ownerSyncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
-                    {ownerSyncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
-                    {ownerSyncNotice.type === 'info' && <Info className="w-6 h-6 text-blue-600 flex-shrink-0" />}
-                    <h4 className="text-base font-bold text-slate-900">{ownerSyncNotice.title}</h4>
-                  </div>
-                  <p className="text-sm text-slate-600 leading-relaxed">{ownerSyncNotice.message}</p>
-                  {ownerSyncNotice.details && (
-                    <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono whitespace-pre-wrap">
-                      {ownerSyncNotice.details}
-                    </pre>
-                  )}
-                  <div className="flex justify-end pt-2">
-                    <button
-                      onClick={() => setOwnerSyncNotice(null)}
-                      className="px-4 py-2 text-xs font-semibold rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition"
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
             {tab === 'logs' && (
               <OwnerSyncLogsTab
                 key={hotelId || 'logs'}
@@ -594,7 +561,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           </>
         ) : (
           <>
-            {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={mode} />}
+            {tab === 'overview' && <OverviewTab overview={overview} onNavigate={onNavigate} onTab={setTab} mode={effectiveMode} />}
             {tab === 'channels' && (
               <ChannelsDashboard
                 key={hotelId || 'channels'}
@@ -609,6 +576,27 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
               />
             )}
             {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
+            {tab === 'rate_push' && (
+              <OwnerRatePushTab
+                key={hotelId || 'rate_push'}
+                categories={overview.categories}
+                ratePlans={overview.ratePlans}
+                connections={overview.connections}
+                mappings={overview.mappings}
+                onRefresh={load}
+                onBulkUpdate={() => setOwnerBulkOpen(true)}
+              />
+            )}
+            {tab === 'inventory_push' && (
+              <OwnerInventoryPushTab
+                key={hotelId || 'inventory_push'}
+                categories={overview.categories}
+                connections={overview.connections}
+                mappings={overview.mappings}
+                onRefresh={load}
+                onBulkUpdate={() => setOwnerBulkOpen(true)}
+              />
+            )}
             {tab === 'reservations' && <ReservationsTab key={hotelId || 'reservations'} reservations={overview.otaReservations} onChanged={load} />}
             {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
             {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
@@ -617,6 +605,92 @@ export const ChannelManager = ({ onBack, onNavigate, mode = 'hotel_owner' }: Cha
           </>
         )
       ) : null}
+
+      {/* Global Bulk Update Drawer (accessible from both views) */}
+      {overview && ownerBulkOpen && (
+        <BulkUpdateDrawer
+          categories={overview.categories}
+          defaultStart={new Date().toISOString().slice(0, 10)}
+          defaultEnd={addDays(new Date().toISOString().slice(0, 10), 6)}
+          hotelId={hotelId}
+          onClose={() => setOwnerBulkOpen(false)}
+          onSuccess={async (result?: any) => {
+            await load();
+            if (!result) {
+              setOwnerBulkOpen(false);
+              return;
+            }
+            const extSync = result.externalSync;
+            const status = extSync?.status;
+            if (status === 'VERIFIED' || (result.allVerified && extSync?.success)) {
+              setOwnerBulkOpen(false);
+              setOwnerSyncNotice({
+                title: 'Inventory & Rates Updated and Verified',
+                message: result.message || 'Authoritative rates and inventory were saved to PMS and verified with the external channel manager.',
+                type: 'success'
+              });
+            } else if (status === 'NOT_CONFIGURED') {
+              setOwnerBulkOpen(false);
+              setOwnerSyncNotice({
+                title: 'PMS Saved (Local Only)',
+                message: 'Authoritative inventory and rates were saved to the PMS database. Channel manager integration is not configured for this hotel, so external channels were not updated.',
+                type: 'info'
+              });
+            } else if (status === 'PARTIAL_SUCCESS') {
+              setOwnerBulkOpen(false);
+              setOwnerSyncNotice({
+                title: 'Partial Success',
+                message: extSync?.message || result.message || 'Some updates were applied but not all could be verified with the channel manager.',
+                type: 'warning'
+              });
+            } else if (extSync && !extSync.success) {
+              setOwnerBulkOpen(false);
+              setOwnerSyncNotice({
+                title: 'Saved Locally — Channel Sync Failed',
+                message: extSync.message || result.message || 'Data was saved to PMS but could not be pushed to external channels.',
+                type: 'warning',
+                details: extSync.failureReasons?.join('\n') || undefined
+              });
+            } else {
+              setOwnerBulkOpen(false);
+              setOwnerSyncNotice({
+                title: 'Bulk Update Saved',
+                message: result.message || `${result.updatedCount || 0} records updated successfully.`,
+                type: 'success'
+              });
+            }
+          }}
+        />
+      )}
+
+      {/* Global Sync Notification Modal */}
+      {ownerSyncNotice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-scale-in">
+            <div className="flex items-center gap-3">
+              {ownerSyncNotice.type === 'success' && <CheckCircle2 className="w-6 h-6 text-emerald-600 flex-shrink-0" />}
+              {ownerSyncNotice.type === 'warning' && <AlertTriangle className="w-6 h-6 text-amber-600 flex-shrink-0" />}
+              {ownerSyncNotice.type === 'error' && <XCircle className="w-6 h-6 text-red-600 flex-shrink-0" />}
+              {ownerSyncNotice.type === 'info' && <Info className="w-6 h-6 text-blue-600 flex-shrink-0" />}
+              <h4 className="text-base font-bold text-slate-900">{ownerSyncNotice.title}</h4>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">{ownerSyncNotice.message}</p>
+            {ownerSyncNotice.details && (
+              <pre className="max-h-48 overflow-auto p-3 bg-slate-900 text-slate-100 text-xs rounded-xl font-mono whitespace-pre-wrap">
+                {ownerSyncNotice.details}
+              </pre>
+            )}
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setOwnerSyncNotice(null)}
+                className="px-4 py-2 text-xs font-semibold rounded-xl bg-amber-500 text-white hover:bg-amber-600 transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isSuperAdminUser && (
         <HotelSelectorModal
