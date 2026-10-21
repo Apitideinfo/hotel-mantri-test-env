@@ -10,6 +10,7 @@ import { AppShell } from '@/components/AppShell';
 import { getTodayLocal } from '@/lib/calc';
 import { supabase } from '@/lib/supabase';
 import { triggerLiveSync } from '@/lib/externalChannelSyncService';
+import { realtimeManager } from '@/lib/realtimeManager';
 
 
 type PublicView =
@@ -450,60 +451,14 @@ function AppInner() {
     }
   }, [hotelId, hotelStatus]);
 
-  // Realtime subscription for instant updates when reservations or OTA bookings change
+  // Coordinated Realtime lifecycle management with exponential backoff & polling fallback
   useEffect(() => {
-    if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
-
-    const channel = supabase
-      .channel(`hotel_mantri_realtime_${hotelId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'reservations', filter: `hotel_id=eq.${hotelId}` },
-        (payload) => {
-          window.dispatchEvent(
-            new CustomEvent('hotel_mantri_reservations_updated', {
-              detail: { source: 'realtime_reservations', payload },
-            })
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'channel_ota_reservations', filter: `hotel_id=eq.${hotelId}` },
-        (payload) => {
-          window.dispatchEvent(
-            new CustomEvent('hotel_mantri_reservations_updated', {
-              detail: { source: 'realtime_ota', payload },
-            })
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'room_chart_entries', filter: `hotel_id=eq.${hotelId}` },
-        (payload) => {
-          window.dispatchEvent(
-            new CustomEvent('hotel_mantri_reservations_updated', {
-              detail: { source: 'realtime_room_chart_entries', payload },
-            })
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
-        (payload) => {
-          window.dispatchEvent(
-            new CustomEvent('hotel_mantri_availability_updated', {
-              detail: { source: 'realtime_channel_inventory_restrictions', payload },
-            })
-          );
-        }
-      )
-      .subscribe();
+    const isReady = Boolean(hotelId && hotelStatus === 'HOTEL_CONTEXT_READY');
+    realtimeManager.connect(hotelId, isReady);
 
     return () => {
-      supabase.removeChannel(channel);
+      // Graceful cleanup on unmount or hotel change
+      realtimeManager.disconnect();
     };
   }, [hotelId, hotelStatus]);
 

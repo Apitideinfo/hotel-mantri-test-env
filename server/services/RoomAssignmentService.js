@@ -159,6 +159,7 @@ export const createReservationsAtomically = async ({
   items,
   userId = null,
   allowEmptyEmail = false,
+  allowBackdated = false,
   idempotencyKey = null,
 }) => {
   if (!hotelId) {
@@ -181,6 +182,7 @@ export const createReservationsAtomically = async ({
 
   // 1. Date and Room Integrity Check
   const assignedPhysicalRooms = new Set();
+  const todayKolkata = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
 
   for (const item of rawList) {
     const ci = String(item.check_in_date || '').slice(0, 10);
@@ -194,6 +196,21 @@ export const createReservationsAtomically = async ({
         status: 400,
         code: 'INVALID_STAY_DATES',
         message: `Check-out date (${co}) must be strictly after check-in date (${ci}).`,
+      };
+    }
+
+    const isBackdatedAllowed = Boolean(
+      allowBackdated ||
+      item.allowBackdated ||
+      item.allow_backdated ||
+      item.is_backdated ||
+      item.source_category === 'Historical'
+    );
+    if (ci < todayKolkata && !isBackdatedAllowed) {
+      throw {
+        status: 400,
+        code: 'PAST_CHECK_IN_DATE',
+        message: `Check-in date (${ci}) cannot be in the past for new bookings (Current hotel business date: ${todayKolkata}) unless authorized as a backdated entry.`,
       };
     }
 

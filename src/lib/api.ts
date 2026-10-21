@@ -193,13 +193,18 @@ export const deleteCompanySource = async (id: string): Promise<void> => {
 
 // ---- Room categories ----
 
-export const getRoomCategories = async (): Promise<RoomCategory[]> => {
+export const getRoomCategories = async (hotelId?: string, onlyActive: boolean = false): Promise<RoomCategory[]> => {
   try {
-    const { data, error } = await supabase
+    const targetHotelId = hotelId || getCurrentHotelId();
+    let query = supabase
       .from('room_categories')
       .select('*')
-      .eq('hotel_id', getCurrentHotelId())
+      .eq('hotel_id', targetHotelId)
       .order('sort_order', { ascending: true });
+    if (onlyActive) {
+      query = query.eq('is_active', true);
+    }
+    const { data, error } = await query;
     if (!error && data) return data as RoomCategory[];
     if (error) console.warn('Error fetching room categories:', error.message);
   } catch (err: any) {
@@ -210,12 +215,13 @@ export const getRoomCategories = async (): Promise<RoomCategory[]> => {
 
 export const upsertRoomCategory = async (
   name: string, id?: string,
-  defaults?: { default_tariff?: number; extra_bed_charge?: number }
+  defaults?: { default_tariff?: number; extra_bed_charge?: number; is_active?: boolean }
 ): Promise<RoomCategory> => {
   if (id) {
     const patch: Record<string, unknown> = { name: name.trim() };
     if (defaults?.default_tariff !== undefined) patch.default_tariff = defaults.default_tariff;
     if (defaults?.extra_bed_charge !== undefined) patch.extra_bed_charge = defaults.extra_bed_charge;
+    if (defaults?.is_active !== undefined) patch.is_active = defaults.is_active;
     const { data, error } = await supabase
       .from('room_categories')
       .update(patch)
@@ -239,6 +245,7 @@ export const upsertRoomCategory = async (
       hotel_id: getCurrentHotelId(), name: name.trim(), sort_order: nextOrder,
       default_tariff: defaults?.default_tariff ?? 0,
       extra_bed_charge: defaults?.extra_bed_charge ?? 0,
+      is_active: defaults?.is_active ?? true,
     })
     .select('*')
     .single();
@@ -246,9 +253,46 @@ export const upsertRoomCategory = async (
   return data as RoomCategory;
 };
 
-export const deleteRoomCategory = async (id: string): Promise<void> => {
-  const { error } = await supabase.from('room_categories').delete().eq('id', id);
+export const toggleRoomCategoryStatus = async (id: string, isActive: boolean): Promise<RoomCategory> => {
+  const { data, error } = await supabase
+    .from('room_categories')
+    .update({ is_active: isActive })
+    .eq('id', id)
+    .select('*')
+    .single();
   if (error) throw error;
+  return data as RoomCategory;
+};
+
+export const deleteRoomCategory = async (id: string): Promise<{ softDeleted: boolean }> => {
+  // Check if any rooms use this category
+  const { count: roomCount } = await supabase
+    .from('rooms')
+    .select('id', { count: 'exact', head: true })
+    .eq('category_id', id);
+
+  if (roomCount && roomCount > 0) {
+    // Soft delete to protect room assignments, audit records and historical integrity
+    const { error } = await supabase
+      .from('room_categories')
+      .update({ is_active: false })
+      .eq('id', id);
+    if (error) throw error;
+    return { softDeleted: true };
+  }
+
+  // Safe to attempt hard delete if no rooms are linked
+  const { error } = await supabase.from('room_categories').delete().eq('id', id);
+  if (error) {
+    // Fallback to soft delete if constrained by historical restrictions or reservations
+    const { error: softErr } = await supabase
+      .from('room_categories')
+      .update({ is_active: false })
+      .eq('id', id);
+    if (softErr) throw error;
+    return { softDeleted: true };
+  }
+  return { softDeleted: false };
 };
 
 export const reorderRoomCategories = async (

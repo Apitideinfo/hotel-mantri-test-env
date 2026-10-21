@@ -388,12 +388,13 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   });
 
-  // 5. Get room categories to map category names
+  // 5. Get room categories to map category names (active, hotel-scoped only)
   const { data: allCategories } = await supabase
     .from('room_categories')
-    .select('id, name')
+    .select('id, name, default_tariff, extra_bed_charge, sort_order')
     .eq('hotel_id', hotelId)
-    .neq('is_active', false);
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
 
   const catNameToIdMap = {};
   (allCategories || []).forEach(c => {
@@ -568,10 +569,13 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
         blocked,
         calculatedAvailable,
         available: sellable,
+        is_unconfigured: physical === 0 && !isManual,
         stop_sell: Boolean(r?.stop_sell),
         is_manual: isManual,
         manual_availability: manualVal,
-        base_rate: r?.base_rate ?? 0,
+        base_rate: (r && r.base_rate !== undefined && r.base_rate !== null && Number(r.base_rate) > 0)
+          ? Number(r.base_rate)
+          : (Number(cat.default_tariff) || 0),
         channel_rate: r?.channel_rate ?? 0,
         min_stay: r?.min_stay ?? 1,
         max_stay: r?.max_stay ?? 0,

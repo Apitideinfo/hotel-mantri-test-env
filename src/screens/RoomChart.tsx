@@ -1417,7 +1417,7 @@ export const RoomChart = ({ date: initialDate, onBack, onSaved }: RoomChartProps
                 <div className="grid grid-cols-2 gap-3">
                   <TextField label="Room No." value={panelRow.room_no} onChange={(v) => updatePanelRow('room_no', v)} />
                   <SelectField label="Room Category" value={panelRow.room_category}
-                    options={categories.length > 0 ? categories.filter((c) => c.is_active).map((c) => c.name) : ['Standard', 'Deluxe', 'Super Deluxe', 'Executive', 'Suite', 'Family Room']}
+                    options={categories.filter((c) => c.is_active).map((c) => c.name)}
                     onChange={(v) => updatePanelRow('room_category', v)} />
                 </div>
               )}

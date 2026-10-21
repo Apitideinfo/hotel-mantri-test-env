@@ -2,14 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   ArrowLeft, Building2, Users, CreditCard, Activity, Ticket, ScrollText,
   ToggleLeft, MapPin, BedDouble, Plus, Trash2, Pencil, Power, X, Layers,
-  LogIn, KeyRound, CalendarClock, Save, FileText,
+  LogIn, KeyRound, CalendarClock, Save, FileText, Mail,
 } from 'lucide-react';
 import {
   getEnterpriseHotel, getHotelFeatures, getPayments, getTickets, getAuditLogs,
   updateEnterpriseHotel, upsertHotelFeature, resetHotelPassword, startImpersonation,
   getEnterpriseRoomCategories, createEnterpriseRoomCategory, deleteEnterpriseRoomCategory,
   getEnterpriseRooms, createEnterpriseRoom, updateEnterpriseRoom, deleteEnterpriseRoom, bulkCreateEnterpriseRooms,
-  logAudit,
+  logAudit, sendWelcomeEmail,
 } from '../api';
 import { DataManagementTab } from './DataManagementTab';
 import { SubscriptionTab } from './SubscriptionTab';
@@ -49,6 +49,8 @@ export const HotelDetailScreen = ({ hotelId, onBack, onImpersonate, onViewInvoic
   const [impersonateModal, setImpersonateModal] = useState(false);
   const [impersonateReason, setImpersonateReason] = useState('');
   const [confirmAction, setConfirmAction] = useState<{ action: string } | null>(null);
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailNotification, setEmailNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const { companyRole } = useAuth();
   const canDelete = hasPermission(companyRole, 'hotels.delete');
   const canReset = hasPermission(companyRole, 'hotels.reset');
@@ -145,6 +147,41 @@ export const HotelDetailScreen = ({ hotelId, onBack, onImpersonate, onViewInvoic
     finally { setBusy(false); setConfirmAction(null); }
   };
 
+  const handleSendWelcomeEmail = async () => {
+    if (!hotel) return;
+    try {
+      setEmailSending(true);
+      setEmailNotification(null);
+      const res = await sendWelcomeEmail({
+        hotelId: hotel.id,
+        hotelName: hotel.hotel_name,
+        ownerName: hotel.owner_name || 'Hotel Owner',
+        ownerEmail: hotel.admin_email,
+        totalRooms: hotel.total_rooms,
+        planName: hotel.subscription_status ? `${hotel.subscription_status} Plan` : undefined,
+      });
+
+      if (res.success) {
+        setEmailNotification({
+          type: 'success',
+          message: `Welcome email sent successfully to ${hotel.admin_email}${res.hasPasswordSetupLink ? ' with secure password setup link.' : '.'}`,
+        });
+      } else {
+        setEmailNotification({
+          type: 'error',
+          message: res.message || 'Failed to send welcome email. Please check SMTP settings.',
+        });
+      }
+    } catch (e) {
+      setEmailNotification({
+        type: 'error',
+        message: e instanceof Error ? e.message : 'Error sending email',
+      });
+    } finally {
+      setEmailSending(false);
+    }
+  };
+
   if (loading) return <LoadingState label="Loading hotel details…" />;
   if (error) return <ErrorState message={error} />;
   if (!hotel) return <ErrorState message="Hotel not found" />;
@@ -180,6 +217,7 @@ export const HotelDetailScreen = ({ hotelId, onBack, onImpersonate, onViewInvoic
         {/* Action buttons */}
         <div className="hidden lg:flex items-center gap-1">
           <ActionBtn title="Edit" onClick={() => setEditTarget({ ...hotel })}><Pencil className="w-4 h-4" /></ActionBtn>
+          <ActionBtn title="Send Welcome Email" onClick={handleSendWelcomeEmail} disabled={emailSending}><Mail className={`w-4 h-4 ${emailSending ? 'animate-spin' : ''}`} /></ActionBtn>
           <ActionBtn title="Create Invoice" onClick={onCreateInvoice}><FileText className="w-4 h-4" /></ActionBtn>
           <ActionBtn title="Login as Hotel" onClick={() => setImpersonateModal(true)}><LogIn className="w-4 h-4" /></ActionBtn>
           <ActionBtn title="Extend Trial" onClick={() => setExtendModal(true)}><CalendarClock className="w-4 h-4" /></ActionBtn>
@@ -191,6 +229,7 @@ export const HotelDetailScreen = ({ hotelId, onBack, onImpersonate, onViewInvoic
       {/* Mobile action row */}
       <div className="lg:hidden flex items-center gap-1 flex-wrap">
         <button onClick={() => setEditTarget({ ...hotel })} className="flex items-center gap-1 text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-1.5 rounded-lg"><Pencil className="w-3.5 h-3.5" /> Edit</button>
+        <button onClick={handleSendWelcomeEmail} disabled={emailSending} className="flex items-center gap-1 text-xs bg-sky-50 text-sky-700 font-semibold px-2.5 py-1.5 rounded-lg disabled:opacity-50"><Mail className="w-3.5 h-3.5" /> {emailSending ? 'Sending...' : 'Welcome Email'}</button>
         <button onClick={onCreateInvoice} className="flex items-center gap-1 text-xs bg-emerald-100 text-emerald-700 font-semibold px-2.5 py-1.5 rounded-lg"><FileText className="w-3.5 h-3.5" /> Invoice</button>
         <button onClick={() => setImpersonateModal(true)} className="flex items-center gap-1 text-xs bg-sky-100 text-sky-700 font-semibold px-2.5 py-1.5 rounded-lg"><LogIn className="w-3.5 h-3.5" /> Login as Hotel</button>
         <button onClick={() => setExtendModal(true)} className="flex items-center gap-1 text-xs bg-amber-100 text-amber-700 font-semibold px-2.5 py-1.5 rounded-lg"><CalendarClock className="w-3.5 h-3.5" /> Extend</button>
@@ -233,11 +272,37 @@ export const HotelDetailScreen = ({ hotelId, onBack, onImpersonate, onViewInvoic
       )}
 
       {tab === 'owner' && (
-        <Card className="p-5 space-y-3">
-          <Row label="Owner Name" value={hotel.owner_name || '—'} />
-          <Row label="Email" value={hotel.admin_email} />
-          <Row label="Mobile" value={hotel.mobile || '—'} />
-          <Row label="Last Login" value={fmtDate(hotel.last_login_at)} />
+        <Card className="p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">Owner Account Information</h3>
+              <p className="text-xs text-slate-500">Credentials and contact details for the hotel owner</p>
+            </div>
+            <button
+              onClick={handleSendWelcomeEmail}
+              disabled={emailSending}
+              className="flex items-center gap-1.5 text-xs bg-sky-50 hover:bg-sky-100 text-sky-700 font-semibold px-3 py-2 rounded-lg border border-sky-200 transition disabled:opacity-50 shrink-0 self-start sm:self-auto"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              {emailSending ? 'Sending Welcome Email...' : 'Send Welcome / Credentials Email'}
+            </button>
+          </div>
+          {emailNotification && (
+            <div className={`p-3 rounded-lg text-xs flex items-center justify-between gap-2 ${
+              emailNotification.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'
+            }`}>
+              <span>{emailNotification.message}</span>
+              <button onClick={() => setEmailNotification(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          <div className="space-y-3">
+            <Row label="Owner Name" value={hotel.owner_name || '—'} />
+            <Row label="Email" value={hotel.admin_email} />
+            <Row label="Mobile" value={hotel.mobile || '—'} />
+            <Row label="Last Login" value={fmtDate(hotel.last_login_at)} />
+          </div>
         </Card>
       )}
 

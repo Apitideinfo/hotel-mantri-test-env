@@ -6,7 +6,7 @@ import {
 import type { RoomCategory, Room, RoomInput } from '@/lib/types';
 import {
   getRoomCategories, getRooms, saveRoom, deleteRoom, bulkInsertRooms,
-  upsertRoomCategory, deleteRoomCategory,
+  upsertRoomCategory, deleteRoomCategory, toggleRoomCategoryStatus,
 } from '@/lib/api';
 import { fmtMoney, toNum } from '@/lib/calc';
 
@@ -235,11 +235,24 @@ const CategoriesView = ({ categories, setCategories, setError }: {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this category? Rooms in this category will become uncategorized but will not be deleted.')) return;
+  const handleToggleActive = async (c: RoomCategory) => {
     try {
-      await deleteRoomCategory(id);
-      setCategories((prev) => prev.filter((c) => c.id !== id));
+      const updated = await toggleRoomCategoryStatus(c.id, !c.is_active);
+      setCategories((prev) => prev.map((item) => (item.id === c.id ? updated : item)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update category status');
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to remove this category? If rooms or reservations are linked to it, it will be safely deactivated/archived to preserve operational history.')) return;
+    try {
+      const res = await deleteRoomCategory(id);
+      if (res.softDeleted) {
+        setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, is_active: false } : c)));
+      } else {
+        setCategories((prev) => prev.filter((c) => c.id !== id));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete category');
     }
@@ -286,15 +299,31 @@ const CategoriesView = ({ categories, setCategories, setError }: {
           </div>
         )}
         {categories.map((c) => (
-          <div key={c.id} className="bg-white rounded-xl border border-slate-200 p-3 flex items-center justify-between">
+          <div key={c.id} className={`bg-white rounded-xl border p-3 flex items-center justify-between ${c.is_active ? 'border-slate-200' : 'border-slate-200 bg-slate-50 opacity-70'}`}>
             <div className="flex items-center gap-3">
-              <span className={`w-2.5 h-2.5 rounded-full ${c.is_active ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+              <button
+                onClick={() => handleToggleActive(c)}
+                title={c.is_active ? 'Active — click to deactivate' : 'Inactive — click to activate'}
+                className="cursor-pointer"
+              >
+                <span className={`inline-block w-3 h-3 rounded-full ${c.is_active ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-slate-300'}`} />
+              </button>
               <div>
-                <p className="text-sm font-semibold text-slate-800">{c.name}</p>
+                <p className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                  {c.name}
+                  {!c.is_active && <span className="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-normal">Inactive</span>}
+                </p>
                 <p className="text-xs text-slate-400">₹{fmtMoney(c.default_tariff)} tariff · ₹{fmtMoney(c.extra_bed_charge)} extra bed</p>
               </div>
             </div>
             <div className="flex items-center gap-1">
+              <button
+                onClick={() => handleToggleActive(c)}
+                className={`p-2 rounded-lg transition ${c.is_active ? 'text-emerald-600 hover:bg-emerald-50' : 'text-slate-400 hover:bg-slate-100'}`}
+                title={c.is_active ? 'Deactivate category' : 'Activate category'}
+              >
+                <Power className="w-4 h-4" />
+              </button>
               <button onClick={() => startEdit(c)} className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition"><Pencil className="w-4 h-4" /></button>
               <button onClick={() => handleDelete(c.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"><Trash2 className="w-4 h-4" /></button>
             </div>

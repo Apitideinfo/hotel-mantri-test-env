@@ -173,11 +173,12 @@ export const getChannelMetadata = (type: string): { label: string; short: string
 
 // ── Channel Connections ──
 
-export const getChannelConnections = async (): Promise<ChannelConnection[]> => {
+export const getChannelConnections = async (hotelIdOverride?: string): Promise<ChannelConnection[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   const { data, error } = await supabase
     .from('channel_connections')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', targetHotelId)
     .order('created_at', { ascending: true });
   if (error) throw error;
   return (data as ChannelConnection[]) ?? [];
@@ -216,11 +217,12 @@ export const deleteChannelConnection = async (id: string): Promise<void> => {
 
 // ── Rate Plan Mappings ──
 
-export const getChannelRateMappings = async (): Promise<ChannelRateMapping[]> => {
+export const getChannelRateMappings = async (hotelIdOverride?: string): Promise<ChannelRateMapping[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   const { data, error } = await supabase
     .from('channel_rate_mappings')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', targetHotelId)
     .order('created_at', { ascending: true });
   if (error) throw error;
   return (data as ChannelRateMapping[]) ?? [];
@@ -258,11 +260,12 @@ export const deleteChannelRateMapping = async (id: string): Promise<void> => {
 
 // ── OTA Reservations ──
 
-export const getOtaReservations = async (limit = 50): Promise<ChannelOtaReservation[]> => {
+export const getOtaReservations = async (limit = 50, hotelIdOverride?: string): Promise<ChannelOtaReservation[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   const { data, error } = await supabase
     .from('channel_ota_reservations')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', targetHotelId)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (error) throw error;
@@ -309,12 +312,14 @@ export const updateOtaReservationStatus = async (
 
 export const getInventoryRestrictions = async (
   startDate: string,
-  endDate: string
+  endDate: string,
+  hotelIdOverride?: string
 ): Promise<ChannelInventoryRestriction[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   const { data, error } = await supabase
     .from('channel_inventory_restrictions')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', targetHotelId)
     .gte('date', startDate)
     .lte('date', endDate)
     .order('date', { ascending: true });
@@ -1175,15 +1180,16 @@ export interface ChannelManagerOverview {
   };
 }
 
-export const getChannelManagerOverview = async (): Promise<ChannelManagerOverview> => {
+export const getChannelManagerOverview = async (hotelIdOverride?: string): Promise<ChannelManagerOverview> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   const [connections, otaReservations, categories, ratePlans, mappings, syncLogs, settings] = await Promise.all([
-    getChannelConnections(),
-    getOtaReservations(20),
+    getChannelConnections(targetHotelId),
+    getOtaReservations(20, targetHotelId),
     (async () => {
       const { data, error } = await supabase
         .from('room_categories')
         .select('*')
-        .eq('hotel_id', getCurrentHotelId())
+        .eq('hotel_id', targetHotelId)
         .eq('is_active', true)
         .order('sort_order', { ascending: true });
       if (error) throw error;
@@ -1193,13 +1199,13 @@ export const getChannelManagerOverview = async (): Promise<ChannelManagerOvervie
       const { data, error } = await supabase
         .from('rate_plans')
         .select('*')
-        .eq('hotel_id', getCurrentHotelId())
+        .eq('hotel_id', targetHotelId)
         .eq('is_active', true)
         .order('plan_type', { ascending: true });
       if (error) throw error;
       return (data as RatePlan[]) ?? [];
     })(),
-    getChannelRateMappings(),
+    getChannelRateMappings(targetHotelId),
     getSyncLogs(50),
     getChannelSettings(),
   ]);

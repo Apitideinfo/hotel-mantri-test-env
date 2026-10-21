@@ -290,29 +290,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     };
   }, [load]);
 
-  // Realtime postgres_changes subscription for channel_inventory_restrictions
-  useEffect(() => {
-    if (!hotelId || hotelStatus !== 'HOTEL_CONTEXT_READY') return;
-    const channel = supabase
-      .channel(`ops-board-restrictions-${hotelId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'channel_inventory_restrictions',
-          filter: `hotel_id=eq.${hotelId}`,
-        },
-        () => {
-          load();
-        }
-      )
-      .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [hotelId, hotelStatus, load]);
 
   const handleSaveAvailability = async (data: {
     categoryId: string;

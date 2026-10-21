@@ -9,6 +9,7 @@ export interface ReservationValidationInput {
   checkIn: string;
   checkOut: string;
   allowEmptyEmail?: boolean;
+  allowBackdated?: boolean;
 }
 
 export interface ValidationResult {
@@ -48,6 +49,15 @@ export const validateReservationForm = (input: ReservationValidationInput): Vali
 
   if (!input.checkIn || !input.checkOut) {
     return { valid: false, error: 'Please select check-in and check-out dates.', emailError: null };
+  }
+
+  const todayKolkata = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  if (input.checkIn < todayKolkata && !input.allowBackdated) {
+    return {
+      valid: false,
+      error: `Check-in date (${input.checkIn}) cannot be in the past (Current hotel date: ${todayKolkata}) unless backdated entry is authorized.`,
+      emailError: null,
+    };
   }
 
   if (new Date(input.checkOut + 'T00:00:00') <= new Date(input.checkIn + 'T00:00:00')) {
@@ -102,6 +112,7 @@ export interface BuildReservationInputsParams {
   createdBy: string;
   status?: 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled' | 'no_show';
   allowEmptyEmail?: boolean;
+  allowBackdated?: boolean;
   rooms: Room[];
   categories: RoomCategory[];
   roomDetails?: RoomDetailConfig[];
@@ -258,6 +269,7 @@ export const buildReservationInputs = (params: BuildReservationInputsParams): Re
       status: params.status || 'confirmed',
       group_id: groupId,
       allowEmptyEmail: params.allowEmptyEmail ?? true,
+      allowBackdated: params.allowBackdated,
     };
   });
 };

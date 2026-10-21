@@ -10,8 +10,8 @@ declare const Deno: {
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey, x-request-id",
 };
 
 interface OnboardingPayload {
@@ -46,20 +46,114 @@ const STEPS = [
 ] as const;
 
 Deno.serve(async (req: Request) => {
+  const requestId = req.headers.get("x-request-id") || crypto.randomUUID();
+
+  // 1. CORS Preflight
   if (req.method === "OPTIONS") {
-    return new Response(null, { status: 200, headers: corsHeaders });
+    return new Response(null, {
+      status: 200,
+      headers: { ...corsHeaders, "x-request-id": requestId },
+    });
+  }
+
+  // 2. Health & Status Check via GET
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+    const attemptIdParam = url.searchParams.get("attempt_id");
+    const propertyCodeParam = url.searchParams.get("property_code");
+    const emailParam = url.searchParams.get("email");
+
+    // If query params are provided, allow checking attempt status
+    if (attemptIdParam || (propertyCodeParam && emailParam)) {
+      try {
+        const authHeader = req.headers.get("Authorization");
+        if (!authHeader) {
+          return errorResponse("auth", "MISSING_AUTH_HEADER", "Missing Authorization header", false, null, null, 401, requestId);
+        }
+        const jwt = authHeader.replace("Bearer ", "").trim();
+        const supabaseUrl = Deno.env.get("SUPABASE_URL") || Deno.env.get("VITE_SUPABASE_URL");
+        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY");
+
+        if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+          return errorResponse("server", "CONFIGURATION_ERROR", "Server configuration error.", false, null, null, 500, requestId);
+        }
+
+        const userClient = createClient(supabaseUrl, anonKey, {
+          global: { headers: { Authorization: `Bearer ${jwt}` } },
+          auth: { autoRefreshToken: false, persistSession: false },
+        });
+        const { data: { user }, error: authError } = await userClient.auth.getUser(jwt);
+        if (authError || !user) {
+          return errorResponse("auth", "INVALID_TOKEN", "Your session is invalid or expired.", false, null, null, 401, requestId);
+        }
+
+        const adminClient = createClient(supabaseUrl, serviceRoleKey, {
+          auth: { autoRefreshToken: false, persistSession: false },
+        });
+
+        let query = adminClient.from("onboarding_attempts").select("*");
+        if (attemptIdParam) {
+          query = query.eq("id", attemptIdParam);
+        } else {
+          const attemptKey = `${propertyCodeParam?.trim() || ""}|${emailParam?.trim().toLowerCase() || ""}`;
+          query = query.eq("attempt_key", attemptKey).order("created_at", { ascending: false }).limit(1);
+        }
+
+        const { data: attempt, error: attemptError } = await query.maybeSingle();
+        if (attemptError) {
+          return errorResponse("status", "QUERY_FAILED", "Failed to retrieve onboarding attempt status.", true, null, null, 500, requestId);
+        }
+
+        return jsonResponse({
+          success: true,
+          attempt: attempt || null,
+        }, 200, requestId);
+      } catch (err) {
+        console.error(`[ONBOARDING_STATUS_GET_ERROR] [${requestId}]`, err);
+        return errorResponse("status", "STATUS_CHECK_FAILED", "Unable to verify onboarding status.", true, null, null, 500, requestId);
+      }
+    }
+
+    // Default GET response: healthy status probe
+    return jsonResponse({
+      success: true,
+      service: "hotel-onboarding",
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      version: "1.2.0",
+    }, 200, requestId);
+  }
+
+  // 3. Reject unsupported HTTP methods
+  if (req.method !== "POST") {
+    return errorResponse(
+      "method",
+      "METHOD_NOT_ALLOWED",
+      `HTTP method ${req.method} is not allowed. Use POST to onboard a hotel.`,
+      false,
+      null,
+      null,
+      405,
+      requestId
+    );
   }
 
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
-      return errorResponse("auth", "MISSING_AUTH_HEADER", "Missing Authorization header", false, null, null, 401);
+      return errorResponse("auth", "MISSING_AUTH_HEADER", "Missing Authorization header", false, null, null, 401, requestId);
     }
     const jwt = authHeader.replace("Bearer ", "").trim();
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const supabaseUrl = Deno.env.get("SUPABASE_URL") || Deno.env.get("VITE_SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("VITE_SUPABASE_ANON_KEY");
+
+    if (!supabaseUrl || !serviceRoleKey || !anonKey) {
+      console.error(`[ONBOARDING_ENV_MISSING] [${requestId}] url=${Boolean(supabaseUrl)} serviceRole=${Boolean(serviceRoleKey)} anonKey=${Boolean(anonKey)}`);
+      return errorResponse("server", "CONFIGURATION_ERROR", "Server configuration error. Service keys are missing.", false, null, null, 500, requestId);
+    }
 
     // ── Auth Verification ──
     const userClient = createClient(supabaseUrl, anonKey, {
@@ -69,20 +163,45 @@ Deno.serve(async (req: Request) => {
 
     const { data: { user }, error: authError } = await userClient.auth.getUser(jwt);
     if (authError || !user) {
-      return errorResponse("auth", "INVALID_TOKEN", "Your session is invalid or expired. Please log in again.", false, null, null, 401);
+      return errorResponse("auth", "INVALID_TOKEN", "Your session is invalid or expired. Please log in again.", false, null, null, 401, requestId);
     }
 
-    const { data: isSuperAdmin } = await userClient.rpc("is_super_admin");
+    // Check Super Admin privilege via RPC with fallback to hotel_admins check
+    let isSuperAdmin = false;
+    const { data: rpcSuperAdmin, error: rpcErr } = await userClient.rpc("is_super_admin");
+    if (!rpcErr && rpcSuperAdmin === true) {
+      isSuperAdmin = true;
+    } else {
+      const adminClientCheck = createClient(supabaseUrl, serviceRoleKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      const { data: adminRecord } = await adminClientCheck
+        .from("hotel_admins")
+        .select("role")
+        .eq("user_id", user.id)
+        .eq("role", "super_admin")
+        .maybeSingle();
+      if (adminRecord) {
+        isSuperAdmin = true;
+      }
+    }
+
     if (!isSuperAdmin) {
-      return errorResponse("auth", "FORBIDDEN", "Forbidden: Super Admin access is required to onboard hotels.", false, null, null, 403);
+      return errorResponse("auth", "FORBIDDEN", "Forbidden: Super Admin access is required to onboard hotels.", false, null, null, 403, requestId);
     }
 
-    const body: OnboardingPayload = await req.json();
+    // ── Safe JSON Body Parsing ──
+    let body: OnboardingPayload;
+    try {
+      body = await req.json();
+    } catch {
+      return errorResponse("validation", "INVALID_JSON_BODY", "Request body must be valid JSON.", false, null, null, 400, requestId);
+    }
 
-    // ── Validation (Phase 21) ──
+    // ── Validation ──
     const validation = validatePayload(body);
     if (!validation.valid) {
-      return errorResponse("validation", "VALIDATION_FAILED", validation.error ?? "Invalid onboarding details.", false, null, null, 400);
+      return errorResponse("validation", "VALIDATION_FAILED", validation.error ?? "Invalid onboarding details.", false, null, null, 400, requestId);
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
@@ -119,7 +238,30 @@ Deno.serve(async (req: Request) => {
           retryable: false,
         },
         409,
+        requestId
       );
+    }
+
+    // Check if property code is already in use by another active hotel
+    if (cleanPropCode) {
+      const { data: propCheck } = await adminClient
+        .from("hotels")
+        .select("id, hotel_name")
+        .eq("property_code", cleanPropCode)
+        .maybeSingle();
+
+      if (propCheck && (!existingAttempt || existingAttempt.hotel_id !== propCheck.id)) {
+        return errorResponse(
+          "hotel_record",
+          "PROPERTY_CODE_EXISTS",
+          `Property code "${cleanPropCode}" is already assigned to "${propCheck.hotel_name}". Please choose a unique property code.`,
+          false,
+          null,
+          propCheck.id,
+          409,
+          requestId
+        );
+      }
     }
 
     if (existingAttempt && existingAttempt.hotel_id) {
@@ -127,17 +269,17 @@ Deno.serve(async (req: Request) => {
       attemptId = existingAttempt.id;
       hotelId = existingAttempt.hotel_id;
       completedSteps = existingAttempt.completed_steps || [];
-      console.log(`[ONBOARDING_RESUME] attemptId=${attemptId} hotelId=${hotelId} completedSteps=${completedSteps.join(",")}`);
+      console.log(`[ONBOARDING_RESUME] [${requestId}] attemptId=${attemptId} hotelId=${hotelId} completedSteps=${completedSteps.join(",")}`);
     } else {
       // New attempt
       attemptId = body.attempt_id || crypto.randomUUID();
-      console.log(`[ONBOARDING_START] attemptId=${attemptId} key=${attemptKey}`);
+      console.log(`[ONBOARDING_START] [${requestId}] attemptId=${attemptId} key=${attemptKey}`);
     }
 
     const today = new Date().toISOString().slice(0, 10);
     const trialEnd = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
 
-    // ── Find / resolve subscription plan (Phase 16) ──
+    // ── Find / resolve subscription plan ──
     let selectedPlanId: string | null = body.plan_id || null;
     if (!selectedPlanId) {
       const { data: plans } = await adminClient
@@ -148,7 +290,7 @@ Deno.serve(async (req: Request) => {
       selectedPlanId = trialPlan?.id || null;
     }
 
-    // ── Step 1: Hotel record (Phase 13) ──
+    // ── Step 1: Hotel record ──
     if (!completedSteps.includes("hotel_record")) {
       if (hotelId) {
         completedSteps.push("hotel_record");
@@ -179,14 +321,24 @@ Deno.serve(async (req: Request) => {
           .single();
 
         if (hotelError) {
-          console.error(`[ONBOARDING_FAILED] step=hotel_record error=${hotelError.message}`);
+          console.error(`[ONBOARDING_FAILED] [${requestId}] step=hotel_record error=${hotelError.message}`);
           await updateAttempt(adminClient, attemptId, "failed", completedSteps, "hotel_record", hotelError.message);
-          return errorResponse("hotel_record", "HOTEL_CREATE_FAILED", "Failed to create hotel record in database.", true, attemptId, null, 500);
+          const isConflict = hotelError.code === "23505";
+          return errorResponse(
+            "hotel_record",
+            isConflict ? "HOTEL_RECORD_CONFLICT" : "HOTEL_CREATE_FAILED",
+            isConflict ? "A hotel record with these unique details already exists." : "Failed to create hotel record in database.",
+            !isConflict,
+            attemptId,
+            null,
+            isConflict ? 409 : 500,
+            requestId
+          );
         }
 
         hotelId = hotel.id;
         completedSteps.push("hotel_record");
-        console.log(`[ONBOARDING_HOTEL_CREATED] hotelId=${hotelId}`);
+        console.log(`[ONBOARDING_HOTEL_CREATED] [${requestId}] hotelId=${hotelId}`);
 
         await adminClient.from("onboarding_attempts").upsert({
           id: attemptId,
@@ -208,9 +360,9 @@ Deno.serve(async (req: Request) => {
       }, { onConflict: "id" });
 
       if (settingsError) {
-        console.error(`[ONBOARDING_FAILED] step=hotel_settings error=${settingsError.message}`);
+        console.error(`[ONBOARDING_FAILED] [${requestId}] step=hotel_settings error=${settingsError.message}`);
         await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "hotel_settings", settingsError.message);
-        return errorResponse("hotel_settings", "HOTEL_SETTINGS_FAILED", "Failed to save hotel configuration settings.", true, attemptId, hotelId, 500);
+        return errorResponse("hotel_settings", "HOTEL_SETTINGS_FAILED", "Failed to save hotel configuration settings.", true, attemptId, hotelId, 500, requestId);
       }
 
       const defaultSources = ["OTA", "Direct/Walking", "Corporate/Agent", "Phonebook"];
@@ -224,23 +376,22 @@ Deno.serve(async (req: Request) => {
       );
 
       if (sourcesError) {
-        console.error(`[ONBOARDING_FAILED] step=hotel_settings error=${sourcesError.message}`);
+        console.error(`[ONBOARDING_FAILED] [${requestId}] step=hotel_settings error=${sourcesError.message}`);
         await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "hotel_settings", sourcesError.message);
-        return errorResponse("hotel_settings", "COMPANY_SOURCES_FAILED", "Failed to initialize booking sources.", true, attemptId, hotelId, 500);
+        return errorResponse("hotel_settings", "COMPANY_SOURCES_FAILED", "Failed to initialize booking sources.", true, attemptId, hotelId, 500, requestId);
       }
 
       completedSteps.push("hotel_settings");
       await updateAttempt(adminClient, attemptId, "creating", completedSteps);
     }
 
-    // ── Step 3: Room categories (Phase 11 - with tariffs updated!) ──
+    // ── Step 3: Room categories ──
     const catIdMap = new Map<string, string>();
     if (!completedSteps.includes("room_categories")) {
       for (const cat of body.categories) {
         const trimmedName = cat.name.trim();
         if (!trimmedName) continue;
 
-        // Upsert category with actual configured tariffs
         const { data: upsertedCat, error: catError } = await adminClient
           .from("room_categories")
           .upsert({
@@ -254,16 +405,27 @@ Deno.serve(async (req: Request) => {
           .single();
 
         if (catError) {
-          console.error(`[ONBOARDING_FAILED] step=room_categories error=${catError.message}`);
+          console.error(`[ONBOARDING_FAILED] [${requestId}] step=room_categories error=${catError.message}`);
           await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "room_categories", catError.message);
-          return errorResponse("room_categories", "CATEGORY_CREATE_FAILED", `Failed to configure room category: ${trimmedName}.`, true, attemptId, hotelId, 500);
+          return errorResponse("room_categories", "CATEGORY_CREATE_FAILED", `Failed to configure room category: ${trimmedName}.`, true, attemptId, hotelId, 500, requestId);
         }
 
         catIdMap.set(trimmedName.toLowerCase(), upsertedCat.id);
       }
 
+      // Deactivate any unconfigured legacy trigger-seeded categories that were not submitted in this onboarding
+      const configuredCatIds = Array.from(catIdMap.values());
+      if (configuredCatIds.length > 0) {
+        await adminClient
+          .from("room_categories")
+          .update({ is_active: false })
+          .eq("hotel_id", hotelId)
+          .eq("default_tariff", 0)
+          .not("id", "in", `(${configuredCatIds.join(",")})`);
+      }
+
       completedSteps.push("room_categories");
-      console.log(`[ONBOARDING_CATEGORIES_CREATED] hotelId=${hotelId} count=${catIdMap.size}`);
+      console.log(`[ONBOARDING_CATEGORIES_CREATED] [${requestId}] hotelId=${hotelId} count=${catIdMap.size}`);
       await updateAttempt(adminClient, attemptId, "creating", completedSteps);
     } else {
       // Load existing categories for room mapping
@@ -276,24 +438,20 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // ── Step 4: Room inventory (Phases 11, 12, 36) ──
+    // ── Step 4: Room inventory ──
     if (!completedSteps.includes("room_inventory")) {
-      // 1. Fetch existing rooms for this hotel to enforce idempotency
       const { data: existingRooms } = await adminClient
         .from("rooms")
         .select("id, room_no")
         .eq("hotel_id", hotelId);
 
       const existingRoomNos = new Set((existingRooms || []).map((r: any) => r.room_no.trim()));
-
-      // 2. Ensure all total_rooms rooms exist
       const fullRoomList = generateMissingRooms(
         body.total_rooms,
         body.categories,
         body.rooms || [],
       );
 
-      // 3. Insert only missing rooms
       const roomsToInsert: {
         hotel_id: string;
         room_no: string;
@@ -308,7 +466,7 @@ Deno.serve(async (req: Request) => {
 
       for (const room of fullRoomList) {
         const cleanRoomNo = room.room_no.trim();
-        if (existingRoomNos.has(cleanRoomNo)) continue; // Already created in a prior partial run
+        if (existingRoomNos.has(cleanRoomNo)) continue;
 
         const catKey = room.category_name?.trim().toLowerCase() || "";
         const categoryId = catKey ? (catIdMap.get(catKey) ?? null) : null;
@@ -330,35 +488,33 @@ Deno.serve(async (req: Request) => {
       if (roomsToInsert.length > 0) {
         const { error: roomError } = await adminClient.from("rooms").insert(roomsToInsert);
         if (roomError) {
-          console.error(`[ONBOARDING_FAILED] step=room_inventory error=${roomError.message}`);
+          console.error(`[ONBOARDING_FAILED] [${requestId}] step=room_inventory error=${roomError.message}`);
           await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "room_inventory", roomError.message);
-          return errorResponse("room_inventory", "ROOM_CREATION_FAILED", "Failed to create physical rooms in database.", true, attemptId, hotelId, 500);
+          return errorResponse("room_inventory", "ROOM_CREATION_FAILED", "Failed to create physical rooms in database.", true, attemptId, hotelId, 500, requestId);
         }
       }
 
       completedSteps.push("room_inventory");
-      console.log(`[ONBOARDING_ROOMS_CREATED] hotelId=${hotelId} inserted=${roomsToInsert.length} total=${existingRoomNos.size}`);
+      console.log(`[ONBOARDING_ROOMS_CREATED] [${requestId}] hotelId=${hotelId} inserted=${roomsToInsert.length} total=${existingRoomNos.size}`);
       await updateAttempt(adminClient, attemptId, "creating", completedSteps);
     }
 
-    // ── Step 5: Owner auth account (Phases 3, 4, 5, 14, 15) ──
+    // ── Step 5: Owner auth account ──
     if (!completedSteps.includes("owner_auth")) {
-      // Targeted lookup using secure RPC get_auth_user_by_email (O(1), no scan, no NULL crashes)
       const { data: authUserRows, error: lookupError } = await adminClient.rpc("get_auth_user_by_email", {
         p_email: cleanEmail,
       });
 
       if (lookupError) {
-        console.error(`[ONBOARDING_FAILED] step=owner_auth lookup_error=${lookupError.message}`);
+        console.error(`[ONBOARDING_FAILED] [${requestId}] step=owner_auth lookup_error=${lookupError.message}`);
         await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "owner_auth", lookupError.message);
-        return errorResponse("owner_auth", "OWNER_AUTH_LOOKUP_FAILED", "Unable to verify owner account status.", true, attemptId, hotelId, 500);
+        return errorResponse("owner_auth", "OWNER_AUTH_LOOKUP_FAILED", "Unable to verify owner account status.", true, attemptId, hotelId, 500, requestId);
       }
 
       const existingAuthUser = (authUserRows && authUserRows.length > 0) ? authUserRows[0] : null;
       let userId: string;
 
       if (existingAuthUser) {
-        // CASE B, C, D: User exists in Auth
         const { data: adminLinks } = await adminClient
           .from("hotel_admins")
           .select("id, hotel_id, role")
@@ -374,14 +530,12 @@ Deno.serve(async (req: Request) => {
             attemptId,
             hotelId,
             409,
+            requestId
           );
         }
 
-        const sameHotelLink = (adminLinks || []).find((l: any) => l.hotel_id === hotelId);
         const otherHotelLink = (adminLinks || []).find((l: any) => l.hotel_id && l.hotel_id !== hotelId);
-
         if (otherHotelLink) {
-          // CASE C: Belong to another hotel -> conflict!
           return errorResponse(
             "owner_auth",
             "OWNER_EMAIL_CONFLICT",
@@ -390,20 +544,22 @@ Deno.serve(async (req: Request) => {
             attemptId,
             hotelId,
             409,
+            requestId
           );
         }
 
-        // CASE B or E: Re-use existing auth user, update password if provided
         userId = existingAuthUser.id;
         if (body.password) {
-          await adminClient.auth.admin.updateUserById(userId, {
+          const { error: updatePwErr } = await adminClient.auth.admin.updateUserById(userId, {
             password: body.password,
             email_confirm: true,
           });
+          if (updatePwErr) {
+            console.warn(`[ONBOARDING_WARNING] [${requestId}] password update warning: ${updatePwErr.message}`);
+          }
         }
-        console.log(`[ONBOARDING_OWNER_AUTH_REUSED] userId=${userId} email=${cleanEmail}`);
+        console.log(`[ONBOARDING_OWNER_AUTH_REUSED] [${requestId}] userId=${userId} email=${cleanEmail}`);
       } else {
-        // CASE A: Create new auth user
         const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
           email: cleanEmail,
           password: body.password,
@@ -415,16 +571,32 @@ Deno.serve(async (req: Request) => {
         });
 
         if (createError) {
-          console.error(`[ONBOARDING_FAILED] step=owner_auth create_error=${createError.message}`);
+          console.error(`[ONBOARDING_FAILED] [${requestId}] step=owner_auth create_error=${createError.message}`);
           await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "owner_auth", createError.message);
-          return errorResponse("owner_auth", "OWNER_AUTH_CREATE_FAILED", "Unable to create the owner authentication account.", true, attemptId, hotelId, 500);
+          
+          // Map client validation / format errors to 400 Bad Request
+          const msg = createError.message || "Unable to create owner account.";
+          const isFormatError = msg.toLowerCase().includes("invalid") ||
+                                msg.toLowerCase().includes("format") ||
+                                msg.toLowerCase().includes("password") ||
+                                msg.toLowerCase().includes("email");
+          return errorResponse(
+            "owner_auth",
+            isFormatError ? "INVALID_OWNER_CREDENTIALS" : "OWNER_AUTH_CREATE_FAILED",
+            msg,
+            !isFormatError,
+            attemptId,
+            hotelId,
+            isFormatError ? 400 : 500,
+            requestId
+          );
         }
 
         userId = newUserData.user.id;
-        console.log(`[ONBOARDING_OWNER_AUTH_CREATED] userId=${userId} email=${cleanEmail}`);
+        console.log(`[ONBOARDING_OWNER_AUTH_CREATED] [${requestId}] userId=${userId} email=${cleanEmail}`);
       }
 
-      // Link owner to this hotel in hotel_admins (Phase 14 & 15: strictly hotel_admin)
+      // Link owner to this hotel in hotel_admins
       const { error: linkError } = await adminClient.from("hotel_admins").upsert(
         {
           user_id: userId,
@@ -437,25 +609,23 @@ Deno.serve(async (req: Request) => {
       );
 
       if (linkError) {
-        console.error(`[ONBOARDING_FAILED] step=owner_auth link_error=${linkError.message}`);
+        console.error(`[ONBOARDING_FAILED] [${requestId}] step=owner_auth link_error=${linkError.message}`);
         await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "owner_auth", linkError.message);
-        return errorResponse("owner_auth", "OWNER_LINK_FAILED", "Failed to assign hotel owner permissions.", true, attemptId, hotelId, 500);
+        return errorResponse("owner_auth", "OWNER_LINK_FAILED", "Failed to assign hotel owner permissions.", true, attemptId, hotelId, 500, requestId);
       }
 
       completedSteps.push("owner_auth");
       await updateAttempt(adminClient, attemptId, "creating", completedSteps);
     }
 
-    // ── Step 6: Subscription (Phase 16) ──
+    // ── Step 6: Subscription ──
     if (!completedSteps.includes("subscription")) {
       if (selectedPlanId) {
-        // 1. Ensure hotels has plan_id
         await adminClient
           .from("hotels")
           .update({ plan_id: selectedPlanId })
           .eq("id", hotelId);
 
-        // 2. Ensure initial entry in subscription_plan_history
         const { data: existingSubHistory } = await adminClient
           .from("subscription_plan_history")
           .select("id")
@@ -492,9 +662,9 @@ Deno.serve(async (req: Request) => {
             { onConflict: "hotel_id,module_key" },
           );
           if (featError) {
-            console.error(`[ONBOARDING_FAILED] step=features error=${featError.message}`);
+            console.error(`[ONBOARDING_FAILED] [${requestId}] step=features error=${featError.message}`);
             await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "features", featError.message);
-            return errorResponse("features", "FEATURES_CONFIG_FAILED", "Failed to configure hotel module features.", true, attemptId, hotelId, 500);
+            return errorResponse("features", "FEATURES_CONFIG_FAILED", "Failed to configure hotel module features.", true, attemptId, hotelId, 500, requestId);
           }
         }
       }
@@ -502,26 +672,30 @@ Deno.serve(async (req: Request) => {
       await updateAttempt(adminClient, attemptId, "creating", completedSteps);
     }
 
-    // ── Step 8: Audit log ──
+    // ── Step 8: Audit log (non-blocking) ──
     if (!completedSteps.includes("audit_log")) {
-      await adminClient.from("audit_logs").insert({
-        user_id: user.id,
-        user_email: user.email,
-        role: "super_admin",
-        action: "onboard_hotel",
-        module: "hotels",
-        hotel_id: hotelId,
-        hotel_name: cleanHotelName,
-        record_id: hotelId,
-        new_value: {
+      try {
+        await adminClient.from("audit_logs").insert({
+          user_id: user.id,
+          user_email: user.email,
+          role: "super_admin",
+          action: "onboard_hotel",
+          module: "hotels",
+          hotel_id: hotelId,
           hotel_name: cleanHotelName,
-          owner: body.owner_name,
-          email: cleanEmail,
-          total_rooms: body.total_rooms,
-          categories: body.categories.length,
-        },
-        severity: "info",
-      });
+          record_id: hotelId,
+          new_value: {
+            hotel_name: cleanHotelName,
+            owner: body.owner_name,
+            email: cleanEmail,
+            total_rooms: body.total_rooms,
+            categories: body.categories.length,
+          },
+          severity: "info",
+        });
+      } catch (auditErr: any) {
+        console.warn(`[ONBOARDING_AUDIT_WARNING] [${requestId}]`, auditErr.message);
+      }
       completedSteps.push("audit_log");
     }
 
@@ -532,14 +706,14 @@ Deno.serve(async (req: Request) => {
       .eq("id", hotelId);
 
     if (activateError) {
-      console.error(`[ONBOARDING_FAILED] step=activate error=${activateError.message}`);
+      console.error(`[ONBOARDING_FAILED] [${requestId}] step=activate error=${activateError.message}`);
       await updateAttempt(adminClient, attemptId, "incomplete", completedSteps, "activate", activateError.message);
-      return errorResponse("activate", "HOTEL_ACTIVATION_FAILED", "Failed to activate hotel status.", true, attemptId, hotelId, 500);
+      return errorResponse("activate", "HOTEL_ACTIVATION_FAILED", "Failed to activate hotel status.", true, attemptId, hotelId, 500, requestId);
     }
 
     completedSteps.push("activate");
     await updateAttempt(adminClient, attemptId, "completed", completedSteps);
-    console.log(`[ONBOARDING_COMPLETED] attemptId=${attemptId} hotelId=${hotelId}`);
+    console.log(`[ONBOARDING_COMPLETED] [${requestId}] attemptId=${attemptId} hotelId=${hotelId}`);
 
     return jsonResponse(
       {
@@ -550,11 +724,12 @@ Deno.serve(async (req: Request) => {
         total_rooms: body.total_rooms,
       },
       200,
+      requestId
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown internal server error";
-    console.error(`[ONBOARDING_UNCAUGHT_EXCEPTION] error=${message}`);
-    return errorResponse("server", "INTERNAL_SERVER_ERROR", "An unexpected error occurred during onboarding. Please try again.", true, null, null, 500);
+    console.error(`[ONBOARDING_UNCAUGHT_EXCEPTION] [${requestId}] error=${message}`);
+    return errorResponse("server", "INTERNAL_SERVER_ERROR", "An unexpected error occurred during onboarding. Please try again.", true, null, null, 500, requestId);
   }
 });
 
@@ -568,30 +743,44 @@ async function updateAttempt(
   failedStep?: string,
   errorMessage?: string,
 ) {
-  await client.from("onboarding_attempts").update({
-    status,
-    completed_steps: completedSteps,
-    failed_step: failedStep ?? null,
-    error_message: errorMessage ?? null,
-    updated_at: new Date().toISOString(),
-  }).eq("id", attemptId);
+  try {
+    await client.from("onboarding_attempts").update({
+      status,
+      completed_steps: completedSteps,
+      failed_step: failedStep ?? null,
+      error_message: errorMessage ?? null,
+      updated_at: new Date().toISOString(),
+    }).eq("id", attemptId);
+  } catch (err: any) {
+    console.warn(`[ONBOARDING_UPDATE_ATTEMPT_WARNING] attemptId=${attemptId}`, err.message);
+  }
 }
 
 function validatePayload(body: OnboardingPayload): { valid: boolean; error?: string } {
-  if (!body.hotel_name || !body.hotel_name.trim()) {
+  if (!body || typeof body !== "object") {
+    return { valid: false, error: "Invalid payload format." };
+  }
+  if (!body.hotel_name || typeof body.hotel_name !== "string" || !body.hotel_name.trim()) {
     return { valid: false, error: "Hotel name is required." };
   }
-  if (!body.owner_name || !body.owner_name.trim()) {
+  if (!body.owner_name || typeof body.owner_name !== "string" || !body.owner_name.trim()) {
     return { valid: false, error: "Owner name is required." };
   }
-  if (!body.admin_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.admin_email.trim())) {
-    return { valid: false, error: "A valid owner email address is required." };
+  
+  // Strict RFC 5322 email regex without consecutive dots or malformed syntax
+  const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
+  const cleanEmail = (body.admin_email || "").trim();
+  if (!cleanEmail || !emailRegex.test(cleanEmail) || cleanEmail.includes("..")) {
+    return { valid: false, error: "A valid owner email address is required (e.g. owner@hotel.com)." };
   }
-  if (!body.mobile || !body.mobile.trim()) {
-    return { valid: false, error: "Mobile number is required." };
+
+  const cleanMobile = (body.mobile || "").replace(/\D/g, "");
+  if (!cleanMobile || cleanMobile.length < 10) {
+    return { valid: false, error: "Mobile number must contain at least 10 valid digits." };
   }
+
   if (typeof body.total_rooms !== "number" || body.total_rooms < 1 || !Number.isInteger(body.total_rooms)) {
-    return { valid: false, error: "Total rooms must be a positive whole number." };
+    return { valid: false, error: "Total rooms must be a positive whole number (minimum 1)." };
   }
   if (!Array.isArray(body.categories) || body.categories.length === 0) {
     return { valid: false, error: "At least one room category is required." };
@@ -601,7 +790,7 @@ function validatePayload(body: OnboardingPayload): { valid: boolean; error?: str
       return { valid: false, error: "All room categories must have a valid name." };
     }
   }
-  if (!body.password || body.password.length < 6) {
+  if (!body.password || typeof body.password !== "string" || body.password.length < 6) {
     return { valid: false, error: "Password must be at least 6 characters long." };
   }
   return { valid: true };
@@ -654,10 +843,14 @@ function generateMissingRooms(
   return result;
 }
 
-function jsonResponse(data: Record<string, unknown>, status = 200) {
-  return new Response(JSON.stringify(data), {
+function jsonResponse(data: Record<string, unknown>, status = 200, requestId?: string) {
+  return new Response(JSON.stringify({ ...data, request_id: requestId }), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+      ...(requestId ? { "x-request-id": requestId } : {}),
+    },
   });
 }
 
@@ -669,6 +862,7 @@ function errorResponse(
   attemptId?: string | null,
   hotelId?: string | null,
   status = 500,
+  requestId?: string,
 ) {
   return jsonResponse(
     {
@@ -683,5 +877,6 @@ function errorResponse(
       hotel_id: hotelId ?? null,
     },
     status,
+    requestId,
   );
 }
