@@ -61,18 +61,9 @@ export const getChannelProviderConfig = async (hotelId, requestId = null, client
     console.error(`[getChannelProviderConfig] DB error loading channel_settings for hotel ${hotelId}:`, settingsError);
   }
 
-  // 2. Fetch hotel record for fallback property_code
-  let propertyCodeFallback = null;
-  if (!settings?.aiosell_hotel_code) {
-    const { data: hotel } = await db
-      .from('hotels')
-      .select('property_code')
-      .eq('id', hotelId)
-      .maybeSingle();
-    propertyCodeFallback = hotel?.property_code || null;
-  }
-
-  const hotelCode = settings?.aiosell_hotel_code || propertyCodeFallback || null;
+  // hotelCode MUST come strictly from channel_settings.aiosell_hotel_code
+  // NEVER fall back to hotels.property_code (which is an internal PMS code, not an Aiosell code)
+  const hotelCode = (settings?.aiosell_hotel_code && String(settings.aiosell_hotel_code).trim()) || null;
   const partnerId = settings?.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
   const environment = settings?.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
   const username = process.env.AIOSELL_USERNAME || 'hotel-mantri-pms';

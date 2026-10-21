@@ -601,7 +601,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId 
             {tab === 'mapping' && <MappingTab key={hotelId || 'mapping'} categories={overview.categories} ratePlans={overview.ratePlans} mappings={overview.mappings} onChanged={load} />}
             {tab === 'logs' && <LogsTab key={hotelId || 'logs'} logs={overview.syncLogs} connections={overview.connections} />}
             {tab === 'diagnostics' && <DiagnosticsTab key={hotelId || 'diagnostics'} />}
-            {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} onChanged={load} />}
+            {tab === 'settings' && <SettingsTab key={hotelId || 'settings'} settings={overview.settings} hotelId={hotelId} onChanged={load} />}
           </>
         )
       ) : null}
@@ -3516,14 +3516,15 @@ const LogsTab = ({ logs, connections }: {
 // ══════════════════════════════════════════════════════════════════
 // SETTINGS TAB
 // ══════════════════════════════════════════════════════════════════
-const SettingsTab = ({ settings, onChanged }: {
+const SettingsTab = ({ settings, hotelId, onChanged }: {
   settings: ChannelSettings | null;
+  hotelId?: string;
   onChanged: () => void;
 }) => {
   const [enabled, setEnabled] = useState(settings?.channel_manager_enabled ?? false);
   const [hotelCode, setHotelCode] = useState(settings?.aiosell_hotel_code || '');
   const [partnerId, setPartnerId] = useState(settings?.aiosell_partner_id || '');
-  const [environment, setEnvironment] = useState<'production' | 'test'>(settings?.aiosell_environment || 'production');
+  const [environment, setEnvironment] = useState<'production' | 'test'>((settings?.aiosell_environment as any) || 'production');
   const [providerTesting, setProviderTesting] = useState(false);
   const [providerTestResult, setProviderTestResult] = useState<{
     ok: boolean;
@@ -3540,16 +3541,28 @@ const SettingsTab = ({ settings, onChanged }: {
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Synchronize form state whenever settings or hotelId changes (prevents state leakage across hotels)
+  useEffect(() => {
+    setEnabled(settings?.channel_manager_enabled ?? false);
+    setHotelCode(settings?.aiosell_hotel_code || '');
+    setPartnerId(settings?.aiosell_partner_id || '');
+    setEnvironment((settings?.aiosell_environment as any) || 'production');
+    setProviderTestResult(null);
+  }, [settings, hotelId]);
+
+  const targetHotelId = hotelId || settings?.hotel_id;
+
   const handleSave = async () => {
     setSaving(true);
     try {
       await saveChannelSettings({
-        ...settings!,
+        ...settings,
+        hotelId: targetHotelId,
         channel_manager_enabled: enabled,
-        aiosell_hotel_code: hotelCode,
-        aiosell_partner_id: partnerId,
+        aiosell_hotel_code: hotelCode.trim() || null,
+        aiosell_partner_id: partnerId.trim() || null,
         aiosell_environment: environment,
-      });
+      }, targetHotelId);
       onChanged();
     } catch (e) {
       console.error(e);
@@ -3562,7 +3575,7 @@ const SettingsTab = ({ settings, onChanged }: {
     setProviderTesting(true);
     setProviderTestResult(null);
     try {
-      const res = await testChannelConnection();
+      const res = await testChannelConnection(targetHotelId);
       if (res.success) {
         setProviderTestResult({ 
           ok: true, 
@@ -3578,26 +3591,24 @@ const SettingsTab = ({ settings, onChanged }: {
           }
         });
         // Save success status automatically
-        if (settings) {
-          await saveChannelSettings({
-            ...settings,
-            aiosell_status: 'connected',
-            aiosell_environment: res.environment as 'test' | 'production',
-            aiosell_hotel_code: res.hotelCode,
-            aiosell_partner_id: res.partnerId,
-          });
-          onChanged();
-        }
+        await saveChannelSettings({
+          ...settings,
+          hotelId: targetHotelId,
+          aiosell_status: 'connected',
+          aiosell_environment: res.environment as 'test' | 'production',
+          aiosell_hotel_code: res.hotelCode,
+          aiosell_partner_id: res.partnerId,
+        }, targetHotelId);
+        onChanged();
       } else {
         const errMsg = typeof res.error === 'string' ? res.error : (res.error?.message || res.message);
         setProviderTestResult({ ok: false, message: errMsg || "Failed to connect to Provider." });
-        if (settings) {
-          await saveChannelSettings({
-            ...settings,
-            aiosell_status: 'error',
-          });
-          onChanged();
-        }
+        await saveChannelSettings({
+          ...settings,
+          hotelId: targetHotelId,
+          aiosell_status: 'error',
+        }, targetHotelId);
+        onChanged();
       }
     } catch (err: any) {
       const isAuthError = err?.status === 401 || err?.errorCode === 'AIOSSELL_AUTH_FAILED';
@@ -3612,13 +3623,12 @@ const SettingsTab = ({ settings, onChanged }: {
         ok: false, 
         message: safeMsg
       });
-      if (settings) {
-        await saveChannelSettings({
-          ...settings,
-          aiosell_status: 'error',
-        });
-        onChanged();
-      }
+      await saveChannelSettings({
+        ...settings,
+        hotelId: targetHotelId,
+        aiosell_status: 'error',
+      }, targetHotelId);
+      onChanged();
     } finally {
       setProviderTesting(false);
     }
@@ -3627,7 +3637,12 @@ const SettingsTab = ({ settings, onChanged }: {
   const handleDisconnect = async () => {
     setSaving(true);
     try {
-      await saveChannelSettings({ ...settings!, aiosell_status: 'disconnected', channel_manager_enabled: false });
+      await saveChannelSettings({
+        ...settings,
+        hotelId: targetHotelId,
+        aiosell_status: 'disconnected',
+        channel_manager_enabled: false
+      }, targetHotelId);
       onChanged();
     } finally {
       setSaving(false);

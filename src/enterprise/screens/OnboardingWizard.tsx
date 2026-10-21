@@ -506,7 +506,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
             </div>
 
             {/* Resend button */}
-            {(emailStatus === 'failed' || emailStatus === 'sent') && (
+            {(emailStatus === 'failed' || emailStatus === 'sent' || emailStatus === 'sending') && (
               <button
                 type="button"
                 onClick={() => triggerWelcomeEmail()}

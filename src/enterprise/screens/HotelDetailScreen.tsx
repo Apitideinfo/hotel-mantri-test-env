@@ -751,8 +751,8 @@ const Row = ({ label, value }: { label: string; value: string }) => (
   </div>
 );
 
-const ActionBtn = ({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) => (
-  <button title={title} onClick={onClick} className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition">{children}</button>
+const ActionBtn = ({ title, onClick, children, disabled }: { title: string; onClick: () => void; children: React.ReactNode; disabled?: boolean }) => (
+  <button title={title} onClick={onClick} disabled={disabled} className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-lg transition disabled:opacity-50">{children}</button>
 );
 
 const Modal = ({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) => (

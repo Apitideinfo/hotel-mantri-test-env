@@ -16,6 +16,7 @@
     "test:whinta": "node scripts/test_whinta_integration.mjs",
     "test:accounting": "node scripts/test_accounting_reconciliation.mjs",
     "test:meta": "node scripts/test_meta_compliance_suite.mjs",
+    "test:aiosell-isolation": "node scripts/test_aiosell_isolation_suite.mjs",
     "test": "npm run test:housekeeping && npm run test:whinta && npm run test:accounting && npm run test:meta"
   },
   "dependencies": {
