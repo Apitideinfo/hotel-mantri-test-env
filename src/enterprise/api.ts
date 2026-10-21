@@ -169,7 +169,7 @@ export const deactivateEnterpriseHotel = async (hotelId: string) => {
     body: JSON.stringify({ action: 'deactivate_hotel', hotel_id: hotelId })
   });
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({ error: `Edge function returned HTTP ${res.status}` }));
   if (!res.ok) {
     throw new Error(`Edge Function Error: ${JSON.stringify(data)}`);
   }
@@ -964,10 +964,10 @@ export const createHotelAdminAccount = async (email: string, password: string, h
     body: JSON.stringify({ action: 'create_hotel_admin', email, password, hotel_id: hotelId, role: 'hotel_admin' }),
   });
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({ error: `Failed to create admin account (HTTP ${res.status})` }));
     throw new Error(err.error || 'Failed to create admin account');
   }
-  return res.json();
+  return res.json().catch(() => ({ success: true }));
 };
 
 export const resetHotelPassword = async (email: string, password: string) => {
@@ -980,10 +980,10 @@ export const resetHotelPassword = async (email: string, password: string) => {
     body: JSON.stringify({ action: 'reset_password', email, password }),
   });
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({ error: `Failed to reset password (HTTP ${res.status})` }));
     throw new Error(err.error || 'Failed to reset password');
   }
-  return res.json();
+  return res.json().catch(() => ({ success: true }));
 };
 
 // ── Hotel Data Management ──
@@ -1109,10 +1109,10 @@ export const deleteHotelStorageFiles = async (hotelId: string): Promise<number> 
     body: JSON.stringify({ action: 'delete_storage_files', hotel_id: hotelId }),
   });
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({ error: `Failed to delete storage files (HTTP ${res.status})` }));
     throw new Error(err.error || 'Failed to delete storage files');
   }
-  const result = await res.json();
+  const result = await res.json().catch(() => ({ deleted_files: 0 }));
   return result.deleted_files as number;
 };
 

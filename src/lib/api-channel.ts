@@ -836,11 +836,12 @@ export interface SyncLogFilters {
   endDate?: string;
 }
 
-export const getSyncLogs = async (limit = 100, filters?: SyncLogFilters): Promise<ChannelSyncLog[]> => {
+export const getSyncLogs = async (limit = 100, filters?: SyncLogFilters, hotelIdOverride?: string): Promise<ChannelSyncLog[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   let query = supabase
     .from('channel_sync_logs')
     .select('*')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', targetHotelId)
     .order('created_at', { ascending: false })
     .limit(limit);
   if (filters?.channelConnectionId) query = query.eq('channel_connection_id', filters.channelConnectionId);
@@ -854,30 +855,38 @@ export const getSyncLogs = async (limit = 100, filters?: SyncLogFilters): Promis
 };
 
 export const insertSyncLog = async (
-  input: Omit<ChannelSyncLog, 'id' | 'hotel_id' | 'created_at' | 'retry_status' | 'retry_count'> & Partial<Pick<ChannelSyncLog, 'retry_status' | 'retry_count'>>
+  input: Omit<ChannelSyncLog, 'id' | 'hotel_id' | 'created_at' | 'retry_status' | 'retry_count'> & Partial<Pick<ChannelSyncLog, 'retry_status' | 'retry_count'>>,
+  hotelIdOverride?: string
 ): Promise<void> => {
-  const payload = { retry_status: 'not_retried', retry_count: 0, ...input, hotel_id: getCurrentHotelId() };
+  const targetHotelId = hotelIdOverride || (input as any).hotel_id || getCurrentHotelId();
+  const payload = { retry_status: 'not_retried', retry_count: 0, ...input, hotel_id: targetHotelId };
   const { error } = await supabase.from('channel_sync_logs').insert(payload);
   if (error) throw error;
 };
 
-export const retrySyncLog = async (logOrId: string | ChannelSyncLog): Promise<any> => {
+export const retrySyncLog = async (logOrId: string | ChannelSyncLog, hotelIdOverride?: string): Promise<any> => {
   const logId = typeof logOrId === 'string' ? logOrId : logOrId.id;
+  const targetHotelId = hotelIdOverride || (typeof logOrId === 'object' ? logOrId.hotel_id : undefined) || getCurrentHotelId();
   return await apiFetch(`/api/channels/sync/retry/${logId}`, {
-    method: 'POST'
+    method: 'POST',
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
   });
 };
 
 // ── Channel Settings (Backend Secured) ──
 
-export const getChannelSettings = async (): Promise<ChannelSettings | null> => {
+export const getChannelSettings = async (hotelIdOverride?: string): Promise<ChannelSettings | null> => {
   try {
-    const res: any = await apiFetch('/api/channels/settings');
+    const targetHotelId = hotelIdOverride || getCurrentHotelId();
+    const endpoint = `/api/channels/settings${targetHotelId ? `?hotelId=${encodeURIComponent(targetHotelId)}` : ''}`;
+    const res: any = await apiFetch(endpoint, {
+      headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+    });
     if (!res || !res.settings) return null;
     const s = res.settings;
     return {
       id: s.id || '',
-      hotel_id: s.hotelId || getCurrentHotelId(),
+      hotel_id: s.hotelId || targetHotelId,
       api_base_url: s.apiBaseUrl || '',
       api_key_secret_name: null,
       property_id: s.hotelCode || null,
@@ -900,28 +909,43 @@ export const getChannelSettings = async (): Promise<ChannelSettings | null> => {
 
 export const saveChannelSettings = async (
   input: {
+    hotelId?: string;
     hotelCode?: string;
     partnerId?: string;
-    environment?: 'test' | 'production';
+    environment?: 'test' | 'production' | 'sandbox';
     apiBaseUrl?: string;
-  } | any
+  } | any,
+  hotelIdOverride?: string
 ): Promise<any> => {
-  const hotelCode = input.hotelCode || input.aiosell_hotel_code || input.property_id;
-  const partnerId = input.partnerId || input.aiosell_partner_id;
+  const targetHotelId = hotelIdOverride || input.hotelId || input.hotel_id || getCurrentHotelId();
+  const hotelCode = input.hotelCode !== undefined 
+    ? input.hotelCode 
+    : (input.aiosell_hotel_code !== undefined ? input.aiosell_hotel_code : input.property_id);
+  const partnerId = input.partnerId !== undefined 
+    ? input.partnerId 
+    : input.aiosell_partner_id;
   const environment = input.environment || input.aiosell_environment || 'production';
   const apiBaseUrl = input.apiBaseUrl || input.api_base_url;
 
   return await apiFetch('/api/channels/settings', {
     method: 'POST',
-    body: JSON.stringify({ hotelCode, partnerId, environment, apiBaseUrl })
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ 
+      hotelId: targetHotelId,
+      hotelCode: hotelCode !== undefined ? (hotelCode ? String(hotelCode).trim() : null) : undefined, 
+      partnerId: partnerId !== undefined ? (partnerId ? String(partnerId).trim() : null) : undefined, 
+      environment, 
+      apiBaseUrl 
+    })
   });
 };
 
 export const updateChannelSettingsStatus = async (
   status: string,
-  testResult?: string
+  testResult?: string,
+  hotelIdOverride?: string
 ): Promise<void> => {
-  const existing = await getChannelSettings();
+  const existing = await getChannelSettings(hotelIdOverride);
   if (!existing) return;
   const payload: Record<string, unknown> = {
     status,
@@ -933,7 +957,7 @@ export const updateChannelSettingsStatus = async (
   if (error) throw error;
 };
 
-export const fetchMappingValidation = async (channelId: string): Promise<{
+export const fetchMappingValidation = async (channelId: string, hotelIdOverride?: string): Promise<{
   success: boolean;
   channelId: string;
   mappingStatus: string;
@@ -946,11 +970,18 @@ export const fetchMappingValidation = async (channelId: string): Promise<{
   missingRatePlans: { id: string; name: string }[];
   validationErrors: string[];
 }> => {
-  return await apiFetch(`/api/channels/${channelId}/mapping-validation`);
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return await apiFetch(`/api/channels/${channelId}/mapping-validation`, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 };
 
-export const fetchChannelAuditHistory = async (): Promise<any[]> => {
-  const res: any = await apiFetch('/api/channels/audit-history');
+export const fetchChannelAuditHistory = async (hotelIdOverride?: string): Promise<any[]> => {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  const endpoint = `/api/channels/audit-history${targetHotelId ? `?hotelId=${encodeURIComponent(targetHotelId)}` : ''}`;
+  const res: any = await apiFetch(endpoint, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
   return res.logs || [];
 };
 
@@ -1206,8 +1237,8 @@ export const getChannelManagerOverview = async (hotelIdOverride?: string): Promi
       return (data as RatePlan[]) ?? [];
     })(),
     getChannelRateMappings(targetHotelId),
-    getSyncLogs(50),
-    getChannelSettings(),
+    getSyncLogs(50, undefined, targetHotelId),
+    getChannelSettings(targetHotelId),
   ]);
 
   const dbConnected = settings?.aiosell_status === 'connected' && Boolean(settings?.aiosell_hotel_code);
@@ -1226,7 +1257,7 @@ export const getChannelManagerOverview = async (hotelIdOverride?: string): Promi
   };
 
   try {
-    const data = await checkChannelStatus();
+    const data = await checkChannelStatus(targetHotelId);
     if (data) {
       const isConnected = data.connected === true || String(data.status).toUpperCase() === 'CONNECTED';
       isLiveMode = isConnected || dbConnected;
@@ -1261,92 +1292,128 @@ export const getChannelManagerOverview = async (hotelIdOverride?: string): Promi
   };
 };
 
-export async function fetchChannels() {
-  return apiFetch('/api/channels');
+export async function fetchChannels(hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return apiFetch('/api/channels', {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 }
 
-export async function fetchChannelDetails(channelId: string) {
-  return apiFetch(`/api/channels/${channelId}`);
+export async function fetchChannelDetails(channelId: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return apiFetch(`/api/channels/${channelId}`, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 }
 
-export async function updateChannel(channelId: string, updates: Record<string, any>) {
+export async function updateChannel(channelId: string, updates: Record<string, any>, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}`, {
     method: 'PATCH',
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
     body: JSON.stringify(updates),
   });
 }
 
-export async function deleteChannel(channelId: string) {
+export async function deleteChannel(channelId: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}`, {
     method: 'DELETE',
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
   });
 }
 
-export async function fetchChannelMappings(channelId: string) {
-  return apiFetch(`/api/channels/${channelId}/mappings`);
+export async function fetchChannelMappings(channelId: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return apiFetch(`/api/channels/${channelId}/mappings`, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 }
 
-export async function saveChannelMappings(channelId: string, mappings: any[]) {
+export async function saveChannelMappings(channelId: string, mappings: any[], hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}/mappings`, {
     method: 'POST',
-    body: JSON.stringify({ mappings }),
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ mappings, hotelId: targetHotelId }),
   });
 }
 
-export async function syncChannelInventory(channelId: string, startDate?: string, endDate?: string) {
+export async function syncChannelInventory(channelId: string, startDate?: string, endDate?: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}/sync/inventory`, {
     method: 'POST',
-    body: JSON.stringify({ startDate, endDate }),
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ startDate, endDate, hotelId: targetHotelId }),
   });
 }
 
-export async function syncChannelRates(channelId: string, startDate?: string, endDate?: string) {
+export async function syncChannelRates(channelId: string, startDate?: string, endDate?: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}/sync/rates`, {
     method: 'POST',
-    body: JSON.stringify({ startDate, endDate }),
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ startDate, endDate, hotelId: targetHotelId }),
   });
 }
 
-export async function pullChannelFutureBookings(channelId: string, startDate?: string, endDate?: string) {
+export async function pullChannelFutureBookings(channelId: string, startDate?: string, endDate?: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch(`/api/channels/${channelId}/future-bookings`, {
     method: 'POST',
-    body: JSON.stringify({ startDate, endDate }),
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ startDate, endDate, hotelId: targetHotelId }),
   });
 }
 
-export async function fetchChannelReservations(channelId: string) {
-  return apiFetch(`/api/channels/${channelId}/reservations`);
+export async function fetchChannelReservations(channelId: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return apiFetch(`/api/channels/${channelId}/reservations`, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 }
 
-export async function fetchChannelLogs(channelId: string) {
-  return apiFetch(`/api/channels/${channelId}/logs`);
+export async function fetchChannelLogs(channelId: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
+  return apiFetch(`/api/channels/${channelId}/logs`, {
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
+  });
 }
 
-export async function discoverChannels() {
+export async function discoverChannels(hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch('/api/channels/discover', {
-    method: 'POST'
+    method: 'POST',
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
   });
 }
 
-export async function addChannel(channelType: string, displayName: string, externalChannelId?: string) {
+export async function addChannel(channelType: string, displayName: string, externalChannelId?: string, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch('/api/channels', {
     method: 'POST',
-    body: JSON.stringify({ channelType, displayName, externalChannelId })
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ channelType, displayName, externalChannelId, hotelId: targetHotelId })
   });
 }
 
-export async function testChannelConnectionDirect() {
+export async function testChannelConnectionDirect(hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch('/api/channels/test-connection', {
-    method: 'POST'
+    method: 'POST',
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {}
   });
 }
 
-export async function triggerChannelLiveSync(params?: { startDate?: string; endDate?: string; force?: boolean }) {
+export async function triggerChannelLiveSync(params?: { startDate?: string; endDate?: string; force?: boolean }, hotelIdOverride?: string) {
+  const targetHotelId = hotelIdOverride || getCurrentHotelId();
   return apiFetch('/api/channels/live-sync', {
     method: 'POST',
-    body: JSON.stringify(params || {})
+    headers: targetHotelId ? { 'x-hotel-id': targetHotelId } : {},
+    body: JSON.stringify({ ...(params || {}), hotelId: targetHotelId })
   });
 }
+
 
 
 

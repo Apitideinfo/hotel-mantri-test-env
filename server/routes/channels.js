@@ -279,13 +279,9 @@ router.get('/settings', checkAuth, async (req, res) => {
 
     if (error) throw error;
 
-    const { data: hotel } = await supabaseServiceRole
-      .from('hotels')
-      .select('property_code, hotel_name')
-      .eq('id', hotelId)
-      .maybeSingle();
-
-    const hotelCode = settings?.aiosell_hotel_code || hotel?.property_code || '';
+    // hotelCode MUST strictly come from channel_settings.aiosell_hotel_code
+    // NEVER fall back to hotels.property_code (which is an internal PMS code, not an Aiosell code)
+    const hotelCode = (settings?.aiosell_hotel_code && String(settings.aiosell_hotel_code).trim()) || '';
     const partnerId = settings?.aiosell_partner_id || process.env.AIOSELL_PARTNER_ID || 'hotel-mantri-pms';
     const environment = settings?.aiosell_environment || process.env.AIOSELL_ENVIRONMENT || 'production';
     const status = settings?.status || settings?.aiosell_status || 'disconnected';
@@ -324,7 +320,7 @@ router.get('/settings', checkAuth, async (req, res) => {
  */
 router.post('/settings', checkAuth, requireRoles(['super_admin']), async (req, res) => {
   try {
-    const hotelId = req.hotelId || req.auth?.hotelId;
+    const hotelId = req.body?.hotelId || req.body?.hotel_id || req.headers['x-hotel-id'] || req.query.hotelId || req.hotelId || req.auth?.hotelId;
     const { hotelCode, partnerId, environment, apiBaseUrl } = req.body;
     if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
@@ -335,12 +331,36 @@ router.post('/settings', checkAuth, requireRoles(['super_admin']), async (req, r
       .eq('hotel_id', hotelId)
       .maybeSingle();
 
+    const cleanHotelCode = hotelCode !== undefined ? (hotelCode ? String(hotelCode).trim() : null) : existing?.aiosell_hotel_code;
+    const cleanPartnerId = partnerId !== undefined ? (partnerId ? String(partnerId).trim() : null) : existing?.aiosell_partner_id;
+
+    // Strict multi-tenant isolation: prevent assigning another hotel's external Aiosell code
+    if (cleanHotelCode) {
+      const { data: conflict } = await supabaseServiceRole
+        .from('channel_settings')
+        .select('hotel_id')
+        .eq('aiosell_hotel_code', cleanHotelCode)
+        .neq('hotel_id', hotelId)
+        .maybeSingle();
+
+      if (conflict) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_HOTEL_CODE',
+          message: `The Aiosell hotel code '${cleanHotelCode}' is already linked to another property in Hotel Mantri. Each property must have its own unique external hotel code.`,
+          requestId: req.requestId
+        });
+      }
+    }
+
     const payload = {
       hotel_id: hotelId,
-      aiosell_hotel_code: hotelCode !== undefined ? (hotelCode ? String(hotelCode).trim() : null) : existing?.aiosell_hotel_code,
-      aiosell_partner_id: partnerId !== undefined ? (partnerId ? String(partnerId).trim() : null) : existing?.aiosell_partner_id,
+      aiosell_hotel_code: cleanHotelCode,
+      aiosell_partner_id: cleanPartnerId,
       aiosell_environment: environment || existing?.aiosell_environment || 'production',
       api_base_url: apiBaseUrl !== undefined ? apiBaseUrl : existing?.api_base_url,
+      // If hotel code was cleared, set status to disconnected
+      ...(cleanHotelCode ? {} : { aiosell_status: 'disconnected', last_test_result: null }),
       updated_at: new Date().toISOString()
     };
 
@@ -364,13 +384,8 @@ router.post('/settings', checkAuth, requireRoles(['super_admin']), async (req, r
       savedData = data;
     }
 
-    // Also sync property_code to hotels table if provided
-    if (hotelCode) {
-      await supabaseServiceRole
-        .from('hotels')
-        .update({ property_code: String(hotelCode).trim() })
-        .eq('id', hotelId);
-    }
+    // NOTE: We do NOT sync hotelCode to hotels.property_code!
+    // A hotel's internal property code is completely distinct from the channel manager property code.
 
     await recordChannelAudit({
       req,

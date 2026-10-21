@@ -83,12 +83,16 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const data = await getChannelManagerOverview();
+      const data = await getChannelManagerOverview(hotel.id);
       setOverview(data);
       if (data.settings) {
         setMasterHotelCode(data.settings.aiosell_hotel_code || '');
         setMasterPartnerId(data.settings.aiosell_partner_id || '');
         setMasterEnv((data.settings.environment as any) || 'production');
+      } else {
+        setMasterHotelCode('');
+        setMasterPartnerId('');
+        setMasterEnv('production');
       }
     } catch (err: any) {
       setError(err?.message || 'Failed to load OTA configuration data');
@@ -96,10 +100,17 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [hotel.id]);
 
   useEffect(() => {
     setLoading(true);
+    // Explicitly reset form state on hotel switch so previous hotel's data never leaks
+    setOverview(null);
+    setMasterHotelCode('');
+    setMasterPartnerId('');
+    setMasterEnv('production');
+    setMasterTestResult(null);
+    setBannerNotice(null);
     loadData();
   }, [hotel.id, loadData]);
 
@@ -115,10 +126,11 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     setBannerNotice(null);
     try {
       await saveChannelSettings({
-        aiosell_hotel_code: masterHotelCode.trim(),
+        hotelId: hotel.id,
+        aiosell_hotel_code: masterHotelCode.trim() || null,
         aiosell_partner_id: masterPartnerId.trim() || undefined,
         environment: masterEnv
-      });
+      }, hotel.id);
       setBannerNotice({
         type: 'success',
         message: 'Master channel manager property code saved successfully.'
@@ -139,10 +151,10 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     setTestingMaster(true);
     setMasterTestResult(null);
     try {
-      const res: any = await testChannelConnectionDirect();
+      const res: any = await testChannelConnectionDirect(hotel.id);
       setMasterTestResult({
         success: res.connected ?? res.success,
-        latencyMs: res.latencyMs,
+        latencyMs: res.latencyMs || res.responseTimeMs,
         message: res.message || (res.connected ? 'Master connection healthy.' : 'Connection check failed.')
       });
     } catch (err: any) {
@@ -158,7 +170,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
   // Toggle Channel Enabled Status
   const handleToggleChannel = async (channel: ChannelConnection, newStatus: boolean) => {
     try {
-      await updateChannel(channel.id, { isEnabled: newStatus });
+      await updateChannel(channel.id, { isEnabled: newStatus }, hotel.id);
       setBannerNotice({
         type: 'success',
         message: `${channel.channel_name || channel.channel_type} ${newStatus ? 'enabled' : 'disabled'} successfully.`
@@ -176,7 +188,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
   const handleValidateChannel = async (channel: ChannelConnection) => {
     setValidatingChannelId(channel.id);
     try {
-      const res = await fetchMappingValidation(channel.id);
+      const res = await fetchMappingValidation(channel.id, hotel.id);
       setValidationResult({ channelName: channel.channel_name || channel.channel_type, ...res });
     } catch (err: any) {
       setBannerNotice({
@@ -193,7 +205,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     setShowAuditModal(true);
     setLoadingAudit(true);
     try {
-      const logs = await fetchChannelAuditHistory();
+      const logs = await fetchChannelAuditHistory(hotel.id);
       setAuditLogs(logs);
     } catch (err: any) {
       setBannerNotice({
@@ -210,7 +222,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     if (!channelToDelete) return;
     setIsDeletingChannel(true);
     try {
-      await deleteChannel(channelToDelete.id);
+      await deleteChannel(channelToDelete.id, hotel.id);
       setBannerNotice({
         type: 'success',
         message: `Disconnected ${channelToDelete.channel_name || channelToDelete.channel_type}.`
@@ -629,6 +641,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
       {showAddChannelModal && (
         <AddChannelConfigModal
           existingConnections={connections}
+          hotelId={hotel.id}
           onClose={() => setShowAddChannelModal(false)}
           onSuccess={async () => {
             setShowAddChannelModal(false);
@@ -645,6 +658,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
       {selectedChannelForConfig && (
         <ChannelCredentialsModal
           channel={selectedChannelForConfig}
+          hotelId={hotel.id}
           onClose={() => setSelectedChannelForConfig(null)}
           onSuccess={async () => {
             setSelectedChannelForConfig(null);
@@ -663,6 +677,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
           channel={selectedChannelForRoomMap}
           categories={categories}
           existingMappings={mappings.filter(m => m.channel_connection_id === selectedChannelForRoomMap.id)}
+          hotelId={hotel.id}
           onClose={() => setSelectedChannelForRoomMap(null)}
           onSuccess={async () => {
             setSelectedChannelForRoomMap(null);
@@ -682,6 +697,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
           ratePlans={ratePlans}
           categories={categories}
           existingMappings={mappings.filter(m => m.channel_connection_id === selectedChannelForRateMap.id)}
+          hotelId={hotel.id}
           onClose={() => setSelectedChannelForRateMap(null)}
           onSuccess={async () => {
             setSelectedChannelForRateMap(null);
@@ -856,9 +872,10 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
 
 const AddChannelConfigModal: React.FC<{
   existingConnections: ChannelConnection[];
+  hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ existingConnections, onClose, onSuccess }) => {
+}> = ({ existingConnections, hotelId, onClose, onSuccess }) => {
   const [channelType, setChannelType] = useState('makemytrip');
   const [displayName, setDisplayName] = useState('MakeMyTrip');
   const [externalPropertyId, setExternalPropertyId] = useState('');
@@ -893,7 +910,7 @@ const AddChannelConfigModal: React.FC<{
     setLoading(true);
     setError(null);
     try {
-      await addChannel(channelType, displayName, externalPropertyId.trim() || undefined);
+      await addChannel(channelType, displayName, externalPropertyId.trim() || undefined, hotelId);
       onSuccess();
     } catch (err: any) {
       setError(err?.message || 'Failed to add OTA channel.');
@@ -1038,9 +1055,10 @@ const AddChannelConfigModal: React.FC<{
 
 const ChannelCredentialsModal: React.FC<{
   channel: ChannelConnection;
+  hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ channel, onClose, onSuccess }) => {
+}> = ({ channel, hotelId, onClose, onSuccess }) => {
   const [externalId, setExternalId] = useState(channel.external_channel_id || '');
   const [displayName, setDisplayName] = useState(channel.channel_name || '');
   const [isEnabled, setIsEnabled] = useState(channel.is_enabled !== false);
@@ -1059,7 +1077,7 @@ const ChannelCredentialsModal: React.FC<{
         externalChannelId: externalId.trim() || undefined,
         displayName: displayName.trim() || undefined,
         isEnabled
-      });
+      }, hotelId);
       onSuccess();
     } catch (err: any) {
       setError(err?.message || 'Failed to update channel parameters');
@@ -1182,9 +1200,10 @@ const RoomMappingModal: React.FC<{
   channel: ChannelConnection;
   categories: RoomCategory[];
   existingMappings: ChannelRateMapping[];
+  hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ channel, categories, existingMappings, onClose, onSuccess }) => {
+}> = ({ channel, categories, existingMappings, hotelId, onClose, onSuccess }) => {
   const [mappingsState, setMappingsState] = useState<Record<string, { code: string; name: string }>>(() => {
     const init: Record<string, { code: string; name: string }> = {};
     for (const cat of categories) {
@@ -1234,7 +1253,7 @@ const RoomMappingModal: React.FC<{
           status: 'mapped'
         }));
 
-      await saveChannelMappings(channel.id, payload);
+      await saveChannelMappings(channel.id, payload, hotelId);
       onSuccess();
     } catch (err: any) {
       setError(err?.message || 'Failed to save room mappings.');
@@ -1356,9 +1375,10 @@ const RateMappingModal: React.FC<{
   ratePlans: RatePlan[];
   categories: RoomCategory[];
   existingMappings: ChannelRateMapping[];
+  hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ channel, ratePlans, categories, existingMappings, onClose, onSuccess }) => {
+}> = ({ channel, ratePlans, categories, existingMappings, hotelId, onClose, onSuccess }) => {
   const [rateMappings, setRateMappings] = useState<Record<string, { code: string; name: string }>>(() => {
     const init: Record<string, { code: string; name: string }> = {};
     for (const plan of ratePlans) {
@@ -1397,7 +1417,7 @@ const RateMappingModal: React.FC<{
           };
         });
 
-      await saveChannelMappings(channel.id, payload);
+      await saveChannelMappings(channel.id, payload, hotelId);
       onSuccess();
     } catch (err: any) {
       setError(err?.message || 'Failed to save rate plan mappings.');
