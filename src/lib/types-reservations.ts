@@ -87,6 +87,7 @@ export interface ReservationInput {
   guest_id?: string | null;
   room_category_id?: string | null;
   allowEmptyEmail?: boolean;
+  allowBackdated?: boolean;
 }
 
 // ── Phase 9: Group Bookings ──

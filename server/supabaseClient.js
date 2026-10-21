@@ -135,3 +135,22 @@ export const ensureAuth = async () => {
   return getServiceRoleClient();
 };
 
+/**
+ * Resolves and verifies a user from a JWT token using the service role client.
+ * Returns the user object if valid, null otherwise.
+ *
+ * @param {string} jwt - The JWT access token to verify
+ * @returns {Promise<Object|null>} - The Supabase user object, or null
+ */
+export const resolveUserFromJwt = async (jwt) => {
+  try {
+    if (!jwt || typeof jwt !== 'string') return null;
+    const client = getServiceRoleClient();
+    const { data: { user }, error } = await client.auth.getUser(jwt);
+    if (error || !user) return null;
+    return user;
+  } catch {
+    return null;
+  }
+};
+

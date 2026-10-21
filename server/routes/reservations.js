@@ -460,6 +460,7 @@ router.post('/', checkAuth, async (req, res) => {
       inputs: cleanList,
       userId,
       allowEmptyEmail: Boolean(req.body?.allowEmptyEmail || cleanList.some(i => i.allowEmptyEmail)),
+      allowBackdated: Boolean(req.body?.allowBackdated || cleanList.some(i => i.allowBackdated || i.allow_backdated)),
       idempotencyKey,
     });
 

@@ -153,6 +153,10 @@ export const NewReservationWizard = ({
   const [step, setStep] = useState<WizardStep>(1);
 
   /* ── State: Step 1 – Stay Details ── */
+  const todayBusinessDate = useMemo(() => {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+  }, []);
+  const [allowBackdated, setAllowBackdated] = useState(false);
   const [checkIn, setCheckIn] = useState(preselectCheckIn ?? defaultDate);
   const [checkOut, setCheckOut] = useState(preselectCheckOut ?? addDays(preselectCheckIn ?? defaultDate, 1));
   const [numRooms, setNumRooms] = useState<number>(0);
@@ -706,7 +710,11 @@ export const NewReservationWizard = ({
         setError('Please select check-in and check-out dates.');
         return false;
       }
-      if (new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
+      if (checkIn < todayBusinessDate && !allowBackdated) {
+        setError(`Check-in date (${checkIn}) cannot be in the past. Current hotel business date is ${todayBusinessDate}. Please choose today or a future date, or enable backdated entry for historical stays.`);
+        return false;
+      }
+      if (checkOut <= checkIn || new Date(checkOut + 'T00:00:00') <= new Date(checkIn + 'T00:00:00')) {
         setError('Check-out date must be strictly after check-in date.');
         return false;
       }
@@ -826,6 +834,7 @@ export const NewReservationWizard = ({
       createdBy: createdBy.trim(),
       status: 'confirmed',
       allowEmptyEmail: true,
+      allowBackdated: allowBackdated || checkIn < todayBusinessDate,
       rooms,
       categories,
       roomDetails: roomRows.map((r) => ({
@@ -1376,6 +1385,31 @@ export const NewReservationWizard = ({
                         <span className="text-[10px] font-bold text-indigo-500">Auto calculated</span>
                       </div>
                     </div>
+
+                    {/* Past Date Warning & Backdated Toggle */}
+                    {checkIn < todayBusinessDate && (
+                      <div className="p-3.5 bg-amber-50 border border-amber-200/90 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="space-y-1">
+                          <p className="font-bold">Past Stay Dates Detected</p>
+                          <p className="text-[11px] text-amber-700">
+                            Selected check-in ({checkIn}) is before the current hotel business date ({todayBusinessDate}).
+                          </p>
+                          <label className="flex items-center gap-2 mt-1 cursor-pointer font-bold select-none text-[11px] text-amber-900">
+                            <input
+                              type="checkbox"
+                              checked={allowBackdated}
+                              onChange={(e) => {
+                                setAllowBackdated(e.target.checked);
+                                if (e.target.checked) setError(null);
+                              }}
+                              className="rounded border-amber-400 text-amber-600 focus:ring-amber-500 w-4 h-4 cursor-pointer"
+                            />
+                            <span>Authorize as backdated / historical front-office entry</span>
+                          </label>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Room & Guest Steppers */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">

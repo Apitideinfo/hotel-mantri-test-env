@@ -157,7 +157,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId 
     try {
       setLoading(true);
       setError(null);
-      const data = await getChannelManagerOverview();
+      const data = await getChannelManagerOverview(hotelId);
       setOverview(data);
     } catch (e: any) {
       const rawMsg = e instanceof Error ? e.message : String(e || 'Failed to load Channel Manager');
@@ -575,7 +575,7 @@ export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId 
                 loading={loading}
               />
             )}
-            {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} />}
+            {tab === 'inventory' && <InventoryTab key={hotelId || 'inventory'} categories={overview.categories} isLiveMode={overview.isLiveMode} onNavigate={onNavigate} />}
             {tab === 'rate_push' && (
               <OwnerRatePushTab
                 key={hotelId || 'rate_push'}
@@ -898,7 +898,15 @@ const OverviewTab = ({ overview, onNavigate, onTab, mode = 'hotel_owner' }: {
 
 type RangePreset = '7' | '14' | '30' | 'custom';
 
-const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; isLiveMode: boolean }) => {
+const InventoryTab = ({
+  categories,
+  isLiveMode,
+  onNavigate
+}: {
+  categories: RoomCategory[];
+  isLiveMode: boolean;
+  onNavigate?: (screen: string) => void;
+}) => {
   const { hotelId } = useHotel();
   const [startDate, setStartDate] = useState(todayStr());
   const [endDate, setEndDate] = useState(addDays(todayStr(), 6));
@@ -1011,6 +1019,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
             room_category_id: item.room_category_id,
             date: item.date,
             availability: item.available,
+            is_unconfigured: item.is_unconfigured,
             base_rate: item.base_rate,
             channel_rate: (item as any).channel_rate ?? 0,
             min_stay: item.min_stay,
@@ -1049,29 +1058,20 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
     };
   }, [load]);
 
-  // Direct Supabase realtime listener for channel_inventory_restrictions scoped to this hotel
-  useEffect(() => {
-    if (!hotelId) return;
-    const channel = supabase
-      .channel(`inventory_tab_changes_${hotelId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'channel_inventory_restrictions', filter: `hotel_id=eq.${hotelId}` },
-        () => {
-          load();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [hotelId, load]);
-
-  const getR = (catId: string, date: string): Partial<ChannelInventoryRestriction> => {
-    return restrictions.get(`${catId}|${date}`) ?? {
-      base_rate: 0, channel_rate: 0, availability: 0, min_stay: 1, max_stay: 0,
-      stop_sell: false, closed_to_arrival: false, closed_to_departure: false,
+  const getR = (catId: string, date: string): Partial<ChannelInventoryRestriction> & { is_unconfigured?: boolean; base_rate?: number } => {
+    const existing = restrictions.get(`${catId}|${date}`);
+    if (existing) return existing as any;
+    const cat = categories.find((c) => c.id === catId);
+    return {
+      base_rate: cat?.default_tariff ?? 0,
+      channel_rate: 0,
+      availability: undefined,
+      is_unconfigured: true,
+      min_stay: 1,
+      max_stay: 0,
+      stop_sell: false,
+      closed_to_arrival: false,
+      closed_to_departure: false,
     };
   };
 
@@ -1083,10 +1083,18 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
 
   if (categories.length === 0) {
     return (
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-8 text-center">
-        <Building2 className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-        <p className="text-sm text-slate-500 mb-2">No room categories configured.</p>
-        <p className="text-xs text-slate-400">Configure room categories in Property Master to use the Channel Manager inventory calendar.</p>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-card p-8 text-center max-w-xl mx-auto my-8">
+        <Building2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+        <h3 className="text-base font-bold text-slate-800 mb-1">No room categories configured yet</h3>
+        <p className="text-sm text-slate-500 mb-4">No room categories have been configured for this hotel yet. Add room categories and rooms in Hotel Configuration to manage inventory.</p>
+        {onNavigate && (
+          <button
+            onClick={() => onNavigate('property_master')}
+            className="inline-flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm transition"
+          >
+            <Building2 className="w-4 h-4" /> Go to Hotel Configuration
+          </button>
+        )}
       </div>
     );
   }
@@ -1223,13 +1231,17 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                       key: 'avail', label: 'Availability', field: 'availability',
                       render: (d: string) => {
                         const r = getR(cat.id, d);
-                        const val = toNum(r.availability);
+                        const isUnconfigured = Boolean(r.is_unconfigured || r.availability === undefined || r.availability === null);
+                        const val = isUnconfigured ? null : toNum(r.availability);
                         return (
                           <button
                             onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })}
-                            className={`w-full text-center text-sm font-bold rounded-lg py-1.5 px-1 border transition hover:ring-2 hover:ring-brand-300 ${availColor(val, 10, Boolean(r.stop_sell))}`}
+                            className={`w-full text-center text-sm font-bold rounded-lg py-1.5 px-1 border transition hover:ring-2 hover:ring-brand-300 ${
+                              isUnconfigured ? 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100' : availColor(val ?? 0, 10, Boolean(r.stop_sell))
+                            }`}
+                            title={isUnconfigured ? 'Inventory unconfigured / No physical rooms assigned' : undefined}
                           >
-                            {val}
+                            {isUnconfigured ? <span className="text-slate-400 font-normal">—</span> : val}
                           </button>
                         );
                       },
@@ -1238,7 +1250,7 @@ const InventoryTab = ({ categories, isLiveMode }: { categories: RoomCategory[]; 
                       key: 'rate', label: 'Base Rate', field: 'base_rate',
                       render: (d: string) => {
                         const r = getR(cat.id, d);
-                        const val = toNum(r.base_rate);
+                        const val = toNum(r.base_rate) > 0 ? toNum(r.base_rate) : toNum(cat.default_tariff);
                         return (
                           <button
                             onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })}

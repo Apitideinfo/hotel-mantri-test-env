@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Check, Building2, User, MapPin, Layers, BedDouble, CreditCard, ToggleLeft, KeyRound, Plus, Trash2, X, AlertTriangle, RotateCcw, Trash, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Building2, User, MapPin, Layers, BedDouble, CreditCard, ToggleLeft, KeyRound, Plus, Trash2, X, AlertTriangle, RotateCcw, Trash, Eye, EyeOff, Mail } from 'lucide-react';
 import {
-  checkExistingOnboarding, onboardHotelAtomically, discardOnboardingAttempt,
+  checkExistingOnboarding, onboardHotelAtomically, discardOnboardingAttempt, sendWelcomeEmail,
 } from '../api';
 import type { EnterpriseHotel } from '../types';
 import { MODULE_KEYS, MODULE_LABELS } from '../types';
@@ -31,6 +31,14 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
   const [error, setError] = useState<string | null>(null);
   const [completed, setCompleted] = useState(false);
 
+  // Welcome email state
+  const [createdHotelId, setCreatedHotelId] = useState<string | null>(null);
+  const [emailStatus, setEmailStatus] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
+  const [emailMessage, setEmailMessage] = useState<string | null>(null);
+  const [emailSentAt, setEmailSentAt] = useState<string | null>(null);
+  const [emailMessageId, setEmailMessageId] = useState<string | null>(null);
+  const [hasPasswordSetupLink, setHasPasswordSetupLink] = useState(false);
+
   // Duplicate/resume state
   const [existingState, setExistingState] = useState<ExistingOnboardingState | null>(null);
   const [checking, setChecking] = useState(false);
@@ -53,9 +61,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
 
   // Step 4: Room categories
   const [categories, setCategories] = useState<CatRow[]>([
-    { name: 'Standard', tariff: 999, extraBed: 200 },
-    { name: 'Deluxe', tariff: 1499, extraBed: 250 },
-    { name: 'Super Deluxe', tariff: 1999, extraBed: 300 },
+    { name: '', tariff: 0, extraBed: 0 },
   ]);
 
   // Step 5: Room numbers
@@ -82,7 +88,7 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
   const generateRoomsForCount = (targetCount: number, cats: CatRow[]): RoomRow[] => {
     if (targetCount <= 0) return [];
     const validCats = cats.filter((c) => c.name.trim());
-    const fallbackCats: CatRow[] = validCats.length > 0 ? validCats : [{ name: 'Standard', tariff: 999, extraBed: 200 }];
+    const fallbackCats: CatRow[] = validCats.length > 0 ? validCats : [{ name: 'Room', tariff: 1000, extraBed: 0 }];
     const newRooms: RoomRow[] = [];
     const roomsPerFloor = Math.min(20, Math.ceil(targetCount / Math.max(1, Math.ceil(targetCount / 20))));
     let floorNum = 1;
@@ -224,11 +230,54 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
       }
 
       setCompleted(true);
+      const hid = result.hotel_id ?? null;
+      if (hid) {
+        setCreatedHotelId(hid);
+      }
+      // Trigger welcome email automatically (non-blocking)
+      triggerWelcomeEmail(hid);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(`Unexpected error: ${msg}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const triggerWelcomeEmail = async (overrideHotelId?: string | null) => {
+    const targetHotelId = overrideHotelId || createdHotelId;
+    if (!targetHotelId) {
+      setEmailStatus('failed');
+      setEmailMessage('Hotel ID not available to send welcome email.');
+      return;
+    }
+
+    setEmailStatus('sending');
+    setEmailMessage(null);
+    try {
+      const res = await sendWelcomeEmail({
+        hotelId: targetHotelId,
+        hotelName: hotelName.trim(),
+        ownerName: ownerName.trim(),
+        ownerEmail: ownerEmail.trim(),
+        totalRooms,
+        categoryCount: categories.filter(c => c.name.trim()).length,
+        planName: planId ? 'Selected Plan' : '14-Day Free Trial',
+      });
+
+      if (res.success) {
+        setEmailStatus('sent');
+        setEmailMessage(res.message || `Welcome email sent to ${ownerEmail.trim()}`);
+        setEmailMessageId(res.messageId || null);
+        setHasPasswordSetupLink(Boolean(res.hasPasswordSetupLink));
+        setEmailSentAt(new Date().toLocaleTimeString());
+      } else {
+        setEmailStatus('failed');
+        setEmailMessage(res.message || 'Failed to deliver welcome email. Please check SMTP settings.');
+      }
+    } catch (err) {
+      setEmailStatus('failed');
+      setEmailMessage(err instanceof Error ? err.message : 'Network error dispatching welcome email.');
     }
   };
 
@@ -326,15 +375,160 @@ export const OnboardingWizard = ({ onComplete, onCancel }: Props) => {
 
   if (completed) {
     return (
-      <div className="max-w-lg mx-auto py-12 text-center">
-        <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Check className="w-8 h-8 text-emerald-600" />
+      <div className="max-w-2xl mx-auto py-8 space-y-6">
+        {/* Main Success Header */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm text-center">
+          <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 ring-8 ring-emerald-50">
+            <Check className="w-8 h-8 text-emerald-600" />
+          </div>
+          <h2 className="text-2xl font-bold text-slate-900">Hotel Onboarded Successfully!</h2>
+          <p className="text-slate-600 mt-2 text-sm max-w-lg mx-auto">
+            Property <strong>"{hotelName}"</strong> has been created with a 14-day trial, {categories.filter(c => c.name.trim()).length} room categories, and {rooms.length} room inventory records.
+          </p>
+
+          {/* Quick Info Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 text-left">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Property</span>
+              <span className="text-sm font-bold text-slate-800 truncate block mt-0.5">{hotelName}</span>
+              {propertyCode ? (
+                <span className="text-xs text-slate-500 font-mono">({propertyCode})</span>
+              ) : (
+                <span className="text-xs text-slate-400">{city || 'Location'}</span>
+              )}
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Owner</span>
+              <span className="text-sm font-bold text-slate-800 truncate block mt-0.5">{ownerName}</span>
+              <span className="text-xs text-slate-500 truncate block">{ownerMobile || 'No phone'}</span>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Owner Login</span>
+              <span className="text-xs font-mono font-medium text-slate-700 truncate block mt-1" title={ownerEmail}>
+                {ownerEmail}
+              </span>
+            </div>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">Inventory</span>
+              <span className="text-sm font-bold text-slate-800 block mt-0.5">{rooms.length} Rooms</span>
+              <span className="text-xs text-slate-500 block">{categories.filter(c => c.name.trim()).length} Categories</span>
+            </div>
+          </div>
         </div>
-        <h2 className="text-xl font-bold text-slate-900">Hotel Onboarded Successfully!</h2>
-        <p className="text-sm text-slate-500 mt-2">"{hotelName}" has been created with a 14-day trial, {categories.length} room categories, {rooms.length} rooms, and an owner account. The owner can sign in with their email and password.</p>
-        <button onClick={onComplete} className="mt-6 bg-sky-600 hover:bg-sky-700 text-white font-semibold px-6 py-2.5 rounded-xl transition">
-          Go to Hotel List
-        </button>
+
+        {/* Welcome Email Delivery Status Card */}
+        <div className={`border rounded-2xl p-5 sm:p-6 transition-all ${
+          emailStatus === 'sent'
+            ? 'bg-emerald-50/80 border-emerald-300'
+            : emailStatus === 'failed'
+            ? 'bg-amber-50/80 border-amber-300'
+            : emailStatus === 'sending'
+            ? 'bg-sky-50/80 border-sky-300'
+            : 'bg-slate-50 border-slate-200'
+        }`}>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3.5">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${
+                emailStatus === 'sent'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : emailStatus === 'failed'
+                  ? 'bg-amber-100 text-amber-700'
+                  : 'bg-sky-100 text-sky-700'
+              }`}>
+                {emailStatus === 'sending' && <RotateCcw className="w-5 h-5 animate-spin" />}
+                {emailStatus === 'sent' && <Mail className="w-5 h-5 text-emerald-700" />}
+                {emailStatus === 'failed' && <AlertTriangle className="w-5 h-5 text-amber-700" />}
+                {emailStatus === 'idle' && <Mail className="w-5 h-5 text-slate-500" />}
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    {emailStatus === 'sending' && 'Sending Welcome Email...'}
+                    {emailStatus === 'sent' && 'Welcome Email Delivered'}
+                    {emailStatus === 'failed' && 'Welcome Email Delivery Incomplete'}
+                    {emailStatus === 'idle' && 'Preparing Welcome Email...'}
+                  </h3>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                    emailStatus === 'sent'
+                      ? 'bg-emerald-200 text-emerald-900'
+                      : emailStatus === 'failed'
+                      ? 'bg-amber-200 text-amber-900'
+                      : 'bg-sky-200 text-sky-900'
+                  }`}>
+                    {emailStatus}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600">
+                  Recipient: <strong className="text-slate-800 font-mono">{ownerEmail}</strong>
+                </p>
+
+                {emailStatus === 'sent' && (
+                  <div className="mt-2 text-xs text-emerald-800 space-y-1">
+                    <p className="flex items-center gap-1.5 font-medium">
+                      <span className="text-emerald-600">✓</span> Professional onboarding email sent to hotel owner.
+                    </p>
+                    {hasPasswordSetupLink ? (
+                      <p className="flex items-center gap-1.5 text-emerald-700">
+                        <span className="text-emerald-600">✓</span> Expiring 72-hour secure password setup link included.
+                      </p>
+                    ) : (
+                      <p className="flex items-center gap-1.5 text-emerald-700">
+                        <span className="text-emerald-600">✓</span> Portal login link & secure account instructions included.
+                      </p>
+                    )}
+                    {emailSentAt && (
+                      <p className="text-[11px] text-emerald-600">Dispatched at {emailSentAt}</p>
+                    )}
+                    {emailMessageId && (
+                      <p className="text-[11px] font-mono text-emerald-600/80 truncate max-w-sm">
+                        Message ID: {emailMessageId}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {emailStatus === 'failed' && (
+                  <div className="mt-2 text-xs text-amber-900 space-y-1">
+                    <p className="font-semibold">
+                      Hotel creation succeeded, but the welcome email could not be delivered:
+                    </p>
+                    <p className="p-2.5 rounded-lg bg-white/90 border border-amber-200 font-mono text-[11px] text-red-700">
+                      {emailMessage || 'SMTP delivery failed. Check SMTP configuration in server settings.'}
+                    </p>
+                    <p className="text-[11px] text-amber-800">
+                      The hotel account is active and the owner can log in or reset password at any time. You can also retry sending below.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Resend button */}
+            {(emailStatus === 'failed' || emailStatus === 'sent') && (
+              <button
+                type="button"
+                onClick={() => triggerWelcomeEmail()}
+                disabled={emailStatus === 'sending'}
+                className="flex items-center gap-1.5 bg-white hover:bg-slate-50 border border-slate-300 hover:border-slate-400 text-slate-700 hover:text-slate-900 text-xs font-semibold px-3 py-2 rounded-xl transition shadow-sm shrink-0 disabled:opacity-50"
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${emailStatus === 'sending' ? 'animate-spin' : ''}`} />
+                {emailStatus === 'failed' ? 'Retry Email' : 'Resend Email'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Action Button */}
+        <div className="flex justify-center pt-2">
+          <button
+            onClick={onComplete}
+            className="bg-sky-600 hover:bg-sky-700 text-white font-semibold px-8 py-2.5 rounded-xl transition shadow-sm text-sm"
+          >
+            Go to Hotel List
+          </button>
+        </div>
       </div>
     );
   }

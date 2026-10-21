@@ -837,11 +837,13 @@ export const onboardHotelAtomically = async (payload: {
       };
     }
 
+    const reqId = `HM-ONB-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const res = await fetch(`${SUPABASE_URL}/functions/v1/hotel-onboarding`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        'x-request-id': reqId,
       },
       body: JSON.stringify({ action: 'onboard_hotel', ...payload }),
     });
@@ -883,6 +885,73 @@ export const onboardHotelAtomically = async (payload: {
 export const discardOnboardingAttempt = async (attemptId: string, hotelId: string): Promise<void> => {
   await supabase.from('onboarding_attempts').delete().eq('id', attemptId);
   await supabase.from('hotels').delete().eq('id', hotelId);
+};
+
+// ── Welcome Email ──
+
+export interface WelcomeEmailResult {
+  success: boolean;
+  messageId?: string;
+  hasPasswordSetupLink?: boolean;
+  message?: string;
+  code?: string;
+}
+
+export const sendWelcomeEmail = async (params: {
+  hotelId: string;
+  hotelName: string;
+  ownerName: string;
+  ownerEmail: string;
+  totalRooms?: number;
+  categoryCount?: number;
+  planName?: string;
+  trialEndDate?: string;
+}): Promise<WelcomeEmailResult> => {
+  try {
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) {
+      return { success: false, code: 'AUTH_REQUIRED', message: 'Session expired. Please log in again.' };
+    }
+
+    // Determine API base URL
+    const apiBaseUrl = import.meta.env.VITE_API_URL || '';
+    const url = apiBaseUrl
+      ? `${apiBaseUrl}/api/onboarding/send-welcome-email`
+      : '/api/onboarding/send-welcome-email';
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
+    });
+
+    const result = await res.json().catch(() => ({}));
+
+    if (res.ok && result.success) {
+      return {
+        success: true,
+        messageId: result.messageId,
+        hasPasswordSetupLink: result.hasPasswordSetupLink,
+        message: result.message,
+      };
+    }
+
+    return {
+      success: false,
+      code: result.code || 'SEND_FAILED',
+      message: result.message || 'Failed to send welcome email.',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      code: 'NETWORK_ERROR',
+      message: err instanceof Error ? err.message : 'Network error while sending welcome email.',
+    };
+  }
 };
 
 export const createHotelAdminAccount = async (email: string, password: string, hotelId: string) => {
