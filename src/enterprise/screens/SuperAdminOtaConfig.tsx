@@ -57,6 +57,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     success: boolean;
     latencyMs?: number;
     message?: string;
+    details?: any;
   } | null>(null);
 
   // Modals & Panels
@@ -155,12 +156,21 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
       setMasterTestResult({
         success: res.connected ?? res.success,
         latencyMs: res.latencyMs || res.responseTimeMs,
-        message: res.message || (res.connected ? 'Master connection healthy.' : 'Connection check failed.')
+        message: res.message || (res.connected ? 'Master connection healthy.' : 'Connection check failed.'),
+        details: res.details
       });
     } catch (err: any) {
       setMasterTestResult({
         success: false,
-        message: err?.message || 'Connection test failed'
+        message: err?.message || 'Connection test failed',
+        details: err?.details || {
+          status: err?.status || 500,
+          hotelCode: masterHotelCode,
+          partnerId: masterPartnerId,
+          environment: masterEnv,
+          errorCategory: err?.errorCode || err?.code || 'TEST_FAILED',
+          resolutionGuidance: err?.details?.resolutionGuidance
+        }
       });
     } finally {
       setTestingMaster(false);
@@ -431,13 +441,32 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
         </form>
 
         {masterTestResult && (
-          <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
-            masterTestResult.success ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-red-50 text-red-800 border-red-200'
+          <div className={`p-4 rounded-xl text-xs border ${
+            masterTestResult.success ? 'bg-emerald-50/90 text-emerald-800 border-emerald-200' : 'bg-red-50/90 text-red-800 border-red-200'
           }`}>
-            {masterTestResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-red-600" />}
-            <span>{masterTestResult.message}</span>
-            {masterTestResult.latencyMs && (
-              <span className="text-[11px] text-slate-500 ml-auto font-mono">Latency: {masterTestResult.latencyMs}ms</span>
+            <div className="flex items-center gap-2 font-bold">
+              {masterTestResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />}
+              <span className="text-sm">{masterTestResult.message}</span>
+              {masterTestResult.latencyMs && (
+                <span className="text-[11px] text-slate-500 ml-auto font-mono">Latency: {masterTestResult.latencyMs}ms</span>
+              )}
+            </div>
+            {masterTestResult.details && (
+              <div className="mt-2 pt-2 border-t border-slate-200/60 font-mono space-y-1 text-[11px]">
+                <p>HTTP Status: <span className="font-bold">{masterTestResult.details.status || (masterTestResult.success ? 200 : 403)}</span></p>
+                <p>Hotel Code Tested: <span className="font-bold">{masterTestResult.details.hotelCode || masterHotelCode || 'N/A'}</span></p>
+                <p>Partner ID: <span>{masterTestResult.details.partnerId || masterPartnerId || 'hotel-mantri-pms'}</span></p>
+                <p>Environment: <span>{masterTestResult.details.environment || masterEnv}</span></p>
+                {masterTestResult.details.errorCategory && (
+                  <p>Category: <span className="font-bold text-red-700">{masterTestResult.details.errorCategory}</span></p>
+                )}
+                {masterTestResult.details.resolutionGuidance && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-white/80 border border-red-200 text-slate-700 font-sans text-xs leading-relaxed">
+                    <span className="font-bold text-red-700 block mb-0.5">Resolution Required:</span>
+                    {masterTestResult.details.resolutionGuidance}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}

@@ -3575,17 +3575,17 @@ const SettingsTab = ({ settings, hotelId, onChanged }: {
     setProviderTesting(true);
     setProviderTestResult(null);
     try {
-      const res = await testChannelConnection(targetHotelId);
-      if (res.success) {
+      const res: any = await testChannelConnection(targetHotelId);
+      if (res.success && res.connected !== false) {
         setProviderTestResult({ 
           ok: true, 
           message: "✓ Provider Connected",
           details: {
-            status: res.status || 'CONNECTED',
+            status: res.status || 200,
             responseTimeMs: res.responseTimeMs || res.latencyMs || 0,
-            hotelCode: res.hotelCode,
-            partnerId: res.partnerId,
-            environment: res.environment,
+            hotelCode: res.hotelCode || hotelCode,
+            partnerId: res.partnerId || partnerId,
+            environment: res.environment || environment,
             roomsCount: res.mapping?.rooms?.length || 0,
             ratePlansCount: res.mapping?.ratePlans?.length || 0,
           }
@@ -3602,7 +3602,19 @@ const SettingsTab = ({ settings, hotelId, onChanged }: {
         onChanged();
       } else {
         const errMsg = typeof res.error === 'string' ? res.error : (res.error?.message || res.message);
-        setProviderTestResult({ ok: false, message: errMsg || "Failed to connect to Provider." });
+        setProviderTestResult({ 
+          ok: false, 
+          message: errMsg || "Failed to connect to Provider.",
+          details: res.details || {
+            status: res.status || 403,
+            responseTimeMs: res.responseTimeMs || 0,
+            hotelCode: res.hotelCode || hotelCode,
+            partnerId: res.partnerId || partnerId,
+            environment: res.environment || environment,
+            errorCategory: res.errorCode || res.code || 'ACCESS_DENIED',
+            resolutionGuidance: res.details?.resolutionGuidance
+          }
+        });
         await saveChannelSettings({
           ...settings,
           hotelId: targetHotelId,
@@ -3619,9 +3631,21 @@ const SettingsTab = ({ settings, hotelId, onChanged }: {
         : isAuthError
         ? "✕ Channel Manager Authentication Failed"
         : (rawMsg.startsWith('✕') ? rawMsg : `✕ ${rawMsg}`);
+      
+      const details = err?.details || {
+        status: err?.status || 500,
+        responseTimeMs: err?.responseTimeMs || 0,
+        hotelCode: err?.details?.hotelCode || hotelCode,
+        partnerId: err?.details?.partnerId || partnerId,
+        environment: err?.details?.environment || environment,
+        errorCategory: err?.errorCode || err?.code || 'UNKNOWN_ERROR',
+        resolutionGuidance: err?.details?.resolutionGuidance
+      };
+
       setProviderTestResult({ 
         ok: false, 
-        message: safeMsg
+        message: safeMsg,
+        details
       });
       await saveChannelSettings({
         ...settings,
@@ -3716,20 +3740,46 @@ const SettingsTab = ({ settings, hotelId, onChanged }: {
         </div>
 
         {providerTestResult && (
-          <div className={`mt-4 rounded-lg p-3 flex flex-col gap-2 animate-fade-in ${providerTestResult.ok ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
-            <div className="flex items-center gap-2">
-              {providerTestResult.ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <XCircle className="w-4 h-4 text-red-600" />}
-              <p className={`text-sm font-semibold ${providerTestResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{providerTestResult.message}</p>
-            </div>
-            {providerTestResult.details && (
-              <div className="text-xs text-emerald-700 ml-6 space-y-1">
-                <p>HTTP Status: {providerTestResult.details.status}</p>
-                <p>Response Time: {providerTestResult.details.responseTimeMs} ms</p>
-                <p>Hotel: {providerTestResult.details.hotelCode}</p>
-                <p>Rooms: {providerTestResult.details.roomsCount}</p>
-                <p>Rate Plans: {providerTestResult.details.ratePlansCount}</p>
+          <div className={`mt-4 rounded-xl p-4 flex flex-col gap-2.5 animate-fade-in border ${providerTestResult.ok ? 'bg-emerald-50/90 border-emerald-200' : 'bg-red-50/90 border-red-200'}`}>
+            <div className="flex items-start gap-2.5">
+              {providerTestResult.ok ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p className={`text-sm font-bold leading-snug ${providerTestResult.ok ? 'text-emerald-800' : 'text-red-800'}`}>
+                  {providerTestResult.message}
+                </p>
+                {providerTestResult.details && (
+                  <div className={`text-xs mt-2 pt-2 border-t space-y-1 font-mono ${providerTestResult.ok ? 'border-emerald-200/60 text-emerald-700' : 'border-red-200/60 text-red-700'}`}>
+                    <p>HTTP Status: <span className="font-bold">{providerTestResult.details.status || (providerTestResult.ok ? 200 : 403)}</span></p>
+                    <p>Response Time: {providerTestResult.details.responseTimeMs || 0} ms</p>
+                    <p>Tested External Code: <span className="font-bold">{providerTestResult.details.hotelCode || hotelCode || 'N/A'}</span></p>
+                    <p>Partner ID: <span>{providerTestResult.details.partnerId || partnerId || 'hotel-mantri-pms'}</span></p>
+                    <p>Environment: <span>{providerTestResult.details.environment || environment}</span></p>
+                    {providerTestResult.ok ? (
+                      <>
+                        <p>Rooms Synced: {providerTestResult.details.roomsCount || 0}</p>
+                        <p>Rate Plans Synced: {providerTestResult.details.ratePlansCount || 0}</p>
+                      </>
+                    ) : (
+                      <>
+                        {(providerTestResult.details as any).errorCategory && (
+                          <p>Category: <span className="font-bold">{(providerTestResult.details as any).errorCategory}</span></p>
+                        )}
+                        {(providerTestResult.details as any).resolutionGuidance && (
+                          <div className="mt-2 p-2.5 rounded-lg bg-white/80 border border-red-200 text-slate-700 font-sans text-xs leading-relaxed">
+                            <span className="font-bold text-red-700 block mb-0.5">Resolution Required:</span>
+                            {(providerTestResult.details as any).resolutionGuidance}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
 

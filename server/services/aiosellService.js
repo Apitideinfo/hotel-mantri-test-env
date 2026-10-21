@@ -113,7 +113,7 @@ export const sanitizeAiosellError = (error, status, reqId = null) => {
       status: 403,
       errorCode: 'AIOSSELL_HOTEL_CODE_INVALID',
       code: 'AIOSSELL_HOTEL_CODE_INVALID',
-      message: 'The channel manager denied access to this property code. Please verify the external hotel code.',
+      message: 'The channel manager denied access to this property code. Please verify the external hotel code or ensure the property is mapped to partner "hotel-mantri-pms" in Aiosell Connect.',
       requestId: reqId,
       retryable: false
     };
@@ -397,12 +397,14 @@ export const testConnection = async (hotelConfig) => {
   const start = Date.now();
 
   const debugDiagnostic = {
+    selectedHotelId: config.hotelId,
+    hotelCode: config.hotelCode,
+    partnerId: config.partnerId,
+    environment: config.environment,
+    endpointPath: `/property_details/${config.hotelCode}?partnerId=${config.partnerId}`,
     baseUrlConfigured: !!config.baseUrl,
     usernameConfigured: !!config.username,
     passwordConfigured: !!config.password,
-    partnerId: config.partnerId,
-    hotelCode: config.hotelCode,
-    environment: config.environment
   };
 
   if (!config.partnerId || !config.hotelCode) {
@@ -410,7 +412,13 @@ export const testConnection = async (hotelConfig) => {
       success: false,
       status: 400,
       error: sanitizeAiosellError('Channel credentials (partner ID or hotel code) are not configured for this hotel.', 400),
-      diagnostic: debugDiagnostic
+      diagnostic: {
+        ...debugDiagnostic,
+        status: 400,
+        httpStatus: 400,
+        errorCategory: 'PROPERTY_NOT_CONFIGURED',
+        resolutionGuidance: 'Please enter a valid external hotel code in Channel Settings and save setup.'
+      }
     };
   }
 
@@ -426,7 +434,13 @@ export const testConnection = async (hotelConfig) => {
         code: 'AIOSSELL_AUTH_FAILED',
         message: 'Server integration credentials are unavailable.'
       },
-      diagnostic: debugDiagnostic
+      diagnostic: {
+        ...debugDiagnostic,
+        status: 401,
+        httpStatus: 401,
+        errorCategory: 'SERVER_CREDENTIALS_MISSING',
+        resolutionGuidance: 'Server integration credentials (AIOSELL_USERNAME / AIOSELL_PASSWORD) are missing from backend environment.'
+      }
     };
   }
 
@@ -498,16 +512,76 @@ export const testConnection = async (hotelConfig) => {
       mapping: {
         rooms,
         ratePlans
+      },
+      diagnostic: {
+        ...debugDiagnostic,
+        status: 200,
+        httpStatus: 200,
+        responseTimeMs,
+        roomsCount: rooms.length,
+        ratePlansCount: ratePlans.length
       }
     };
   } catch (err) {
     const responseTimeMs = Date.now() - start;
+    const upstreamStatus = err.status || 500;
+    const errCode = err.errorCode || err.code || 'AIOSSELL_CONNECTION_FAILED';
+    const rawUpstreamMessage = err.message || (typeof err === 'string' ? err : 'Unknown error');
+
+    let diagnosticCategory = 'UNKNOWN_FAILURE';
+    let resolutionGuidance = '';
+
+    if (upstreamStatus === 403 || String(rawUpstreamMessage).toLowerCase().includes('access denied')) {
+      diagnosticCategory = 'PROPERTY_NOT_AUTHORIZED_OR_NOT_MAPPED';
+      resolutionGuidance = `Aiosell returned HTTP 403 Access Denied for property '${config.hotelCode}'. The property code exists or is registered, but it has not been mapped to partner account '${config.partnerId}' inside Aiosell Connect. Action needed: Map property '${config.hotelCode}' to partner '${config.partnerId}' in the Aiosell portal, or confirm the assigned code with Aiosell Support.`;
+    } else if (upstreamStatus === 404 || String(rawUpstreamMessage).toLowerCase().includes('not found')) {
+      diagnosticCategory = 'PROPERTY_CODE_NOT_FOUND';
+      resolutionGuidance = `Aiosell returned HTTP 404 Not Found for property '${config.hotelCode}'. This property code does not exist in Aiosell's system. Please verify the code in the Aiosell extranet.`;
+    } else if (upstreamStatus === 401) {
+      diagnosticCategory = 'CREDENTIALS_REJECTED';
+      resolutionGuidance = `Aiosell rejected server Basic Authentication credentials for partner '${config.partnerId}'. Please verify AIOSELL_USERNAME and AIOSELL_PASSWORD in server environment.`;
+    } else if (upstreamStatus >= 500) {
+      diagnosticCategory = 'UPSTREAM_SERVER_ERROR';
+      resolutionGuidance = `Aiosell server returned HTTP ${upstreamStatus}. The distribution provider may be experiencing temporary degradation or maintenance.`;
+    }
+
+    logProviderDiagnostic({
+      operation: 'TEST_CONNECTION_FAILED',
+      hotelId: config.hotelId,
+      hotelCode: config.hotelCode,
+      partnerId: config.partnerId,
+      endpoint: `${config.baseUrl}/property_details/${config.hotelCode}?partnerId=${config.partnerId}`,
+      method: 'GET',
+      status: upstreamStatus,
+      credentialPresent: true,
+      environment: config.environment,
+      responseTimeMs,
+      diagnosticCategory,
+      message: resolutionGuidance || rawUpstreamMessage
+    });
+
     return {
       success: false,
-      status: err.status || 500,
+      status: upstreamStatus,
       responseTimeMs,
-      error: err,
-      diagnostic: debugDiagnostic
+      error: {
+        ...err,
+        status: upstreamStatus,
+        code: errCode,
+        errorCode: errCode,
+        message: err.message || 'Channel manager integration connection failed',
+        resolutionGuidance,
+      },
+      diagnostic: {
+        ...debugDiagnostic,
+        responseTimeMs,
+        status: upstreamStatus,
+        httpStatus: upstreamStatus,
+        errorCode: errCode,
+        errorCategory: diagnosticCategory,
+        resolutionGuidance,
+        rawUpstreamMessage
+      }
     };
   }
 };
