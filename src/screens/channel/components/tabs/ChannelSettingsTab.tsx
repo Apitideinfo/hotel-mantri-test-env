@@ -4,7 +4,7 @@ import {
   Loader2, Power, Building2 
 } from 'lucide-react';
 import type { ChannelConnection } from '@/lib/api-channel';
-import { updateChannel, deleteChannel } from '@/lib/api-channel';
+import { updateChannel, deleteChannel, getHotelExtranetCode } from '@/lib/api-channel';
 
 interface ChannelSettingsTabProps {
   channel: ChannelConnection;
@@ -24,6 +24,8 @@ export const ChannelSettingsTab: React.FC<ChannelSettingsTabProps> = ({
 
   const [externalId, setExternalId] = useState(() => resolveExternalId(channel));
   const [isEnabled, setIsEnabled] = useState(() => resolveIsEnabled(channel));
+  const [registryCode, setRegistryCode] = useState<string | null>(null);
+  const [loadingRegistry, setLoadingRegistry] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -32,6 +34,24 @@ export const ChannelSettingsTab: React.FC<ChannelSettingsTabProps> = ({
   useEffect(() => {
     setExternalId(resolveExternalId(channel));
     setIsEnabled(resolveIsEnabled(channel));
+
+    let isMounted = true;
+    if (channel?.hotel_id && channel?.channel_type) {
+      setLoadingRegistry(true);
+      getHotelExtranetCode(channel.hotel_id, channel.channel_type)
+        .then(rec => {
+          if (isMounted) {
+            setRegistryCode(rec?.extranet_property_code || null);
+          }
+        })
+        .catch(() => {
+          if (isMounted) setRegistryCode(null);
+        })
+        .finally(() => {
+          if (isMounted) setLoadingRegistry(false);
+        });
+    }
+    return () => { isMounted = false; };
   }, [channel]);
 
   const handleSave = async (e: React.FormEvent) => {
@@ -104,9 +124,30 @@ export const ChannelSettingsTab: React.FC<ChannelSettingsTabProps> = ({
               placeholder="e.g. 47378196"
               className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-brand-500 text-slate-800"
             />
-            <p className="text-[11px] text-slate-400 mt-1">
-              Used to identify your property on the OTA's backend extranet.
-            </p>
+            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1.5 text-[11px]">
+              <span className="text-slate-400">
+                Used to identify your property on the OTA's backend extranet.
+              </span>
+              {registryCode ? (
+                <div className="flex items-center gap-1.5 bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200">
+                  <span className="text-emerald-700">Registry:</span>
+                  <code className="font-mono font-bold">{registryCode}</code>
+                  {externalId !== registryCode && (
+                    <button
+                      type="button"
+                      onClick={() => setExternalId(registryCode)}
+                      className="ml-1 text-[10px] text-brand-700 hover:text-brand-900 underline font-semibold"
+                    >
+                      Use code
+                    </button>
+                  )}
+                </div>
+              ) : !loadingRegistry ? (
+                <span className="text-amber-600 font-medium">
+                  Not registered in Super Admin Extranet Codes
+                </span>
+              ) : null}
+            </div>
           </div>
 
           <div className="pt-2 border-t border-slate-100">

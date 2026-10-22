@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { 
   CheckCircle2, AlertTriangle, XCircle, Save, Sparkles, 
-  RefreshCw, Loader2, BedDouble, ArrowRight, HelpCircle 
+  RefreshCw, Loader2, BedDouble, ArrowRight, HelpCircle,
+  KeyRound, Info
 } from 'lucide-react';
-import type { ChannelConnection, ChannelRateMapping } from '@/lib/api-channel';
+import type { ChannelConnection, ChannelRateMapping, HotelExtranetCode } from '@/lib/api-channel';
 import type { RoomCategory } from '@/lib/types';
 import { 
   fetchChannelMappings, saveChannelMappings, 
-  fetchChannelMapping 
+  fetchChannelMapping, getHotelExtranetCode
 } from '@/lib/api-channel';
 
 interface ChannelRoomMappingTabProps {
@@ -35,6 +36,30 @@ export const ChannelRoomMappingTab: React.FC<ChannelRoomMappingTabProps> = ({
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [autoMatchConfirm, setAutoMatchConfirm] = useState<{ categoryId: string; externalCode: string; externalName: string }[] | null>(null);
+
+  // Extranet Code for this hotel and OTA channel
+  const [extranetCode, setExtranetCode] = useState<HotelExtranetCode | null>(null);
+  const [loadingExtranetCode, setLoadingExtranetCode] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCode = async () => {
+      const hotelId = channel.hotel_id || (channel as any).hotelId;
+      const channelType = channel.channel_type || (channel as any).channelType;
+      if (!hotelId || !channelType) return;
+      try {
+        setLoadingExtranetCode(true);
+        const code = await getHotelExtranetCode(hotelId, channelType);
+        if (isMounted) setExtranetCode(code);
+      } catch (err) {
+        console.warn('Failed to fetch extranet code for mapping screen:', err);
+      } finally {
+        if (isMounted) setLoadingExtranetCode(false);
+      }
+    };
+    fetchCode();
+    return () => { isMounted = false; };
+  }, [channel.hotel_id, (channel as any).hotelId, channel.channel_type, (channel as any).channelType]);
 
   // Initialize mapping from existing DB mappings
   useEffect(() => {
@@ -185,6 +210,29 @@ export const ChannelRoomMappingTab: React.FC<ChannelRoomMappingTabProps> = ({
             &times;
           </button>
         </div>
+      )}
+
+      {/* Extranet Code Mapping Status Banner */}
+      {!loadingExtranetCode && (
+        extranetCode ? (
+          <div className="flex items-center gap-2.5 p-3 bg-amber-50/70 border border-amber-200/90 rounded-2xl text-xs text-amber-950 font-semibold shadow-xs">
+            <KeyRound className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Saved Extranet Property Code for {channel.channel_name || channel.channel_type}:</span>
+            <span className="font-mono font-extrabold bg-white px-2 py-0.5 rounded-lg border border-amber-300 text-slate-900 shadow-xs">
+              {extranetCode.extranet_property_code}
+            </span>
+            {extranetCode.ota_property_name && (
+              <span className="text-slate-500 text-[11px] font-medium">({extranetCode.ota_property_name})</span>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center justify-between p-3 bg-amber-50/70 border border-amber-200 rounded-2xl text-xs text-amber-900 font-semibold shadow-xs">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>No extranet code is saved for this hotel and OTA. Add it in Extranet Codes.</span>
+            </div>
+          </div>
+        )
       )}
 
       {/* Action header */}

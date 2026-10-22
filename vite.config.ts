@@ -191,6 +191,9 @@ export default defineConfig(({ mode }) => {
               if (id.includes('@supabase')) {
                 return 'vendor-supabase';
               }
+              if (id.includes('@tanstack')) {
+                return 'vendor-query';
+              }
               return 'vendor-others';
             }
           },

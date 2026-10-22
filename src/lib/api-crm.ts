@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
+import { queryClient, queryKeys, STALE_TIMES } from './queryClient';
 import type { Guest, GuestPreferences, GuestNote, GuestDocument, GuestStay,
   CorporateProfile, TravelAgent, LoyaltyTransaction, GuestStats, GuestInsights,
   LoyaltyLevel, DuplicateCheckResult } from './types-crm';
@@ -8,13 +9,21 @@ import { LOYALTY_THRESHOLDS, LOYALTY_POINTS_PER_RUPEE, LOYALTY_POINTS_PER_NIGHT 
 // ── Guests ──
 
 export const getGuests = async (): Promise<Guest[]> => {
-  const { data, error } = await supabase
-    .from('guests')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .order('updated_at', { ascending: false });
-  if (error) throw error;
-  return (data as Guest[]) ?? [];
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) return [];
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.guests(hotelId, 'all'),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('guests')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return (data as Guest[]) ?? [];
+    },
+    staleTime: STALE_TIMES.STATIC_REF,
+  });
 };
 
 export const getGuestById = async (id: string): Promise<Guest | null> => {
@@ -44,6 +53,7 @@ export const searchGuests = async (query: string): Promise<Guest[]> => {
 
 export const saveGuest = async (guest: Partial<Guest>, id?: string): Promise<Guest> => {
   const hotelId = getCurrentHotelId();
+  let saved: Guest;
   if (id) {
     const { data, error } = await supabase
       .from('guests')
@@ -52,20 +62,29 @@ export const saveGuest = async (guest: Partial<Guest>, id?: string): Promise<Gue
       .select('*')
       .single();
     if (error) throw error;
-    return data as Guest;
+    saved = data as Guest;
+  } else {
+    const { data, error } = await supabase
+      .from('guests')
+      .insert({ ...guest, hotel_id: hotelId })
+      .select('*')
+      .single();
+    if (error) throw error;
+    saved = data as Guest;
   }
-  const { data, error } = await supabase
-    .from('guests')
-    .insert({ ...guest, hotel_id: hotelId })
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data as Guest;
+  if (hotelId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.guests(hotelId) });
+  }
+  return saved;
 };
 
 export const deleteGuest = async (id: string): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const { error } = await supabase.from('guests').delete().eq('id', id);
   if (error) throw error;
+  if (hotelId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.guests(hotelId) });
+  }
 };
 
 // ── Duplicate Detection ──
@@ -396,14 +415,22 @@ export const deleteTravelAgent = async (id: string): Promise<void> => {
 // ── VIP Guests ──
 
 export const getVipGuests = async (): Promise<Guest[]> => {
-  const { data, error } = await supabase
-    .from('guests')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .neq('vip_type', '')
-    .order('updated_at', { ascending: false });
-  if (error) throw error;
-  return (data as Guest[]) ?? [];
+  const hotelId = getCurrentHotelId();
+  if (!hotelId) return [];
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.vipGuests(hotelId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('guests')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .neq('vip_type', '')
+        .order('updated_at', { ascending: false });
+      if (error) throw error;
+      return (data as Guest[]) ?? [];
+    },
+    staleTime: STALE_TIMES.STATIC_REF,
+  });
 };
 
 // ── Insights ──

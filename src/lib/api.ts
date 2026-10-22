@@ -40,87 +40,83 @@ export const getCurrentHotelId = (): string => {
 };
 
 
-// Safe in-memory configuration cache for static reference data
-const _companySourcesCache = new Map<string, { data: CompanySource[]; timestamp: number }>();
-const _hotelSettingsCache = new Map<string, { data: HotelSettings; timestamp: number }>();
-const CONFIG_CACHE_TTL_MS = 60000; // 60s TTL for static configuration
+import { queryClient, queryKeys, invalidateHotelSettings, invalidateCompanySources, invalidateRoomInventory, invalidateOperationalData } from './queryClient';
 
+// Safe in-memory configuration cache for static reference data (backed by TanStack Query)
 export const invalidateCompanySourcesCache = (hotelId?: string) => {
-  if (hotelId) _companySourcesCache.delete(hotelId);
-  else _companySourcesCache.clear();
+  const targetId = hotelId || _currentHotelId;
+  if (targetId) invalidateCompanySources(targetId);
+  else queryClient.invalidateQueries({ queryKey: ['hotel'] });
 };
 
 export const invalidateSettingsCache = (hotelId?: string) => {
-  if (hotelId) _hotelSettingsCache.delete(hotelId);
-  else _hotelSettingsCache.clear();
+  const targetId = hotelId || _currentHotelId;
+  if (targetId) invalidateHotelSettings(targetId);
+  else queryClient.invalidateQueries({ queryKey: ['hotel'] });
 };
 
 export const getSettings = async (forceRefresh = false): Promise<HotelSettings> => {
   const hotelId = getCurrentHotelId();
-  if (!forceRefresh) {
-    const cached = _hotelSettingsCache.get(hotelId);
-    if (cached && Date.now() - cached.timestamp < CONFIG_CACHE_TTL_MS) {
-      return cached.data;
-    }
+  if (forceRefresh) {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.hotelSettings(hotelId) });
   }
 
-  try {
-    const { data, error } = await supabase
-      .from('hotel_settings')
-      .select('*')
-      .eq('id', hotelId)
-      .maybeSingle();
-    if (data) {
-      const res = data as HotelSettings;
-      _hotelSettingsCache.set(hotelId, { data: res, timestamp: Date.now() });
-      return res;
-    }
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.hotelSettings(hotelId),
+    queryFn: async () => {
+      try {
+        const { data, error } = await supabase
+          .from('hotel_settings')
+          .select('*')
+          .eq('id', hotelId)
+          .maybeSingle();
+        if (data) {
+          return data as HotelSettings;
+        }
 
-    const { data: hotelData } = await supabase
-      .from('hotels')
-      .select('hotel_name, total_rooms')
-      .eq('id', hotelId)
-      .maybeSingle();
-    const hotelName = (hotelData as { hotel_name: string } | null)?.hotel_name ?? 'Hotel';
-    const totalRooms = (hotelData as { total_rooms: number } | null)?.total_rooms ?? 20;
+        const { data: hotelData } = await supabase
+          .from('hotels')
+          .select('hotel_name, total_rooms')
+          .eq('id', hotelId)
+          .maybeSingle();
+        const hotelName = (hotelData as { hotel_name: string } | null)?.hotel_name ?? 'Hotel';
+        const totalRooms = (hotelData as { total_rooms: number } | null)?.total_rooms ?? 20;
 
-    const { data: created, error: insErr } = await supabase
-      .from('hotel_settings')
-      .upsert({
-        id: hotelId,
-        hotel_name: hotelName,
-        total_rooms: totalRooms,
-      })
-      .select('*')
-      .maybeSingle();
-    if (created) {
-      const res = created as HotelSettings;
-      _hotelSettingsCache.set(hotelId, { data: res, timestamp: Date.now() });
-      return res;
-    }
-    const fallback = {
-      id: hotelId,
-      hotel_name: hotelName,
-      total_rooms: totalRooms,
-      opening_cash_balance: 0,
-      financial_year: new Date().getFullYear(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    } as unknown as HotelSettings;
-    _hotelSettingsCache.set(hotelId, { data: fallback, timestamp: Date.now() });
-    return fallback;
-  } catch {
-    const fallback = {
-      id: hotelId,
-      hotel_name: 'Hotel',
-      total_rooms: 20,
-      opening_cash_balance: 0,
-      financial_year: new Date().getFullYear(),
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    } as unknown as HotelSettings;
-    return fallback;
-  }
+        const { data: created } = await supabase
+          .from('hotel_settings')
+          .upsert({
+            id: hotelId,
+            hotel_name: hotelName,
+            total_rooms: totalRooms,
+          })
+          .select('*')
+          .maybeSingle();
+        if (created) {
+          return created as HotelSettings;
+        }
+        return {
+          id: hotelId,
+          hotel_name: hotelName,
+          total_rooms: totalRooms,
+          opening_cash_balance: 0,
+          financial_year: new Date().getFullYear(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as unknown as HotelSettings;
+      } catch {
+        return {
+          id: hotelId,
+          hotel_name: 'Hotel',
+          total_rooms: 20,
+          opening_cash_balance: 0,
+          financial_year: new Date().getFullYear(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as unknown as HotelSettings;
+      }
+    },
+    staleTime: 5 * 60_000, // 5 minutes
+  });
 };
 
 export const updateSettings = async (patch: Partial<HotelSettings>): Promise<HotelSettings> => {
@@ -140,22 +136,23 @@ export const updateSettings = async (patch: Partial<HotelSettings>): Promise<Hot
 
 export const getCompanySources = async (forceRefresh = false): Promise<CompanySource[]> => {
   const hotelId = getCurrentHotelId();
-  if (!forceRefresh) {
-    const cached = _companySourcesCache.get(hotelId);
-    if (cached && Date.now() - cached.timestamp < CONFIG_CACHE_TTL_MS) {
-      return cached.data;
-    }
+  if (forceRefresh) {
+    await queryClient.invalidateQueries({ queryKey: queryKeys.companySources(hotelId) });
   }
 
-  const { data, error } = await supabase
-    .from('company_sources')
-    .select('*')
-    .eq('hotel_id', hotelId)
-    .order('name', { ascending: true });
-  if (error) throw error;
-  const list = (data as CompanySource[]) ?? [];
-  _companySourcesCache.set(hotelId, { data: list, timestamp: Date.now() });
-  return list;
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.companySources(hotelId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('company_sources')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .order('name', { ascending: true });
+      if (error) throw error;
+      return (data as CompanySource[]) ?? [];
+    },
+    staleTime: 5 * 60_000, // 5 minutes
+  });
 };
 
 export const upsertCompanySource = async (
@@ -194,29 +191,36 @@ export const deleteCompanySource = async (id: string): Promise<void> => {
 // ---- Room categories ----
 
 export const getRoomCategories = async (hotelId?: string, onlyActive: boolean = false): Promise<RoomCategory[]> => {
-  try {
-    const targetHotelId = hotelId || getCurrentHotelId();
-    let query = supabase
-      .from('room_categories')
-      .select('*')
-      .eq('hotel_id', targetHotelId)
-      .order('sort_order', { ascending: true });
-    if (onlyActive) {
-      query = query.eq('is_active', true);
-    }
-    const { data, error } = await query;
-    if (!error && data) return data as RoomCategory[];
-    if (error) console.warn('Error fetching room categories:', error.message);
-  } catch (err: any) {
-    console.warn('Failed to load room categories:', err?.message || err);
-  }
-  return [];
+  const targetHotelId = hotelId || getCurrentHotelId();
+  return queryClient.fetchQuery({
+    queryKey: ['hotel', targetHotelId, 'categories', { onlyActive }],
+    queryFn: async () => {
+      try {
+        let query = supabase
+          .from('room_categories')
+          .select('*')
+          .eq('hotel_id', targetHotelId)
+          .order('sort_order', { ascending: true });
+        if (onlyActive) {
+          query = query.eq('is_active', true);
+        }
+        const { data, error } = await query;
+        if (!error && data) return data as RoomCategory[];
+        if (error) console.warn('Error fetching room categories:', error.message);
+      } catch (err: any) {
+        console.warn('Failed to load room categories:', err?.message || err);
+      }
+      return [];
+    },
+    staleTime: 5 * 60_000,
+  });
 };
 
 export const upsertRoomCategory = async (
   name: string, id?: string,
   defaults?: { default_tariff?: number; extra_bed_charge?: number; is_active?: boolean }
 ): Promise<RoomCategory> => {
+  const hotelId = getCurrentHotelId();
   if (id) {
     const patch: Record<string, unknown> = { name: name.trim() };
     if (defaults?.default_tariff !== undefined) patch.default_tariff = defaults.default_tariff;
@@ -229,12 +233,13 @@ export const upsertRoomCategory = async (
       .select('*')
       .single();
     if (error) throw error;
+    await invalidateRoomInventory(hotelId);
     return data as RoomCategory;
   }
   const { data: existing } = await supabase
     .from('room_categories')
     .select('sort_order')
-    .eq('hotel_id', getCurrentHotelId())
+    .eq('hotel_id', hotelId)
     .order('sort_order', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -242,7 +247,7 @@ export const upsertRoomCategory = async (
   const { data, error } = await supabase
     .from('room_categories')
     .insert({
-      hotel_id: getCurrentHotelId(), name: name.trim(), sort_order: nextOrder,
+      hotel_id: hotelId, name: name.trim(), sort_order: nextOrder,
       default_tariff: defaults?.default_tariff ?? 0,
       extra_bed_charge: defaults?.extra_bed_charge ?? 0,
       is_active: defaults?.is_active ?? true,
@@ -250,10 +255,12 @@ export const upsertRoomCategory = async (
     .select('*')
     .single();
   if (error) throw error;
+  await invalidateRoomInventory(hotelId);
   return data as RoomCategory;
 };
 
 export const toggleRoomCategoryStatus = async (id: string, isActive: boolean): Promise<RoomCategory> => {
+  const hotelId = getCurrentHotelId();
   const { data, error } = await supabase
     .from('room_categories')
     .update({ is_active: isActive })
@@ -261,10 +268,12 @@ export const toggleRoomCategoryStatus = async (id: string, isActive: boolean): P
     .select('*')
     .single();
   if (error) throw error;
+  await invalidateRoomInventory(hotelId);
   return data as RoomCategory;
 };
 
 export const deleteRoomCategory = async (id: string): Promise<{ softDeleted: boolean }> => {
+  const hotelId = getCurrentHotelId();
   // Check if any rooms use this category
   const { count: roomCount } = await supabase
     .from('rooms')
@@ -278,6 +287,7 @@ export const deleteRoomCategory = async (id: string): Promise<{ softDeleted: boo
       .update({ is_active: false })
       .eq('id', id);
     if (error) throw error;
+    await invalidateRoomInventory(hotelId);
     return { softDeleted: true };
   }
 
@@ -290,42 +300,53 @@ export const deleteRoomCategory = async (id: string): Promise<{ softDeleted: boo
       .update({ is_active: false })
       .eq('id', id);
     if (softErr) throw error;
+    await invalidateRoomInventory(hotelId);
     return { softDeleted: true };
   }
+  await invalidateRoomInventory(hotelId);
   return { softDeleted: false };
 };
 
 export const reorderRoomCategories = async (
   ids: string[]
 ): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const updates = ids.map((id, idx) =>
     supabase.from('room_categories').update({ sort_order: idx + 1 }).eq('id', id)
   );
   const results = await Promise.all(updates);
   const failed = results.find((r) => r.error);
   if (failed?.error) throw failed.error;
+  await invalidateRoomInventory(hotelId);
 };
 
 // ---- Rooms (Property Master inventory) ----
 
-export const getRooms = async (): Promise<Room[]> => {
-  try {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('*')
-      .eq('hotel_id', getCurrentHotelId())
-      .order('sort_order', { ascending: true });
-    if (!error && data) return data as Room[];
-    if (error) console.warn('Error fetching rooms:', error.message);
-  } catch (err: any) {
-    console.warn('Failed to load rooms:', err?.message || err);
-  }
-  return [];
+export const getRooms = async (hotelId?: string): Promise<Room[]> => {
+  const targetHotelId = hotelId || getCurrentHotelId();
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.rooms(targetHotelId),
+    queryFn: async () => {
+      try {
+        const { data, error } = await supabase
+          .from('rooms')
+          .select('*')
+          .eq('hotel_id', targetHotelId)
+          .order('sort_order', { ascending: true });
+        if (!error && data) return data as Room[];
+        if (error) console.warn('Error fetching rooms:', error.message);
+      } catch (err: any) {
+        console.warn('Failed to load rooms:', err?.message || err);
+      }
+      return [];
+    },
+    staleTime: 5 * 60_000,
+  });
 };
 
-
 export const saveRoom = async (input: RoomInput, id?: string): Promise<Room> => {
-  const payload = { ...input, hotel_id: getCurrentHotelId() };
+  const hotelId = getCurrentHotelId();
+  const payload = { ...input, hotel_id: hotelId };
   if (id) {
     const { data, error } = await supabase
       .from('rooms')
@@ -334,6 +355,7 @@ export const saveRoom = async (input: RoomInput, id?: string): Promise<Room> => 
       .select('*')
       .single();
     if (error) throw error;
+    await invalidateRoomInventory(hotelId);
     return data as Room;
   }
   const { data, error } = await supabase
@@ -342,21 +364,26 @@ export const saveRoom = async (input: RoomInput, id?: string): Promise<Room> => 
     .select('*')
     .single();
   if (error) throw error;
+  await invalidateRoomInventory(hotelId);
   return data as Room;
 };
 
 export const deleteRoom = async (id: string): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const { error } = await supabase.from('rooms').delete().eq('id', id);
   if (error) throw error;
+  await invalidateRoomInventory(hotelId);
 };
 
 export const bulkInsertRooms = async (rooms: RoomInput[]): Promise<Room[]> => {
-  const payload = rooms.map((r) => ({ ...r, hotel_id: getCurrentHotelId() }));
+  const hotelId = getCurrentHotelId();
+  const payload = rooms.map((r) => ({ ...r, hotel_id: hotelId }));
   const { data, error } = await supabase
     .from('rooms')
     .insert(payload)
     .select('*');
   if (error) throw error;
+  await invalidateRoomInventory(hotelId);
   return (data as Room[]) ?? [];
 };
 
@@ -606,11 +633,12 @@ export const saveRoomChartRow = async (
   const nights = (input.arrival && input.departure)
     ? calcStayNights(input.arrival, input.departure)
     : Math.max(1, toNum(input.nights) || 1);
+  const hotelId = getCurrentHotelId();
   const normalizedPayMode = normalizePayMode(input.pay_mode);
   const payload = {
     ...input,
     nights,
-    hotel_id: getCurrentHotelId(),
+    hotel_id: hotelId,
     source_category: category,
     pay_mode: normalizedPayMode,
   };
@@ -622,6 +650,7 @@ export const saveRoomChartRow = async (
       .select('*')
       .single();
     if (error) throw error;
+    await invalidateOperationalData(hotelId);
     return data as RoomChartEntry;
   }
   const { id: _id, ...rest } = payload as RoomChartEntryInput & { id?: string };
@@ -632,37 +661,46 @@ export const saveRoomChartRow = async (
     .select('*')
     .single();
   if (error) throw error;
+  await invalidateOperationalData(hotelId);
   return data as RoomChartEntry;
 };
 
 export const deleteRoomChartRow = async (id: string): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const { error } = await supabase.from('room_chart_entries').delete().eq('id', id);
   if (error) throw error;
+  await invalidateOperationalData(hotelId);
 };
 
 export const getRoomChartForDateRange = async (fromDate: string, toDate: string): Promise<RoomChartEntry[]> => {
   const hotelId = getCurrentHotelId();
-  // Fetch room chart entries bounded between lookback and lookahead window
-  const lookbackDate = addDays(fromDate, -60);
-  const lookaheadDate = addDays(toDate, 60);
-  const { data, error } = await supabase
-    .from('room_chart_entries')
-    .select('*')
-    .eq('hotel_id', hotelId)
-    .gte('report_date', lookbackDate)
-    .lte('report_date', lookaheadDate)
-    .order('report_date', { ascending: true });
-  if (error) {
-    console.error('[getRoomChartForDateRange] Supabase error:', error);
-    throw error;
-  }
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.roomChartRange(hotelId, fromDate, toDate),
+    queryFn: async () => {
+      // Fetch room chart entries bounded between lookback and lookahead window
+      const lookbackDate = addDays(fromDate, -14);
+      const lookaheadDate = addDays(toDate, 7);
+      const { data, error } = await supabase
+        .from('room_chart_entries')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .gte('report_date', lookbackDate)
+        .lte('report_date', lookaheadDate)
+        .order('report_date', { ascending: true });
+      if (error) {
+        console.error('[getRoomChartForDateRange] Supabase error:', error);
+        throw error;
+      }
 
-  const entries = (data as RoomChartEntry[]) ?? [];
-  return entries.filter((e) => {
-    const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
-    const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
-    // Entry overlaps if arr <= toDate AND dep >= fromDate
-    return arr <= toDate && dep >= fromDate;
+      const entries = (data as RoomChartEntry[]) ?? [];
+      return entries.filter((e) => {
+        const arr = (e.arrival && e.arrival.trim() !== '' ? e.arrival : e.report_date).slice(0, 10);
+        const dep = (e.departure && e.departure.trim() !== '' ? e.departure : e.report_date).slice(0, 10);
+        // Entry overlaps if arr <= toDate AND dep >= fromDate
+        return arr <= toDate && dep >= fromDate;
+      });
+    },
+    staleTime: 30_000,
   });
 };
 

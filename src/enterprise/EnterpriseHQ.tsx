@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Building2, Users, CreditCard, Shield, ToggleLeft,
   Bell, ScrollText, Ticket, Settings as SettingsIcon, LogOut,
   Menu, X, Search, ChevronDown, Hotel, Zap, ArrowLeft, AlertTriangle,
-  FileText, Receipt, RefreshCw, Radio,
+  FileText, Receipt, RefreshCw, Radio, KeyRound,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 import { BrandLogo, BrandIcon } from '@/components/BrandLogo';
@@ -33,10 +33,11 @@ import { InvoicePreviewDrawer } from './screens/InvoicePreviewDrawer';
 import { BillingSettings } from './screens/BillingSettings';
 import { RenewalDashboardScreen } from './screens/RenewalDashboardScreen';
 import { ChannelManagerScreen } from './screens/ChannelManagerScreen';
+import { ExtranetCodesScreen } from './screens/ExtranetCodesScreen';
 
 type Page =
   | 'dashboard' | 'hotels' | 'hotel-detail' | 'onboarding'
-  | 'users' | 'subscriptions' | 'features' | 'channel-manager'
+  | 'users' | 'subscriptions' | 'features' | 'channel-manager' | 'extranet-codes'
   | 'crm' | 'support' | 'audit' | 'notifications' | 'settings'
   | 'invoices' | 'invoice-detail' | 'invoice-create' | 'billing-settings' | 'renewals';
 
@@ -52,6 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, perm: 'dashboard', group: 'Overview' },
   { key: 'hotels', label: 'Hotels', icon: <Building2 className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
   { key: 'channel-manager', label: 'OTA Configuration', icon: <Radio className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
+  { key: 'extranet-codes', label: 'Extranet Codes', icon: <KeyRound className="w-4 h-4" />, perm: 'hotels.read', group: 'Management' },
   { key: 'subscriptions', label: 'Subscriptions', icon: <CreditCard className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },
   { key: 'invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, perm: 'invoices.read', group: 'Management' },
   { key: 'renewals', label: 'Renewals', icon: <RefreshCw className="w-4 h-4" />, perm: 'subscriptions.read', group: 'Management' },
@@ -195,6 +197,7 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
       case 'dashboard': return <DashboardScreen onNavigateHotels={() => navigateHq('hotels')} onNavigateLeads={() => navigateHq('crm')} onNavigateTickets={() => navigateHq('support')} />;
       case 'hotels': return <HotelsScreen onViewHotel={navigateToHotel} onNewHotel={() => setShowOnboarding(true)} onImpersonate={startImpersonationSession} onConfigureChannelManager={(id) => { setSelectedHotelId(id); navigateHq('channel-manager'); }} />;
       case 'channel-manager': return <ChannelManagerScreen initialHotelId={selectedHotelId} onBack={() => navigateHq('hotels')} />;
+      case 'extranet-codes': return <ExtranetCodesScreen />;
       case 'hotel-detail': return selectedHotelId ? <HotelDetailScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotels')} onImpersonate={startImpersonationSession} onViewInvoice={(id) => setDrawerInvoiceId(id)} onCreateInvoice={() => { navigateHq('invoice-create'); }} /> : null;
       case 'users': return <CompanyUsersScreen />;
       case 'subscriptions': return <SubscriptionsScreen onViewHotel={navigateToHotel} />;

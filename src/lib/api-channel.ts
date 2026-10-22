@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
-import { getCurrentHotelId } from './api';
+import { getCurrentHotelId, getRoomCategories, getRooms } from './api';
+import { queryClient, queryKeys, STALE_TIMES } from './queryClient';
 import { apiFetch } from './api-fetch';
 import type { RoomCategory } from './types';
 import type { RatePlan } from './types-reservations';
@@ -428,6 +429,7 @@ export const applyBulkInventoryPatch = async (
       body: JSON.stringify({ updates: patches, skipSync })
     });
     if (res && res.success) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.authoritativeMatrix(hotelId) });
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated', {
           detail: { hotelId, count: patches.length }
@@ -614,6 +616,10 @@ export const applyBulkInventoryPatch = async (
     }
   }
 
+  if (hotelId) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.authoritativeMatrix(hotelId) });
+  }
+
   return {
     success: true,
     updatedCount: mergedPayload.length,
@@ -677,153 +683,182 @@ export interface AuthoritativeMatrixItem {
   closed_to_departure?: boolean;
 }
 
+let lastAiosellFailureTime = 0;
+
 export const getAuthoritativeAvailabilityMatrix = async (
   startDate: string,
   endDate: string
 ): Promise<{ matrix: AuthoritativeMatrixItem[]; source: 'api' | 'supabase' }> => {
   const hotelId = getCurrentHotelId();
-  // 1. Try server matrix endpoint first
-  try {
-    const res = await getInventoryMatrix(startDate, endDate);
-    if (res && res.success && Array.isArray(res.matrix)) {
-      return { matrix: res.matrix, source: 'api' };
-    }
-  } catch {
-    // Fall back to client calculation from Supabase
-  }
+  if (!hotelId) return { matrix: [], source: 'supabase' };
 
-  // 2. Client-side authoritative calculation directly from Supabase
-  const [catsRes, roomsRes, resvsRes, blocksRes, restrictionsRes] = await Promise.all([
-    supabase.from('room_categories').select('id, name').eq('hotel_id', hotelId).eq('is_active', true).order('sort_order', { ascending: true }),
-    supabase.from('rooms').select('id, category_id, room_no, is_active').eq('hotel_id', hotelId),
-    supabase.from('reservations').select('id, room_id, room_no, check_in_date, check_out_date, status, created_at').eq('hotel_id', hotelId).in('status', ['confirmed', 'checked_in']).lte('check_in_date', endDate).gte('check_out_date', startDate),
-    supabase.from('room_blocks').select('room_no, start_date, end_date, block_type').eq('hotel_id', hotelId).lte('start_date', endDate).gte('end_date', startDate),
-    supabase.from('channel_inventory_restrictions').select('*').eq('hotel_id', hotelId).gte('date', startDate).lte('date', endDate),
-  ]);
-
-  const categories = (catsRes.data ?? []) as Array<{ id: string; name: string }>;
-  const rooms = (roomsRes.data ?? []) as Array<{ id: string; category_id: string; room_no: string; is_active: boolean }>;
-  const reservations = (resvsRes.data ?? []) as Array<{ id: string; room_id: string; room_no: string; check_in_date: string; check_out_date: string; status: string }>;
-  const blocks = (blocksRes.data ?? []) as Array<{ room_no: string; start_date: string; end_date: string; block_type: string }>;
-  const restrictions = (restrictionsRes.data ?? []) as ChannelInventoryRestriction[];
-
-  const physicalCounts: Record<string, number> = {};
-  const roomToCatMap: Record<string, string> = {};
-  const roomNoToCatMap: Record<string, string> = {};
-
-  for (const r of rooms) {
-    if (r.category_id && r.is_active !== false) {
-      roomToCatMap[r.id] = r.category_id;
-      physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
-      if (r.room_no) {
-        roomNoToCatMap[r.room_no.trim().toLowerCase()] = r.category_id;
-      }
-    }
-  }
-
-  const restrictionMap = new Map<string, ChannelInventoryRestriction>();
-  for (const r of restrictions) {
-    restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
-  }
-
-  // Generate date array
-  const dates: string[] = [];
-  let cur = startDate;
-  while (cur <= endDate) {
-    dates.push(cur);
-    const [y, m, d] = cur.split('-').map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d + 1));
-    cur = dt.toISOString().slice(0, 10);
-  }
-
-  const matrix: AuthoritativeMatrixItem[] = [];
-
-  for (const d of dates) {
-    const dTime = new Date(d + 'T12:00:00');
-    const occCounts: Record<string, number> = {};
-    for (const res of reservations) {
-      const ci = new Date(res.check_in_date + 'T12:00:00');
-      const co = new Date(res.check_out_date + 'T12:00:00');
-      if (dTime >= ci && dTime < co) {
-        const catId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
-        if (catId) {
-          occCounts[catId] = (occCounts[catId] || 0) + 1;
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.authoritativeMatrix(hotelId, startDate, endDate),
+    queryFn: async () => {
+      // 1. Try server matrix endpoint first if cooldown expired
+      const now = Date.now();
+      if (now - lastAiosellFailureTime > 60000) {
+        try {
+          const res = await getInventoryMatrix(startDate, endDate);
+          if (res && res.success && Array.isArray(res.matrix)) {
+            return { matrix: res.matrix, source: 'api' as const };
+          }
+        } catch {
+          lastAiosellFailureTime = Date.now();
+          // Fall back to client calculation from Supabase
         }
       }
-    }
 
-    const blkCounts: Record<string, number> = {};
-    for (const b of blocks) {
-      const bs = new Date(b.start_date + 'T12:00:00');
-      const be = new Date(b.end_date + 'T12:00:00');
-      if (dTime >= bs && dTime <= be) {
-        const catId = roomNoToCatMap[b.room_no.trim().toLowerCase()];
-        if (catId) {
-          blkCounts[catId] = (blkCounts[catId] || 0) + 1;
+      // 2. Client-side authoritative calculation directly from Supabase / cached models
+      const [categoriesRaw, rooms, resvsRes, blocksRes, restrictionsRes] = await Promise.all([
+        getRoomCategories().catch(() => []),
+        getRooms().catch(() => []),
+        supabase
+          .from('reservations')
+          .select('id, room_id, room_no, check_in_date, check_out_date, status, created_at')
+          .eq('hotel_id', hotelId)
+          .in('status', ['confirmed', 'checked_in'])
+          .lte('check_in_date', endDate)
+          .gte('check_out_date', startDate),
+        supabase
+          .from('room_blocks')
+          .select('room_no, start_date, end_date, block_type')
+          .eq('hotel_id', hotelId)
+          .lte('start_date', endDate)
+          .gte('end_date', startDate),
+        supabase
+          .from('channel_inventory_restrictions')
+          .select('*')
+          .eq('hotel_id', hotelId)
+          .gte('date', startDate)
+          .lte('date', endDate),
+      ]);
+
+      const categories = categoriesRaw.filter((c) => c.is_active);
+      const reservations = (resvsRes.data ?? []) as Array<{ id: string; room_id: string; room_no: string; check_in_date: string; check_out_date: string; status: string; created_at?: string }>;
+      const blocks = (blocksRes.data ?? []) as Array<{ room_no: string; start_date: string; end_date: string; block_type: string }>;
+      const restrictions = (restrictionsRes.data ?? []) as ChannelInventoryRestriction[];
+
+      const physicalCounts: Record<string, number> = {};
+      const roomToCatMap: Record<string, string> = {};
+      const roomNoToCatMap: Record<string, string> = {};
+
+      for (const r of rooms) {
+        if (r.category_id && r.is_active !== false) {
+          roomToCatMap[r.id] = r.category_id;
+          physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
+          if (r.room_no) {
+            roomNoToCatMap[r.room_no.trim().toLowerCase()] = r.category_id;
+          }
         }
       }
-    }
 
-    for (const cat of categories) {
-      const physical = physicalCounts[cat.id] || 0;
-      const occupied = occCounts[cat.id] || 0;
-      const blocked = blkCounts[cat.id] || 0;
-      const calculatedAvailable = Math.max(0, physical - occupied - blocked);
+      const restrictionMap = new Map<string, ChannelInventoryRestriction>();
+      for (const r of restrictions) {
+        restrictionMap.set(`${r.room_category_id}|${r.date}`, r);
+      }
 
-      const r = restrictionMap.get(`${cat.id}|${d}`);
-      let sellable = calculatedAvailable;
-      const isManual = Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '');
-      const manualVal = isManual ? Number(r!.availability) : null;
+      // Generate date array
+      const dates: string[] = [];
+      let cur = startDate;
+      while (cur <= endDate) {
+        dates.push(cur);
+        const [y, m, d] = cur.split('-').map(Number);
+        const dt = new Date(Date.UTC(y, m - 1, d + 1));
+        cur = dt.toISOString().slice(0, 10);
+      }
 
-      if (r) {
-        if (r.stop_sell) {
-          sellable = 0;
-        } else if (isManual && manualVal !== null && !isNaN(manualVal)) {
-          const rUpdatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-          let newBookingsAfterUpdate = 0;
-          if (rUpdatedAt > 0) {
-            for (const res of reservations) {
-              const ci = new Date(res.check_in_date + 'T12:00:00');
-              const co = new Date(res.check_out_date + 'T12:00:00');
-              if (dTime >= ci && dTime < co) {
-                const resCreatedAt = (res as any).created_at ? new Date((res as any).created_at).getTime() : 0;
-                if (resCreatedAt > rUpdatedAt) {
-                  const matchedCatId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
-                  if (matchedCatId === cat.id) {
-                    newBookingsAfterUpdate++;
+      const matrix: AuthoritativeMatrixItem[] = [];
+
+      for (const d of dates) {
+        const dTime = new Date(d + 'T12:00:00');
+        const occCounts: Record<string, number> = {};
+        for (const res of reservations) {
+          const ci = new Date(res.check_in_date + 'T12:00:00');
+          const co = new Date(res.check_out_date + 'T12:00:00');
+          if (dTime >= ci && dTime < co) {
+            const catId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+            if (catId) {
+              occCounts[catId] = (occCounts[catId] || 0) + 1;
+            }
+          }
+        }
+
+        const blkCounts: Record<string, number> = {};
+        for (const b of blocks) {
+          const bs = new Date(b.start_date + 'T12:00:00');
+          const be = new Date(b.end_date + 'T12:00:00');
+          if (dTime >= bs && dTime <= be) {
+            const catId = roomNoToCatMap[b.room_no.trim().toLowerCase()];
+            if (catId) {
+              blkCounts[catId] = (blkCounts[catId] || 0) + 1;
+            }
+          }
+        }
+
+        for (const cat of categories) {
+          const physical = physicalCounts[cat.id] || 0;
+          const occupied = occCounts[cat.id] || 0;
+          const blocked = blkCounts[cat.id] || 0;
+          const calculatedAvailable = Math.max(0, physical - occupied - blocked);
+
+          const r = restrictionMap.get(`${cat.id}|${d}`);
+          let sellable = calculatedAvailable;
+          const isManual = Boolean(r && r.availability !== undefined && r.availability !== null && String(r.availability) !== '');
+          const manualVal = isManual ? Number(r!.availability) : null;
+
+          if (r) {
+            if (r.stop_sell) {
+              sellable = 0;
+            } else if (isManual && manualVal !== null && !isNaN(manualVal)) {
+              const rUpdatedAt = r.updated_at ? new Date(r.updated_at).getTime() : 0;
+              let newBookingsAfterUpdate = 0;
+              if (rUpdatedAt > 0) {
+                for (const res of reservations) {
+                  const ci = new Date(res.check_in_date + 'T12:00:00');
+                  const co = new Date(res.check_out_date + 'T12:00:00');
+                  if (dTime >= ci && dTime < co) {
+                    const resCreatedAt = res.created_at ? new Date(res.created_at).getTime() : 0;
+                    if (resCreatedAt > rUpdatedAt) {
+                      const matchedCatId = (res.room_id ? roomToCatMap[res.room_id] : null) || (res.room_no ? roomNoToCatMap[res.room_no.trim().toLowerCase()] : null);
+                      if (matchedCatId === cat.id) {
+                        newBookingsAfterUpdate++;
+                      }
+                    }
                   }
                 }
               }
+              const remainingManual = Math.max(0, manualVal - newBookingsAfterUpdate);
+              sellable = Math.min(remainingManual, calculatedAvailable);
             }
           }
-          const remainingManual = Math.max(0, manualVal - newBookingsAfterUpdate);
-          sellable = Math.min(remainingManual, calculatedAvailable);
+
+          matrix.push({
+            date: d,
+            room_category_id: cat.id,
+            category_name: cat.name,
+            physical,
+            occupied,
+            blocked,
+            calculatedAvailable,
+            available: sellable,
+            stop_sell: Boolean(r?.stop_sell),
+            is_manual: isManual,
+            manual_availability: manualVal,
+            base_rate: r?.base_rate ?? 0,
+            channel_rate: r?.channel_rate ?? 0,
+            min_stay: r?.min_stay ?? 1,
+            max_stay: r?.max_stay ?? 0,
+            closed_to_arrival: Boolean(r?.closed_to_arrival),
+            closed_to_departure: Boolean(r?.closed_to_departure),
+          });
         }
       }
 
-      matrix.push({
-        date: d,
-        room_category_id: cat.id,
-        category_name: cat.name,
-        physical,
-        occupied,
-        blocked,
-        calculatedAvailable,
-        available: sellable,
-        stop_sell: Boolean(r?.stop_sell),
-        is_manual: isManual,
-        manual_availability: manualVal,
-        base_rate: r?.base_rate ?? 0,
-        channel_rate: r?.channel_rate ?? 0,
-        min_stay: r?.min_stay ?? 1,
-        max_stay: r?.max_stay ?? 0,
-        closed_to_arrival: Boolean(r?.closed_to_arrival),
-        closed_to_departure: Boolean(r?.closed_to_departure),
-      });
-    }
-  }
-
-  return { matrix, source: 'supabase' };
+      return { matrix, source: 'supabase' as const };
+    },
+    staleTime: STALE_TIMES.OPERATIONAL,
+  });
 };
 
 // ── Sync Logs ──
@@ -1413,6 +1448,184 @@ export async function triggerChannelLiveSync(params?: { startDate?: string; endD
     body: JSON.stringify({ ...(params || {}), hotelId: targetHotelId })
   });
 }
+
+// ── Hotel Extranet Codes Registry API ──
+
+export interface HotelExtranetCode {
+  id: string;
+  hotel_id: string;
+  hotelId?: string;
+  hotel_name?: string;
+  hotelName?: string;
+  hotel_property_code?: string;
+  hotelPropertyCode?: string;
+  city?: string;
+  state?: string;
+  channel_id?: string | null;
+  channelId?: string | null;
+  ota_type: string;
+  otaType?: string;
+  ota_name: string;
+  otaName?: string;
+  extranet_property_code: string;
+  extranetPropertyCode?: string;
+  ota_property_name?: string | null;
+  otaPropertyName?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+  isActive?: boolean;
+  created_at: string;
+  createdAt?: string;
+  updated_at: string;
+  updatedAt?: string;
+}
+
+export async function getExtranetCodes(params?: {
+  hotelId?: string;
+  otaType?: string;
+  status?: string;
+  search?: string;
+}): Promise<HotelExtranetCode[]> {
+  try {
+    const query = new URLSearchParams();
+    if (params?.hotelId) query.set('hotelId', params.hotelId);
+    if (params?.otaType) query.set('otaType', params.otaType);
+    if (params?.status) query.set('status', params.status);
+    if (params?.search) query.set('search', params.search);
+
+    const queryString = query.toString() ? `?${query.toString()}` : '';
+    const res = await apiFetch(`/api/channels/extranet-codes${queryString}`, {
+      headers: params?.hotelId ? { 'x-hotel-id': params.hotelId } : {}
+    });
+
+    if (res && Array.isArray(res.codes)) {
+      return res.codes;
+    }
+  } catch (err) {
+    console.warn('[api-channel] Failed to fetch extranet codes via API, falling back to direct Supabase query:', err);
+  }
+
+  // Direct Supabase fallback
+  try {
+    let q = supabase
+      .from('hotel_extranet_codes')
+      .select('*, hotels(id, hotel_name, property_code, city, state)')
+      .order('created_at', { ascending: false });
+
+    if (params?.hotelId) q = q.eq('hotel_id', params.hotelId);
+    if (params?.otaType) q = q.eq('ota_type', params.otaType);
+    if (params?.status === 'active') q = q.eq('is_active', true);
+    if (params?.status === 'inactive') q = q.eq('is_active', false);
+
+    const { data, error } = await q;
+    if (!error && data) {
+      let mapped = data.map((r: any) => ({
+        id: r.id,
+        hotel_id: r.hotel_id,
+        hotelId: r.hotel_id,
+        hotel_name: r.hotels?.hotel_name || '',
+        hotelName: r.hotels?.hotel_name || '',
+        hotel_property_code: r.hotels?.property_code || '',
+        hotelPropertyCode: r.hotels?.property_code || '',
+        city: r.hotels?.city || '',
+        state: r.hotels?.state || '',
+        channel_id: r.channel_id,
+        channelId: r.channel_id,
+        ota_type: r.ota_type,
+        otaType: r.ota_type,
+        ota_name: r.ota_name,
+        otaName: r.ota_name,
+        extranet_property_code: r.extranet_property_code,
+        extranetPropertyCode: r.extranet_property_code,
+        ota_property_name: r.ota_property_name || '',
+        otaPropertyName: r.ota_property_name || '',
+        notes: r.notes || '',
+        is_active: r.is_active !== false,
+        isActive: r.is_active !== false,
+        created_at: r.created_at,
+        createdAt: r.created_at,
+        updated_at: r.updated_at,
+        updatedAt: r.updated_at
+      }));
+
+      if (params?.search) {
+        const s = params.search.toLowerCase();
+        mapped = mapped.filter((m: any) =>
+          m.hotel_name.toLowerCase().includes(s) ||
+          m.hotel_property_code.toLowerCase().includes(s) ||
+          m.ota_name.toLowerCase().includes(s) ||
+          m.extranet_property_code.toLowerCase().includes(s)
+        );
+      }
+      return mapped;
+    }
+  } catch (fallbackErr) {
+    console.error('[api-channel] Direct Supabase fallback failed:', fallbackErr);
+  }
+
+  return [];
+}
+
+export async function createExtranetCode(payload: {
+  hotelId: string;
+  otaType: string;
+  otaName: string;
+  extranetPropertyCode: string;
+  otaPropertyName?: string;
+  notes?: string;
+  isActive?: boolean;
+}): Promise<HotelExtranetCode> {
+  const res = await apiFetch('/api/channels/extranet-codes', {
+    method: 'POST',
+    headers: { 'x-hotel-id': payload.hotelId },
+    body: JSON.stringify({
+      hotelId: payload.hotelId,
+      otaType: payload.otaType,
+      otaName: payload.otaName,
+      extranetPropertyCode: payload.extranetPropertyCode.trim(),
+      otaPropertyName: payload.otaPropertyName?.trim() || undefined,
+      notes: payload.notes?.trim() || undefined,
+      isActive: payload.isActive !== false
+    })
+  });
+  return res.code;
+}
+
+export async function updateExtranetCode(
+  id: string,
+  payload: {
+    extranetPropertyCode?: string;
+    otaPropertyName?: string;
+    notes?: string;
+    isActive?: boolean;
+    hotelId?: string;
+  }
+): Promise<HotelExtranetCode> {
+  const res = await apiFetch(`/api/channels/extranet-codes/${id}`, {
+    method: 'PUT',
+    headers: payload.hotelId ? { 'x-hotel-id': payload.hotelId } : {},
+    body: JSON.stringify({
+      extranetPropertyCode: payload.extranetPropertyCode !== undefined ? payload.extranetPropertyCode.trim() : undefined,
+      otaPropertyName: payload.otaPropertyName !== undefined ? payload.otaPropertyName.trim() : undefined,
+      notes: payload.notes !== undefined ? payload.notes.trim() : undefined,
+      isActive: payload.isActive
+    })
+  });
+  return res.code;
+}
+
+export async function deleteExtranetCode(id: string, hotelId?: string): Promise<{ success: boolean }> {
+  return apiFetch(`/api/channels/extranet-codes/${id}`, {
+    method: 'DELETE',
+    headers: hotelId ? { 'x-hotel-id': hotelId } : {}
+  });
+}
+
+export async function getHotelExtranetCode(hotelId: string, otaType: string): Promise<HotelExtranetCode | null> {
+  const codes = await getExtranetCodes({ hotelId, otaType });
+  return codes.find(c => c.hotel_id === hotelId && c.ota_type === otaType) || null;
+}
+
 
 
 

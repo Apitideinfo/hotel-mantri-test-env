@@ -3,6 +3,7 @@ import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRang
 import { toNum, calcStayNights, isStayOverlapping, calcGstFull } from './calc';
 import { dispatchChannelEvent } from './api-channel';
 import { apiFetch } from './api-fetch';
+import { queryClient, queryKeys, invalidateOperationalData } from './queryClient';
 import type { RoomChartEntry } from './types';
 import type {
   Reservation, ReservationInput, ReservationStatus,
@@ -127,25 +128,31 @@ export const getReservationsForDateRange = async (
   endDate: string,
 ): Promise<Reservation[]> => {
   const hotelId = getCurrentHotelId();
-  const { data, error } = await supabase
-    .from('reservations')
-    .select('*')
-    .eq('hotel_id', hotelId)
-    .lte('check_in_date', endDate)
-    .gte('check_out_date', startDate)
-    .order('check_in_date', { ascending: true });
-  if (error) {
-    console.error('[getReservationsForDateRange] Supabase query error:', error);
-    throw error;
-  }
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.reservationsRange(hotelId, startDate, endDate),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('reservations')
+        .select('*')
+        .eq('hotel_id', hotelId)
+        .lte('check_in_date', endDate)
+        .gte('check_out_date', startDate)
+        .order('check_in_date', { ascending: true });
+      if (error) {
+        console.error('[getReservationsForDateRange] Supabase query error:', error);
+        throw error;
+      }
 
-  const list = (data as Reservation[]) ?? [];
-  return list.filter((r) => {
-    const ci = (r.check_in_date ?? '').slice(0, 10);
-    const co = (r.check_out_date ?? '').slice(0, 10);
-    if (!ci || !co) return false;
-    // Overlaps the date range [startDate, endDate]
-    return ci <= endDate && co >= startDate;
+      const list = (data as Reservation[]) ?? [];
+      return list.filter((r) => {
+        const ci = (r.check_in_date ?? '').slice(0, 10);
+        const co = (r.check_out_date ?? '').slice(0, 10);
+        if (!ci || !co) return false;
+        // Overlaps the date range [startDate, endDate]
+        return ci <= endDate && co >= startDate;
+      });
+    },
+    staleTime: 30_000,
   });
 };
 
@@ -153,17 +160,23 @@ export const getFutureReservationsCount = async (
   targetDate: string,
 ): Promise<number> => {
   const hotelId = getCurrentHotelId();
-  const { count, error } = await supabase
-    .from('reservations')
-    .select('id', { count: 'exact', head: true })
-    .eq('hotel_id', hotelId)
-    .eq('status', 'confirmed')
-    .gt('check_in_date', targetDate);
-  if (error) {
-    console.error('[getFutureReservationsCount] Supabase count error:', error);
-    throw error;
-  }
-  return count ?? 0;
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.futureReservationsCount(hotelId, targetDate),
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from('reservations')
+        .select('id', { count: 'exact', head: true })
+        .eq('hotel_id', hotelId)
+        .eq('status', 'confirmed')
+        .gt('check_in_date', targetDate);
+      if (error) {
+        console.error('[getFutureReservationsCount] Supabase count error:', error);
+        throw error;
+      }
+      return count ?? 0;
+    },
+    staleTime: 30_000,
+  });
 };
 
 export const saveReservation = async (

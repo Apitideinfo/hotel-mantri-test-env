@@ -4,7 +4,7 @@ import {
   Clock, ChevronLeft, Plus, Eye, EyeOff, Save, Trash2,
   Shield, Settings, Link2, ExternalLink, Activity, Check,
   X, Copy, Zap, Info, Lock, Play, Pause, Power, Loader2,
-  Tag, BedDouble, ArrowRight, History
+  Tag, BedDouble, ArrowRight, History, KeyRound
 } from 'lucide-react';
 import type { EnterpriseHotel } from '../types';
 import {
@@ -18,12 +18,14 @@ import {
   testChannelConnectionDirect,
   fetchMappingValidation,
   fetchChannelAuditHistory,
+  getExtranetCodes,
   CHANNEL_TYPES,
   getChannelMetadata,
   type ChannelConnection,
   type ChannelSettings as ChannelSettingsType,
   type ChannelRateMapping,
-  type ChannelManagerOverview
+  type ChannelManagerOverview,
+  type HotelExtranetCode
 } from '@/lib/api-channel';
 import type { RoomCategory } from '@/lib/types';
 import type { RatePlan } from '@/lib/types-reservations';
@@ -45,6 +47,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [overview, setOverview] = useState<ChannelManagerOverview | null>(null);
+  const [extranetCodes, setExtranetCodes] = useState<HotelExtranetCode[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   // Master Provider Settings state
@@ -84,8 +87,12 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
   const loadData = useCallback(async () => {
     try {
       setError(null);
-      const data = await getChannelManagerOverview(hotel.id);
+      const [data, exCodes] = await Promise.all([
+        getChannelManagerOverview(hotel.id),
+        getExtranetCodes({ hotelId: hotel.id })
+      ]);
       setOverview(data);
+      setExtranetCodes(exCodes);
       if (data.settings) {
         setMasterHotelCode(data.settings.aiosell_hotel_code || '');
         setMasterPartnerId(data.settings.aiosell_partner_id || '');
@@ -107,6 +114,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
     setLoading(true);
     // Explicitly reset form state on hotel switch so previous hotel's data never leaks
     setOverview(null);
+    setExtranetCodes([]);
     setMasterHotelCode('');
     setMasterPartnerId('');
     setMasterEnv('production');
@@ -541,9 +549,27 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
                           <h4 className="text-sm font-extrabold text-slate-900">
                             {ch.channel_name || meta.label}
                           </h4>
-                          <span className="text-[11px] font-mono text-slate-500">
-                            ID: {ch.external_channel_id || 'Not set'}
-                          </span>
+                          {(() => {
+                            const savedExtranet = extranetCodes.find((e) => e.ota_type === ch.channel_type);
+                            return (
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <KeyRound className="w-3 h-3 text-amber-600 shrink-0" />
+                                {savedExtranet?.extranet_property_code ? (
+                                  <span className="text-[11px] font-mono font-bold text-amber-950 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                                    Extranet ID: {savedExtranet.extranet_property_code}
+                                  </span>
+                                ) : ch.external_channel_id ? (
+                                  <span className="text-[11px] font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                    ID: {ch.external_channel_id}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-semibold text-amber-800 bg-amber-50/70 px-1.5 py-0.5 rounded border border-amber-200">
+                                    No extranet code saved
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -706,6 +732,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
           channel={selectedChannelForRoomMap}
           categories={categories}
           existingMappings={mappings.filter(m => m.channel_connection_id === selectedChannelForRoomMap.id)}
+          savedExtranet={extranetCodes.find(e => e.ota_type === selectedChannelForRoomMap.channel_type)}
           hotelId={hotel.id}
           onClose={() => setSelectedChannelForRoomMap(null)}
           onSuccess={async () => {
@@ -726,6 +753,7 @@ export const SuperAdminOtaConfig: React.FC<SuperAdminOtaConfigProps> = ({
           ratePlans={ratePlans}
           categories={categories}
           existingMappings={mappings.filter(m => m.channel_connection_id === selectedChannelForRateMap.id)}
+          savedExtranet={extranetCodes.find(e => e.ota_type === selectedChannelForRateMap.channel_type)}
           hotelId={hotel.id}
           onClose={() => setSelectedChannelForRateMap(null)}
           onSuccess={async () => {
@@ -1229,10 +1257,11 @@ const RoomMappingModal: React.FC<{
   channel: ChannelConnection;
   categories: RoomCategory[];
   existingMappings: ChannelRateMapping[];
+  savedExtranet?: HotelExtranetCode | null;
   hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ channel, categories, existingMappings, hotelId, onClose, onSuccess }) => {
+}> = ({ channel, categories, existingMappings, savedExtranet, hotelId, onClose, onSuccess }) => {
   const [mappingsState, setMappingsState] = useState<Record<string, { code: string; name: string }>>(() => {
     const init: Record<string, { code: string; name: string }> = {};
     for (const cat of categories) {
@@ -1312,6 +1341,25 @@ const RoomMappingModal: React.FC<{
         {error && (
           <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold">
             {error}
+          </div>
+        )}
+
+        {/* Saved Extranet Code Banner */}
+        {savedExtranet ? (
+          <div className="p-3 bg-amber-50/70 border border-amber-200/90 rounded-xl text-xs text-amber-950 font-semibold flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Saved Extranet Property Code:</span>
+            <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-amber-300 text-slate-900 shadow-xs">
+              {savedExtranet.extranet_property_code}
+            </span>
+            {savedExtranet.ota_property_name && (
+              <span className="text-slate-500 text-[11px]">({savedExtranet.ota_property_name})</span>
+            )}
+          </div>
+        ) : (
+          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900 font-semibold flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>No extranet code is saved for this hotel and OTA. Add it in Extranet Codes.</span>
           </div>
         )}
 
@@ -1404,10 +1452,11 @@ const RateMappingModal: React.FC<{
   ratePlans: RatePlan[];
   categories: RoomCategory[];
   existingMappings: ChannelRateMapping[];
+  savedExtranet?: HotelExtranetCode | null;
   hotelId?: string;
   onClose: () => void;
   onSuccess: () => void;
-}> = ({ channel, ratePlans, categories, existingMappings, hotelId, onClose, onSuccess }) => {
+}> = ({ channel, ratePlans, categories, existingMappings, savedExtranet, hotelId, onClose, onSuccess }) => {
   const [rateMappings, setRateMappings] = useState<Record<string, { code: string; name: string }>>(() => {
     const init: Record<string, { code: string; name: string }> = {};
     for (const plan of ratePlans) {
@@ -1476,6 +1525,25 @@ const RateMappingModal: React.FC<{
         {error && (
           <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold">
             {error}
+          </div>
+        )}
+
+        {/* Saved Extranet Code Banner */}
+        {savedExtranet ? (
+          <div className="p-3 bg-amber-50/70 border border-amber-200/90 rounded-xl text-xs text-amber-950 font-semibold flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Saved Extranet Property Code:</span>
+            <span className="font-mono font-bold bg-white px-2 py-0.5 rounded border border-amber-300 text-slate-900 shadow-xs">
+              {savedExtranet.extranet_property_code}
+            </span>
+            {savedExtranet.ota_property_name && (
+              <span className="text-slate-500 text-[11px]">({savedExtranet.ota_property_name})</span>
+            )}
+          </div>
+        ) : (
+          <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900 font-semibold flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>No extranet code is saved for this hotel and OTA. Add it in Extranet Codes.</span>
           </div>
         )}
 

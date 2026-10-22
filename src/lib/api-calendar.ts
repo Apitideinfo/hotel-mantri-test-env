@@ -1,19 +1,27 @@
 import { supabase } from './supabase';
 import { getCurrentHotelId } from './api';
 import type { HotSeason } from './types';
+import { queryClient, queryKeys } from './queryClient';
 
-export const getHotSeasons = async (): Promise<HotSeason[]> => {
-  const { data, error } = await supabase
-    .from('hot_seasons')
-    .select('*')
-    .eq('hotel_id', getCurrentHotelId())
-    .order('start_date', { ascending: true });
-  if (error) {
-    // If the table doesn't exist yet (e.g. migration not run), just return empty array gracefully
-    if (error.code === '42P01') return [];
-    throw error;
-  }
-  return (data as HotSeason[]) ?? [];
+export const getHotSeasons = async (hotelId?: string): Promise<HotSeason[]> => {
+  const targetHotelId = hotelId || getCurrentHotelId();
+  return queryClient.fetchQuery({
+    queryKey: queryKeys.hotSeasons(targetHotelId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('hot_seasons')
+        .select('*')
+        .eq('hotel_id', targetHotelId)
+        .order('start_date', { ascending: true });
+      if (error) {
+        // If the table doesn't exist yet (e.g. migration not run), just return empty array gracefully
+        if (error.code === '42P01') return [];
+        throw error;
+      }
+      return (data as HotSeason[]) ?? [];
+    },
+    staleTime: 5 * 60_000,
+  });
 };
 
 export const addHotSeason = async (
@@ -21,10 +29,11 @@ export const addHotSeason = async (
   start_date: string,
   end_date: string
 ): Promise<HotSeason> => {
+  const hotelId = getCurrentHotelId();
   const { data, error } = await supabase
     .from('hot_seasons')
     .insert({
-      hotel_id: getCurrentHotelId(),
+      hotel_id: hotelId,
       name,
       start_date,
       end_date,
@@ -32,12 +41,15 @@ export const addHotSeason = async (
     .select('*')
     .single();
   if (error) throw error;
+  await queryClient.invalidateQueries({ queryKey: queryKeys.hotSeasons(hotelId) });
   return data as HotSeason;
 };
 
 export const deleteHotSeason = async (id: string): Promise<void> => {
+  const hotelId = getCurrentHotelId();
   const { error } = await supabase.from('hot_seasons').delete().eq('id', id);
   if (error) throw error;
+  await queryClient.invalidateQueries({ queryKey: queryKeys.hotSeasons(hotelId) });
 };
 
 /**
