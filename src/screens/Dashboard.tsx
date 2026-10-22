@@ -20,7 +20,7 @@ interface DashboardProps {
 }
 
 export const Dashboard = ({ onNavigate }: DashboardProps) => {
-  const { role, hotelName } = useAuth();
+  const { role, hotelName, hotelId } = useAuth();
   void role; // Available for staff specific conditionals if needed
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,7 +54,7 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
     } finally {
       setLoading(false);
     }
-  }, [selectedDate]);
+  }, [selectedDate, hotelId]);
 
   const loadPeriodRevenue = useCallback(async () => {
     try {
@@ -85,7 +85,7 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
     } finally {
       setRevenueLoading(false);
     }
-  }, [dateFilter, selectedDate, rangeStart, rangeEnd, todayStr]);
+  }, [dateFilter, selectedDate, rangeStart, rangeEnd, todayStr, hotelId]);
 
   useEffect(() => {
     loadSummary();
@@ -137,6 +137,9 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
   const ytd = summary?.ytd ?? null;
   const lastClosedDate = summary?.lastClosedDate ?? null;
   const ranking = summary?.ranking ?? [];
+  const activeRanking = periodRevenue?.bookingSources !== undefined
+    ? periodRevenue.bookingSources
+    : ranking;
   const roomPreview = summary?.roomPreview ?? { categories: [] };
   const opsToday = summary?.opsToday ?? { arrivals: 0, departures: 0, inHouse: 0, available: 0, occupied: 0, dueCheckouts: 0, todayCheckins: 0 };
   const totalRooms = summary?.settings?.total_rooms || 20;
@@ -275,8 +278,15 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
       {/* 6. Room Inventory & Allocation Matrix Section */}
       <RoomChartPreviewSection roomPreview={roomPreview} todayStr={selectedDate} onNavigate={onNavigate} />
 
-      {/* 7. YTD Executive Summary + Channel Leaderboard */}
-      <YtdAndBookingSources ytd={ytd} ranking={ranking} />
+      {/* 7. YTD Executive Summary + Dynamic Channel Leaderboard */}
+      <YtdAndBookingSources
+        ytd={ytd}
+        ranking={activeRanking}
+        loading={revenueLoading || (loading && !summary)}
+        error={error}
+        periodLabel={periodSubtitle}
+        onRetry={refreshAll}
+      />
 
       {/* Dedicated Day-Wise Revenue History Modal */}
       <DailyRevenueHistoryModal

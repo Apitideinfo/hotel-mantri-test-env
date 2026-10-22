@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Phone, Mail, MapPin } from 'lucide-react';
-import { RevealOnScroll } from './RevealOnScroll';
+import React from 'react';
+import { Phone, Mail, Globe, Sparkles } from 'lucide-react';
+import { BrandLogo } from '@/components/BrandLogo';
 
 interface FooterProps {
   onNavigateLogin?: () => void;
+  onOpenBookDemo?: () => void;
   onNavigatePrivacy?: () => void;
   onNavigateDeletion?: () => void;
   onNavigateTerms?: () => void;
@@ -11,22 +12,11 @@ interface FooterProps {
 
 export const Footer: React.FC<FooterProps> = ({
   onNavigateLogin,
+  onOpenBookDemo,
   onNavigatePrivacy,
   onNavigateDeletion,
   onNavigateTerms,
 }) => {
-  const [email, setEmail] = useState('');
-  const [subscribed, setSubscribed] = useState(false);
-
-  const handleSubscribe = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (email.trim()) {
-      setSubscribed(true);
-      setTimeout(() => setSubscribed(false), 4000);
-      setEmail('');
-    }
-  };
-
   const navigateTo = (path: string, callback?: () => void) => {
     if (callback) {
       callback();
@@ -39,185 +29,202 @@ export const Footer: React.FC<FooterProps> = ({
     }
   };
 
-  const handleNav = (id: string) => {
-    if (id === 'login' && onNavigateLogin) {
-      onNavigateLogin();
+  const handleScrollTo = (id: string) => {
+    if (id === 'home') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
     const el = document.getElementById(id);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth' });
-    } else {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
   return (
-    <footer className="bg-black text-gray-400 text-xs sm:text-sm select-none border-t border-neutral-900 pt-16 sm:pt-20 pb-12">
-      <div className="max-w-[1360px] mx-auto px-4 sm:px-6 lg:px-10">
+    <footer className="bg-[#050914] text-slate-400 text-xs sm:text-sm select-none border-t border-slate-800/80 pt-16 sm:pt-20 pb-12">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
-        {/* ── Main 5-Column Grid ── */}
-        <RevealOnScroll variant="fade-up" duration={700}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8 pb-14 border-b border-neutral-800/80">
-            
-            {/* Column 1: Brand Logo & Contact Details (lg:col-span-3) */}
-            <div className="lg:col-span-3 flex flex-col justify-start">
-              <button
-                onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-                className="shrink-0 cursor-pointer select-none text-left mb-6 inline-block"
+        {/* ── Main Footer Columns Grid ── */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-8 sm:gap-10 pb-14 border-b border-slate-800/80 text-left">
+          
+          {/* Brand Info (col-span-2 on lg) */}
+          <div className="col-span-2 space-y-4">
+            <button
+              onClick={() => handleScrollTo('home')}
+              className="shrink-0 cursor-pointer select-none text-left inline-block"
+              aria-label="HotelMantri Home"
+            >
+              <BrandLogo variant="landing-footer" onDark={true} />
+            </button>
+            <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
+              Your Hotel's Digital Manager — All-in-one hotel management software designed for independent hotels, resorts and boutique properties across India.
+            </p>
+            <div className="space-y-2 pt-1 text-xs">
+              <a
+                href="tel:+919925958831"
+                className="flex items-center gap-2 text-slate-300 hover:text-amber-400 transition"
               >
-                <span className="text-2xl font-black tracking-tight text-white font-sans">
-                  <span className="text-[#7B5CF5]">Hotel</span>
-                  <span className="text-[#22B8CF]">Mantri</span>
-                </span>
-              </button>
-
-              <div className="flex flex-col gap-3.5 text-xs text-gray-300">
-                <a
-                  href="tel:+919925958831"
-                  className="flex items-center gap-2.5 hover:text-white transition-colors"
-                >
-                  <Phone className="w-4 h-4 text-[#16A34A] shrink-0" />
-                  <span className="font-semibold">+91 99259 58831</span>
-                </a>
-                <a
-                  href="mailto:booking@hotelmantri.com"
-                  className="flex items-center gap-2.5 hover:text-white transition-colors"
-                >
-                  <Mail className="w-4 h-4 text-[#0070F3] shrink-0" />
-                  <span className="font-semibold">booking@hotelmantri.com</span>
-                </a>
-              </div>
+                <Phone className="w-3.5 h-3.5 text-amber-400" /> +91 99259 58831
+              </a>
+              <a
+                href="mailto:booking@hotelmantri.com"
+                className="flex items-center gap-2 text-slate-300 hover:text-amber-400 transition"
+              >
+                <Mail className="w-3.5 h-3.5 text-sky-400" /> booking@hotelmantri.com
+              </a>
             </div>
-
-            {/* Column 2: Our Branches (lg:col-span-3) */}
-            <div className="lg:col-span-3 flex flex-col">
-              <h4 className="text-sm font-bold text-white tracking-tight mb-4 flex items-center gap-1.5">
-                <MapPin className="w-3.5 h-3.5 text-cyan-400" />
-                Our Branches
-              </h4>
-              <div className="space-y-4 text-xs leading-relaxed text-gray-400">
-                <div>
-                  <p className="font-semibold text-gray-200">New Zealand Office</p>
-                  <p className="text-gray-400 text-[11px] mt-0.5">
-                    2 Khyber Pass Road, Eden Terrace, Auckland 1010
-                  </p>
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-200">Mumbai Office</p>
-                  <p className="text-gray-400 text-[11px] mt-0.5">
-                    Sector 17, Vashi, Navi Mumbai, Maharashtra 400703
-                  </p>
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-200">Bhubaneswar Office</p>
-                  <p className="text-gray-400 text-[11px] mt-0.5">
-                    DCB 915, DLF CYBER CITY, Chandaka Industrial Estate, Patia, Bhubaneswar, Odisha 751024
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Column 3: Products (lg:col-span-2) */}
-            <div className="lg:col-span-2 flex flex-col">
-              <h4 className="text-sm font-bold text-white tracking-tight mb-4">
-                Products
-              </h4>
-              <ul className="space-y-2.5 text-xs text-gray-400">
-                <li>
-                  <button onClick={() => handleNav('features')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    HotelMantri PMS
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('features')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    HotelMantri POS
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('integrations')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Channel Manager
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('features')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Direct Booking Engine
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('overview')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Reports & Analytics
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('overview')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Guest Management
-                  </button>
-                </li>
-              </ul>
-            </div>
-
-            {/* Column 4: Services (lg:col-span-2) */}
-            <div className="lg:col-span-2 flex flex-col">
-              <h4 className="text-sm font-bold text-white tracking-tight mb-4">
-                Services
-              </h4>
-              <ul className="space-y-2.5 text-xs text-gray-400">
-                <li>
-                  <button onClick={() => handleNav('features')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Digital Marketing
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('overview')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Google Business Listing
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('integrations')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    OTA Setup & Onboarding
-                  </button>
-                </li>
-                <li>
-                  <button onClick={() => handleNav('features')} className="hover:text-white transition-colors cursor-pointer text-left">
-                    Photography & Videography
-                  </button>
-                </li>
-              </ul>
-            </div>
-
-            {/* Column 5: Subscribe (lg:col-span-2) */}
-            <div className="lg:col-span-2 flex flex-col">
-              <h4 className="text-sm font-bold text-white tracking-tight mb-2">
-                Subscribe
-              </h4>
-              <p className="text-xs text-gray-400 mb-3">
-                Get product updates and hospitality tips.
-              </p>
-              <form onSubmit={handleSubscribe} className="flex flex-col gap-2">
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.com"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-neutral-900 border border-neutral-700 text-white text-xs placeholder:text-gray-500 focus:outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 transition-all"
-                />
-                <button
-                  type="submit"
-                  className="w-full py-2.5 px-4 rounded-xl bg-white text-black font-bold text-xs hover:bg-gray-100 active:scale-95 transition-all cursor-pointer shadow-sm"
-                >
-                  {subscribed ? 'Subscribed ✓' : 'Subscribe'}
-                </button>
-              </form>
-            </div>
-
           </div>
-        </RevealOnScroll>
+
+          {/* Column 1: Product */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Product</h4>
+            <ul className="space-y-2 text-xs text-slate-400">
+              <li>
+                <button onClick={() => handleScrollTo('modules')} className="hover:text-white transition cursor-pointer">
+                  PMS
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('channel-manager')} className="hover:text-white transition cursor-pointer">
+                  Channel Manager
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('modules')} className="hover:text-white transition cursor-pointer">
+                  Housekeeping
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('modules')} className="hover:text-white transition cursor-pointer">
+                  Finance
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('modules')} className="hover:text-white transition cursor-pointer">
+                  Reports
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('modules')} className="hover:text-white transition cursor-pointer">
+                  POS
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          {/* Column 2: Company */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Company</h4>
+            <ul className="space-y-2 text-xs text-slate-400">
+              <li>
+                <button onClick={() => handleScrollTo('architecture')} className="hover:text-white transition cursor-pointer">
+                  About
+                </button>
+              </li>
+              <li>
+                <a href="mailto:booking@hotelmantri.com" className="hover:text-white transition">
+                  Contact
+                </a>
+              </li>
+              <li>
+                <a href="mailto:careers@hotelmantri.com" className="hover:text-white transition">
+                  Careers
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          {/* Column 3: Resources */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Resources</h4>
+            <ul className="space-y-2 text-xs text-slate-400">
+              <li>
+                <button onClick={() => handleScrollTo('how-it-works')} className="hover:text-white transition cursor-pointer">
+                  Help Center
+                </button>
+              </li>
+              <li>
+                <button onClick={() => handleScrollTo('whatsapp')} className="hover:text-white transition cursor-pointer">
+                  WhatsApp Support
+                </button>
+              </li>
+              <li>
+                <a href="mailto:support@hotelmantri.com" className="hover:text-white transition">
+                  Support
+                </a>
+              </li>
+            </ul>
+          </div>
+
+          {/* Column 4: Account & Social */}
+          <div className="space-y-3">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider">Account</h4>
+            <ul className="space-y-2 text-xs text-slate-400">
+              <li>
+                <button onClick={onNavigateLogin} className="hover:text-white transition cursor-pointer font-semibold text-slate-200">
+                  Login
+                </button>
+              </li>
+              <li>
+                <button onClick={onOpenBookDemo} className="hover:text-amber-400 transition cursor-pointer font-bold text-amber-400">
+                  Book Demo
+                </button>
+              </li>
+            </ul>
+
+            <div className="pt-3">
+              <h5 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-2">Follow Us</h5>
+              <div className="flex items-center gap-2.5 text-slate-400">
+                <a
+                  href="https://facebook.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-center justify-center hover:text-white hover:bg-slate-700 transition"
+                  aria-label="Facebook"
+                >
+                  <span className="font-bold text-[11px]">f</span>
+                </a>
+                <a
+                  href="https://instagram.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-center justify-center hover:text-white hover:bg-slate-700 transition"
+                  aria-label="Instagram"
+                >
+                  <span className="font-bold text-[11px]">ig</span>
+                </a>
+                <a
+                  href="https://linkedin.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-center justify-center hover:text-white hover:bg-slate-700 transition"
+                  aria-label="LinkedIn"
+                >
+                  <span className="font-bold text-[11px]">in</span>
+                </a>
+                <a
+                  href="https://youtube.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 rounded-lg bg-slate-800/80 border border-slate-700/80 flex items-center justify-center hover:text-white hover:bg-slate-700 transition"
+                  aria-label="YouTube"
+                >
+                  <span className="font-bold text-[11px]">yt</span>
+                </a>
+              </div>
+            </div>
+          </div>
+
+        </div>
 
         {/* ── Sub-Footer Bottom Bar ── */}
-        <div className="pt-8 flex flex-col md:flex-row items-center justify-between text-[11px] text-gray-500 gap-4 text-center md:text-left">
-          {/* Left: Policy links */}
+        <div className="pt-8 flex flex-col md:flex-row items-center justify-between text-[11.5px] text-slate-500 gap-4 text-center md:text-left">
+          {/* Left: Copyright */}
+          <div>
+            © {new Date().getFullYear()} HotelMantri. All Rights Reserved.
+          </div>
+
+          {/* Right: Policy links */}
           <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-5">
             <a
               href="/privacy-policy"
@@ -227,11 +234,11 @@ export const Footer: React.FC<FooterProps> = ({
                   navigateTo('/privacy-policy', onNavigatePrivacy);
                 }
               }}
-              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+              className="hover:text-slate-300 transition-colors cursor-pointer"
             >
               Privacy Policy
             </a>
-            <span className="text-neutral-700">|</span>
+            <span className="text-slate-800">•</span>
             <a
               href="/data-deletion"
               onClick={(e) => {
@@ -240,11 +247,11 @@ export const Footer: React.FC<FooterProps> = ({
                   navigateTo('/data-deletion', onNavigateDeletion);
                 }
               }}
-              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+              className="hover:text-slate-300 transition-colors cursor-pointer"
             >
               Data Deletion
             </a>
-            <span className="text-neutral-700">|</span>
+            <span className="text-slate-800">•</span>
             <a
               href="/terms"
               onClick={(e) => {
@@ -253,20 +260,10 @@ export const Footer: React.FC<FooterProps> = ({
                   navigateTo('/terms', onNavigateTerms);
                 }
               }}
-              className="hover:text-gray-200 transition-colors cursor-pointer text-gray-400 font-medium"
+              className="hover:text-slate-300 transition-colors cursor-pointer"
             >
               Terms of Service
             </a>
-          </div>
-
-          {/* Center: Attribution */}
-          <div className="text-gray-400 font-medium">
-            Designed and Developed by <span className="text-white font-semibold">HotelMantri</span>
-          </div>
-
-          {/* Right: Copyright */}
-          <div>
-            © {new Date().getFullYear()} HotelMantri. All Rights Reserved.
           </div>
         </div>
 

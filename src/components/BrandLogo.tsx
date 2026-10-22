@@ -22,7 +22,7 @@ export const HotelMantriVectorIcon: React.FC<{ size?: number; className?: string
   />
 );
 
-type Variant = 'login' | 'sidebar' | 'mobile' | 'invoice' | 'compact';
+type Variant = 'login' | 'sidebar' | 'mobile' | 'invoice' | 'compact' | 'landing-header' | 'landing-footer';
 
 interface BrandLogoProps {
   variant?: Variant;
@@ -69,6 +69,18 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       taglineClass: 'hidden',
       gap: 'gap-1.5',
     },
+    'landing-header': {
+      iconSize: 34,
+      titleClass: 'text-[20px] sm:text-[22px]',
+      taglineClass: 'text-[7px] sm:text-[7.5px] tracking-[0.16em] mt-0.5',
+      gap: 'gap-2.5',
+    },
+    'landing-footer': {
+      iconSize: 38,
+      titleClass: 'text-[22px] sm:text-[24px]',
+      taglineClass: 'text-[7.5px] sm:text-[8px] tracking-[0.18em] mt-1',
+      gap: 'gap-3',
+    },
   }[variant];
 
   return (
@@ -78,7 +90,9 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
     >
       <img
         src={BRAND_ICON_SRC}
-        alt="HotelMantri Icon"
+        alt="HotelMantri — Your Hotel's Digital Manager"
+        width={config.iconSize}
+        height={config.iconSize}
         style={{ width: `${config.iconSize}px`, height: `${config.iconSize}px` }}
         className="shrink-0 object-contain drop-shadow-sm select-none"
         loading="eager"

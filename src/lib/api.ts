@@ -1130,57 +1130,139 @@ export const getCompanyLedger = async (
   return (data as RoomChartEntry[]) ?? [];
 };
 
-// All distinct companies with their revenue for ranking.
+// All distinct booking sources / channels with their revenue and booking counts.
 // Revenue is computed as per-night rate (room_rate priority, then total÷nights)
 // multiplied by the number of nights that fall within the requested date range.
-// This prevents a 2-night booking from contributing ₹2,400 in a period where
-// only 1 night overlaps.
+// Integrates both room_chart_entries and active reservations without double-counting.
 export const getCompanyRevenueRanking = async (
-  fromDate: string, toDate: string
-): Promise<{ name: string; category: SourceCategory; revenue: number; bookings: number }[]> => {
-  // Wide lookback to catch backdated entries
+  fromDate: string,
+  toDate: string,
+  targetHotelId?: string
+): Promise<{ name: string; category: SourceCategory; revenue: number; bookings: number; sharePercent?: number }[]> => {
+  const hotelId = targetHotelId || getCurrentHotelId();
+  if (!hotelId) return [];
+
+  // Lookback to catch stays spanning into this window
   const lookback = addDays(fromDate, -180);
-  const { data, error } = await supabase
-    .from('room_chart_entries')
-    .select('company, source_category, total, room_rate, nights, arrival, departure, report_date, is_complimentary')
-    .eq('hotel_id', getCurrentHotelId())
-    .gte('report_date', lookback)
-    .lte('report_date', addDays(toDate, 30));
-  if (error) throw error;
-  const map = new Map<string, { name: string; category: SourceCategory; revenue: number; bookings: number }>();
-  for (const r of (data ?? []) as RoomChartEntry[]) {
-    if (r.is_complimentary) continue;
-    // Count only nights that fall within the requested [fromDate, toDate] window
-    const arr = (r.arrival && r.arrival.trim() ? r.arrival : r.report_date).slice(0, 10);
-    const dep = (r.departure && r.departure.trim() ? r.departure : r.report_date).slice(0, 10);
-    const nightlyRate = toNum(r.room_rate) > 0
-      ? toNum(r.room_rate)
-      : (toNum(r.total) > 0
-        ? toNum(r.total) / Math.max(1, arr < dep ? calcStayNights(arr, dep) : (toNum(r.nights) || 1))
-        : 0);
-    // Count how many occupied nights of this booking fall within [fromDate, toDate]
+  const lookahead = addDays(toDate, 30);
+
+  const [chartRes, resvRes] = await Promise.all([
+    supabase
+      .from('room_chart_entries')
+      .select('id, reservation_id, company, source_category, total, room_rate, nights, arrival, departure, report_date, is_complimentary')
+      .eq('hotel_id', hotelId)
+      .gte('report_date', lookback)
+      .lte('report_date', lookahead),
+    supabase
+      .from('reservations')
+      .select('id, source_name, source_category, rate, invoice_total, nights, check_in_date, check_out_date, status, payment_mode, remarks')
+      .eq('hotel_id', hotelId)
+      .not('status', 'in', '("cancelled","no_show")')
+      .lte('check_in_date', toDate)
+      .gte('check_out_date', fromDate),
+  ]);
+
+  const chartRows = (chartRes.data ?? []) as any[];
+  const resvRows = (resvRes.data ?? []) as any[];
+
+  // Deduplicate linked reservations to prevent double-counting
+  const linkedResvIds = new Set(chartRows.map((e) => e.reservation_id).filter(Boolean));
+  const unlinkedResvs = resvRows.filter((r) => !linkedResvIds.has(r.id));
+
+  // Synthesize unified stay objects
+  const allStays = [
+    ...chartRows.map((e) => ({
+      id: e.id,
+      resvId: e.reservation_id || e.id,
+      name: (e.company || e.source_category || '').trim() || 'Unknown',
+      category: (e.source_category || 'OTA') as SourceCategory,
+      arr: (e.arrival && e.arrival.trim() ? e.arrival : e.report_date || '').slice(0, 10),
+      dep: (e.departure && e.departure.trim() ? e.departure : e.report_date || '').slice(0, 10),
+      room_rate: toNum(e.room_rate),
+      total: toNum(e.total),
+      nights: toNum(e.nights) || 1,
+      is_complimentary: Boolean(e.is_complimentary),
+    })),
+    ...unlinkedResvs.map((r) => {
+      const isComplimentary = Boolean(
+        r.payment_mode === 'Complimentary' ||
+        (r.remarks && typeof r.remarks === 'string' && r.remarks.toLowerCase().includes('complimentary'))
+      );
+      return {
+        id: r.id,
+        resvId: r.id,
+        name: (r.source_name || r.source_category || '').trim() || 'Unknown',
+        category: (r.source_category || 'OTA') as SourceCategory,
+        arr: (r.check_in_date || '').slice(0, 10),
+        dep: (r.check_out_date || '').slice(0, 10),
+        room_rate: toNum(r.rate),
+        total: toNum(r.invoice_total),
+        nights: toNum(r.nights) || 1,
+        is_complimentary: isComplimentary,
+      };
+    }),
+  ];
+
+  const sourceBookingMap = new Map<string, Set<string>>();
+  const sourceRevenueMap = new Map<string, number>();
+  const sourceCategoryMap = new Map<string, SourceCategory>();
+  let totalPeriodRoomRevenue = 0;
+
+  for (const s of allStays) {
+    if (!s.arr) continue;
+    const effectiveDep = s.dep && s.dep > s.arr ? s.dep : addDays(s.arr, 1);
+    const stayNights = Math.max(1, calcStayNights(s.arr, effectiveDep));
+    const nightlyRate = s.is_complimentary
+      ? 0
+      : s.room_rate > 0
+      ? s.room_rate
+      : s.total > 0
+      ? s.total / stayNights
+      : 0;
+
+    // Overlapping nights with [fromDate, toDate]
+    // Check-in date inclusive, check-out date exclusive
+    const winStart = s.arr >= fromDate ? s.arr : fromDate;
+    const nextAfterTo = addDays(toDate, 1);
+    const winEnd = effectiveDep <= nextAfterTo ? effectiveDep : nextAfterTo;
+
     let nightsInPeriod = 0;
-    if (arr < dep) {
-      // Multi-night: count days in [max(arr,fromDate), min(dep,toDate+1))
-      const effectiveStart = arr >= fromDate ? arr : fromDate;
-      const effectiveEnd = dep <= addDays(toDate, 1) ? dep : addDays(toDate, 1);
-      if (effectiveStart < effectiveEnd) {
-        nightsInPeriod = calcStayNights(effectiveStart, effectiveEnd);
-      }
-    } else {
-      // Single-day: count if that day is in range
-      if (arr >= fromDate && arr <= toDate) nightsInPeriod = 1;
+    if (winStart < winEnd) {
+      nightsInPeriod = calcStayNights(winStart, winEnd);
     }
+
     if (nightsInPeriod <= 0) continue;
-    const amt = nightlyRate * nightsInPeriod;
-    const key = r.company || 'Unknown';
-    const existing = map.get(key) ?? { name: key, category: r.source_category, revenue: 0, bookings: 0 };
-    existing.revenue += amt;
-    existing.bookings += 1;
-    map.set(key, existing);
+
+    const earnedAmt = nightlyRate * nightsInPeriod;
+    totalPeriodRoomRevenue += earnedAmt;
+
+    const key = s.name;
+    const resvSet = sourceBookingMap.get(key) ?? new Set<string>();
+    resvSet.add(s.resvId);
+    sourceBookingMap.set(key, resvSet);
+
+    sourceRevenueMap.set(key, (sourceRevenueMap.get(key) || 0) + earnedAmt);
+    if (!sourceCategoryMap.has(key)) {
+      sourceCategoryMap.set(key, s.category);
+    }
   }
-  return Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+
+  const results = Array.from(sourceBookingMap.entries()).map(([name, resvSet]) => {
+    const rev = Math.round((sourceRevenueMap.get(name) || 0) * 100) / 100;
+    const sharePercent = totalPeriodRoomRevenue > 0 ? Math.round((rev / totalPeriodRoomRevenue) * 1000) / 10 : 0;
+    return {
+      name,
+      category: sourceCategoryMap.get(name) || 'Direct/Walking',
+      revenue: rev,
+      bookings: resvSet.size,
+      sharePercent,
+    };
+  });
+
+  return results.sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings);
 };
+
+export const getTopBookingSources = getCompanyRevenueRanking;
 
 // ---- Legacy daily_reports (kept for backward compat; derived report supersedes) ----
 
@@ -1337,7 +1419,7 @@ export interface DashboardSummary {
   };
   weekReports: DerivedReport[];
   lastClosedDate: string | null;
-  ranking: { name: string; category: SourceCategory; revenue: number; bookings: number }[];
+  ranking: { name: string; category: SourceCategory; revenue: number; bookings: number; sharePercent?: number }[];
   roomPreview: { categories: { name: string; total: number; occupied: number; reserved: number; blocked: number; maintenance: number; outOfOrder: number; available?: number }[] };
   opsToday: { arrivals: number; departures: number; inHouse: number; available: number; occupied: number; dueCheckouts: number; todayCheckins: number; inHouseDue?: number };
   cashFlow?: CashFlowData;

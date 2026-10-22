@@ -1123,10 +1123,94 @@ import type {
   InvoiceWithDetails, InvoiceStatus,
 } from './types';
 
+export const DEFAULT_BILLING_SETTINGS: BillingSettings = {
+  company_details: {
+    brand_name: 'Hotel Mantri',
+    legal_name: 'Hotel Mantri Technologies Pvt. Ltd.',
+    tagline: 'Modern Hotel Management System',
+    address: '',
+    city: '',
+    state: '',
+    pin_code: '',
+    country: 'India',
+    gstin: '',
+    pan: '',
+    cin: '',
+    support_email: 'support@hotelmantri.com',
+    support_phone: '',
+    website: 'https://hotelmantri.com',
+  },
+  branding: {
+    logo_url: '',
+    invoice_logo_url: '',
+    watermark_url: '',
+    signature_url: '',
+    seal_url: '',
+    primary_color: '#0f172a',
+    secondary_color: '#1e3a5f',
+    accent_color: '#d4af37',
+    invoice_theme: 'navy_gold',
+    logo_size: 'medium',
+    watermark_opacity: 0.05,
+  },
+  invoice_numbering: {
+    prefix: 'HM',
+    fy_format: 'YYYY-YY',
+    starting_number: 1,
+    padding_length: 6,
+    next_preview: 'HM/2026-27/000001',
+  },
+  gst: {
+    default_gst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9,
+    igst_rate: 18,
+    hsn_sac: '998314',
+    place_of_supply: '',
+    tax_inclusive: false,
+    reverse_charge: false,
+    round_off: true,
+  },
+  payment: {
+    bank_name: '',
+    account_holder: '',
+    account_number: '',
+    ifsc: '',
+    branch: '',
+    upi_id: '',
+    qr_code_url: '',
+    payment_link: '',
+    payment_instructions: '',
+  },
+  terms: {
+    invoice_notes: '',
+    terms_conditions: '1. All payments are strictly due within the due date.\n2. Services may be suspended upon non-payment.\n3. Subject to jurisdiction.',
+    late_payment_terms: 'Late payment interest of 1.5% per month applicable after due date.',
+    refund_policy: 'Subscription fees are non-refundable once activated.',
+    jurisdiction: 'Subject to local court jurisdiction.',
+    footer_message: 'Thank you for choosing Hotel Mantri PMS.',
+    thank_you_message: 'We appreciate your business.',
+  },
+};
+
 export const getBillingSettings = async (): Promise<BillingSettings> => {
-  const { data, error } = await supabase.rpc('get_billing_settings');
-  if (error) throw error;
-  return data as BillingSettings;
+  try {
+    const { data, error } = await supabase.rpc('get_billing_settings');
+    if (!error && data && typeof data === 'object') {
+      const d = data as any;
+      return {
+        company_details: { ...DEFAULT_BILLING_SETTINGS.company_details, ...(d.company_details || {}) },
+        branding: { ...DEFAULT_BILLING_SETTINGS.branding, ...(d.branding || {}) },
+        invoice_numbering: { ...DEFAULT_BILLING_SETTINGS.invoice_numbering, ...(d.invoice_numbering || {}) },
+        gst: { ...DEFAULT_BILLING_SETTINGS.gst, ...(d.gst || {}) },
+        payment: { ...DEFAULT_BILLING_SETTINGS.payment, ...(d.payment || {}) },
+        terms: { ...DEFAULT_BILLING_SETTINGS.terms, ...(d.terms || {}) },
+      };
+    }
+  } catch (err) {
+    console.warn('[getBillingSettings] Error calling get_billing_settings RPC:', err);
+  }
+  return DEFAULT_BILLING_SETTINGS;
 };
 
 export const updateBillingSettings = async (

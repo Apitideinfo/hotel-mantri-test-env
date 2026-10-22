@@ -1,32 +1,47 @@
-import { Trophy, TrendingUp, Layers, IndianRupee, BarChart3, Users, Wallet, Percent, Calendar } from 'lucide-react';
+import { Trophy, TrendingUp, Layers, IndianRupee, BarChart3, Users, Wallet, Percent, Calendar, AlertTriangle, RefreshCw, Inbox } from 'lucide-react';
 import { fmtMoney, fmtInt } from '@/lib/calc';
 import type { DashboardSummary } from '@/lib/api';
 
+export interface BookingSourceRankingItem {
+  name: string;
+  bookings: number;
+  revenue: number;
+  category?: string;
+  sharePercent?: number;
+}
+
 interface YtdAndBookingSourcesProps {
   ytd: DashboardSummary['ytd'] | null;
-  ranking: DashboardSummary['ranking'];
+  ranking: BookingSourceRankingItem[];
+  loading?: boolean;
+  error?: string | null;
+  periodLabel?: string;
+  onRetry?: () => void;
 }
 
 const rs = (n: number | string): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
-export const YtdAndBookingSources = ({ ytd, ranking }: YtdAndBookingSourcesProps) => {
+export const YtdAndBookingSources = ({
+  ytd,
+  ranking,
+  loading = false,
+  error = null,
+  periodLabel,
+  onRetry,
+}: YtdAndBookingSourcesProps) => {
   const ytdData = ytd ?? {
-    roomRevenue: 288000,
-    totalRevenue: 348000,
-    occ: 65,
-    arr: 1800,
-    roomNights: 160,
+    roomRevenue: 0,
+    totalRevenue: 0,
+    occ: 0,
+    arr: 0,
+    roomNights: 0,
   };
 
-  const bookingSources = (ranking && ranking.length > 0) ? ranking : [
-    { name: 'MakeMyTrip', bookings: 42, revenue: 165000, category: 'OTA' },
-    { name: 'Direct Walk-in', bookings: 28, revenue: 115000, category: 'Direct' },
-    { name: 'Booking.com', bookings: 18, revenue: 68000, category: 'OTA' },
-  ];
+  const bookingSources = ranking ?? [];
 
   const roomShare = ytdData.totalRevenue > 0
     ? Math.min(100, Math.round((ytdData.roomRevenue / ytdData.totalRevenue) * 100))
-    : 100;
+    : (ytdData.roomRevenue > 0 ? 100 : 0);
 
   const revpar = ytd?.revpar ?? (ytdData.occ > 0 ? (ytdData.arr * ytdData.occ) / 100 : 0);
 
@@ -72,7 +87,7 @@ export const YtdAndBookingSources = ({ ytd, ranking }: YtdAndBookingSourcesProps
           <div className="w-full bg-brand-100/70 rounded-full h-2 overflow-hidden">
             <div
               className="bg-brand-600 h-full rounded-full transition-all duration-500"
-              style={{ width: `${Math.min(100, Math.max(5, roomShare))}%` }}
+              style={{ width: `${Math.min(100, Math.max(0, roomShare))}%` }}
             />
           </div>
         </div>
@@ -132,43 +147,91 @@ export const YtdAndBookingSources = ({ ytd, ranking }: YtdAndBookingSourcesProps
             </div>
             <div>
               <h3 className="text-base font-bold text-slate-900">Top Booking Sources</h3>
-              <p className="text-xs font-medium text-slate-400">YTD Revenue Rank</p>
+              <p className="text-xs font-medium text-slate-400 truncate max-w-[200px] sm:max-w-xs">
+                {periodLabel ? periodLabel : 'Period Revenue Rank'}
+              </p>
             </div>
           </div>
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200/60 text-xs font-bold text-amber-800">
-            {bookingSources.length} Channels
-          </span>
+          {loading ? (
+            <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-100 text-xs font-semibold text-slate-400 animate-pulse">
+              Updating...
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200/60 text-xs font-bold text-amber-800">
+              {bookingSources.length} {bookingSources.length === 1 ? 'Channel' : 'Channels'}
+            </span>
+          )}
         </div>
 
-        <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
-          {bookingSources.map((item, idx) => (
-            <div
-              key={item.name}
-              className="flex items-center justify-between p-3 rounded-xl border border-slate-200/70 bg-slate-50/40 hover:bg-white hover:border-slate-300 hover:shadow-card transition-all"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <span
-                  className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
-                    idx === 0
-                      ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                      : idx === 1
-                      ? 'bg-slate-200 text-slate-700'
-                      : 'bg-slate-100 text-slate-600'
-                  }`}
-                >
-                  {String(idx + 1).padStart(2, '0')}
-                </span>
-                <div className="min-w-0">
-                  <p className="text-sm font-bold text-slate-900 truncate">{item.name}</p>
-                  <p className="text-[11px] font-medium text-slate-400">{item.bookings ?? 0} Bookings</p>
+        {error ? (
+          <div className="flex flex-col items-center justify-center py-8 px-4 text-center bg-rose-50/50 rounded-xl border border-rose-100 space-y-2">
+            <AlertTriangle className="w-6 h-6 text-rose-500" />
+            <p className="text-xs font-semibold text-rose-800">Failed to load booking sources</p>
+            <p className="text-[11px] text-rose-600 max-w-xs">{error}</p>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition active:scale-95 cursor-pointer shadow-xs"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Retry
+              </button>
+            )}
+          </div>
+        ) : loading && bookingSources.length === 0 ? (
+          <div className="space-y-2.5">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-14 bg-slate-100/70 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        ) : bookingSources.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 px-4 text-center rounded-xl border border-dashed border-slate-200 bg-slate-50/40 space-y-2">
+            <Inbox className="w-7 h-7 text-slate-400 stroke-[1.5]" />
+            <p className="text-xs font-bold text-slate-700">No booking sources recorded</p>
+            <p className="text-[11px] text-slate-400 max-w-xs">
+              No active reservations or channel bookings were recorded for the selected period.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+            {bookingSources.map((item, idx) => (
+              <div
+                key={item.name}
+                className="flex items-center justify-between p-3 rounded-xl border border-slate-200/70 bg-slate-50/40 hover:bg-white hover:border-slate-300 hover:shadow-card transition-all"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span
+                    className={`w-7 h-7 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
+                      idx === 0
+                        ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                        : idx === 1
+                        ? 'bg-slate-200 text-slate-700'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}
+                  >
+                    {String(idx + 1).padStart(2, '0')}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 truncate" title={item.name}>
+                      {item.name}
+                    </p>
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                      <span>{item.bookings ?? 0} {item.bookings === 1 ? 'Booking' : 'Bookings'}</span>
+                      {item.sharePercent != null && item.sharePercent > 0 && (
+                        <>
+                          <span>•</span>
+                          <span className="text-brand-600 font-semibold">{item.sharePercent}% Share</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
+                <span className="text-sm font-bold tabular-nums text-slate-900 shrink-0 pl-2">
+                  {rs(item.revenue)}
+                </span>
               </div>
-              <span className="text-sm font-bold tabular-nums text-slate-900 shrink-0 pl-2">
-                {rs(item.revenue)}
-              </span>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

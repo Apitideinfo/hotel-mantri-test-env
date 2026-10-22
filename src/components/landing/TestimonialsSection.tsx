@@ -1,126 +1,90 @@
 import React from 'react';
-import { User } from 'lucide-react';
-import { RevealOnScroll } from './RevealOnScroll';
+import { Star, Building2, Quote } from 'lucide-react';
 
 export const TestimonialsSection: React.FC = () => {
-  const testimonials = [
+  const TESTIMONIALS = [
     {
-      id: 1,
-      quote:
-        '“Excellent product with seamless OTA integration and intuitive UI. The support team is very responsive and knowledgeable.”',
-      author: 'Amit Sharma',
+      hotel: 'Hotel Gopal Dwarka',
       role: 'Hotel Owner',
+      quote:
+        '“HotelMantri has made our daily operations so much easier. Everything from reservations to reports is in one place.”',
     },
     {
-      id: 2,
+      hotel: 'Dev Inn Somnath',
+      role: 'Management Team',
       quote:
-        '“Our room and bill order queries were looked after and successfully solved, with continuous efforts from the team and the Owner.”',
-      author: 'Sachin Patil',
+        '“The operations board and finance reports are very helpful. Our staff picked it up quickly without needing technical training.”',
+    },
+    {
+      hotel: 'Nivedanam Somnath',
       role: 'Hotel Owner',
-    },
-    {
-      id: 3,
       quote:
-        '“User-friendly interface, comprehensive features for managing reservations, pricing, strong channel management with seamless integration to various OTA platforms, reporting tools, and excellent support.”',
-      author: 'Sanjoy Das',
-      role: 'Hotel Owner',
-    },
-    {
-      id: 4,
-      quote:
-        '“HotelMantri has revolutionized the way we manage our hotel. Their software is intuitive, reliable, and customizable to our specific needs. 5 stars isn’t enough - we’d give them 10 stars if we could!”',
-      author: 'Sujit Dash',
-      role: 'Hotel Owner',
-    },
-    {
-      id: 5,
-      quote:
-        '“The automated GST invoices, instant WhatsApp room billing, and daily revenue reports save our front desk team over 3 hours every day.”',
-      author: 'Priya Nair',
-      role: 'General Manager',
-    },
-    {
-      id: 6,
-      quote:
-        '“Instant two-way sync with MakeMyTrip and Booking.com solved our overbooking problem permanently. Highly recommended for Indian hotels.”',
-      author: 'Vikram Mehta',
-      role: 'Hotel Director',
+        '“Channel Manager and WhatsApp reports save a lot of time. Very useful for our hotel and keeps inventory synced 24/7.”',
     },
   ];
 
-  // Duplicated list for continuous seamless looping marquee
-  const marqueeItems = [...testimonials, ...testimonials];
-
   return (
-    <section
-      id="testimonials"
-      className="relative w-full py-24 lg:py-32 bg-black text-white select-none overflow-hidden"
-    >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* ── Section Header ── */}
-        <RevealOnScroll variant="fade-up" duration={700}>
-          <div className="text-center max-w-3xl mx-auto">
-            {/* Eyebrow */}
-            <span className="text-xs font-bold tracking-[0.25em] text-[#38b6ff] uppercase">
-              TESTIMONIALS
-            </span>
+    <section className="relative py-24 sm:py-32 bg-slate-950 text-white overflow-hidden">
+      {/* Background Image with Dark Vignette */}
+      <div
+        className="absolute inset-0 bg-cover bg-center opacity-25 mix-blend-luminosity scale-105"
+        style={{ backgroundImage: `url('/hotel_sunset_cabana.jpg')` }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-slate-950/90" />
 
-            {/* Heading */}
-            <h2 className="text-3xl sm:text-5xl lg:text-[56px] font-bold text-white tracking-tight leading-[1.12] mt-3 mb-4">
-              Beyond expectations
-            </h2>
-
-            {/* Subtitle */}
-            <p className="text-gray-400 text-base sm:text-lg font-normal leading-relaxed">
-              HotelMantri is helping hotels across India streamline operations and grow direct bookings.
-            </p>
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Section Heading */}
+        <div className="text-left mb-12 sm:mb-16 max-w-2xl">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-800/80 border border-slate-700 text-amber-400 text-xs font-bold uppercase tracking-wider mb-4">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> TRUSTED BY HOTELIERS
           </div>
-        </RevealOnScroll>
-      </div>
+          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-[1.18]">
+            Simpler Operations. <br />
+            Happier Guests. <br />
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-amber-400 to-yellow-400">
+              Stronger Business.
+            </span>
+          </h2>
+        </div>
 
-      {/* ── Infinite Smooth Right-to-Left Marquee Carousel Track ── */}
-      <RevealOnScroll variant="fade-up" duration={700} delay={150}>
-        <div className="relative mt-16 w-full overflow-hidden">
-          
-          {/* Left Edge Dark Gradient Fade */}
-          <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-24 sm:w-48 bg-gradient-to-r from-black via-black/80 to-transparent z-20" />
-          
-          {/* Right Edge Dark Gradient Fade */}
-          <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-24 sm:w-48 bg-gradient-to-l from-black via-black/80 to-transparent z-20" />
-
-          {/* Marquee Animated Flex Container */}
-          <div className="animate-marquee flex gap-6 py-4 px-6">
-            {marqueeItems.map((item, index) => (
-              <div
-                key={`${item.id}-${index}`}
-                className="w-[320px] sm:w-[370px] shrink-0 bg-[#131315] hover:bg-[#18181b] border border-white/10 hover:border-white/20 rounded-2xl p-7 sm:p-8 flex flex-col justify-between transition-all duration-300 shadow-2xl hover:scale-[1.02]"
-              >
-                {/* Quote Text */}
-                <p className="font-normal italic text-white/90 text-sm sm:text-[15px] leading-relaxed mb-8">
-                  {item.quote}
-                </p>
-
-                {/* Author & Avatar */}
-                <div className="flex items-center gap-3 pt-4 border-t border-white/5">
-                  {/* White Circle Avatar with User Icon */}
-                  <div className="w-9 h-9 rounded-full bg-white text-black flex items-center justify-center shrink-0 shadow-md">
-                    <User className="w-5 h-5 fill-current text-black stroke-[1.5]" />
+        {/* 3 Real Testimonial Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8">
+          {TESTIMONIALS.map((t) => (
+            <div
+              key={t.hotel}
+              className="bg-white/95 backdrop-blur-md rounded-2xl p-6 sm:p-7 text-slate-900 border border-white/20 shadow-xl shadow-black/40 flex flex-col justify-between hover:translate-y-[-2px] transition duration-200"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200 text-amber-700 flex items-center justify-center font-bold text-xs">
+                      <Building2 className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-extrabold text-slate-900 leading-tight">{t.hotel}</h4>
+                      <p className="text-[11px] font-semibold text-slate-500">{t.role}</p>
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-bold text-white text-sm tracking-tight">
-                      {item.author}
-                    </div>
-                    <div className="text-xs text-gray-400 font-normal">
-                      {item.role}
-                    </div>
+                  <div className="flex text-amber-400">
+                    {[...Array(5)].map((_, i) => (
+                      <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
+                    ))}
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
 
+                <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-normal">
+                  {t.quote}
+                </p>
+              </div>
+
+              <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                <span>Verified Independent Hotel</span>
+                <span className="text-emerald-600 font-semibold">Active Property</span>
+              </div>
+            </div>
+          ))}
         </div>
-      </RevealOnScroll>
+      </div>
     </section>
   );
 };
