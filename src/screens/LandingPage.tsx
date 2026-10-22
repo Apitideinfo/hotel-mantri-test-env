@@ -1,19 +1,17 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
-import { ProductIconStrip } from '../components/landing/ProductIconStrip';
-import { OverviewSuiteSection } from '../components/landing/OverviewSuiteSection';
-import { CoreModulesSection } from '../components/landing/CoreModulesSection';
+import { CredibilityStrip } from '../components/landing/CredibilityStrip';
+import { ConnectedArchitectureSection } from '../components/landing/ConnectedArchitectureSection';
+import { ProductModulesSection } from '../components/landing/ProductModulesSection';
+import { WhatsAppSection } from '../components/landing/WhatsAppSection';
+import { ChannelManagerShowcaseSection } from '../components/landing/ChannelManagerShowcaseSection';
+import { WhoIsItForSection } from '../components/landing/WhoIsItForSection';
 import { TestimonialsSection } from '../components/landing/TestimonialsSection';
-import { ManagementShowcaseSection } from '../components/landing/ManagementShowcaseSection';
-import { BuiltForHoteliersSection } from '../components/landing/BuiltForHoteliersSection';
-import { CloudReliabilitySection } from '../components/landing/CloudReliabilitySection';
-import { SeamlessIntegrationsShowcase } from '../components/landing/SeamlessIntegrationsShowcase';
-import { HospitalityInsightsSection } from '../components/landing/HospitalityInsightsSection';
-import { TrustedPioneersSection } from '../components/landing/TrustedPioneersSection';
-import { IntegrationsSection } from '../components/landing/IntegrationsSection';
-import { TalkToCeoBanner } from '../components/landing/TalkToCeoBanner';
+import { HowItWorks } from '../components/landing/HowItWorks';
+import { FinalCTA } from '../components/landing/FinalCTA';
 import { Footer } from '../components/landing/Footer';
+import { BookDemoModal } from '../components/landing/BookDemoModal';
 
 interface LandingPageProps {
   onNavigateLogin: () => void;
@@ -25,68 +23,78 @@ interface LandingPageProps {
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onNavigateLogin,
+  onNavigateSignup,
   onNavigatePrivacy,
   onNavigateDeletion,
   onNavigateTerms,
 }) => {
+  const [isBookDemoOpen, setIsBookDemoOpen] = useState(false);
+
   const handleScrollToFeatures = () => {
-    const el = document.getElementById('features');
+    const el = document.getElementById('modules');
     if (el) el.scrollIntoView({ behavior: 'smooth' });
   };
 
-  return (
-    <div className="min-h-screen bg-white font-sans antialiased text-slate-900 selection:bg-blue-500 selection:text-white overflow-x-hidden">
-      {/* 1. Sticky Header */}
-      <Header onNavigateLogin={onNavigateLogin} />
+  const handleOpenDemo = () => {
+    setIsBookDemoOpen(true);
+  };
 
-      {/* 2. Hero — Full-screen image + overlaid copy & CTAs */}
+  return (
+    <div className="min-h-screen bg-white font-sans antialiased text-slate-900 selection:bg-amber-400 selection:text-slate-950 overflow-x-hidden">
+      {/* 0. Interactive Book Demo Modal (WhatsApp dispatch) */}
+      <BookDemoModal
+        isOpen={isBookDemoOpen}
+        onClose={() => setIsBookDemoOpen(false)}
+        onNavigateLogin={onNavigateLogin}
+      />
+
+      {/* 1. Sticky Modern SaaS Header */}
+      <Header
+        onNavigateLogin={onNavigateLogin}
+        onOpenBookDemo={handleOpenDemo}
+      />
+
+      {/* 2. Hero Section — Hotel OS with Live Product UI & KPIs */}
       <HeroSection
         onLogin={onNavigateLogin}
+        onOpenBookDemo={handleOpenDemo}
         onExploreFeatures={handleScrollToFeatures}
       />
 
-      {/* 3. Product Apna Laago — 6 Core Product Icons (Screenshot 2: PMS, Channel Manager, Booking Engine, POS, Reports, Guest Management) */}
-      <ProductIconStrip onSelectProduct={handleScrollToFeatures} />
+      {/* 3. Credibility Strip — Built for Independent Hotels, Resorts & Boutique Properties */}
+      <CredibilityStrip />
 
-      {/* 4. Overview Suite Section — All in one Hospitality Suite */}
-      <OverviewSuiteSection
-        onLogin={onNavigateLogin}
-        onBookDemo={onNavigateLogin}
-      />
+      {/* 4. Connected Architecture — One Hotel. One System. No Double Entry. */}
+      <ConnectedArchitectureSection onOpenBookDemo={handleOpenDemo} />
 
-      {/* 5. The Platform — Core Modules Section (6 Photo Cards with View Features hover) */}
-      <CoreModulesSection />
+      {/* 5. Powerful Modules for Complete Hotel Management (8 Product Cards) */}
+      <ProductModulesSection onOpenBookDemo={handleOpenDemo} />
 
-      {/* 6. Testimonials — Beyond expectations (Infinite Moving Marquee) */}
+      {/* 6. WhatsApp Updates — Daily Reports, Occupancy & Alerts */}
+      <WhatsAppSection onOpenBookDemo={handleOpenDemo} />
+
+      {/* 7. Channel Manager Showcase — Rates & Inventory Synced Everywhere */}
+      <ChannelManagerShowcaseSection onOpenBookDemo={handleOpenDemo} />
+
+      {/* 8. Who is HotelMantri For? — 6 Property Archetypes */}
+      <WhoIsItForSection />
+
+      {/* 9. Testimonials — Simpler Operations. Happier Guests. Stronger Business. */}
       <TestimonialsSection />
 
-      {/* 7. Management Showcase — Premium Hotel Management with 4 Tabs, Stats (400+, 98%, 24/7, 1M+) & Performance Metrics */}
-      <ManagementShowcaseSection onLogin={onNavigateLogin} />
+      {/* 10. How HotelMantri Works — 5 Simple Steps */}
+      <HowItWorks />
 
-      {/* 8. Built For Hoteliers, By Hoteliers — Narrative + Sunset Pool Panoramic Image */}
-      <BuiltForHoteliersSection />
+      {/* 11. Final Dark Call-to-Action */}
+      <FinalCTA
+        onLogin={onNavigateLogin}
+        onOpenBookDemo={handleOpenDemo}
+      />
 
-      {/* 9. Innovation — Cloud-Native Reliability (50/50 Split) */}
-      <CloudReliabilitySection />
-
-      {/* 10. Ecosystem — Seamless Integrations (50/50 Split Dark Mode) */}
-      <SeamlessIntegrationsShowcase />
-
-      {/* 11. Knowledge Base — Hospitality Insights (3 Blog/Article Cards) */}
-      <HospitalityInsightsSection />
-
-      {/* 12. Social Proof — Trusted by hospitality pioneers around the world (Moving Marquee) */}
-      <TrustedPioneersSection />
-
-      {/* 13. Connect with your tools — Integrations with Category Filter Tabs & Moving Marquee */}
-      <IntegrationsSection onLogin={onNavigateLogin} />
-
-      {/* 14. Talk directly with our CEO Banner & Contact Information Card (Screenshot 1) */}
-      <TalkToCeoBanner onLogin={onNavigateLogin} />
-
-      {/* 15. Footer */}
+      {/* 12. Clean Structured Footer */}
       <Footer
         onNavigateLogin={onNavigateLogin}
+        onOpenBookDemo={handleOpenDemo}
         onNavigatePrivacy={onNavigatePrivacy}
         onNavigateDeletion={onNavigateDeletion}
         onNavigateTerms={onNavigateTerms}

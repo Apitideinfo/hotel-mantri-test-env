@@ -6,6 +6,7 @@ import {
   FileText, Receipt, RefreshCw, Radio, KeyRound,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
+import { useHotel } from '@/lib/hotel-context';
 import { BrandLogo, BrandIcon } from '@/components/BrandLogo';
 import { hasPermission, ROLE_LABELS } from './permissions';
 import type { Permission } from './permissions';
@@ -74,6 +75,7 @@ interface EnterpriseHQProps {
 
 export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) => {
   const { user, companyRole, signOut } = useAuth();
+  const { hotelId: globalHotelId } = useHotel();
   const [page, setPage] = useState<Page>(() => {
     try {
       const st = window.history.state;
@@ -196,14 +198,63 @@ export const EnterpriseHQ = ({ onSignOut, onViewDashboard }: EnterpriseHQProps) 
     switch (page) {
       case 'dashboard': return <DashboardScreen onNavigateHotels={() => navigateHq('hotels')} onNavigateLeads={() => navigateHq('crm')} onNavigateTickets={() => navigateHq('support')} />;
       case 'hotels': return <HotelsScreen onViewHotel={navigateToHotel} onNewHotel={() => setShowOnboarding(true)} onImpersonate={startImpersonationSession} onConfigureChannelManager={(id) => { setSelectedHotelId(id); navigateHq('channel-manager'); }} />;
-      case 'channel-manager': return <ChannelManagerScreen initialHotelId={selectedHotelId} onBack={() => navigateHq('hotels')} />;
+      case 'channel-manager': return <ChannelManagerScreen initialHotelId={selectedHotelId || globalHotelId} onBack={() => navigateHq('hotels')} />;
       case 'extranet-codes': return <ExtranetCodesScreen />;
-      case 'hotel-detail': return selectedHotelId ? <HotelDetailScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotels')} onImpersonate={startImpersonationSession} onViewInvoice={(id) => setDrawerInvoiceId(id)} onCreateInvoice={() => { navigateHq('invoice-create'); }} /> : null;
+      case 'hotel-detail': {
+        const targetHId = selectedHotelId || globalHotelId;
+        return targetHId ? (
+          <HotelDetailScreen
+            hotelId={targetHId}
+            onBack={() => navigateHq('hotels')}
+            onImpersonate={startImpersonationSession}
+            onViewInvoice={(id) => setDrawerInvoiceId(id)}
+            onCreateInvoice={() => {
+              setSelectedHotelId(targetHId);
+              navigateHq('invoice-create');
+            }}
+          />
+        ) : (
+          <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
+            <p className="text-slate-600 font-medium">No hotel selected.</p>
+            <button onClick={() => navigateHq('hotels')} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-xl transition">
+              View All Hotels
+            </button>
+          </div>
+        );
+      }
       case 'users': return <CompanyUsersScreen />;
       case 'subscriptions': return <SubscriptionsScreen onViewHotel={navigateToHotel} />;
       case 'invoices': return <InvoiceListScreen onOpenDrawer={(id) => setDrawerInvoiceId(id)} onNewInvoice={() => { navigateHq('invoice-create'); }} />;
-      case 'invoice-detail': return selectedInvoiceId ? <InvoiceDetailScreen invoiceId={selectedInvoiceId} onBack={() => navigateHq('invoices')} /> : null;
-      case 'invoice-create': return selectedHotelId ? <InvoiceCreateScreen hotelId={selectedHotelId} onBack={() => navigateHq('hotel-detail')} onCreated={(id) => { setSelectedInvoiceId(id); navigateHq('invoice-detail'); }} /> : <InvoiceCreateScreen hotelId={''} onBack={() => navigateHq('invoices')} onCreated={(id) => { setSelectedInvoiceId(id); navigateHq('invoice-detail'); }} />;
+      case 'invoice-detail': return selectedInvoiceId ? (
+        <InvoiceDetailScreen invoiceId={selectedInvoiceId} onBack={() => navigateHq('invoices')} />
+      ) : (
+        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-3">
+          <p className="text-slate-600 font-medium">No invoice selected.</p>
+          <button onClick={() => navigateHq('invoices')} className="px-4 py-2 bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold rounded-xl transition">
+            Back to Invoices
+          </button>
+        </div>
+      );
+      case 'invoice-create': {
+        const effectiveHotelId = selectedHotelId || globalHotelId || '';
+        return (
+          <InvoiceCreateScreen
+            hotelId={effectiveHotelId}
+            onBack={() => navigateHq(selectedHotelId ? 'hotel-detail' : 'invoices')}
+            onCreated={(id) => {
+              if (id) {
+                setSelectedInvoiceId(id);
+                navigateHq('invoice-detail');
+              } else {
+                navigateHq('invoices');
+              }
+            }}
+            onHotelChange={(newId) => {
+              setSelectedHotelId(newId);
+            }}
+          />
+        );
+      }
       case 'billing-settings': return <BillingSettings />;
       case 'renewals': return <RenewalDashboardScreen onViewHotel={navigateToHotel} onViewInvoice={(id) => setDrawerInvoiceId(id)} />;
       case 'features': return <FeatureControlsScreen />;

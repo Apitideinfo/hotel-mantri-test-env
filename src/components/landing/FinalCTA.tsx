@@ -1,59 +1,100 @@
 import React from 'react';
-import { ArrowRight, ShieldCheck, Zap } from 'lucide-react';
+import { ArrowRight, Phone, Mail, Globe, Sparkles } from 'lucide-react';
 
 interface FinalCTAProps {
   onLogin: () => void;
+  onOpenBookDemo: () => void;
 }
 
-export const FinalCTA: React.FC<FinalCTAProps> = ({ onLogin }) => {
+export const FinalCTA: React.FC<FinalCTAProps> = ({ onLogin, onOpenBookDemo }) => {
   return (
-    <section className="py-20 lg:py-28 bg-white text-slate-900 select-none overflow-hidden border-b border-gray-100">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-        
-        <div className="bg-[#0c0c0e] text-white rounded-[32px] p-10 sm:p-16 shadow-2xl relative overflow-hidden">
+    <section id="cta" className="relative py-24 sm:py-32 bg-gradient-to-b from-[#070D1D] via-[#0A1329] to-[#050914] text-white overflow-hidden">
+      {/* Background Ambience with Reception Image Overlay */}
+      <div
+        className="absolute inset-0 bg-cover bg-center opacity-15 mix-blend-luminosity scale-105"
+        style={{ backgroundImage: `url('/hotel_hero.jpg')` }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-r from-[#070D1D] via-[#0A1329]/90 to-[#070D1D]/70 pointer-events-none" />
+
+      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
           
-          {/* Eyebrow tag */}
-          <span className="inline-block px-4 py-1 rounded-full bg-white/10 text-cyan-400 font-bold text-xs tracking-[0.2em] uppercase border border-white/15 mb-6">
-            START TODAY
-          </span>
+          {/* Left Column: Heading, Subtitle & Action Buttons */}
+          <div className="lg:col-span-8 space-y-6 text-left">
+            <h2 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight text-white leading-[1.12]">
+              Your Hotel Deserves <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-amber-400 to-yellow-500">
+                a Smarter Way to Run.
+              </span>
+            </h2>
 
-          {/* Title */}
-          <h2 className="text-3xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-[1.12] mb-4">
-            Ready to upgrade your hotel management?
-          </h2>
+            <p className="text-base sm:text-lg text-slate-300 max-w-xl font-normal leading-relaxed">
+              Bring your reservations, operations, finance and distribution together with HotelMantri.
+            </p>
 
-          {/* Subtitle */}
-          <p className="text-gray-400 text-base sm:text-lg leading-relaxed max-w-2xl mx-auto mb-8 font-normal">
-            Join hundreds of Indian hoteliers who trust HotelMantri to run fast check-ins, automated GST billing, and real-time revenue analytics.
-          </p>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5 pt-2">
+              <button
+                onClick={onOpenBookDemo}
+                className="inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-full bg-gradient-to-r from-amber-400 via-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-extrabold text-sm sm:text-base shadow-xl shadow-amber-500/25 hover:shadow-amber-500/35 hover:scale-[1.02] active:scale-[0.98] transition cursor-pointer"
+              >
+                Book Free Demo <ArrowRight className="w-4 h-4 text-slate-950" />
+              </button>
 
-          {/* Action buttons */}
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <button
-              onClick={onLogin}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-xl bg-white hover:bg-gray-100 text-black font-bold text-sm sm:text-base transition-all duration-200 shadow-lg hover:shadow-xl hover:-translate-y-0.5 cursor-pointer"
-            >
-              <span>Get Started Free</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={onLogin}
-              className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3.5 rounded-xl bg-transparent hover:bg-white/10 text-white font-semibold text-sm sm:text-base border border-white/30 hover:border-white/60 transition-all duration-200 cursor-pointer"
-            >
-              Book a 1-on-1 Demo
-            </button>
+              <button
+                onClick={onLogin}
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 rounded-full bg-slate-900/80 hover:bg-slate-800 text-white font-semibold text-sm sm:text-base border border-slate-700 hover:border-slate-500 transition cursor-pointer"
+              >
+                Start Free Trial
+              </button>
+            </div>
           </div>
 
-          {/* Trust points */}
-          <div className="mt-10 pt-8 border-t border-white/10 flex flex-wrap items-center justify-center gap-6 text-xs text-gray-400 font-medium">
-            <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-emerald-400" /> No credit card required</span>
-            <span className="flex items-center gap-1.5"><Zap className="w-4 h-4 text-amber-400" /> Setup in 10 minutes</span>
-            <span className="flex items-center gap-1.5"><ShieldCheck className="w-4 h-4 text-cyan-400" /> 100% Indian GST ready</span>
+          {/* Right Column: Direct Contact Details */}
+          <div className="lg:col-span-4 bg-slate-900/80 backdrop-blur-md p-6 sm:p-7 rounded-3xl border border-slate-700/80 shadow-2xl text-left space-y-4">
+            <h4 className="text-sm font-extrabold text-white uppercase tracking-wider text-slate-300">
+              Direct Contact
+            </h4>
+
+            <div className="space-y-3 text-sm text-slate-300">
+              <a
+                href="tel:+919925958831"
+                className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 hover:border-amber-400 hover:text-white transition"
+              >
+                <div className="w-8 h-8 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+                  <Phone className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-400 font-medium">Call or WhatsApp</p>
+                  <p className="font-bold text-white">+91 99259 58831</p>
+                </div>
+              </a>
+
+              <a
+                href="mailto:booking@hotelmantri.com"
+                className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 hover:border-amber-400 hover:text-white transition"
+              >
+                <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
+                  <Mail className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-400 font-medium">Email Inquiries</p>
+                  <p className="font-bold text-white">booking@hotelmantri.com</p>
+                </div>
+              </a>
+
+              <div className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                  <Globe className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] text-slate-400 font-medium">Official Portal</p>
+                  <p className="font-bold text-white">www.hotelmantri.com</p>
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>
-
       </div>
     </section>
   );

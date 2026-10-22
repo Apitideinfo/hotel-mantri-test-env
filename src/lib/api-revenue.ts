@@ -81,6 +81,13 @@ export interface DayWiseRevenueData {
   };
   dailyBreakdown: DayBreakdownItem[];
   reservationsBreakdown: ReservationBreakdownItem[];
+  bookingSources?: {
+    name: string;
+    bookings: number;
+    revenue: number;
+    category?: string;
+    sharePercent?: number;
+  }[];
 }
 
 export interface GetDayWiseRevenueParams {

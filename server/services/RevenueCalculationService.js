@@ -260,7 +260,7 @@ export const calculateDayWiseRevenue = async ({
       rate: Number(e.room_rate || 0),
       total: Number(e.total || 0),
       nights: calcStayNights(e.arrival || e.report_date, e.departure || e.report_date),
-      sourceName: e.company || e.source_category || 'Direct/Walking',
+      sourceName: (e.company || e.source_category || '').trim() || 'Unknown',
       revenueCategory: e.revenue_category || 'Room Revenue',
       is_complimentary: Boolean(e.is_complimentary),
       variable_nightly_rates: e.variable_nightly_rates || null,
@@ -282,9 +282,9 @@ export const calculateDayWiseRevenue = async ({
         rate: Number(r.rate || 0),
         total: Number(r.invoice_total || 0),
         nights: calcStayNights(r.check_in_date, r.check_out_date),
-        sourceName: r.source_name || r.source_category || 'OTA',
+        sourceName: (r.source_name || r.source_category || '').trim() || 'Unknown',
         revenueCategory: 'Room Revenue',
-        is_complimentary: false,
+        is_complimentary: Boolean(r.is_complimentary),
         variable_nightly_rates: null,
         paymentMode: resolvedMode,
       };
@@ -404,6 +404,9 @@ export const calculateDayWiseRevenue = async ({
   // 9. Iterate dates and build daily records
   const dailyBreakdown = [];
   const reservationsBreakdown = [];
+  const sourceBookingsMap = new Map();
+  const sourceRevenueMap = new Map();
+  const sourceCategoryMap = new Map();
 
   let curDate = fromDate;
   while (curDate <= toDate) {
@@ -417,6 +420,17 @@ export const calculateDayWiseRevenue = async ({
     let dayCompRooms = 0;
 
     for (const stay of activeStays) {
+      const rawSource = (stay.sourceName || '').trim();
+      const sourceKey = rawSource || 'Unknown';
+
+      const resvSet = sourceBookingsMap.get(sourceKey) || new Set();
+      resvSet.add(stay.reservationId || stay.id);
+      sourceBookingsMap.set(sourceKey, resvSet);
+
+      if (!sourceCategoryMap.has(sourceKey)) {
+        sourceCategoryMap.set(sourceKey, stay.revenueCategory || 'Direct');
+      }
+
       if (stay.is_complimentary) {
         dayCompRooms++;
       } else {
@@ -424,6 +438,7 @@ export const calculateDayWiseRevenue = async ({
         if (stay.revenueCategory === 'Room Revenue') {
           dayRoomRevenue += nightlyAmount;
           dayPayingRooms++;
+          sourceRevenueMap.set(sourceKey, (sourceRevenueMap.get(sourceKey) || 0) + nightlyAmount);
         }
         // Include in reservation line-item drilldown
         reservationsBreakdown.push({
@@ -598,6 +613,18 @@ export const calculateDayWiseRevenue = async ({
   const overallRevpar = totalAvailableNights > 0 ? Math.round((totalRoomRevenue / totalAvailableNights) * 100) / 100 : 0;
   const overallOcc = totalAvailableNights > 0 ? Math.round((totalSoldNights / totalAvailableNights) * 1000) / 10 : 0;
 
+  const bookingSources = Array.from(sourceBookingsMap.entries()).map(([name, resvSet]) => {
+    const rev = Math.round((sourceRevenueMap.get(name) || 0) * 100) / 100;
+    const sharePercent = totalRoomRevenue > 0 ? Math.round((rev / totalRoomRevenue) * 1000) / 10 : 0;
+    return {
+      name,
+      bookings: resvSet.size,
+      revenue: rev,
+      category: sourceCategoryMap.get(name) || 'Direct',
+      sharePercent,
+    };
+  }).sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings);
+
   return {
     hotelId,
     hotelName: hotelObj?.hotel_name || 'Hotel Property',
@@ -633,6 +660,7 @@ export const calculateDayWiseRevenue = async ({
     },
     dailyBreakdown,
     reservationsBreakdown,
+    bookingSources,
   };
 };
 
