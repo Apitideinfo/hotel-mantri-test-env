@@ -261,6 +261,725 @@ router.post('/test-connection', checkAuth, requireRoles(['super_admin']), async 
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EXTRANET CODES REGISTRY (Super Admin Centralized Management)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/channels/extranet-codes
+ * Retrieve extranet codes across all hotels (for Super Admin) or filtered by hotel.
+ */
+router.get('/extranet-codes', checkAuth, async (req, res) => {
+  try {
+    const isSuper = req.auth?.isSuperAdmin || req.userRole === 'super_admin';
+    const hotelIdParam = req.query.hotelId || req.query.hotel_id;
+    const otaTypeParam = req.query.otaType || req.query.ota_type;
+    const statusParam = req.query.status;
+    const searchParam = (req.query.search || '').trim().toLowerCase();
+
+    // If not super admin, strictly enforce tenant hotel boundary
+    const targetHotelId = isSuper ? (hotelIdParam || null) : (req.hotelId || req.auth?.hotelId);
+
+    // Attempt querying hotel_extranet_codes table
+    let query = supabaseServiceRole
+      .from('hotel_extranet_codes')
+      .select('*, hotels!inner(id, hotel_name, property_code, city, state)')
+      .order('created_at', { ascending: false });
+
+    if (targetHotelId) {
+      query = query.eq('hotel_id', targetHotelId);
+    }
+    if (otaTypeParam) {
+      query = query.eq('ota_type', otaTypeParam);
+    }
+    if (statusParam === 'active') {
+      query = query.eq('is_active', true);
+    } else if (statusParam === 'inactive') {
+      query = query.eq('is_active', false);
+    }
+
+    const { data: rows, error } = await query;
+
+    let results = [];
+
+    if (!error && rows) {
+      results = rows.map((r) => ({
+        id: r.id,
+        hotelId: r.hotel_id,
+        hotel_id: r.hotel_id,
+        hotelName: r.hotels?.hotel_name || '',
+        hotel_name: r.hotels?.hotel_name || '',
+        hotelPropertyCode: r.hotels?.property_code || '',
+        hotel_property_code: r.hotels?.property_code || '',
+        city: r.hotels?.city || '',
+        state: r.hotels?.state || '',
+        channelId: r.channel_id,
+        channel_id: r.channel_id,
+        otaType: r.ota_type,
+        ota_type: r.ota_type,
+        otaName: r.ota_name,
+        ota_name: r.ota_name,
+        extranetPropertyCode: r.extranet_property_code,
+        extranet_property_code: r.extranet_property_code,
+        otaPropertyName: r.ota_property_name || '',
+        ota_property_name: r.ota_property_name || '',
+        notes: r.notes || '',
+        isActive: r.is_active !== false,
+        is_active: r.is_active !== false,
+        createdAt: r.created_at,
+        created_at: r.created_at,
+        updatedAt: r.updated_at,
+        updated_at: r.updated_at
+      }));
+    } else if (error && (error.code === 'PGRST205' || error.code === '42P01')) {
+      // Table not yet in PostgREST schema cache: fallback to channel_connections
+      let fallbackQuery = supabaseServiceRole
+        .from('channel_connections')
+        .select('*')
+        .not('external_channel_id', 'is', null);
+
+      if (targetHotelId) {
+        fallbackQuery = fallbackQuery.eq('hotel_id', targetHotelId);
+      }
+      if (otaTypeParam) {
+        fallbackQuery = fallbackQuery.eq('channel_type', otaTypeParam);
+      }
+
+      const { data: fallbackRows } = await fallbackQuery;
+      if (fallbackRows && fallbackRows.length > 0) {
+        const hotelIds = [...new Set(fallbackRows.map(r => r.hotel_id).filter(Boolean))];
+        let hotelMap = new Map();
+        if (hotelIds.length > 0) {
+          const { data: hotelRecords } = await supabaseServiceRole
+            .from('hotels')
+            .select('id, hotel_name, property_code, city, state')
+            .in('id', hotelIds);
+          if (hotelRecords) {
+            hotelRecords.forEach(h => hotelMap.set(h.id, h));
+          }
+        }
+
+        results = fallbackRows.map((r) => {
+          const h = hotelMap.get(r.hotel_id) || {};
+          return {
+            id: r.id,
+            hotelId: r.hotel_id,
+            hotel_id: r.hotel_id,
+            hotelName: h.hotel_name || '',
+            hotel_name: h.hotel_name || '',
+            hotelPropertyCode: h.property_code || '',
+            hotel_property_code: h.property_code || '',
+            city: h.city || '',
+            state: h.state || '',
+            channelId: r.id,
+            channel_id: r.id,
+            otaType: r.channel_type,
+            ota_type: r.channel_type,
+            otaName: r.channel_name || r.channel_type,
+            ota_name: r.channel_name || r.channel_type,
+            extranetPropertyCode: r.external_channel_id || '',
+            extranet_property_code: r.external_channel_id || '',
+            otaPropertyName: '',
+            ota_property_name: '',
+            notes: '',
+            isActive: r.is_enabled !== false,
+            is_active: r.is_enabled !== false,
+            createdAt: r.created_at,
+            created_at: r.created_at,
+            updatedAt: r.updated_at,
+            updated_at: r.updated_at
+          };
+        });
+      }
+    } else if (error) {
+      throw error;
+    }
+
+    // Apply client search filter if provided
+    if (searchParam) {
+      results = results.filter((item) =>
+        item.hotelName.toLowerCase().includes(searchParam) ||
+        item.hotelPropertyCode.toLowerCase().includes(searchParam) ||
+        item.otaName.toLowerCase().includes(searchParam) ||
+        item.extranetPropertyCode.toLowerCase().includes(searchParam) ||
+        (item.otaPropertyName || '').toLowerCase().includes(searchParam)
+      );
+    }
+
+    res.json({
+      success: true,
+      codes: results,
+      total: results.length,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[ExtranetCodes] Error fetching extranet codes:', err);
+    res.status(500).json({
+      success: false,
+      code: 'EXTRANET_CODES_FETCH_FAILED',
+      message: err.message || 'Failed to fetch extranet codes',
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * POST /api/channels/extranet-codes
+ * Super Admin adds a new extranet code for an OTA and hotel.
+ * Validates required fields, trims whitespace, preserves leading zeros, and prevents duplicates.
+ */
+router.post('/extranet-codes', checkAuth, requireRoles(['super_admin']), async (req, res) => {
+  try {
+    const {
+      hotelId,
+      hotel_id,
+      otaType,
+      ota_type,
+      otaName,
+      ota_name,
+      extranetPropertyCode,
+      extranet_property_code,
+      otaPropertyName,
+      ota_property_name,
+      notes,
+      isActive,
+      is_active
+    } = req.body;
+
+    const targetHotelId = (hotelId || hotel_id || '').trim();
+    const targetOtaType = (otaType || ota_type || '').trim().toLowerCase();
+    const targetOtaName = (otaName || ota_name || targetOtaType || '').trim();
+    const targetCode = String(extranetPropertyCode ?? extranet_property_code ?? '').trim();
+    const targetPropertyName = (otaPropertyName ?? ota_property_name ?? '').trim() || null;
+    const targetNotes = (notes ?? '').trim() || null;
+    const activeState = isActive !== undefined ? Boolean(isActive) : is_active !== undefined ? Boolean(is_active) : true;
+
+    if (!targetHotelId) {
+      return res.status(400).json({ success: false, code: 'HOTEL_REQUIRED', message: 'Hotel selection is required.' });
+    }
+    if (!targetOtaType) {
+      return res.status(400).json({ success: false, code: 'OTA_TYPE_REQUIRED', message: 'OTA channel type is required.' });
+    }
+    if (!targetCode) {
+      return res.status(400).json({ success: false, code: 'EXTRANET_CODE_REQUIRED', message: 'Extranet Property ID / Code is required.' });
+    }
+
+    // Verify hotel exists
+    const { data: hotelRecord, error: hotelErr } = await supabaseServiceRole
+      .from('hotels')
+      .select('id, hotel_name, property_code')
+      .eq('id', targetHotelId)
+      .maybeSingle();
+
+    if (hotelErr || !hotelRecord) {
+      return res.status(404).json({ success: false, code: 'HOTEL_NOT_FOUND', message: 'Selected hotel does not exist.' });
+    }
+
+    // Check for existing duplicate record for this hotel and OTA
+    let existingDuplicate = null;
+    const { data: dupExt, error: dupExtErr } = await supabaseServiceRole
+      .from('hotel_extranet_codes')
+      .select('id, extranet_property_code')
+      .eq('hotel_id', targetHotelId)
+      .eq('ota_type', targetOtaType)
+      .maybeSingle();
+
+    if (dupExt) {
+      existingDuplicate = dupExt;
+    } else if (dupExtErr && (dupExtErr.code === 'PGRST205' || dupExtErr.code === '42P01')) {
+      const { data: dupConn } = await supabaseServiceRole
+        .from('channel_connections')
+        .select('id, external_channel_id')
+        .eq('hotel_id', targetHotelId)
+        .eq('channel_type', targetOtaType)
+        .not('external_channel_id', 'is', null)
+        .maybeSingle();
+      if (dupConn && dupConn.external_channel_id) {
+        existingDuplicate = { id: dupConn.id, extranet_property_code: dupConn.external_channel_id };
+      }
+    }
+
+    if (existingDuplicate) {
+      return res.status(409).json({
+        success: false,
+        code: 'DUPLICATE_EXTRANET_CODE',
+        message: `An extranet code for ${hotelRecord.hotel_name} and this OTA already exists (${existingDuplicate.extranet_property_code}). Please edit the existing record.`
+      });
+    }
+
+    // Check if matching channel_connections row exists to link channel_id
+    const { data: existingConn } = await supabaseServiceRole
+      .from('channel_connections')
+      .select('id')
+      .eq('hotel_id', targetHotelId)
+      .eq('channel_type', targetOtaType)
+      .maybeSingle();
+
+    const insertPayload = {
+      hotel_id: targetHotelId,
+      channel_id: existingConn?.id || null,
+      ota_type: targetOtaType,
+      ota_name: targetOtaName,
+      extranet_property_code: targetCode,
+      ota_property_name: targetPropertyName,
+      notes: targetNotes,
+      is_active: activeState,
+      created_by: req.user?.id || null,
+      updated_by: req.user?.id || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+
+    let created = null;
+
+    const { data: createdRow, error: insertErr } = await supabaseServiceRole
+      .from('hotel_extranet_codes')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insertErr) {
+      if (insertErr.code === 'PGRST205' || insertErr.code === '42P01') {
+        // Fallback: upsert channel_connections
+        console.warn('[ExtranetCodes] hotel_extranet_codes table not found in schema cache. Storing in channel_connections fallback.');
+        if (existingConn?.id) {
+          const { data: updatedConn } = await supabaseServiceRole
+            .from('channel_connections')
+            .update({
+              external_channel_id: targetCode,
+              channel_name: targetOtaName,
+              is_enabled: activeState,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', existingConn.id)
+            .select()
+            .single();
+
+          created = {
+            id: updatedConn.id,
+            hotel_id: targetHotelId,
+            channel_id: updatedConn.id,
+            ota_type: targetOtaType,
+            ota_name: targetOtaName,
+            extranet_property_code: targetCode,
+            ota_property_name: targetPropertyName,
+            notes: targetNotes,
+            is_active: activeState,
+            created_at: updatedConn.created_at || new Date().toISOString(),
+            updated_at: updatedConn.updated_at || new Date().toISOString()
+          };
+        } else {
+          const { data: newConn, error: connErr } = await supabaseServiceRole
+            .from('channel_connections')
+            .insert({
+              hotel_id: targetHotelId,
+              channel_type: targetOtaType,
+              channel_name: targetOtaName,
+              external_channel_id: targetCode,
+              is_enabled: activeState,
+              status: 'active',
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+          if (connErr) throw connErr;
+          created = {
+            id: newConn.id,
+            hotel_id: targetHotelId,
+            channel_id: newConn.id,
+            ota_type: targetOtaType,
+            ota_name: targetOtaName,
+            extranet_property_code: targetCode,
+            ota_property_name: targetPropertyName,
+            notes: targetNotes,
+            is_active: activeState,
+            created_at: newConn.created_at,
+            updated_at: newConn.updated_at
+          };
+        }
+      } else {
+        throw insertErr;
+      }
+    } else {
+      created = createdRow;
+
+      // Synchronize to channel_connections.external_channel_id if connection exists
+      if (existingConn?.id) {
+        await supabaseServiceRole
+          .from('channel_connections')
+          .update({
+            external_channel_id: targetCode,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingConn.id);
+      }
+    }
+
+    await recordChannelAudit({
+      req,
+      hotelId: targetHotelId,
+      action: 'ADD_EXTRANET_CODE',
+      recordId: created.id,
+      newValue: {
+        otaType: targetOtaType,
+        otaName: targetOtaName,
+        code: targetCode,
+        hotelName: hotelRecord.hotel_name
+      },
+      severity: 'info'
+    });
+
+    res.status(201).json({
+      success: true,
+      code: {
+        id: created.id,
+        hotelId: created.hotel_id,
+        hotel_id: created.hotel_id,
+        hotelName: hotelRecord.hotel_name,
+        hotel_name: hotelRecord.hotel_name,
+        hotelPropertyCode: hotelRecord.property_code,
+        hotel_property_code: hotelRecord.property_code,
+        channelId: created.channel_id,
+        channel_id: created.channel_id,
+        otaType: created.ota_type,
+        ota_type: created.ota_type,
+        otaName: created.ota_name,
+        ota_name: created.ota_name,
+        extranetPropertyCode: created.extranet_property_code,
+        extranet_property_code: created.extranet_property_code,
+        otaPropertyName: created.ota_property_name,
+        ota_property_name: created.ota_property_name,
+        notes: created.notes,
+        isActive: created.is_active,
+        is_active: created.is_active,
+        createdAt: created.created_at,
+        updatedAt: created.updated_at
+      },
+      message: 'Extranet code saved successfully.',
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[ExtranetCodes] Error creating extranet code:', err);
+    res.status(500).json({
+      success: false,
+      code: 'EXTRANET_CODE_SAVE_FAILED',
+      message: err.message || 'Failed to save extranet code',
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * PUT /api/channels/extranet-codes/:id
+ * Super Admin updates an existing extranet code record.
+ */
+router.put('/extranet-codes/:id', checkAuth, requireRoles(['super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      extranetPropertyCode,
+      extranet_property_code,
+      otaPropertyName,
+      ota_property_name,
+      notes,
+      isActive,
+      is_active
+    } = req.body;
+
+    let existing = null;
+    let isFallback = false;
+
+    const { data: extRow, error: findErr } = await supabaseServiceRole
+      .from('hotel_extranet_codes')
+      .select('*, hotels(id, hotel_name, property_code)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (findErr && (findErr.code === 'PGRST205' || findErr.code === '42P01')) {
+      isFallback = true;
+      const { data: connRow } = await supabaseServiceRole
+        .from('channel_connections')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!connRow) {
+        return res.status(404).json({ success: false, code: 'RECORD_NOT_FOUND', message: 'Extranet code record not found.' });
+      }
+
+      let hotelInfo = null;
+      if (connRow.hotel_id) {
+        const { data: hRec } = await supabaseServiceRole
+          .from('hotels')
+          .select('id, hotel_name, property_code')
+          .eq('id', connRow.hotel_id)
+          .maybeSingle();
+        hotelInfo = hRec;
+      }
+
+      existing = {
+        id: connRow.id,
+        hotel_id: connRow.hotel_id,
+        channel_id: connRow.id,
+        ota_type: connRow.channel_type,
+        ota_name: connRow.channel_name || connRow.channel_type,
+        extranet_property_code: connRow.external_channel_id,
+        is_active: connRow.is_enabled !== false,
+        hotels: hotelInfo,
+        created_at: connRow.created_at,
+        updated_at: connRow.updated_at
+      };
+    } else if (findErr || !extRow) {
+      return res.status(404).json({ success: false, code: 'RECORD_NOT_FOUND', message: 'Extranet code record not found.' });
+    } else {
+      existing = extRow;
+    }
+
+    const updates = {
+      updated_at: new Date().toISOString(),
+      updated_by: req.user?.id || null
+    };
+
+    if (extranetPropertyCode !== undefined || extranet_property_code !== undefined) {
+      const codeVal = String(extranetPropertyCode ?? extranet_property_code ?? '').trim();
+      if (!codeVal) {
+        return res.status(400).json({ success: false, code: 'EXTRANET_CODE_EMPTY', message: 'Extranet code cannot be empty.' });
+      }
+      updates.extranet_property_code = codeVal;
+    }
+
+    if (otaPropertyName !== undefined || ota_property_name !== undefined) {
+      updates.ota_property_name = (otaPropertyName ?? ota_property_name ?? '').trim() || null;
+    }
+
+    if (notes !== undefined) {
+      updates.notes = (notes ?? '').trim() || null;
+    }
+
+    if (isActive !== undefined) {
+      updates.is_active = Boolean(isActive);
+    } else if (is_active !== undefined) {
+      updates.is_active = Boolean(is_active);
+    }
+
+    let updated = null;
+
+    if (isFallback) {
+      const connUpdates = { updated_at: new Date().toISOString() };
+      if (updates.extranet_property_code !== undefined) connUpdates.external_channel_id = updates.extranet_property_code;
+      if (updates.is_active !== undefined) connUpdates.is_enabled = updates.is_active;
+
+      const { data: updConn, error: updConnErr } = await supabaseServiceRole
+        .from('channel_connections')
+        .update(connUpdates)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updConnErr) throw updConnErr;
+
+      updated = {
+        id: updConn.id,
+        hotel_id: updConn.hotel_id,
+        channel_id: updConn.id,
+        ota_type: updConn.channel_type,
+        ota_name: updConn.channel_name || updConn.channel_type,
+        extranet_property_code: updConn.external_channel_id,
+        ota_property_name: updates.ota_property_name || '',
+        notes: updates.notes || '',
+        is_active: updConn.is_enabled !== false,
+        created_at: updConn.created_at,
+        updated_at: updConn.updated_at
+      };
+    } else {
+      const { data: updatedRow, error: updateErr } = await supabaseServiceRole
+        .from('hotel_extranet_codes')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (updateErr) throw updateErr;
+      updated = updatedRow;
+
+      // Synchronize to channel_connections if code or active status changed
+      if (existing.hotel_id && existing.ota_type && updates.extranet_property_code !== undefined) {
+        await supabaseServiceRole
+          .from('channel_connections')
+          .update({
+            external_channel_id: updates.extranet_property_code,
+            updated_at: new Date().toISOString()
+          })
+          .eq('hotel_id', existing.hotel_id)
+          .eq('channel_type', existing.ota_type);
+      }
+    }
+
+    await recordChannelAudit({
+      req,
+      hotelId: existing.hotel_id,
+      action: 'UPDATE_EXTRANET_CODE',
+      recordId: id,
+      oldValue: {
+        code: existing.extranet_property_code,
+        isActive: existing.is_active
+      },
+      newValue: updates,
+      severity: 'info'
+    });
+
+    res.json({
+      success: true,
+      code: {
+        id: updated.id,
+        hotelId: updated.hotel_id,
+        hotel_id: updated.hotel_id,
+        hotelName: existing.hotels?.hotel_name || '',
+        hotel_name: existing.hotels?.hotel_name || '',
+        hotelPropertyCode: existing.hotels?.property_code || '',
+        hotel_property_code: existing.hotels?.property_code || '',
+        channelId: updated.channel_id,
+        channel_id: updated.channel_id,
+        otaType: updated.ota_type,
+        ota_type: updated.ota_type,
+        otaName: updated.ota_name,
+        ota_name: updated.ota_name,
+        extranetPropertyCode: updated.extranet_property_code,
+        extranet_property_code: updated.extranet_property_code,
+        otaPropertyName: updated.ota_property_name,
+        ota_property_name: updated.ota_property_name,
+        notes: updated.notes,
+        isActive: updated.is_active,
+        is_active: updated.is_active,
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at
+      },
+      message: 'Extranet code updated successfully.',
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[ExtranetCodes] Error updating extranet code:', err);
+    res.status(500).json({
+      success: false,
+      code: 'EXTRANET_CODE_UPDATE_FAILED',
+      message: err.message || 'Failed to update extranet code',
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * DELETE /api/channels/extranet-codes/:id
+ * Super Admin deletes an extranet code record.
+ */
+router.delete('/extranet-codes/:id', checkAuth, requireRoles(['super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let existing = null;
+    let isFallback = false;
+
+    const { data: extRow, error: findErr } = await supabaseServiceRole
+      .from('hotel_extranet_codes')
+      .select('*, hotels(id, hotel_name)')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (findErr && (findErr.code === 'PGRST205' || findErr.code === '42P01')) {
+      isFallback = true;
+      const { data: connRow } = await supabaseServiceRole
+        .from('channel_connections')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (!connRow) {
+        return res.status(404).json({ success: false, code: 'RECORD_NOT_FOUND', message: 'Extranet code record not found.' });
+      }
+
+      let hotelInfo = null;
+      if (connRow.hotel_id) {
+        const { data: hRec } = await supabaseServiceRole
+          .from('hotels')
+          .select('id, hotel_name')
+          .eq('id', connRow.hotel_id)
+          .maybeSingle();
+        hotelInfo = hRec;
+      }
+
+      existing = {
+        id: connRow.id,
+        hotel_id: connRow.hotel_id,
+        ota_type: connRow.channel_type,
+        extranet_property_code: connRow.external_channel_id,
+        hotels: hotelInfo
+      };
+    } else if (findErr || !extRow) {
+      return res.status(404).json({ success: false, code: 'RECORD_NOT_FOUND', message: 'Extranet code record not found.' });
+    } else {
+      existing = extRow;
+    }
+
+    if (isFallback) {
+      await supabaseServiceRole
+        .from('channel_connections')
+        .update({
+          external_channel_id: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', id);
+    } else {
+      const { error: delErr } = await supabaseServiceRole
+        .from('hotel_extranet_codes')
+        .delete()
+        .eq('id', id);
+
+      if (delErr) throw delErr;
+
+      // Clear external_channel_id on channel_connections if matching
+      if (existing.hotel_id && existing.ota_type) {
+        await supabaseServiceRole
+          .from('channel_connections')
+          .update({
+            external_channel_id: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('hotel_id', existing.hotel_id)
+          .eq('channel_type', existing.ota_type);
+      }
+    }
+
+    await recordChannelAudit({
+      req,
+      hotelId: existing.hotel_id,
+      action: 'DELETE_EXTRANET_CODE',
+      recordId: id,
+      oldValue: {
+        code: existing.extranet_property_code,
+        otaType: existing.ota_type,
+        hotelName: existing.hotels?.hotel_name
+      },
+      severity: 'warn'
+    });
+
+    res.json({
+      success: true,
+      message: 'Extranet code deleted successfully.',
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[ExtranetCodes] Error deleting extranet code:', err);
+    res.status(500).json({
+      success: false,
+      code: 'EXTRANET_CODE_DELETE_FAILED',
+      message: err.message || 'Failed to delete extranet code',
+      requestId: req.requestId
+    });
+  }
+});
+
 /**
  * GET /api/channels/settings
  * Retrieve OTA configuration settings for the current hotel.

@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Radio, Building2, Search, RefreshCw, CheckCircle2, AlertTriangle,
-  Clock3, ChevronLeft, ArrowRight
+  Clock3, ChevronLeft, ArrowRight, KeyRound
 } from 'lucide-react';
 import { getEnterpriseHotels, getChannelManagerHotelStatuses } from '../api';
 import type { EnterpriseHotel, ChannelManagerHotelStatus } from '../types';
 import { SuperAdminOtaConfig } from './SuperAdminOtaConfig';
+import { ExtranetCodesScreen } from './ExtranetCodesScreen';
 import { ChannelManager } from '@/screens/channel/ChannelManager';
 import { setCurrentHotelId } from '@/lib/api';
 import { useHotel } from '@/lib/hotel-context';
@@ -25,6 +26,7 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
   const [search, setSearch] = useState('');
   const [selectedHotelId, setSelectedHotelId] = useState<string | null>(initialHotelId ?? null);
   const [propertyViewMode, setPropertyViewMode] = useState<'channel_manager' | 'ota_config'>('channel_manager');
+  const [channelDashboardTab, setChannelDashboardTab] = useState<'properties' | 'extranet_codes'>('properties');
 
   const loadData = useCallback(async () => {
     try {
@@ -203,6 +205,35 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
     );
   }
 
+  // If Extranet Codes tab is active, render ExtranetCodesScreen
+  if (channelDashboardTab === 'extranet_codes') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-xs">
+            <button
+              type="button"
+              onClick={() => setChannelDashboardTab('properties')}
+              className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <Radio className="w-3.5 h-3.5 text-slate-500" />
+              OTA Properties
+            </button>
+            <button
+              type="button"
+              onClick={() => setChannelDashboardTab('extranet_codes')}
+              className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold bg-amber-600 text-white shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              Extranet Codes Registry
+            </button>
+          </div>
+        </div>
+        <ExtranetCodesScreen />
+      </div>
+    );
+  }
+
   // Otherwise, render Superadmin Channel Manager Property Dashboard
   return (
     <div className="space-y-6">
@@ -211,12 +242,33 @@ export const ChannelManagerScreen = ({ initialHotelId, onBack }: Props) => {
         subtitle="Configure, monitor, and manage OTA integrations & distribution credentials across enterprise properties."
         icon={<Radio className="w-6 h-6 text-purple-600" />}
         action={
-          <button
-            onClick={loadData}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh Statuses
-          </button>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-xs">
+              <button
+                type="button"
+                onClick={() => setChannelDashboardTab('properties')}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold bg-white text-slate-900 shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Radio className="w-3.5 h-3.5 text-amber-600" />
+                OTA Properties
+              </button>
+              <button
+                type="button"
+                onClick={() => setChannelDashboardTab('extranet_codes')}
+                className="px-3.5 py-1.5 rounded-lg text-xs font-extrabold text-slate-600 hover:text-slate-900 transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-slate-500" />
+                Extranet Codes
+              </button>
+            </div>
+
+            <button
+              onClick={loadData}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} /> Refresh Statuses
+            </button>
+          </div>
         }
       />
 

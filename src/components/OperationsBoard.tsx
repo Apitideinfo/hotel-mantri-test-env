@@ -32,7 +32,7 @@ import {
   extractUnassignedReason,
 } from '@/lib/api-reservations';
 import { extendStay, shiftRoom } from '@/lib/api-frontoffice';
-import { getGuests } from '@/lib/api-crm';
+import { getVipGuests } from '@/lib/api-crm';
 import type { Guest } from '@/lib/types-crm';
 import { addDays, calcStayNights, fmtMoney, fmtInt, toNum, getTodayLocal, isStayOverlapping, calcGstFull } from '@/lib/calc';
 import { BookingDetailPanel } from '@/components/BookingDetailPanel';
@@ -138,6 +138,15 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
   const [viewMode, setViewMode] = useState<ViewMode>('week');
   const [centerDate, setCenterDate] = useState(date);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const [filterCategory, setFilterCategory] = useState('');
   const [filterFloor, setFilterFloor] = useState('');
   const [filterSource, setFilterSource] = useState('');
@@ -261,11 +270,33 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       }
       setCategoryAvailability(map);
 
-      // Fetch VIP guests and all guest profiles for contact resolution
+      // Fetch VIP guests and targeted guest profiles for contact resolution
       try {
-        const allGuests = await getGuests();
-        setGuests(allGuests);
-        setVipGuests(allGuests.filter((g) => g.vip_type !== ''));
+        const vips = await getVipGuests();
+        setVipGuests(vips);
+
+        // Collect guest_ids specifically referenced in visible entries and reservations
+        const guestIds = Array.from(new Set([
+          ...es.map((e) => e.guest_id).filter(Boolean),
+          ...resvs.map((r) => r.guest_id).filter(Boolean),
+        ])) as string[];
+
+        if (guestIds.length > 0) {
+          const { data: matchedGuests } = await supabase
+            .from('guests')
+            .select('id, name, mobile, email, vip_type')
+            .eq('hotel_id', hotelId)
+            .in('id', guestIds);
+
+          const guestMap = new Map<string, Guest>();
+          for (const g of vips) guestMap.set(g.id, g);
+          if (matchedGuests) {
+            for (const g of matchedGuests as Guest[]) guestMap.set(g.id, g);
+          }
+          setGuests(Array.from(guestMap.values()));
+        } else {
+          setGuests(vips);
+        }
       } catch { /* non-critical */ }
     } catch (e) {
       console.error('[OperationsBoard] Failed to load board data:', e);
@@ -277,14 +308,19 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
   useEffect(() => { load(); }, [load]);
 
-  // Automatically refresh board when live sync, realtime OTA, or availability updates fire
+  // Automatically refresh board when live sync, realtime OTA, or availability updates fire (debounced to avoid cascades)
   useEffect(() => {
+    let timer: NodeJS.Timeout | null = null;
     const handleUpdate = () => {
-      load();
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        load();
+      }, 400);
     };
     window.addEventListener('hotel_mantri_reservations_updated', handleUpdate);
     window.addEventListener('hotel_mantri_availability_updated', handleUpdate);
     return () => {
+      if (timer) clearTimeout(timer);
       window.removeEventListener('hotel_mantri_reservations_updated', handleUpdate);
       window.removeEventListener('hotel_mantri_availability_updated', handleUpdate);
     };
@@ -484,8 +520,8 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
 
   const filteredBookings = useMemo(() => {
     let result = allBookings;
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
+    if (debouncedSearch.trim()) {
+      const q = debouncedSearch.trim().toLowerCase();
       result = result.filter(
         (b) =>
           b.guestName.toLowerCase().includes(q) ||
@@ -513,7 +549,7 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
       else if (filterPayment === 'unpaid') result = result.filter((b) => !b.hasPayment);
     }
     return result;
-  }, [allBookings, search, filterCategory, filterFloor, filterSource, filterStatus, filterPayment, activeRooms, categories]);
+  }, [allBookings, debouncedSearch, filterCategory, filterFloor, filterSource, filterStatus, filterPayment, activeRooms, categories]);
 
   const unassignedBookings = useMemo(() => {
     return filteredBookings.filter((b) => {

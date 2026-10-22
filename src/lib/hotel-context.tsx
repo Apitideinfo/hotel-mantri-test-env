@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { supabase } from './supabase';
 import { useAuth, UserRole } from './auth';
 import { setCurrentHotelId } from './api';
+import { clearTenantCache } from './queryClient';
 
 export type HotelContextStatus =
   | 'HOTEL_CONTEXT_LOADING'
@@ -50,6 +51,7 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const resolvingUserRef = useRef<string | null>(null);
 
   const applyHotelSelection = useCallback((h: HotelSummary | null, forSuperAdmin: boolean = false) => {
+    clearTenantCache();
     if (h) {
       setHotelIdState(h.id);
       setHotel(h);
