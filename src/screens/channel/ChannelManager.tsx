@@ -546,6 +546,9 @@ export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId 
                 categories={overview.categories}
                 connections={overview.connections}
                 mappings={overview.mappings}
+                totalRegisteredRooms={overview.totalRegisteredRooms}
+                unassignedRooms={overview.unassignedRooms}
+                onNavigate={onNavigate}
                 onRefresh={load}
                 onBulkUpdate={() => setOwnerBulkOpen(true)}
               />
@@ -593,6 +596,9 @@ export const ChannelManager = ({ onBack, onNavigate, mode, hotelId: propHotelId 
                 categories={overview.categories}
                 connections={overview.connections}
                 mappings={overview.mappings}
+                totalRegisteredRooms={overview.totalRegisteredRooms}
+                unassignedRooms={overview.unassignedRooms}
+                onNavigate={onNavigate}
                 onRefresh={load}
                 onBulkUpdate={() => setOwnerBulkOpen(true)}
               />
@@ -1237,7 +1243,7 @@ const InventoryTab = ({
                           <button
                             onClick={() => setCellEdit({ catId: cat.id, date: d, categoryName: cat.name })}
                             className={`w-full text-center text-sm font-bold rounded-lg py-1.5 px-1 border transition hover:ring-2 hover:ring-brand-300 ${
-                              isUnconfigured ? 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100' : availColor(val ?? 0, 10, Boolean(r.stop_sell))
+                              isUnconfigured ? 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100' : availColor(val ?? 0, cat.room_count ?? (cat as any).total_rooms ?? 0, Boolean(r.stop_sell))
                             }`}
                             title={isUnconfigured ? 'Inventory unconfigured / No physical rooms assigned' : undefined}
                           >
@@ -1393,6 +1399,7 @@ const InventoryTab = ({
           catId={cellEdit.catId}
           date={cellEdit.date}
           categoryName={cellEdit.categoryName}
+          physicalCapacity={categories.find(c => c.id === cellEdit.catId)?.room_count ?? (categories.find(c => c.id === cellEdit.catId) as any)?.total_rooms}
           restriction={getR(cellEdit.catId, cellEdit.date)}
           onClose={() => setCellEdit(null)}
           onSave={async (patch) => {
@@ -1515,11 +1522,12 @@ const InventoryTab = ({
 
 // ── Cell Edit Popover ──
 
-const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSave }: {
+const CellEditPopover = ({ catId, date, categoryName, restriction, physicalCapacity, onClose, onSave }: {
   catId: string;
   date: string;
   categoryName: string;
   restriction: Partial<ChannelInventoryRestriction>;
+  physicalCapacity?: number;
   onClose: () => void;
   onSave: (patch: Partial<ChannelInventoryRestriction>) => Promise<any>;
 }) => {
@@ -1550,7 +1558,24 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
       const patch: Partial<ChannelInventoryRestriction> = {};
 
       if (availability !== initAvailStr) {
-        patch.availability = availability.trim() === '' ? (null as any) : Math.max(0, parseInt(availability) || 0);
+        if (availability.trim() !== '') {
+          const num = parseInt(availability);
+          if (isNaN(num) || num < 0) {
+            setSyncState('error');
+            setSyncNoticeText('Availability cannot be negative');
+            setSaving(false);
+            return;
+          }
+          if (physicalCapacity !== undefined && num > physicalCapacity) {
+            setSyncState('error');
+            setSyncNoticeText(`Cannot exceed physical capacity (${physicalCapacity})`);
+            setSaving(false);
+            return;
+          }
+          patch.availability = num;
+        } else {
+          patch.availability = null as any;
+        }
       }
       if (baseRate !== initRateStr) {
         patch.base_rate = baseRate.trim() === '' ? 0 : Math.max(0, parseFloat(baseRate) || 0);
@@ -1617,9 +1642,13 @@ const CellEditPopover = ({ catId, date, categoryName, restriction, onClose, onSa
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs font-semibold text-slate-500 block mb-1">Availability</label>
+            <label className="text-xs font-semibold text-slate-500 block mb-1">
+              Availability {physicalCapacity !== undefined ? `(Max: ${physicalCapacity})` : ''}
+            </label>
             <input
               type="number"
+              min={0}
+              max={physicalCapacity}
               value={availability}
               onChange={(e) => setAvailability(e.target.value)}
               placeholder="Leave empty for calculated"
@@ -1894,9 +1923,24 @@ const BulkUpdateDrawer = ({
       return;
     }
 
-    if (enableAvail && availValue.trim() === '') {
-      setSaveError('Please enter the number of available rooms.');
-      return;
+    if (enableAvail) {
+      if (availValue.trim() === '') {
+        setSaveError('Please enter the number of available rooms.');
+        return;
+      }
+      const av = parseInt(availValue);
+      if (isNaN(av) || av < 0) {
+        setSaveError('Availability cannot be negative.');
+        return;
+      }
+      for (const catId of selectedCats) {
+        const cat = categories.find((c) => c.id === catId);
+        const maxPhysical = cat?.room_count ?? (cat as any)?.total_rooms ?? 0;
+        if (av > maxPhysical) {
+          setSaveError(`Availability count (${av}) exceeds registered physical capacity (${maxPhysical}) for category "${cat?.name || 'Selected'}".`);
+          return;
+        }
+      }
     }
 
     // 🔒 Tenant Guard: verify every selected category belongs to this hotel's categories list
@@ -1937,7 +1981,8 @@ const BulkUpdateDrawer = ({
         if (enableAvail) {
           const av = parseInt(availValue);
           if (!isNaN(av)) {
-            patch.availability = Math.max(0, av);
+            const physical = category?.room_count ?? (category as any)?.total_rooms ?? 0;
+            patch.availability = Math.max(0, Math.min(av, physical));
           }
         }
 

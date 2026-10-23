@@ -23,9 +23,6 @@ export const OtpVerificationScreen: React.FC<OtpVerificationScreenProps> = ({
 
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Demo OTP Code for immediate developer & user testing
-  const DEMO_OTP = '123456';
-
   // 30-second countdown timer for Resend OTP
   useEffect(() => {
     if (resendTimer > 0) {
@@ -159,21 +156,6 @@ export const OtpVerificationScreen: React.FC<OtpVerificationScreenProps> = ({
               <div className="inline-flex items-center gap-1.5 mt-1 bg-slate-100 px-3 py-1 rounded-lg text-slate-900 font-bold text-xs">
                 <Mail className="w-3.5 h-3.5 text-[#1a68fb]" />
                 <span>{email || 'user@hotelmantri.com'}</span>
-              </div>
-
-              {/* Quick Auto-Fill Action */}
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOtp(['1', '2', '3', '4', '5', '6']);
-                    setError(null);
-                  }}
-                  className="text-[11px] font-extrabold text-[#1a68fb] bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3.5 py-1.5 rounded-full transition cursor-pointer inline-flex items-center gap-1.5 shadow-sm"
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>Click to Auto-fill OTP (123456)</span>
-                </button>
               </div>
             </div>
 

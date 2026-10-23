@@ -320,6 +320,8 @@ export interface RoomCategory {
   default_tariff: number;
   extra_bed_charge: number;
   created_at: string;
+  room_count?: number;
+  total_rooms?: number;
 }
 
 export const CATEGORY_DISPLAY_ORDER = ['DELUXE', 'SUPER DELUXE', 'STANDARD', 'FOURBED', 'SUITE'] as const;

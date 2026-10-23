@@ -199,7 +199,7 @@ export const OwnerRatePushTab: React.FC<OwnerRatePushTabProps> = ({
             >
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name} ({(c as any).total_rooms || 0} rooms)
+                  {c.name} ({c.room_count ?? (c as any).total_rooms ?? 0} rooms)
                 </option>
               ))}
             </select>

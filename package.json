@@ -17,6 +17,8 @@
     "test:accounting": "node scripts/test_accounting_reconciliation.mjs",
     "test:meta": "node scripts/test_meta_compliance_suite.mjs",
     "test:aiosell-isolation": "node scripts/test_aiosell_isolation_suite.mjs",
+    "test:welcome-email": "node scripts/test_hotel_owner_welcome_email.mjs",
+    "test:channel-inventory": "node scripts/test_channel_inventory_exact_matching.mjs",
     "test": "npm run test:housekeeping && npm run test:whinta && npm run test:accounting && npm run test:meta"
   },
   "dependencies": {

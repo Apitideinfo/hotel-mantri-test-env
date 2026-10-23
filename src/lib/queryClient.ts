@@ -89,6 +89,9 @@ export const invalidateRoomInventory = async (hotelId: string) => {
     queryClient.invalidateQueries({ queryKey: ['hotel', hotelId, 'categories'] }),
     queryClient.invalidateQueries({ queryKey: ['hotel', hotelId, 'matrix'] }),
   ]);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('hotel_mantri_availability_updated'));
+  }
 };
 
 /**

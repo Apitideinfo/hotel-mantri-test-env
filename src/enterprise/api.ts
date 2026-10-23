@@ -891,21 +891,24 @@ export const discardOnboardingAttempt = async (attemptId: string, hotelId: strin
 
 export interface WelcomeEmailResult {
   success: boolean;
+  status?: 'sent' | 'failed' | 'pending';
   messageId?: string;
   hasPasswordSetupLink?: boolean;
   message?: string;
   code?: string;
+  deduplicated?: boolean;
 }
 
 export const sendWelcomeEmail = async (params: {
   hotelId: string;
-  hotelName: string;
-  ownerName: string;
-  ownerEmail: string;
+  hotelName?: string;
+  ownerName?: string;
+  ownerEmail?: string;
   totalRooms?: number;
   categoryCount?: number;
   planName?: string;
   trialEndDate?: string;
+  forceResend?: boolean;
 }): Promise<WelcomeEmailResult> => {
   try {
     const session = await supabase.auth.getSession();
@@ -915,7 +918,7 @@ export const sendWelcomeEmail = async (params: {
     }
 
     // Determine API base URL
-    const apiBaseUrl = import.meta.env.VITE_API_URL || '';
+    const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
     const url = apiBaseUrl
       ? `${apiBaseUrl}/api/onboarding/send-welcome-email`
       : '/api/onboarding/send-welcome-email';
@@ -934,23 +937,93 @@ export const sendWelcomeEmail = async (params: {
     if (res.ok && result.success) {
       return {
         success: true,
+        status: 'sent',
         messageId: result.messageId,
         hasPasswordSetupLink: result.hasPasswordSetupLink,
         message: result.message,
+        deduplicated: result.deduplicated,
       };
     }
 
     return {
       success: false,
+      status: 'failed',
       code: result.code || 'SEND_FAILED',
       message: result.message || 'Failed to send welcome email.',
     };
   } catch (err) {
     return {
       success: false,
+      status: 'failed',
       code: 'NETWORK_ERROR',
       message: err instanceof Error ? err.message : 'Network error while sending welcome email.',
     };
+  }
+};
+
+export const getWelcomeEmailStatus = async (hotelId: string): Promise<{
+  success: boolean;
+  status: 'sent' | 'failed' | 'pending';
+  sentAt?: string;
+  messageId?: string;
+  message?: string;
+}> => {
+  try {
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) {
+      return { success: false, status: 'pending', message: 'Not authenticated' };
+    }
+
+    const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+    const url = `${apiBaseUrl}/api/onboarding/welcome-email-status?hotelId=${encodeURIComponent(hotelId)}`;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) {
+      return {
+        success: true,
+        status: data.status || 'pending',
+        sentAt: data.sentAt,
+        messageId: data.messageId,
+      };
+    }
+    return { success: false, status: 'pending', message: data.message };
+  } catch (err) {
+    return { success: false, status: 'pending', message: err instanceof Error ? err.message : 'Status check failed' };
+  }
+};
+
+export const getSmtpStatus = async (): Promise<{
+  configured: boolean;
+  missingVars?: string[];
+  provider?: string;
+}> => {
+  try {
+    const session = await supabase.auth.getSession();
+    const token = session.data.session?.access_token;
+    if (!token) return { configured: false, missingVars: ['AUTH_TOKEN'] };
+
+    const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+    const url = `${apiBaseUrl}/api/onboarding/smtp-status`;
+
+    const res = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    return {
+      configured: Boolean(data.configured),
+      missingVars: data.missingVars || [],
+      provider: data.provider,
+    };
+  } catch {
+    return { configured: false, missingVars: [] };
   }
 };
 

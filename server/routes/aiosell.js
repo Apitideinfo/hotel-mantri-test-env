@@ -320,7 +320,27 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   const dates = getDates(startDate, endDate);
   const supabase = options?.client || getSupabase();
 
-  // 1. Get physical rooms
+  // 1. Get room categories to map category names and establish valid active categories
+  const { data: allCategories, error: catsError } = await supabase
+    .from('room_categories')
+    .select('id, name, default_tariff, extra_bed_charge, sort_order')
+    .eq('hotel_id', hotelId)
+    .eq('is_active', true)
+    .order('sort_order', { ascending: true });
+
+  if (catsError) {
+    console.error('[calculateAuthoritativeInventory] Error querying categories:', catsError);
+  }
+
+  const validCategoryIds = new Set((allCategories || []).map(c => c.id));
+  const catNameToIdMap = {};
+  (allCategories || []).forEach(c => {
+    if (c.name) {
+      catNameToIdMap[c.name.trim().toLowerCase()] = c.id;
+    }
+  });
+
+  // 2. Get physical registered rooms (active only)
   const { data: physicalRooms, error: roomsError } = await supabase
     .from('rooms')
     .select('id, category_id, room_no, is_active')
@@ -330,24 +350,31 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     console.error('[calculateAuthoritativeInventory] Error querying rooms:', roomsError);
   }
 
+  const activeRooms = (physicalRooms || []).filter(r => r.is_active !== false);
+  const totalPhysicalRooms = activeRooms.length;
   const roomToCatMap = {};
+  const roomNoToCatMap = {};
   const physicalCounts = {};
-  (physicalRooms || []).forEach(r => {
-    if (r.category_id && r.is_active !== false) {
+  const unassignedRooms = [];
+
+  activeRooms.forEach(r => {
+    if (r.category_id && validCategoryIds.has(r.category_id)) {
       roomToCatMap[r.id] = r.category_id;
       physicalCounts[r.category_id] = (physicalCounts[r.category_id] || 0) + 1;
+      if (r.room_no) {
+        roomNoToCatMap[String(r.room_no).trim().toLowerCase()] = r.category_id;
+      }
+    } else {
+      unassignedRooms.push({
+        id: r.id,
+        room_no: r.room_no || 'Unknown',
+        category_id: r.category_id || null,
+        reason: !r.category_id ? 'Missing category assignment' : 'Assigned category is inactive or missing'
+      });
     }
   });
 
-  // Map room_no to category_id
-  const roomNoToCatMap = {};
-  (physicalRooms || []).forEach(r => {
-    if (r.room_no && r.category_id) {
-      roomNoToCatMap[String(r.room_no).trim().toLowerCase()] = r.category_id;
-    }
-  });
-
-  // 2. Get active reservations overlapping the date range
+  // 3. Get active reservations overlapping the date range
   const { data: reservations, error: resError } = await supabase
     .from('reservations')
     .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks, created_at')
@@ -360,7 +387,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     console.error('[calculateAuthoritativeInventory] Error querying reservations:', resError);
   }
 
-  // 3. Get room blocks / maintenance
+  // 4. Get room blocks / maintenance
   const { data: roomBlocks } = await supabase
     .from('room_blocks')
     .select('room_no, start_date, end_date, block_type')
@@ -368,7 +395,7 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     .lte('start_date', endDate)
     .gte('end_date', startDate);
 
-  // 4. Get channel mappings for rate plan / room code resolution
+  // 5. Get channel mappings for rate plan / room code resolution
   const { data: mappings } = await supabase
     .from('channel_rate_mappings')
     .select('room_category_id, external_room_code, external_rate_plan_code')
@@ -385,21 +412,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
       if (m.external_rate_plan_code) {
         ratePlanCodeToCatMap[m.external_rate_plan_code.toLowerCase()] = m.room_category_id;
       }
-    }
-  });
-
-  // 5. Get room categories to map category names (active, hotel-scoped only)
-  const { data: allCategories } = await supabase
-    .from('room_categories')
-    .select('id, name, default_tariff, extra_bed_charge, sort_order')
-    .eq('hotel_id', hotelId)
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true });
-
-  const catNameToIdMap = {};
-  (allCategories || []).forEach(c => {
-    if (c.name) {
-      catNameToIdMap[c.name.trim().toLowerCase()] = c.id;
     }
   });
 
@@ -555,10 +567,11 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
         }
 
         const remainingManual = Math.max(0, manualVal - newReservationsAfterUpdate);
-        // Authoritative PMS inventory rule:
-        // Cap at physical availability if physical rooms are configured, otherwise respect manual value
-        sellable = physical > 0 ? Math.min(remainingManual, calculatedAvailable) : remainingManual;
+        sellable = physical > 0 ? Math.max(0, Math.min(remainingManual, calculatedAvailable)) : 0;
       }
+
+      // Authoritative PMS invariant: sellable availability can NEVER exceed physical room capacity
+      sellable = Math.max(0, Math.min(sellable, physical));
 
       matrix.push({
         date,
@@ -614,7 +627,13 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   }
 
-  return { matrix, physicalCounts, categories, mappings: mappings || [] };
+  const enrichedCategories = (categories || []).map(c => ({
+    ...c,
+    room_count: physicalCounts[c.id] || 0,
+    total_rooms: physicalCounts[c.id] || 0
+  }));
+
+  return { matrix, physicalCounts, categories: enrichedCategories, mappings: mappings || [], unassignedRooms, totalPhysicalRooms };
 }
 
 /**
@@ -783,7 +802,7 @@ router.all('/inventory/matrix', async (req, res) => {
       });
     }
 
-    const { matrix, physicalCounts, categories, mappings } = await calculateAuthoritativeInventory(
+    const { matrix, physicalCounts, categories, mappings, unassignedRooms, totalPhysicalRooms } = await calculateAuthoritativeInventory(
       hotelId,
       startDate,
       endDate,
@@ -795,6 +814,8 @@ router.all('/inventory/matrix', async (req, res) => {
       startDate,
       endDate,
       physicalCounts,
+      totalPhysicalRooms,
+      unassignedRooms,
       categories,
       mappings,
       matrix,

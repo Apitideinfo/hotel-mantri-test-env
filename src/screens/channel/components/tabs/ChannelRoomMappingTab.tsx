@@ -342,7 +342,12 @@ export const ChannelRoomMappingTab: React.FC<ChannelRoomMappingTabProps> = ({
                   </td>
 
                   <td className="py-3.5 px-4 text-slate-600">
-                    Active Category
+                    <span className="font-semibold text-slate-800">
+                      {cat.room_count ?? (cat as any).total_rooms ?? 0}
+                    </span>
+                    <span className="text-xs text-slate-400 ml-1">
+                      {(cat.room_count ?? (cat as any).total_rooms ?? 0) === 1 ? 'room' : 'rooms'}
+                    </span>
                   </td>
 
                   <td className="py-3.5 px-4">

@@ -583,7 +583,7 @@ export const syncInventory = async ({
 
         rooms.push({
           roomCode,
-          available: Math.max(0, Math.round(Number(entry.available) || 0))
+          available: Math.max(0, Math.min(Math.round(Number(entry.available) || 0), Number(entry.physical) || 0))
         });
       }
 
