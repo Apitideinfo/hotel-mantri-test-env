@@ -127,7 +127,7 @@ export const OperationsHeader: React.FC<OperationsHeaderProps> = ({
   const balance = Math.max(0, total - advance);
 
   return (
-    <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/90 sticky top-0 z-30 shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
+    <header className="bg-white/95 backdrop-blur-md border-b border-slate-200/90 sticky top-0 z-20 shadow-[0_2px_12px_rgba(0,0,0,0.03)]">
       <div className="w-full px-3 sm:px-6 py-2.5 space-y-2.5">
         
         {/* ── TIER 1: Property Identity & Primary Operational Actions (Left & Right Balanced) ── */}

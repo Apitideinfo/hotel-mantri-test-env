@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Header } from '../components/landing/Header';
 import { HeroSection } from '../components/landing/HeroSection';
+import { FeaturePillsTicker } from '../components/landing/FeaturePillsTicker';
 import { CredibilityStrip } from '../components/landing/CredibilityStrip';
 import { ConnectedArchitectureSection } from '../components/landing/ConnectedArchitectureSection';
 import { ProductModulesSection } from '../components/landing/ProductModulesSection';
@@ -61,6 +62,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         onExploreFeatures={handleScrollToFeatures}
       />
 
+      {/* 2.5 Infinite Auto-Moving Modules Ticker (Single Straight Line) */}
+      <FeaturePillsTicker />
+
       {/* 3. Credibility Strip — Built for Independent Hotels, Resorts & Boutique Properties */}
       <CredibilityStrip />
 
@@ -82,8 +86,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* 9. Testimonials — Simpler Operations. Happier Guests. Stronger Business. */}
       <TestimonialsSection />
 
-      {/* 10. How HotelMantri Works — 5 Simple Steps */}
-      <HowItWorks />
+      {/* 10. How HotelMantri Works — 4 Simple Steps */}
+      <HowItWorks onOpenBookDemo={handleOpenDemo} />
 
       {/* 11. Final Dark Call-to-Action */}
       <FinalCTA

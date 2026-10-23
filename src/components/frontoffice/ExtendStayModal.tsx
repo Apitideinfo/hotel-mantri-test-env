@@ -75,7 +75,7 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
   if (success) {
     return (
       <>
-        <div className="fixed inset-0 bg-black/40 z-40 animate-in fade-in duration-300" onClick={onClose} />
+        <div className="fixed inset-0 bg-black/40 z-50 animate-in fade-in duration-300" onClick={onClose} />
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm pointer-events-auto animate-in zoom-in-95 fade-in slide-in-from-bottom-4 duration-300">
             <div className="px-6 py-8 text-center">
@@ -95,7 +95,7 @@ export const ExtendStayModal = ({ entry, role, onClose, onExtended }: ExtendStay
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-40 animate-in fade-in duration-300" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-50 animate-in fade-in duration-300" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[92vh] flex flex-col pointer-events-auto animate-in zoom-in-95 fade-in slide-in-from-bottom-4 duration-300">
           <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between" style={{ background: brand.navy }}>

@@ -169,7 +169,7 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} />
+      <div className="fixed inset-0 bg-black/40 z-50" onClick={onClose} />
       <div className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white shadow-2xl z-50 flex flex-col
         max-sm:rounded-t-2xl max-sm:bottom-0 max-sm:top-auto max-sm:max-h-[92vh]">
         {/* Header */}

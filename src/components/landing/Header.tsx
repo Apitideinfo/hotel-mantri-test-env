@@ -67,7 +67,7 @@ export const Header: React.FC<HeaderProps> = ({ onNavigateLogin, onOpenBookDemo 
           : 'bg-slate-950/70 backdrop-blur-sm border-b border-slate-800/40 py-4'
       }`}
     >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
+      <div className="w-full max-w-[1720px] mx-auto px-4 sm:px-8 lg:px-12 xl:px-16 flex items-center justify-between">
         {/* Brand Logo on Dark Navy */}
         <button
           onClick={() => handleNavClick('home')}
