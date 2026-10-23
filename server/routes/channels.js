@@ -1972,6 +1972,24 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
       }
     }
 
+    // 3.6. Query authoritative physical room capacity per category for capacity bounds enforcement
+    const { data: catRooms, error: catRoomsErr } = await dbClient
+      .from('rooms')
+      .select('id, category_id, is_active')
+      .eq('hotel_id', hotelId)
+      .in('category_id', targetCatIds);
+
+    if (catRoomsErr) {
+      console.error('[inventory-restrictions/patch] Error fetching rooms for capacity validation:', catRoomsErr);
+      throw catRoomsErr;
+    }
+
+    const physicalCapacities = {};
+    (catRooms || []).forEach(r => {
+      if (r.is_active !== false && r.category_id) {
+        physicalCapacities[r.category_id] = (physicalCapacities[r.category_id] || 0) + 1;
+      }
+    });
 
     // 4. Query existing records for target tuples
     const { data: existingRows, error: fetchErr } = await dbClient
@@ -2039,16 +2057,46 @@ router.post(['/inventory-restrictions/patch', '/invent_restrictions/patch'], che
         merged.channel_rate = 0;
       }
 
-      // Availability: only update if provided
+      // Availability: only update if provided, strictly validated against registered physical room capacity
       if (patch.availability !== undefined) {
         hasInv = true;
         if (patch.availability === null || patch.availability === '') {
           merged.availability = null;
         } else {
-          merged.availability = Math.max(0, parseInt(patch.availability) || 0);
+          const reqAvail = parseInt(patch.availability);
+          if (isNaN(reqAvail) || reqAvail < 0) {
+            return res.status(400).json({
+              success: false,
+              error: {
+                code: 'INVALID_INVENTORY_VALUE',
+                message: 'Availability count cannot be negative or invalid.',
+                hotelId,
+                requestId
+              }
+            });
+          }
+          const maxCapacity = physicalCapacities[patch.room_category_id] || 0;
+          if (reqAvail > maxCapacity) {
+            const catName = foundCatMap.get(patch.room_category_id)?.name || patch.room_category_id;
+            return res.status(400).json({
+              success: false,
+              error: {
+                code: 'EXCEEDS_PHYSICAL_CAPACITY',
+                message: `Availability (${reqAvail}) cannot exceed physical room capacity (${maxCapacity}) for category "${catName}".`,
+                categoryId: patch.room_category_id,
+                categoryName: catName,
+                physicalCapacity: maxCapacity,
+                requestedAvailability: reqAvail,
+                hotelId,
+                requestId
+              }
+            });
+          }
+          merged.availability = reqAvail;
         }
       } else if (existing) {
-        merged.availability = existing.availability;
+        const maxCapacity = physicalCapacities[patch.room_category_id] || 0;
+        merged.availability = existing.availability !== null ? Math.min(existing.availability, maxCapacity) : null;
       } else {
         merged.availability = null;
       }

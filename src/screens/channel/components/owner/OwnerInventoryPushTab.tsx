@@ -15,6 +15,9 @@ interface OwnerInventoryPushTabProps {
   mappings: ChannelRateMapping[];
   onRefresh: () => void;
   onBulkUpdate?: () => void;
+  totalRegisteredRooms?: number;
+  unassignedRooms?: Array<{ id: string; room_no: string; category_id: string | null; reason: string }>;
+  onNavigate?: (screen: string) => void;
 }
 
 type RangePreset = 'today' | '7days' | '30days' | 'custom';
@@ -24,7 +27,10 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
   connections,
   mappings,
   onRefresh,
-  onBulkUpdate
+  onBulkUpdate,
+  totalRegisteredRooms,
+  unassignedRooms,
+  onNavigate
 }) => {
   const todayStr = new Date().toISOString().slice(0, 10);
   const addDays = (d: string, n: number) => {
@@ -44,6 +50,11 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
 
   // Manual Adjustments map: { `${catId}_${date}`: { delta: number, stopSell: boolean } }
   const [adjustments, setAdjustments] = useState<Record<string, { delta: number; stopSell: boolean }>>({});
+
+  // Reset adjustments whenever date range or category selection changes to avoid stale overrides
+  useEffect(() => {
+    setAdjustments({});
+  }, [startDate, endDate, selectedCategoryId]);
 
   // Target Channels Selection
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<string>>(() => {
@@ -85,7 +96,7 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
     }
   };
 
-  // Fetch Matrix
+  // Fetch Authoritative Matrix
   useEffect(() => {
     let active = true;
     const fetchMatrix = async () => {
@@ -96,7 +107,7 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
           setMatrixData(res.matrix);
         }
       } catch (err) {
-        // Fallback default matrix
+        console.warn('[OwnerInventoryPushTab] Failed to fetch matrix:', err);
       } finally {
         if (active) setLoadingMatrix(false);
       }
@@ -124,13 +135,19 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
     return { eligible: true };
   };
 
-  const handleAdjustDelta = (catId: string, date: string, diff: number) => {
+  const handleAdjustDelta = (catId: string, date: string, diff: number, baseAvail: number, physical: number) => {
     const key = `${catId}_${date}`;
     setAdjustments(prev => {
       const cur = prev[key] || { delta: 0, stopSell: false };
+      const nextDelta = cur.delta + diff;
+      const targetAvail = baseAvail + nextDelta;
+      // Invariant: net sellable availability can never be negative or exceed physical capacity
+      if (targetAvail < 0 || targetAvail > physical) {
+        return prev;
+      }
       return {
         ...prev,
-        [key]: { ...cur, delta: cur.delta + diff }
+        [key]: { ...cur, delta: nextDelta }
       };
     });
   };
@@ -189,12 +206,75 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
     }
   };
 
+  const totalPhysicalRooms = totalRegisteredRooms !== undefined
+    ? totalRegisteredRooms
+    : categories.reduce((sum, c) => sum + (c.room_count ?? (c as any).total_rooms ?? 0), 0);
+
+  // If property has no room categories or registered physical rooms, show clean empty state
+  if (categories.length === 0 || totalPhysicalRooms === 0) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center max-w-xl mx-auto my-8 shadow-xs space-y-4">
+        <div className="w-14 h-14 bg-amber-50 rounded-2xl flex items-center justify-center mx-auto text-amber-600">
+          <BedDouble className="w-7 h-7" />
+        </div>
+        <div className="space-y-1.5">
+          <h3 className="text-base font-extrabold text-slate-900">No Physical Rooms Configured</h3>
+          <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+            {categories.length === 0
+              ? 'This property has no room categories defined yet. To manage channel inventory and push availability to OTAs, first set up your room categories and physical rooms in Property Master.'
+              : 'Room categories exist but 0 physical rooms are currently registered. Channel Manager only distributes real, registered inventory. Please add your physical rooms in Property Master.'}
+          </p>
+        </div>
+        {onNavigate && (
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => onNavigate('property_master')}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-brand-600 to-brand-700 hover:from-brand-700 hover:to-brand-800 text-white text-xs font-bold rounded-xl transition shadow-xs cursor-pointer"
+            >
+              Configure Rooms in Property Master
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   const displayedCategories = selectedCategoryId === 'all'
     ? categories
     : categories.filter((c) => c.id === selectedCategoryId);
 
   return (
     <div className="space-y-6">
+      {/* Validation Warning Banner for Unassigned Rooms */}
+      {unassignedRooms && unassignedRooms.length > 0 && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-xs text-amber-900 shadow-2xs">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 space-y-1">
+            <div className="font-extrabold flex items-center gap-2 text-amber-950">
+              Validation Warning: {unassignedRooms.length} Registered Room{unassignedRooms.length > 1 ? 's' : ''} Missing Category Assignment
+            </div>
+            <p className="text-amber-800 leading-relaxed">
+              The following active physical room{unassignedRooms.length > 1 ? 's are' : ' is'} not assigned to any valid room category:{' '}
+              <span className="font-mono font-bold text-amber-950">
+                {unassignedRooms.map((r) => r.room_no).join(', ')}
+              </span>
+              . These rooms are excluded from category availability and cannot be pushed to OTA channels until categorized in Property Master.
+            </p>
+          </div>
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('property_master')}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-[11px] shrink-0 transition cursor-pointer"
+            >
+              Fix in Property Master
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Inventory Push Card */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -204,7 +284,7 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
               Push Room Inventory to OTAs
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Review room availability matrix, apply quick overrides or stop-sells, and push live counts to connected OTAs.
+              Review authoritative room availability matrix, apply quick overrides or stop-sells, and push live counts to connected OTAs. Total physical capacity: {totalPhysicalRooms} rooms.
             </p>
           </div>
           {onBulkUpdate && (
@@ -230,12 +310,17 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
               onChange={(e) => setSelectedCategoryId(e.target.value)}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white"
             >
-              <option value="all">All Room Categories ({categories.length} total)</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} ({(c as any).total_rooms || 0} total rooms)
-                </option>
-              ))}
+              <option value="all">
+                All Room Categories ({categories.length} total, {totalPhysicalRooms} physical rooms)
+              </option>
+              {categories.map((c) => {
+                const count = c.room_count ?? (c as any).total_rooms ?? 0;
+                return (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({count} registered {count === 1 ? 'room' : 'rooms'})
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -304,7 +389,7 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
               Room Availability Matrix ({dateList.length} dates)
             </h4>
             <span className="text-[11px] text-slate-400 font-semibold">
-              Net Available = Total Rooms - Booked - Blocked + Overrides
+              Net Available = Total Physical Rooms - Booked - Blocked + Overrides
             </span>
           </div>
 
@@ -329,25 +414,28 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {displayedCategories.map((cat) => {
-                  const total = (cat as any).total_rooms || 10;
+                  const physical = cat.room_count ?? (cat as any).total_rooms ?? 0;
 
                   return (
                     <tr key={cat.id} className="hover:bg-slate-50/50 transition">
                       <td className="p-3 font-extrabold text-slate-800 sticky left-0 bg-white z-10 border-r border-slate-200">
                         <div>{cat.name}</div>
-                        <span className="text-[10px] font-semibold text-slate-400">Total: {total}</span>
+                        <span className="text-[10px] font-semibold text-slate-400">Total Capacity: {physical}</span>
                       </td>
 
                       {dateList.map((d) => {
                         const adjKey = `${cat.id}_${d}`;
                         const adj = adjustments[adjKey] || { delta: 0, stopSell: false };
-                        const netAvail = Math.max(0, total + adj.delta);
+                        const m = matrixData.find((item: any) => item.room_category_id === cat.id && item.date === d);
+                        const baseAvailable = m ? Number(m.available) : Math.max(0, physical);
+                        const isStopSell = adj.stopSell || Boolean(m?.stop_sell);
+                        const netAvail = isStopSell ? 0 : Math.max(0, Math.min(physical, baseAvailable + adj.delta));
 
                         return (
                           <td
                             key={d}
                             className={`p-2 text-center border-r border-slate-100 last:border-r-0 transition ${
-                              adj.stopSell
+                              isStopSell
                                 ? 'bg-red-50/50 text-red-700'
                                 : netAvail === 0
                                 ? 'bg-amber-50/40 text-amber-800'
@@ -355,23 +443,25 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
                             }`}
                           >
                             <div className="font-extrabold text-sm mb-1">
-                              {adj.stopSell ? 'CLOSED' : netAvail}
+                              {isStopSell ? 'CLOSED' : netAvail}
                             </div>
 
                             {/* Micro Controls */}
                             <div className="flex items-center justify-center gap-1">
                               <button
                                 type="button"
-                                onClick={() => handleAdjustDelta(cat.id, d, -1)}
-                                className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold cursor-pointer"
+                                onClick={() => handleAdjustDelta(cat.id, d, -1, baseAvailable, physical)}
+                                disabled={netAvail <= 0 || physical === 0}
+                                className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                 title="Decrease availability"
                               >
                                 <Minus className="w-2.5 h-2.5" />
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleAdjustDelta(cat.id, d, 1)}
-                                className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold cursor-pointer"
+                                onClick={() => handleAdjustDelta(cat.id, d, 1, baseAvailable, physical)}
+                                disabled={netAvail >= physical || physical === 0}
+                                className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                 title="Increase availability"
                               >
                                 <Plus className="w-2.5 h-2.5" />
@@ -380,13 +470,18 @@ export const OwnerInventoryPushTab: React.FC<OwnerInventoryPushTabProps> = ({
                                 type="button"
                                 onClick={() => handleToggleStopSell(cat.id, d)}
                                 className={`px-1 py-0.5 rounded text-[9px] font-extrabold uppercase transition cursor-pointer ${
-                                  adj.stopSell ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-700'
+                                  isStopSell ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-500 hover:bg-red-100 hover:text-red-700'
                                 }`}
                                 title="Toggle Stop-Sell"
                               >
-                                {adj.stopSell ? 'Stop' : 'Open'}
+                                {isStopSell ? 'Stop' : 'Open'}
                               </button>
                             </div>
+                            {m && (m.occupied > 0 || m.blocked > 0) && (
+                              <div className="text-[9px] text-slate-400 mt-1 font-mono">
+                                {m.occupied > 0 ? `${m.occupied} bkd` : ''} {m.blocked > 0 ? `${m.blocked} blk` : ''}
+                              </div>
+                            )}
                           </td>
                         );
                       })}

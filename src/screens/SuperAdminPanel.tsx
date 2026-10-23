@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth';
+import { sendWelcomeEmail } from '@/enterprise/api';
 
 interface HotelRow {
   id: string;
@@ -69,6 +70,7 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
   const [resetHotel, setResetHotel] = useState<HotelRow | null>(null);
   const [resetPassword, setResetPassword] = useState('');
   const [resetting, setResetting] = useState(false);
+  const [emailSendingId, setEmailSendingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -111,6 +113,33 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
       throw new Error(error.message || 'Function invocation failed');
     }
     return data;
+  };
+
+  const handleSendWelcomeEmail = async (h: HotelRow) => {
+    try {
+      setEmailSendingId(h.id);
+      setError(null);
+      setSuccess(null);
+      const res = await sendWelcomeEmail({
+        hotelId: h.id,
+        hotelName: h.hotel_name,
+        ownerName: h.owner_name || 'Hotel Owner',
+        ownerEmail: h.admin_email,
+        totalRooms: h.total_rooms,
+        planName: h.subscription_status ? `${h.subscription_status} Plan` : undefined,
+        forceResend: true,
+      });
+
+      if (res.success) {
+        setSuccess(`Welcome email delivered successfully to ${h.admin_email}.`);
+      } else {
+        setError(`Welcome email delivery incomplete: ${res.message || 'Please check SMTP settings.'}`);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to send welcome email');
+    } finally {
+      setEmailSendingId(null);
+    }
   };
 
   const handleSave = async () => {
@@ -172,6 +201,7 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
         );
 
         // Now create the auth user + link to hotel via edge function
+        let adminCreated = false;
         try {
           await callEdgeFunction({
             action: 'create_hotel_admin',
@@ -180,11 +210,7 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
             hotel_id: hotelId,
             role: 'hotel_admin',
           });
-          setSuccess(
-            `Hotel "${newHotel.hotel_name}" created successfully. ` +
-            `Hotel Admin account created for ${form.admin_email.trim()}. ` +
-            `They can now sign in with the password you set.`
-          );
+          adminCreated = true;
         } catch (efErr) {
           // Hotel was created but admin account failed
           setSuccess(
@@ -192,6 +218,38 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
             `However, the admin account could not be created: ${efErr instanceof Error ? efErr.message : 'Unknown error'}. ` +
             `Use "Invite Admin" to create the account.`
           );
+        }
+
+        // Trigger owner welcome email notification if admin account was created
+        if (adminCreated) {
+          try {
+            const emailRes = await sendWelcomeEmail({
+              hotelId: newHotel.id,
+              hotelName: newHotel.hotel_name,
+              ownerName: newHotel.owner_name || 'Hotel Owner',
+              ownerEmail: newHotel.admin_email,
+              totalRooms: newHotel.total_rooms,
+              planName: newHotel.subscription_status ? `${newHotel.subscription_status} Plan` : undefined,
+            });
+
+            if (emailRes.success) {
+              setSuccess(
+                `Hotel "${newHotel.hotel_name}" created successfully. ` +
+                `Hotel Admin account created for ${newHotel.admin_email} and welcome email delivered.`
+              );
+            } else {
+              setSuccess(
+                `Hotel "${newHotel.hotel_name}" created successfully. ` +
+                `Hotel Admin account created for ${newHotel.admin_email}. ` +
+                `Welcome email delivery incomplete (${emailRes.message || 'SMTP issue'}). You can resend it from the hotel list.`
+              );
+            }
+          } catch {
+            setSuccess(
+              `Hotel "${newHotel.hotel_name}" created successfully. ` +
+              `Hotel Admin account created for ${newHotel.admin_email}.`
+            );
+          }
         }
       }
 
@@ -485,6 +543,13 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
                     <button onClick={() => handleInviteAdmin(h)}
                       className="flex items-center gap-1 text-xs text-emerald-700 hover:text-emerald-900 transition px-2 py-1">
                       <Mail className="w-3 h-3" /> Invite / Reset
+                    </button>
+                    <button onClick={() => handleSendWelcomeEmail(h)}
+                      disabled={emailSendingId === h.id}
+                      title="Send or resend owner welcome notification email"
+                      className="flex items-center gap-1 text-xs text-indigo-700 hover:text-indigo-900 transition px-2 py-1 disabled:opacity-50">
+                      <RefreshCw className={`w-3 h-3 ${emailSendingId === h.id ? 'animate-spin' : ''}`} />
+                      {emailSendingId === h.id ? 'Sending…' : 'Send Email'}
                     </button>
                     <button onClick={() => handleRemoveHotelClick(h)}
                       className="flex items-center gap-1 text-xs text-rose-700 hover:text-rose-900 transition px-2 py-1">

@@ -829,9 +829,10 @@ export const getAuthoritativeAvailabilityMatrix = async (
                 }
               }
               const remainingManual = Math.max(0, manualVal - newBookingsAfterUpdate);
-              sellable = Math.min(remainingManual, calculatedAvailable);
+              sellable = physical > 0 ? Math.max(0, Math.min(remainingManual, calculatedAvailable)) : 0;
             }
           }
+          sellable = Math.max(0, Math.min(sellable, physical));
 
           matrix.push({
             date: d,
@@ -1244,11 +1245,14 @@ export interface ChannelManagerOverview {
     message?: string;
     errorCode?: string;
   };
+  totalRegisteredRooms: number;
+  unassignedRooms: Array<{ id: string; room_no: string; category_id: string | null; reason: string }>;
+  unassignedCount: number;
 }
 
 export const getChannelManagerOverview = async (hotelIdOverride?: string): Promise<ChannelManagerOverview> => {
   const targetHotelId = hotelIdOverride || getCurrentHotelId();
-  const [connections, otaReservations, categories, ratePlans, mappings, syncLogs, settings] = await Promise.all([
+  const [connections, otaReservations, categoriesRaw, ratePlans, mappings, syncLogs, settings, physicalRoomsResult] = await Promise.all([
     getChannelConnections(targetHotelId),
     getOtaReservations(20, targetHotelId),
     (async () => {
@@ -1274,7 +1278,49 @@ export const getChannelManagerOverview = async (hotelIdOverride?: string): Promi
     getChannelRateMappings(targetHotelId),
     getSyncLogs(50, undefined, targetHotelId),
     getChannelSettings(targetHotelId),
+    (async () => {
+      const { data, error } = await supabase
+        .from('rooms')
+        .select('id, category_id, room_no, is_active')
+        .eq('hotel_id', targetHotelId);
+      if (error) {
+        console.warn('[getChannelManagerOverview] Error fetching physical rooms:', error.message);
+        return [];
+      }
+      return data ?? [];
+    })(),
   ]);
+
+  // Aggregate authoritative physical room counts strictly from the rooms table
+  const activeRooms = (physicalRoomsResult || []).filter((r: any) => r.is_active !== false);
+  const totalRegisteredRooms = activeRooms.length;
+  const validCatIds = new Set(categoriesRaw.map((c) => c.id));
+
+  const roomCountByCat: Record<string, number> = {};
+  const unassignedRooms: Array<{ id: string; room_no: string; category_id: string | null; reason: string }> = [];
+
+  for (const r of activeRooms) {
+    if (r.category_id && validCatIds.has(r.category_id)) {
+      roomCountByCat[r.category_id] = (roomCountByCat[r.category_id] || 0) + 1;
+    } else {
+      unassignedRooms.push({
+        id: r.id,
+        room_no: r.room_no || 'Unknown',
+        category_id: r.category_id ?? null,
+        reason: !r.category_id ? 'Missing category assignment' : 'Assigned category is inactive or missing',
+      });
+    }
+  }
+
+  // Enrich category objects with authoritative physical room counts
+  const categories: RoomCategory[] = categoriesRaw.map((cat) => {
+    const count = roomCountByCat[cat.id] || 0;
+    return {
+      ...cat,
+      room_count: count,
+      total_rooms: count,
+    };
+  });
 
   const dbConnected = settings?.aiosell_status === 'connected' && Boolean(settings?.aiosell_hotel_code);
   let isLiveMode = dbConnected;
@@ -1324,6 +1370,9 @@ export const getChannelManagerOverview = async (hotelIdOverride?: string): Promi
     syncLogs,
     isLiveMode,
     channelStatus,
+    totalRegisteredRooms,
+    unassignedRooms,
+    unassignedCount: unassignedRooms.length,
   };
 };
 
