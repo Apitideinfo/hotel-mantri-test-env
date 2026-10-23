@@ -1072,7 +1072,7 @@ export const AppShell = ({
       >
         {/* Top Header */}
         <header
-          className="sticky top-0 z-20 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
+          className="sticky top-0 z-40 bg-white/85 backdrop-blur-xl border-b border-slate-200/80 px-4 lg:px-6 flex items-center justify-between gap-3 shadow-xs"
           style={{ height: layout.headerHeight }}
         >
           {isHousekeeping ? (

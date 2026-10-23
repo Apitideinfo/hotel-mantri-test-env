@@ -331,6 +331,31 @@ input[type="number"] { -moz-appearance: textfield; }
   animation: pulse-shake 2.8s ease-in-out infinite;
 }
 
+/* ===== Shimmering Gradient Animation ===== */
+@keyframes text-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
 
+.animate-shimmer {
+  background-size: 200% 200%;
+  animation: text-shimmer 4s ease infinite;
+}
 
+/* ===== Hero Ticker Fast Marquee ===== */
+.animate-marquee-fast {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 26s linear infinite;
+}
 
+.animate-marquee-fast:hover {
+  animation-play-state: paused;
+}
