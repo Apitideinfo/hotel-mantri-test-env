@@ -818,13 +818,22 @@ export const getPrevCashClosingDerived = async (
     getExpenseEntriesForDateRange(monthStart, prevStr),
     getRevenueEntriesForDateRange(monthStart, prevStr),
     Promise.resolve(
-      supabase.from('booking_timeline').select('*')
+      supabase.from('booking_timeline')
+        .select('id,hotel_id,reservation_id,entry_id,event_type,event_amount,event_data,status,event_description,performed_by,created_at')
         .eq('hotel_id', hotelId)
+        .gte('created_at', lookbackForMonth)
+        .lte('created_at', `${prevStr}T23:59:59Z`)
+        .order('created_at', { ascending: false })
+        .limit(500)
     ).then(({ data }) => data ?? []).catch(() => []),
     Promise.resolve(
-      supabase.from('reservations').select('*')
+      supabase.from('reservations')
+        .select('*')
         .eq('hotel_id', hotelId)
+        .gte('check_out_date', lookbackForMonth)
+        .lte('check_in_date', prevStr)
     ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
+
   ]);
 
   const allCombined = mergeReservationsWithRoomChart(allEntries, reservations);
@@ -905,13 +914,22 @@ export const getDerivedReport = async (
         .maybeSingle()
     ).then(({ data }) => data).catch(() => null),
     Promise.resolve(
-      supabase.from('booking_timeline').select('*')
+      supabase.from('booking_timeline')
+        .select('id,hotel_id,reservation_id,entry_id,event_type,event_amount,event_data,status,event_description,performed_by,created_at')
         .eq('hotel_id', hotelId)
+        .gte('created_at', addDays(date, -30))
+        .lte('created_at', `${date}T23:59:59Z`)
+        .order('created_at', { ascending: false })
+        .limit(200)
     ).then(({ data }) => data ?? []).catch(() => []),
     Promise.resolve(
-      supabase.from('reservations').select('*')
+      supabase.from('reservations')
+        .select('*')
         .eq('hotel_id', hotelId)
+        .gte('check_out_date', addDays(date, -30))
+        .lte('check_in_date', date)
     ).then(({ data }) => (data as Reservation[]) ?? []).catch(() => []),
+
   ]);
   const financeAgg = (financeEntries as ExpenseEntry[]).map((e: ExpenseEntry) => ({ category: e.category_name, amount: e.amount, payment_mode: e.payment_mode }));
   const revenueAgg = (revenueEntries as RevenueEntry[]).map((e: RevenueEntry) => ({ category: e.revenue_head, amount: e.amount }));
@@ -1488,11 +1506,11 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
       getRoomCategories().catch(() => []),
       Promise.resolve(
         supabase.from('reservations')
-          .select('id,room_no,check_in_date,check_out_date,status,invoice_total,rate,nights,advance_paid,pay_cash,pay_bank,pay_upi,pay_card')
+          .select('id,room_no,check_in_date,check_out_date,status,invoice_total,rate,nights,advance_paid,pay_cash,pay_bank,pay_upi,pay_card,payment_mode,created_at')
           .eq('hotel_id', getCurrentHotelId())
           .in('status', ['confirmed', 'checked_in'])
           .or(`and(check_in_date.lte.${todayStr},check_out_date.gte.${todayStr})`)
-      ).then(({ data }) => (data as { id: string; room_no: string; check_in_date: string; check_out_date: string; status: string; invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number }[]) ?? []).catch(() => []),
+      ).then(({ data }) => (data as { id: string; room_no: string; check_in_date: string; check_out_date: string; status: string; invoice_total?: number; rate?: number; nights?: number; advance_paid?: number; pay_cash?: number; pay_bank?: number; pay_upi?: number; pay_card?: number; payment_mode?: string; created_at?: string }[]) ?? []).catch(() => []),
       Promise.resolve(
         supabase.from('room_blocks')
           .select('room_no,block_type,start_date,end_date')
@@ -1507,8 +1525,10 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
       ).then(({ data }) => (data as { room_category_id: string; availability: number; stop_sell: boolean }[]) ?? []).catch(() => []),
       Promise.resolve(
         supabase.from('booking_timeline')
-          .select('*')
+          .select('id,hotel_id,reservation_id,entry_id,event_type,event_amount,event_data,status,event_description,performed_by,created_at')
           .eq('hotel_id', getCurrentHotelId())
+          .order('created_at', { ascending: false })
+          .limit(200)
       ).then(({ data }) => data ?? []).catch(() => []),
     ]);
 
@@ -1743,7 +1763,27 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
   }
 };
 
-export const getDashboardSummary = getOperationsBoardData;
+export const getDashboardSummary = async (targetDate?: string, forceRefresh = false): Promise<DashboardSummary> => {
+  let hotelId = '';
+  try {
+    hotelId = getCurrentHotelId();
+  } catch {
+    // Hotel context may still be resolving
+  }
+  const date = targetDate || getTodayLocal();
+  const cacheKey = ['hotel', hotelId, 'dashboardSummary', date] as const;
+
+  if (forceRefresh) {
+    queryClient.removeQueries({ queryKey: cacheKey });
+  }
+
+  return queryClient.fetchQuery({
+    queryKey: cacheKey,
+    queryFn: () => getOperationsBoardData(date),
+    staleTime: 30_000,
+  });
+};
+
 
 
 

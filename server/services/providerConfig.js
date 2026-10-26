@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import { supabaseServiceRole } from '../supabaseClient.js';
+import * as redisService from './redisService.js';
 
 dotenv.config();
 
@@ -50,15 +51,24 @@ export const getChannelProviderConfig = async (hotelId, requestId = null, client
 
   const db = client || supabaseServiceRole;
 
-  // 1. Fetch channel_settings for this hotel
-  const { data: settings, error: settingsError } = await db
-    .from('channel_settings')
-    .select('*')
-    .eq('hotel_id', hotelId)
-    .maybeSingle();
+  // 1. Fetch channel_settings with tenant-scoped Redis cache
+  const cacheKey = redisService.buildTenantCacheKey(hotelId, 'channel_settings');
+  let settings = await redisService.get(cacheKey);
 
-  if (settingsError) {
-    console.error(`[getChannelProviderConfig] DB error loading channel_settings for hotel ${hotelId}:`, settingsError);
+  if (!settings) {
+    const { data: dbSettings, error: settingsError } = await db
+      .from('channel_settings')
+      .select('*')
+      .eq('hotel_id', hotelId)
+      .maybeSingle();
+
+    if (settingsError) {
+      console.error(`[getChannelProviderConfig] DB error loading channel_settings for hotel ${hotelId}:`, settingsError);
+    }
+    settings = dbSettings || null;
+    if (settings) {
+      redisService.set(cacheKey, settings, { ttlSeconds: 900 }).catch(() => {});
+    }
   }
 
   // hotelCode MUST come strictly from channel_settings.aiosell_hotel_code

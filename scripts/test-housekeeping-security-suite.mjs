@@ -9,7 +9,7 @@ dotenv.config();
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL;
 const ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY;
-const TEST_HOTEL_ID = 'bd8f18de-2f97-48e7-b029-d2e536feb7cb'; // HOTEL GOPAL
+const TEST_HOTEL_ID = 'aa5bfd36-de50-4217-8997-d2cd18e4dfe8'; // Hotel Swagat (Active registered hotel)
 
 let passed = 0;
 let failed = 0;
@@ -106,6 +106,8 @@ async function runTest() {
     } catch {}
     return { status: res.status, body };
   };
+
+  let createdMaintenanceIssueId = null;
 
   try {
     // 1. Housekeeping CANNOT access Reservations
@@ -208,6 +210,7 @@ async function runTest() {
         priority: 'medium',
       }),
     });
+    createdMaintenanceIssueId = resMaint.body?.issue?.id;
     assert(resMaint.status === 201, 'Housekeeper can report maintenance issue');
     assert(resMaint.body?.issue?.id !== undefined, 'Maintenance issue created with ID');
 
@@ -220,10 +223,17 @@ async function runTest() {
 
   } finally {
     // Clean up
-    console.log('\nCleaning up test user and closing server...');
-    await supabaseServiceRole.from('hotel_admins').delete().eq('user_id', hkUserId);
-    await supabaseServiceRole.from('housekeeping_staff').delete().eq('name', 'Audit Housekeeper');
-    await supabaseServiceRole.auth.admin.deleteUser(hkUserId).catch(() => {});
+    console.log('\nCleaning up test user, test maintenance records, and closing server...');
+    try {
+      if (createdMaintenanceIssueId) {
+        await supabaseServiceRole.from('maintenance_issues').delete().eq('id', createdMaintenanceIssueId);
+      }
+      await supabaseServiceRole.from('hotel_admins').delete().eq('user_id', hkUserId);
+      await supabaseServiceRole.from('housekeeping_staff').delete().eq('name', 'Audit Housekeeper');
+      await supabaseServiceRole.auth.admin.deleteUser(hkUserId);
+    } catch (cleanupErr) {
+      console.warn('  ⚠️ Note: housekeeping cleanup warning:', cleanupErr?.message);
+    }
     server.close();
   }
 

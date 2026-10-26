@@ -282,7 +282,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   }, [startDate, endDate]);
 
+  const lastRefreshTimeRef = useRef<number>(0);
   const refreshAll = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < 400) {
+      return; // Skip duplicate refresh storm within 400ms
+    }
+    lastRefreshTimeRef.current = now;
     checkConflicts();
     if (view === 'list') {
       loadListData();

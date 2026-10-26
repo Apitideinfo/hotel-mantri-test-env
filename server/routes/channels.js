@@ -8,12 +8,24 @@ import { processAiosellReservation } from '../services/integrations/aiosell/Aios
 import { parseWebhookPayload } from '../services/integrations/aiosell/AiosellPayloadParser.js';
 import { handlePmsEvent, syncRates, syncInventory, reconcileInventory, logSyncSafely } from '../services/channelSyncEngine.js';
 import { processPendingRoomAllocations } from '../services/RoomAssignmentService.js';
+import { requireCronAuth } from '../middleware/cronAuth.js';
+import { cronRateLimiter } from '../middleware/rateLimiter.js';
+import * as redisService from '../services/redisService.js';
+import { processPendingSyncJobs, getQueueStatus } from '../services/channelSyncQueueService.js';
 
 const router = express.Router();
 
-// Strict RBAC: Channel Manager forbidden for Housekeeping
-router.use(checkAuth);
-router.use(forbidRoles(['housekeeping']));
+// Strict RBAC: Channel Manager forbidden for Housekeeping.
+// Cron worker (/sync/cron-worker) uses dedicated requireCronAuth.
+router.use((req, res, next) => {
+  if (req.path.includes('/sync/cron-worker')) {
+    return next();
+  }
+  return checkAuth(req, res, (err) => {
+    if (err) return next(err);
+    forbidRoles(['housekeeping'])(req, res, next);
+  });
+});
 
 /**
  * Audit log helper for Channel Manager configuration changes.
@@ -3692,6 +3704,97 @@ router.post('/', checkAuth, requireRoles(['super_admin']), async (req, res) => {
       message: err.message || 'Failed to add channel',
       requestId: req.requestId
     });
+  }
+});
+
+/**
+ * ALL /api/channels/sync/cron-worker
+ * Scheduled / on-demand processor for pending channel sync jobs.
+ * Protected by requireCronAuth and cronRateLimiter.
+ */
+router.all('/sync/cron-worker', cronRateLimiter, requireCronAuth, async (req, res) => {
+  try {
+    const { data: hotelsWithPending, error } = await supabaseServiceRole
+      .from('channel_sync_jobs')
+      .select('hotel_id')
+      .in('status', ['pending', 'retrying'])
+      .lte('next_attempt_at', new Date().toISOString())
+      .limit(20);
+
+    if (error) {
+      // Table may not exist yet if migration pending
+      if (error.code === '42P01' || error.code === 'PGRST205' || error.message?.includes('schema cache')) {
+        return res.json({ success: true, hotelsProcessed: 0, message: 'channel_sync_jobs table not yet applied in database.' });
+      }
+      throw error;
+    }
+
+    const uniqueHotels = [...new Set((hotelsWithPending || []).map(h => h.hotel_id))];
+    const results = [];
+
+    for (const hId of uniqueHotels) {
+      const summary = await processPendingSyncJobs(hId, { maxJobsToProcess: 5 });
+      results.push(summary);
+    }
+
+    res.json({
+      success: true,
+      hotelsProcessed: uniqueHotels.length,
+      results,
+      requestId: req.requestId
+    });
+  } catch (err) {
+    console.error('[cron-worker] Error:', err);
+    res.status(500).json({
+      success: false,
+      code: 'CRON_WORKER_ERROR',
+      message: err.message,
+      requestId: req.requestId
+    });
+  }
+});
+
+/**
+ * GET /api/channels/sync/queue-status
+ * Observability endpoint for queue depth, pending jobs, and retry counts.
+ */
+router.get('/sync/queue-status', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+    const queueStatus = await getQueueStatus(hotelId);
+    const redisHealth = await redisService.checkRedisHealth();
+    const redisMetrics = redisService.getRedisMetrics();
+
+    res.json({
+      success: true,
+      hotelId,
+      queue: queueStatus,
+      redis: {
+        health: redisHealth,
+        metrics: redisMetrics
+      },
+      requestId: req.requestId
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, code: 'QUEUE_STATUS_ERROR', message: err.message, requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /api/channels/sync/trigger-worker
+ * On-demand queue flush for authorized hotel admins.
+ */
+router.post('/sync/trigger-worker', checkAuth, async (req, res) => {
+  try {
+    const hotelId = req.hotelId || req.auth?.hotelId;
+    if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
+
+    const result = await processPendingSyncJobs(hotelId, { maxJobsToProcess: 10 });
+    res.json({ success: true, result, requestId: req.requestId });
+  } catch (err) {
+    res.status(500).json({ success: false, code: 'TRIGGER_WORKER_ERROR', message: err.message, requestId: req.requestId });
   }
 });
 

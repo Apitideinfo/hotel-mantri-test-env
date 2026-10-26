@@ -11,18 +11,22 @@
  */
 
 import { supabaseServiceRole } from '../supabaseClient.js';
+import * as redisService from './redisService.js';
 
 // In-memory mutex map for room-level operations: key = `${hotelId}::${roomNo.toLowerCase()}`
 const roomLocks = new Map();
 
 /**
  * Executes an async task while holding an exclusive lock on a specific physical room.
- * Queues concurrent callers and guarantees strict sequential execution for that room.
+ * Queues concurrent callers and guarantees strict sequential execution for that room,
+ * coordinated across serverless lambdas via Redis and locally via in-process mutex.
  */
 export const withRoomLock = async (hotelId, roomNo, task) => {
   if (!hotelId || !roomNo) return task();
 
-  const key = `${hotelId}::${String(roomNo).trim().toLowerCase()}`;
+  const norm = String(roomNo).trim().toLowerCase();
+  const lockKey = `hm:lock:room:${hotelId}:${norm}`;
+  const key = `${hotelId}::${norm}`;
   const prevLock = roomLocks.get(key) || Promise.resolve();
 
   let release;
@@ -37,7 +41,16 @@ export const withRoomLock = async (hotelId, roomNo, task) => {
 
   try {
     await prevLock.catch(() => {});
-    return await task();
+
+    // Distributed Redis coordination across concurrent serverless instances
+    const redisLock = await redisService.acquireLock(lockKey, { ttlMs: 20000 });
+    try {
+      return await task();
+    } finally {
+      if (redisLock.acquired && !redisLock.fallback) {
+        await redisService.releaseLock(lockKey, redisLock.ownerId);
+      }
+    }
   } finally {
     release();
     if (roomLocks.get(key) === currentLock) {
@@ -496,17 +509,27 @@ export const getCategoryPhysicalRoomAvailability = async ({
 
   const supabase = supabaseServiceRole;
 
-  // 1. Prepare parallel queries for physical rooms, active reservations, chart stays, and blocks
-  let roomQ = supabase
-    .from('rooms')
-    .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
-    .eq('hotel_id', hotelId)
-    .eq('is_active', true)
-    .order('room_no', { ascending: true });
-
-  if (categoryId) {
-    roomQ = roomQ.eq('category_id', categoryId);
-  }
+  // 1. Prepare parallel queries for physical rooms (cached metadata), active reservations, chart stays, and blocks
+  const roomsPromise = redisService.wrapTenant(
+    hotelId,
+    'meta:rooms',
+    categoryId || 'all',
+    async () => {
+      let q = supabase
+        .from('rooms')
+        .select('id, room_no, category_id, floor, room_status, housekeeping_status, is_active')
+        .eq('hotel_id', hotelId)
+        .eq('is_active', true)
+        .order('room_no', { ascending: true });
+      if (categoryId) {
+        q = q.eq('category_id', categoryId);
+      }
+      const { data, error } = await q;
+      if (error) throw error;
+      return data || [];
+    },
+    { ttlSeconds: 300 }
+  );
 
   let resQ = supabase
     .from('reservations')
@@ -529,11 +552,13 @@ export const getCategoryPhysicalRoomAvailability = async ({
   const blocksQ = supabase
     .from('room_blocks')
     .select('id, room_no, block_type, start_date, end_date, reason')
-    .eq('hotel_id', hotelId);
+    .eq('hotel_id', hotelId)
+    .lt('start_date', cleanCheckOut)
+    .gt('end_date', cleanCheckIn);
 
   // Execute all 4 queries concurrently in a single network round trip
-  const [roomsResult, resResult, chartResult, blocksResult] = await Promise.all([
-    roomQ,
+  const [physicalRooms, resResult, chartResult, blocksResult] = await Promise.all([
+    roomsPromise,
     resQ,
     chartQ,
     Promise.resolve(blocksQ).catch((err) => {
@@ -542,8 +567,7 @@ export const getCategoryPhysicalRoomAvailability = async ({
     }),
   ]);
 
-  const physicalRooms = roomsResult.data;
-  if (roomsResult.error || !physicalRooms || physicalRooms.length === 0) {
+  if (!physicalRooms || physicalRooms.length === 0) {
     return {
       available: false,
       totalRooms: 0,

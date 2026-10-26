@@ -154,9 +154,10 @@ import {
   fetchOrderAssociation,
   getRazorpayClient,
 } from './services/paymentSecurityService.js';
-import { resolveAuthorizedHotel } from './middleware/auth.js';
+import { resolveAuthorizedHotel, requireHotelAccess } from './middleware/auth.js';
 import { validateCronConfiguration } from './middleware/cronAuth.js';
 import { supabaseServiceRole } from './supabaseClient.js';
+import * as redisService from './services/redisService.js';
 
 // Root / Health check endpoints (P4 Operations Telemetry)
 app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
@@ -178,7 +179,7 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
     commit: process.env.VERCEL_GIT_COMMIT_SHA || 'unknown',
     branch: process.env.VERCEL_GIT_COMMIT_REF || 'unknown',
     buildTime: new Date().toISOString(),
-    frontendUrl: 'http://localhost:5173',
+    frontendUrl: process.env.FRONTEND_URL || process.env.VITE_APP_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:5173'),
     endpoints: [
       '/api/reservations',
       '/api/channels',
@@ -190,8 +191,39 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
       '/api/housekeeping',
       '/api/create-order',
       '/api/verify-payment',
-      '/api/whatsapp/webhook'
+      '/api/whatsapp/webhook',
+      '/api/redis/status'
     ]
+  });
+});
+
+/**
+ * GET /api/redis/status
+ * Safe authenticated Redis health/status diagnostic.
+ * Reports connection mode, latency, and operational metrics without exposing credentials.
+ */
+app.get(['/api/redis/status', '/redis/status'], requireHotelAccess, async (req, res) => {
+  const health = await redisService.checkRedisHealth();
+  const metrics = redisService.getRedisMetrics();
+  res.json({
+    success: true,
+    configured: metrics.configured,
+    mode: health.mode,
+    status: health.status,
+    healthy: health.healthy,
+    latencyMs: health.latencyMs,
+    metrics: {
+      hits: metrics.hits,
+      misses: metrics.misses,
+      sets: metrics.sets,
+      dels: metrics.dels,
+      bypasses: metrics.bypasses,
+      errors: metrics.errors,
+      locksAcquired: metrics.locksAcquired,
+      locksReleased: metrics.locksReleased,
+      lastErrorAt: metrics.lastErrorAt,
+    },
+    requestId: req.requestId,
   });
 });
 

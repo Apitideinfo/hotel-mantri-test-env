@@ -9,19 +9,21 @@
  */
 
 import { supabaseServiceRole } from '../supabaseClient.js';
+import * as redisService from './redisService.js';
 
 // In-memory mutex map for OTA idempotency: key = `${hotelId}::${channel.toLowerCase()}::${externalId}`
 const otaLocks = new Map();
 
 /**
  * Runs a webhook/OTA task while holding an exclusive lock on that specific external booking.
- * Guarantees that concurrent webhooks for the same booking ID are executed strictly one at a time.
+ * Guarantees that concurrent webhooks for the same booking ID are executed strictly one at a time,
+ * coordinated across serverless lambdas via Redis and locally via in-process mutex.
  */
 export const withOtaLock = async (hotelId, channel, externalBookingId, task) => {
   if (!hotelId || !externalBookingId) return task();
 
   const extId = String(externalBookingId).trim();
-  // Lock strictly per (hotelId, externalBookingId) so any channel alias shares the lock
+  const lockKey = `hm:lock:ota:${hotelId}:${extId}`;
   const key = `${hotelId}::${extId}`;
 
   const prevLock = otaLocks.get(key) || Promise.resolve();
@@ -38,7 +40,16 @@ export const withOtaLock = async (hotelId, channel, externalBookingId, task) => 
 
   try {
     await prevLock.catch(() => {});
-    return await task();
+
+    // Distributed Redis coordination across concurrent serverless instances
+    const redisLock = await redisService.acquireLock(lockKey, { ttlMs: 30000 });
+    try {
+      return await task();
+    } finally {
+      if (redisLock.acquired && !redisLock.fallback) {
+        await redisService.releaseLock(lockKey, redisLock.ownerId);
+      }
+    }
   } finally {
     release();
     if (otaLocks.get(key) === currentLock) {

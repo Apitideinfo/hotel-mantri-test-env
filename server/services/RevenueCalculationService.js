@@ -15,6 +15,7 @@
  */
 
 import { supabaseServiceRole } from '../supabaseClient.js';
+import * as redisService from './redisService.js';
 
 /**
  * Calculates calendar days between two YYYY-MM-DD dates without timezone skew.
@@ -139,6 +140,14 @@ export const calculateDayWiseRevenue = async ({
     fromDate = today;
     toDate = today;
     mode = 'date';
+  }
+
+  // Check tenant-scoped Redis cache
+  const subKey = `day_wise:${mode}:${fromDate}:${toDate}`;
+  const cacheKey = redisService.buildTenantCacheKey(hotelId, 'revenue', subKey);
+  const cached = await redisService.get(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
 
   if (fromDate > toDate) {
@@ -662,10 +671,27 @@ export const calculateDayWiseRevenue = async ({
     reservationsBreakdown,
     bookingSources,
   };
+
+  // Cache result: closed historical dates cached for 1h (3600s), active/open dates for 120s
+  const today = new Date().toISOString().slice(0, 10);
+  const isPastClosed = toDate < today && dailyBreakdown.every(d => d.isClosed);
+  const ttlSeconds = isPastClosed ? 3600 : 120;
+  redisService.set(cacheKey, result, { ttlSeconds }).catch(() => {});
+
+  return result;
+};
+
+/**
+ * Invalidate all cached revenue aggregates for a specific hotel.
+ */
+export const invalidateRevenueCache = async (hotelId) => {
+  if (!hotelId) return 0;
+  return redisService.delPattern(`hm:cache:${hotelId}:revenue:*`);
 };
 
 export default {
   calculateDayWiseRevenue,
+  invalidateRevenueCache,
   isStayOccupiedOnDate,
   getNightlyRoomRevenue,
   calcStayNights,
