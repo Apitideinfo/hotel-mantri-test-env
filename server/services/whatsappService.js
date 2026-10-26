@@ -16,6 +16,12 @@
 
 import dotenv from 'dotenv';
 import { WhintaProvider, getWhintaConfig, formatWhintaPhone } from './whintaService.js';
+import {
+  getMetaWhatsAppConfig,
+  dispatchMetaGraphApiMessage,
+  buildApprovedReservationConfirmationTemplate,
+  sendMetaDocumentMessage,
+} from './metaWhatsAppService.js';
 
 dotenv.config();
 
@@ -29,6 +35,7 @@ export const WHATSAPP_ERRORS = {
   PROVIDER_ERROR: 'WHATSAPP_PROVIDER_ERROR',
   MESSAGE_REJECTED: 'WHATSAPP_MESSAGE_REJECTED',
   TIMEOUT: 'WHATSAPP_TIMEOUT',
+  TEMPLATE_IN_REVIEW: 'WHATSAPP_TEMPLATE_IN_REVIEW',
 };
 
 // ─── Phone Normalization & Validation ─────────────────────────────────────────
@@ -101,6 +108,20 @@ export const buildWhatsAppDirectUrl = (phone, text) => {
  * Exclusively checks for Whinta provider configuration.
  */
 export const getWhatsAppProviderConfig = () => {
+  const metaCfg = getMetaWhatsAppConfig();
+  if (metaCfg.isConfigured) {
+    return {
+      configured: true,
+      enabled: true,
+      active: true,
+      provider: 'META',
+      graphApiVersion: metaCfg.graphApiVersion,
+      templateName: metaCfg.templateName,
+      templateLanguage: metaCfg.templateLanguage,
+      isTemplateApproved: metaCfg.isTemplateApproved,
+    };
+  }
+
   const whintaCfg = getWhintaConfig();
   if (whintaCfg.configured) {
     return {
@@ -116,7 +137,7 @@ export const getWhatsAppProviderConfig = () => {
   return {
     configured: false,
     provider: 'NONE',
-    message: 'Automated WhatsApp delivery is not configured. Set WHINTA_ACCESS_TOKEN and WHINTA_ENABLED=true in your environment.',
+    message: 'Automated WhatsApp delivery is not configured. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID in your environment.',
   };
 };
 
@@ -229,26 +250,49 @@ export const buildMetaBookingConfirmationTemplate = ({
     });
   }
 
-  // Official Approved HotelMantri 7 Body Parameters:
-  // {{1}} = Guest name
-  // {{2}} = Booking ID
-  // {{3}} = Room number
-  // {{4}} = Check-in date
-  // {{5}} = Check-out date
-  // {{6}} = Total amount
-  // {{7}} = Invoice URL
-  components.push({
-    type: 'body',
-    parameters: [
-      { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
-      { type: 'text', text: String(ref).slice(0, 40) },
-      { type: 'text', text: String(cleanRoom).slice(0, 30) },
-      { type: 'text', text: String(checkIn || checkInDate || '—').slice(0, 30) },
-      { type: 'text', text: String(checkOut || checkOutDate || '—').slice(0, 30) },
-      { type: 'text', text: formattedAmount.slice(0, 30) },
-      { type: 'text', text: String(resolvedInvoiceUrl).slice(0, 500) },
-    ],
-  });
+  if (name === 'reservation_confirmation') {
+    // Official Approved Meta Template variables (exact order):
+    // {{1}} = Guest name
+    // {{2}} = Hotel/property name
+    // {{3}} = Reservation ID
+    // {{4}} = Check-in date
+    // {{5}} = Check-out date
+    // {{6}} = Room category
+    // {{7}} = Number of guests
+    components.push({
+      type: 'body',
+      parameters: [
+        { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
+        { type: 'text', text: String(hotelName || 'Hotel Mantri').slice(0, 60) },
+        { type: 'text', text: String(ref).slice(0, 40) },
+        { type: 'text', text: String(checkIn || checkInDate || '—').slice(0, 30) },
+        { type: 'text', text: String(checkOut || checkOutDate || '—').slice(0, 30) },
+        { type: 'text', text: String(roomCategory || cleanRoom || 'Standard Room').slice(0, 40) },
+        { type: 'text', text: String(guestCount || 1).slice(0, 10) },
+      ],
+    });
+  } else {
+    // Official Approved HotelMantri / Whinta 7 Body Parameters (booking_confirmation):
+    // {{1}} = Guest name
+    // {{2}} = Booking ID
+    // {{3}} = Room number
+    // {{4}} = Check-in date
+    // {{5}} = Check-out date
+    // {{6}} = Total amount
+    // {{7}} = Invoice URL
+    components.push({
+      type: 'body',
+      parameters: [
+        { type: 'text', text: String(guestName || 'Guest').slice(0, 60) },
+        { type: 'text', text: String(ref).slice(0, 40) },
+        { type: 'text', text: String(cleanRoom).slice(0, 30) },
+        { type: 'text', text: String(checkIn || checkInDate || '—').slice(0, 30) },
+        { type: 'text', text: String(checkOut || checkOutDate || '—').slice(0, 30) },
+        { type: 'text', text: formattedAmount.slice(0, 30) },
+        { type: 'text', text: String(resolvedInvoiceUrl).slice(0, 500) },
+      ],
+    });
+  }
 
   return {
     name,
@@ -440,7 +484,61 @@ export const sendWhatsAppMessage = async (params) => {
     };
   }
 
-  // 3. Resolve Whinta provider instance
+  // 3. Dispatch to Meta Cloud API if configured
+  if (config.provider === 'META') {
+    const metaCfg = getMetaWhatsAppConfig();
+    const effectiveTemplateName = templateName || metaCfg.templateName;
+
+    // Safety guard: check template approval status
+    // If template is reservation_confirmation and in review, prevent dispatch
+    if (effectiveTemplateName === 'reservation_confirmation' && !metaCfg.isTemplateApproved && !params?.forceSend) {
+      console.warn(`[WhatsAppService] Template "${effectiveTemplateName}" is currently IN REVIEW in Meta. Prevented automated dispatch.`);
+      return {
+        success: false,
+        provider: 'META',
+        status: 'template_in_review',
+        error: WHATSAPP_ERRORS.TEMPLATE_IN_REVIEW,
+        errorCode: WHATSAPP_ERRORS.TEMPLATE_IN_REVIEW,
+        message: `Meta template "${effectiveTemplateName}" is currently in review. Set WHATSAPP_TEMPLATE_APPROVED=true once approved by Meta.`,
+        whatsappDirectUrl: directUrl,
+        requiresApproval: true,
+      };
+    }
+
+    const payload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+    };
+
+    if (effectiveTemplateName) {
+      payload.type = 'template';
+      payload.template = {
+        name: effectiveTemplateName,
+        language: { code: templateLanguage || metaCfg.templateLanguage || 'en' },
+        components: templateComponents || [],
+      };
+    } else if (mediaUrl) {
+      payload.type = mediaType || 'document';
+      payload[mediaType || 'document'] = {
+        link: mediaUrl,
+        filename: fileName || 'document.pdf',
+        caption: caption || '',
+      };
+    } else {
+      payload.type = 'text';
+      payload.text = { body: text };
+    }
+
+    const metaRes = await dispatchMetaGraphApiMessage(payload);
+    return {
+      ...metaRes,
+      provider: 'META',
+      whatsappDirectUrl: directUrl,
+    };
+  }
+
+  // 4. Resolve Whinta provider instance (legacy / fallback)
   const providerInstance = new WhintaProvider();
 
   if (!providerInstance.isConfigured()) {
@@ -455,7 +553,7 @@ export const sendWhatsAppMessage = async (params) => {
     };
   }
 
-  // 4. Dispatch with bounded retries for transient errors (429, 500, 502, 503, 504)
+  // 5. Dispatch with bounded retries for transient errors (429, 500, 502, 503, 504)
   const MAX_ATTEMPTS = 3;
   let lastResult = null;
 
@@ -521,14 +619,33 @@ export const sendWhatsAppMessage = async (params) => {
   };
 };
 
+/**
+ * Sends a PDF reservation confirmation as a WhatsApp document message.
+ */
+export const sendWhatsAppDocumentMessage = async ({ to, documentUrl, filename, caption }) => {
+  const config = getWhatsAppProviderConfig();
+  if (config.provider === 'META') {
+    return sendMetaDocumentMessage({ to, documentUrl, filename, caption });
+  }
+  return sendWhatsAppMessage({
+    to,
+    mediaUrl: documentUrl,
+    fileName: filename,
+    caption,
+    mediaType: 'document',
+  });
+};
+
 export default {
   WHATSAPP_ERRORS,
   normalizeWhatsAppPhone,
   buildWhatsAppDirectUrl,
   buildMetaBookingConfirmationTemplate,
+  buildApprovedReservationConfirmationTemplate,
   buildMetaDailyReportTemplate,
   getWhatsAppProviderConfig,
   sendWhatsAppMessage,
+  sendWhatsAppDocumentMessage,
   WhintaProvider,
   getWhintaConfig,
   formatWhintaPhone,

@@ -13,13 +13,14 @@
     "test:housekeeping": "node scripts/test-housekeeping-security-suite.mjs",
     "test:laundry": "node scripts/test_laundry_production_suite.mjs",
     "test:whatsapp": "node scripts/test_whatsapp_direct_confirmation.mjs",
+    "test:whatsapp-webhook": "node scripts/test_meta_whatsapp_webhook_suite.mjs",
     "test:whinta": "node scripts/test_whinta_integration.mjs",
     "test:accounting": "node scripts/test_accounting_reconciliation.mjs",
     "test:meta": "node scripts/test_meta_compliance_suite.mjs",
     "test:aiosell-isolation": "node scripts/test_aiosell_isolation_suite.mjs",
     "test:welcome-email": "node scripts/test_hotel_owner_welcome_email.mjs",
     "test:channel-inventory": "node scripts/test_channel_inventory_exact_matching.mjs",
-    "test": "npm run test:housekeeping && npm run test:whinta && npm run test:accounting && npm run test:meta"
+    "test": "npm run test:housekeeping && npm run test:whinta && npm run test:accounting && npm run test:meta && npm run test:whatsapp-webhook"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

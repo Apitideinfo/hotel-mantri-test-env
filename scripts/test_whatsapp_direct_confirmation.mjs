@@ -94,7 +94,7 @@ async function runDirectWhatsAppTests() {
     totalAmount: 9408,
   });
 
-  assert(templatePayload.name === 'booking_confirmation', 'Template name is booking_confirmation');
+  assert(templatePayload.name === 'booking_confirmation' || templatePayload.name === process.env.WHINTA_RESERVATION_TEMPLATE, 'Template name matches expected booking confirmation template');
   assert(templatePayload.language?.code === 'en', 'Template language code is en');
   assert(Array.isArray(templatePayload.components), 'Template components is an array');
 
