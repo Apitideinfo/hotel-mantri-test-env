@@ -17,6 +17,8 @@ import { supabaseServiceRole } from '../supabaseClient.js';
 import { sendEmail, isValidEmail, escapeHtml } from './emailService.js';
 import {
   sendWhatsAppMessage,
+  sendWhatsAppDocumentMessage,
+  getWhatsAppProviderConfig,
   buildWhatsAppDirectUrl,
   buildMetaBookingConfirmationTemplate,
   normalizeWhatsAppPhone,
@@ -1067,50 +1069,64 @@ export const generateAndDeliverConfirmation = async ({
       }
     } else {
       // Manual / Direct Flow: Recipient is Customer / Guest
-      let guestPhone = (resRecord.guest_phone || '').trim();
-      if (!guestPhone && resRecord.guest_id) {
-        try {
-          const { data: guest } = await supabaseServiceRole
-            .from('guests')
-            .select('phone')
-            .eq('id', resRecord.guest_id)
-            .maybeSingle();
-          if (guest?.phone) {
-            guestPhone = String(guest.phone).trim();
-          }
-        } catch (gErr) {
-          console.warn('[DELIVERY_SERVICE] Failed to query guest phone by guest_id:', gErr.message);
-        }
-      }
-
-      if (!guestPhone) {
-        console.log(`[DELIVERY_SERVICE] WhatsApp skipped: Customer phone not available for reservation=${reservationId}`);
+      if (resRecord.whatsapp_opt_in === false) {
+        console.log(`[DELIVERY_SERVICE] WhatsApp skipped: Guest opted out of WhatsApp messages for reservation=${reservationId}`);
         whatsappDeliveryResult = {
           status: 'skipped',
           recipientType: 'CUSTOMER',
-          reason: 'CUSTOMER_PHONE_NOT_AVAILABLE',
-          message: 'Customer phone number not available — confirmation PDF generated successfully.',
+          reason: 'GUEST_OPTED_OUT',
+          message: 'Guest has not opted in / has opted out of WhatsApp notifications.',
         };
         await updateDocumentDeliveryStatus(hotelId, reservationId, version, {
-          whatsappStatus: DELIVERY_STATUS.NOT_AVAILABLE,
-          errorDetails: 'Customer phone not available',
+          whatsappStatus: DELIVERY_STATUS.SKIPPED,
+          errorDetails: 'Guest opted out of WhatsApp',
         });
       } else {
-        const norm = normalizeWhatsAppPhone(guestPhone);
-        if (!norm.valid) {
-          console.warn(`[DELIVERY_SERVICE] Invalid guest WhatsApp phone for reservation=${reservationId}: ${norm.error}`);
+        let guestPhone = (resRecord.guest_phone || '').trim();
+        if (!guestPhone && resRecord.guest_id) {
+          try {
+            const { data: guest } = await supabaseServiceRole
+              .from('guests')
+              .select('phone')
+              .eq('id', resRecord.guest_id)
+              .maybeSingle();
+            if (guest?.phone) {
+              guestPhone = String(guest.phone).trim();
+            }
+          } catch (gErr) {
+            console.warn('[DELIVERY_SERVICE] Failed to query guest phone by guest_id:', gErr.message);
+          }
+        }
+
+        if (!guestPhone) {
+          console.log(`[DELIVERY_SERVICE] WhatsApp skipped: Customer phone not available for reservation=${reservationId}`);
           whatsappDeliveryResult = {
-            status: 'failed',
+            status: 'skipped',
             recipientType: 'CUSTOMER',
-            errorCode: WHATSAPP_ERRORS.INVALID_RECIPIENT,
-            message: norm.error || 'Invalid guest phone number for WhatsApp.',
+            reason: 'CUSTOMER_PHONE_NOT_AVAILABLE',
+            message: 'Customer phone number not available — confirmation PDF generated successfully.',
           };
           await updateDocumentDeliveryStatus(hotelId, reservationId, version, {
-            whatsappStatus: DELIVERY_STATUS.FAILED,
-            errorDetails: norm.error || 'Invalid guest phone number',
+            whatsappStatus: DELIVERY_STATUS.NOT_AVAILABLE,
+            errorDetails: 'Customer phone not available',
           });
         } else {
-          targetPhone = norm.normalized;
+          const norm = normalizeWhatsAppPhone(guestPhone);
+          if (!norm.valid) {
+            console.warn(`[DELIVERY_SERVICE] Invalid guest WhatsApp phone for reservation=${reservationId}: ${norm.error}`);
+            whatsappDeliveryResult = {
+              status: 'failed',
+              recipientType: 'CUSTOMER',
+              errorCode: WHATSAPP_ERRORS.INVALID_RECIPIENT,
+              message: norm.error || 'Invalid guest phone number for WhatsApp.',
+            };
+            await updateDocumentDeliveryStatus(hotelId, reservationId, version, {
+              whatsappStatus: DELIVERY_STATUS.FAILED,
+              errorDetails: norm.error || 'Invalid guest phone number',
+            });
+          } else {
+            targetPhone = norm.normalized;
+          }
         }
       }
     }
@@ -1156,8 +1172,13 @@ export const generateAndDeliverConfirmation = async ({
       const roomInfo = `${resRecord.rate_plan || resRecord.room_category || 'Standard'}${resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? ` (Room ${resRecord.room_no})` : ''
         }`;
 
+      const providerConfig = getWhatsAppProviderConfig();
+      const templateNameToUse = process.env.WHATSAPP_RESERVATION_TEMPLATE
+        || (providerConfig.provider === 'META' ? 'reservation_confirmation' : 'booking_confirmation');
+
       const guestCount = Math.max(1, (Number(resRecord.adults || 0) || Number(resRecord.guest_count || 0) || 1) + Number(resRecord.children || 0));
       const metaTemplate = buildMetaBookingConfirmationTemplate({
+        templateName: templateNameToUse,
         guestName: resRecord.guest_name || 'Guest',
         bookingId: confirmationNumber || (resRecord.id ? `HM-RES-${resRecord.id.slice(0, 8).toUpperCase()}` : 'HM-RES'),
         confirmationNumber,
@@ -1165,7 +1186,7 @@ export const generateAndDeliverConfirmation = async ({
         roomNo: resRecord.room_no && resRecord.room_no.toLowerCase() !== 'unassigned' ? resRecord.room_no : 'Unassigned',
         roomNumber: resRecord.room_no,
         roomDetails: roomInfo,
-        roomCategory: resRecord.rate_plan || resRecord.room_category || 'Standard',
+        roomCategory: resRecord.rate_plan || resRecord.room_category || 'Standard Room',
         checkIn: formatDateReadable(checkIn),
         checkOut: formatDateReadable(checkOut),
         totalAmount: totalVal,
@@ -1267,18 +1288,31 @@ export const generateAndDeliverConfirmation = async ({
               });
             } catch (_) { }
           }
+          if (waSendResult.messageId && reservationId) {
+            try {
+              await supabaseServiceRole
+                .from('reservations')
+                .update({
+                  whatsapp_message_id: waSendResult.messageId,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', reservationId);
+            } catch (_) { }
+          }
         } else {
           console.warn(`[DELIVERY_SERVICE] WhatsApp send result=${waSendResult.status} code=${waSendResult.errorCode}`);
           const isNotConfigured = waSendResult.status === 'provider_not_configured';
-          const statusToRecord = isNotConfigured ? DELIVERY_STATUS.NOT_CONFIGURED : DELIVERY_STATUS.FAILED;
+          const isInReview = waSendResult.status === 'template_in_review';
+          const statusToRecord = isNotConfigured ? DELIVERY_STATUS.NOT_CONFIGURED : (isInReview ? DELIVERY_STATUS.SKIPPED : DELIVERY_STATUS.FAILED);
           whatsappDeliveryResult = {
-            status: isNotConfigured ? 'not_configured' : 'failed',
+            status: isNotConfigured ? 'not_configured' : (isInReview ? 'template_in_review' : 'failed'),
             recipientType: targetRecipientType,
             recipient: targetPhone,
             errorCode: waSendResult.errorCode,
             message: waSendResult.message,
             provider: waSendResult.provider,
             whatsappDirectUrl: directUrl,
+            requiresApproval: isInReview,
           };
           await updateDocumentDeliveryStatus(hotelId, reservationId, version, {
             whatsappStatus: statusToRecord,
@@ -1287,7 +1321,7 @@ export const generateAndDeliverConfirmation = async ({
           if (outboxId) {
             try {
               await updateWhatsAppOutboxEvent(outboxId, {
-                status: isNotConfigured ? 'not_configured' : OUTBOX_STATUS.FAILED,
+                status: isNotConfigured ? 'not_configured' : (isInReview ? 'template_in_review' : OUTBOX_STATUS.FAILED),
                 last_error: waSendResult.errorCode || waSendResult.message,
               });
             } catch (_) { }

@@ -91,7 +91,9 @@ app.use((req, res, next) => {
   if (req.url === '/api/index.js' || req.url.startsWith('/api/index.js?')) {
     const matched = req.headers['x-forwarded-uri'] || req.headers['x-invoke-path'] || req.headers['x-vercel-matched-path'] || req.headers['x-matched-path'];
     if (matched && matched.startsWith('/api') && !matched.startsWith('/api/index.js')) {
-      req.url = matched;
+      const qIdx = original.indexOf('?');
+      const queryString = qIdx !== -1 && !matched.includes('?') ? original.slice(qIdx) : '';
+      req.url = matched + queryString;
     }
   } else if (req.url.startsWith('/Test/api')) {
     req.url = req.url.replace(/^\/Test\/api/, '/api');
@@ -110,12 +112,22 @@ app.use((req, res, next) => {
 
 // Route-specific large payload handler for logo upload (up to 10MB base64 images) (SEC-10)
 const LOGO_UPLOAD_LIMIT = '10mb';
-app.use(['/api/hotel-branding/logo', '/hotel-branding/logo'], express.json({ limit: LOGO_UPLOAD_LIMIT }));
+app.use(['/api/hotel-branding/logo', '/hotel-branding/logo'], express.json({
+  limit: LOGO_UPLOAD_LIMIT,
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(['/api/hotel-branding/logo', '/hotel-branding/logo'], express.urlencoded({ extended: true, limit: LOGO_UPLOAD_LIMIT }));
 
-// Global default limit (1MB) for all other JSON & form submissions (SEC-10 resource exhaustion defense)
+// Global default limit (1MB) for all other JSON & form submissions (SEC-10 resource exhaustion defense & Webhook raw buffer preservation)
 const GLOBAL_BODY_LIMIT = '1mb';
-app.use(express.json({ limit: GLOBAL_BODY_LIMIT }));
+app.use(express.json({
+  limit: GLOBAL_BODY_LIMIT,
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 app.use(express.urlencoded({ extended: true, limit: GLOBAL_BODY_LIMIT }));
 
 import channelRoutes from './routes/channels.js';
@@ -128,6 +140,7 @@ import userRoutes from './routes/users.js';
 import housekeepingRoutes from './routes/housekeeping.js';
 import metaComplianceRoutes from './routes/metaCompliance.js';
 import onboardingRoutes from './routes/onboarding.js';
+import whatsappWebhookRoutes from './routes/whatsappWebhook.js';
 import {
   paymentRateLimiter,
   validateAndDeriveOrderContext,
@@ -176,7 +189,8 @@ app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
       '/api/users',
       '/api/housekeeping',
       '/api/create-order',
-      '/api/verify-payment'
+      '/api/verify-payment',
+      '/api/whatsapp/webhook'
     ]
   });
 });
@@ -228,6 +242,9 @@ app.use('/compliance', metaComplianceRoutes);
 
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/onboarding', onboardingRoutes);
+
+app.use('/api/whatsapp', whatsappWebhookRoutes);
+app.use('/whatsapp', whatsappWebhookRoutes);
 
 /**
  * STEP 1: Backend Endpoint to Create Order (SEC-03 Hardened)
