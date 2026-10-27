@@ -209,6 +209,7 @@ export const NewReservationWizard = ({
   }, [preselectRoom, rooms, categories]);
 
   const availabilityCacheRef = useRef<Map<string, Set<string>>>(new Map());
+  const inFlightAvailabilityKeyRef = useRef<string | null>(null);
 
   /* ── Fetch Real-time Room Availability for Selected Dates ── */
   const fetchAvailability = useCallback(async () => {
@@ -218,6 +219,10 @@ export const NewReservationWizard = ({
       setBookedRoomNos(availabilityCacheRef.current.get(cacheKey)!);
       return;
     }
+    if (inFlightAvailabilityKeyRef.current === cacheKey) {
+      return;
+    }
+    inFlightAvailabilityKeyRef.current = cacheKey;
 
     setAvailabilityLoading(true);
     try {
@@ -298,13 +303,17 @@ export const NewReservationWizard = ({
     } catch (e) {
       console.warn('[NewReservationWizard] Availability fetch warning:', e);
     } finally {
+      inFlightAvailabilityKeyRef.current = null;
       setAvailabilityLoading(false);
     }
   }, [checkIn, checkOut]);
 
-  // Trigger availability fetch when dates change
+  // Trigger availability fetch when dates change (debounced to avoid multiple rapid requests)
   useEffect(() => {
-    fetchAvailability();
+    const timer = setTimeout(() => {
+      fetchAvailability();
+    }, 150);
+    return () => clearTimeout(timer);
   }, [fetchAvailability]);
 
   /* ── Category Availability Info ── */

@@ -320,16 +320,79 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
   const dates = getDates(startDate, endDate);
   const supabase = options?.client || getSupabase();
 
-  // 1. Get room categories to map category names and establish valid active categories
-  const { data: allCategories, error: catsError } = await supabase
-    .from('room_categories')
-    .select('id, name, default_tariff, extra_bed_charge, sort_order')
+  // Prepare independent database queries to execute concurrently via Promise.all
+  let restrictionsQuery = supabase
+    .from('channel_inventory_restrictions')
+    .select('date, room_category_id, availability, stop_sell, base_rate, channel_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure, updated_at')
     .eq('hotel_id', hotelId)
-    .eq('is_active', true)
-    .order('sort_order', { ascending: true });
+    .gte('date', startDate)
+    .lte('date', endDate);
 
-  if (catsError) {
-    console.error('[calculateAuthoritativeInventory] Error querying categories:', catsError);
+  if (specificCategoryIds && specificCategoryIds.length > 0) {
+    restrictionsQuery = restrictionsQuery.in('room_category_id', specificCategoryIds);
+  }
+
+  const [
+    catsRes,
+    roomsRes,
+    resRes,
+    blocksRes,
+    mapsRes,
+    otaRes,
+    restrictionsRes,
+  ] = await Promise.all([
+    supabase
+      .from('room_categories')
+      .select('id, name, default_tariff, extra_bed_charge, sort_order')
+      .eq('hotel_id', hotelId)
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true }),
+    supabase
+      .from('rooms')
+      .select('id, category_id, room_no, is_active')
+      .eq('hotel_id', hotelId),
+    supabase
+      .from('reservations')
+      .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks, created_at')
+      .eq('hotel_id', hotelId)
+      .in('status', ['confirmed', 'checked_in'])
+      .lte('check_in_date', endDate)
+      .gte('check_out_date', startDate),
+    supabase
+      .from('room_blocks')
+      .select('room_no, start_date, end_date, block_type')
+      .eq('hotel_id', hotelId)
+      .lte('start_date', endDate)
+      .gte('end_date', startDate),
+    supabase
+      .from('channel_rate_mappings')
+      .select('room_category_id, external_room_code, external_rate_plan_code')
+      .eq('hotel_id', hotelId)
+      .eq('status', 'mapped'),
+    supabase
+      .from('channel_ota_reservations')
+      .select('ota_booking_id, reservation_id, room_category')
+      .eq('hotel_id', hotelId)
+      .limit(500),
+    restrictionsQuery,
+  ]);
+
+  const allCategories = catsRes?.data || [];
+  const physicalRooms = roomsRes?.data || [];
+  const reservations = resRes?.data || [];
+  const roomBlocks = blocksRes?.data || [];
+  const mappings = mapsRes?.data || [];
+  const otaRecords = otaRes?.data || [];
+  const restrictions = restrictionsRes?.data || [];
+
+  if (catsRes?.error) {
+    console.error('[calculateAuthoritativeInventory] Error querying categories:', catsRes.error);
+  }
+  if (roomsRes?.error) {
+    console.error('[calculateAuthoritativeInventory] Error querying rooms:', roomsRes.error);
+  }
+  if (resRes?.error) {
+    console.error('[calculateAuthoritativeInventory] Error querying reservations:', resRes.error);
   }
 
   const validCategoryIds = new Set((allCategories || []).map(c => c.id));
@@ -339,16 +402,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
       catNameToIdMap[c.name.trim().toLowerCase()] = c.id;
     }
   });
-
-  // 2. Get physical registered rooms (active only)
-  const { data: physicalRooms, error: roomsError } = await supabase
-    .from('rooms')
-    .select('id, category_id, room_no, is_active')
-    .eq('hotel_id', hotelId);
-
-  if (roomsError) {
-    console.error('[calculateAuthoritativeInventory] Error querying rooms:', roomsError);
-  }
 
   const activeRooms = (physicalRooms || []).filter(r => r.is_active !== false);
   const totalPhysicalRooms = activeRooms.length;
@@ -374,34 +427,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   });
 
-  // 3. Get active reservations overlapping the date range
-  const { data: reservations, error: resError } = await supabase
-    .from('reservations')
-    .select('id, room_id, room_no, rate_plan, check_in_date, check_out_date, status, internal_note, remarks, created_at')
-    .eq('hotel_id', hotelId)
-    .in('status', ['confirmed', 'checked_in'])
-    .lte('check_in_date', endDate)
-    .gte('check_out_date', startDate);
-
-  if (resError) {
-    console.error('[calculateAuthoritativeInventory] Error querying reservations:', resError);
-  }
-
-  // 4. Get room blocks / maintenance
-  const { data: roomBlocks } = await supabase
-    .from('room_blocks')
-    .select('room_no, start_date, end_date, block_type')
-    .eq('hotel_id', hotelId)
-    .lte('start_date', endDate)
-    .gte('end_date', startDate);
-
-  // 5. Get channel mappings for rate plan / room code resolution
-  const { data: mappings } = await supabase
-    .from('channel_rate_mappings')
-    .select('room_category_id, external_room_code, external_rate_plan_code')
-    .eq('hotel_id', hotelId)
-    .eq('status', 'mapped');
-
   const extCodeToCatMap = {};
   const ratePlanCodeToCatMap = {};
   (mappings || []).forEach(m => {
@@ -415,12 +440,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
     }
   });
 
-  // 6. Query channel_ota_reservations for mapping unassigned bookings
-  const { data: otaRecords } = await supabase
-    .from('channel_ota_reservations')
-    .select('ota_booking_id, reservation_id, room_category')
-    .eq('hotel_id', hotelId);
-
   const otaResIdToCatMap = {};
   const otaBookingIdToCatMap = {};
   (otaRecords || []).forEach(o => {
@@ -430,19 +449,6 @@ export async function calculateAuthoritativeInventory(hotelId, startDate, endDat
       if (o.ota_booking_id) otaBookingIdToCatMap[String(o.ota_booking_id).trim()] = matchedCatId;
     }
   });
-
-  // 7. Get inventory restrictions overrides
-  let restrictionsQuery = supabase
-    .from('channel_inventory_restrictions')
-    .select('date, room_category_id, availability, stop_sell, base_rate, channel_rate, min_stay, max_stay, closed_to_arrival, closed_to_departure, updated_at')
-    .eq('hotel_id', hotelId)
-    .gte('date', startDate)
-    .lte('date', endDate);
-
-  if (specificCategoryIds && specificCategoryIds.length > 0) {
-    restrictionsQuery = restrictionsQuery.in('room_category_id', specificCategoryIds);
-  }
-  const { data: restrictions } = await restrictionsQuery;
 
   const restrictionMap = new Map();
   (restrictions || []).forEach(r => {
