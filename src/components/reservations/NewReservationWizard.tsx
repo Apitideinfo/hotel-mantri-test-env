@@ -208,9 +208,17 @@ export const NewReservationWizard = ({
     }
   }, [preselectRoom, rooms, categories]);
 
+  const availabilityCacheRef = useRef<Map<string, Set<string>>>(new Map());
+
   /* ── Fetch Real-time Room Availability for Selected Dates ── */
   const fetchAvailability = useCallback(async () => {
     if (!checkIn || !checkOut || checkIn >= checkOut) return;
+    const cacheKey = `${checkIn}::${checkOut}`;
+    if (availabilityCacheRef.current.has(cacheKey)) {
+      setBookedRoomNos(availabilityCacheRef.current.get(cacheKey)!);
+      return;
+    }
+
     setAvailabilityLoading(true);
     try {
       const hotelId = getCurrentHotelId();
@@ -230,6 +238,7 @@ export const NewReservationWizard = ({
             booked.add(clean);
           }
         }
+        availabilityCacheRef.current.set(cacheKey, booked);
         setBookedRoomNos(booked);
         return;
       }
@@ -284,6 +293,7 @@ export const NewReservationWizard = ({
         }
       }
 
+      availabilityCacheRef.current.set(cacheKey, booked);
       setBookedRoomNos(booked);
     } catch (e) {
       console.warn('[NewReservationWizard] Availability fetch warning:', e);
@@ -458,12 +468,12 @@ export const NewReservationWizard = ({
           const candidateTariff = toNum(defaultRate) > 0
             ? toNum(defaultRate)
             : toNum(candidate?.default_tariff) > 0
-            ? toNum(candidate?.default_tariff)
-            : toNum(cat?.default_tariff) > 0
-            ? toNum(cat?.default_tariff)
-            : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
-            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
-            : (toNum((settings as any)?.default_room_tariff) || 0);
+              ? toNum(candidate?.default_tariff)
+              : toNum(cat?.default_tariff) > 0
+                ? toNum(cat?.default_tariff)
+                : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
+                  ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+                  : (toNum((settings as any)?.default_room_tariff) || 0);
 
           newRows.push({
             uid: crypto.randomUUID(),
@@ -614,8 +624,12 @@ export const NewReservationWizard = ({
 
   const balanceDue = Math.max(0, grandTotal - effectiveAdvancePaid);
 
-  /* ── Guest Search by Phone ── */
+  /* ── Guest Search & Selection (Cached & Race-Proof) ── */
   const guestSearchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const guestSearchCacheRef = useRef<Map<string, Guest[]>>(new Map());
+  const guestStayStatsCacheRef = useRef<Map<string, { stayCount: number; lastStay: string | null }>>(new Map());
+  const searchSeqRef = useRef<number>(0);
+
   const handlePhoneChange = useCallback((val: string) => {
     setPhone(val);
     setSelectedGuest(null);
@@ -624,31 +638,32 @@ export const NewReservationWizard = ({
     const cleaned = val.replace(/\D/g, '');
     if (cleaned.length >= 4) {
       setGuestSearching(true);
+      const currentSeq = ++searchSeqRef.current;
+
+      // Check client search cache
+      if (guestSearchCacheRef.current.has(cleaned)) {
+        setGuestSearchResults(guestSearchCacheRef.current.get(cleaned)!);
+        setGuestSearching(false);
+        return;
+      }
+
       guestSearchTimeout.current = setTimeout(async () => {
         try {
           const results = await searchGuests(cleaned);
-          setGuestSearchResults(results.slice(0, 5));
-          if (results.length > 0) {
-            // Fetch stay history for first match
-            const first = results[0];
-            const { data: resData } = await supabase
-              .from('reservations')
-              .select('id, check_in_date')
-              .or(`guest_id.eq.${first.id},guest_phone.ilike.%${cleaned}%`)
-              .order('check_in_date', { ascending: false });
-            if (resData) {
-              setGuestStayStats({
-                stayCount: resData.length,
-                lastStay: resData[0]?.check_in_date || null,
-              });
-            }
-          }
+          if (currentSeq !== searchSeqRef.current) return;
+          const topResults = results.slice(0, 5);
+          guestSearchCacheRef.current.set(cleaned, topResults);
+          setGuestSearchResults(topResults);
         } catch {
-          setGuestSearchResults([]);
+          if (currentSeq === searchSeqRef.current) {
+            setGuestSearchResults([]);
+          }
         } finally {
-          setGuestSearching(false);
+          if (currentSeq === searchSeqRef.current) {
+            setGuestSearching(false);
+          }
         }
-      }, 350);
+      }, 250);
     } else {
       setGuestSearchResults([]);
       setGuestSearching(false);
@@ -682,18 +697,33 @@ export const NewReservationWizard = ({
       setPhone(mob);
     }
 
-    // Query stay count & last stay date
+    // Check stay stats cache first
+    const cacheKey = guest.id || mob;
+    if (guestStayStatsCacheRef.current.has(cacheKey)) {
+      setGuestStayStats(guestStayStatsCacheRef.current.get(cacheKey)!);
+      return;
+    }
+
+    // Query stay count & last stay date (tenant isolated & bounded)
     try {
-      const { data: resData } = await supabase
+      const currentHotelId = getCurrentHotelId();
+      let stayQuery = supabase
         .from('reservations')
         .select('id, check_in_date')
         .or(`guest_id.eq.${guest.id},guest_phone.ilike.%${mob.replace(/\D/g, '')}%`)
-        .order('check_in_date', { ascending: false });
+        .order('check_in_date', { ascending: false })
+        .limit(20);
+      if (currentHotelId) {
+        stayQuery = stayQuery.eq('hotel_id', currentHotelId);
+      }
+      const { data: resData } = await stayQuery;
       if (resData) {
-        setGuestStayStats({
+        const stats = {
           stayCount: resData.length,
           lastStay: resData[0]?.check_in_date || null,
-        });
+        };
+        guestStayStatsCacheRef.current.set(cacheKey, stats);
+        setGuestStayStats(stats);
       }
     } catch {
       // non-critical
@@ -750,6 +780,21 @@ export const NewReservationWizard = ({
         setError(msg);
         setEmailError(msg);
         return false;
+      }
+      return true;
+    }
+
+    if (s === 4) {
+      if (bookingStatus === 'confirmed' && paymentStatusType === 'partial') {
+        const val = toNum(partialAmount);
+        if (val <= 0) {
+          setError('Please enter a valid partial advance amount greater than ₹0.');
+          return false;
+        }
+        if (val > grandTotal) {
+          setError(`Partial advance amount (₹${fmtInt(val)}) cannot exceed total invoice amount (₹${fmtInt(grandTotal)}).`);
+          return false;
+        }
       }
       return true;
     }
@@ -860,7 +905,7 @@ export const NewReservationWizard = ({
   /* ── Confirm & Create Reservation ── */
   const handleConfirmReservation = async () => {
     if (isSubmittingRef.current || submitting || saving) return;
-    if (!validateStep(3)) return;
+    if (!validateStep(1) || !validateStep(2) || !validateStep(3) || !validateStep(4)) return;
     isSubmittingRef.current = true;
     setSubmitting(true);
     setError(null);
@@ -1104,7 +1149,7 @@ export const NewReservationWizard = ({
             <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-indigo-950 px-6 pt-7 pb-6 text-white text-center relative overflow-hidden">
               <div className="absolute top-0 right-0 -mr-6 -mt-6 w-36 h-36 rounded-full bg-indigo-500/20 blur-2xl pointer-events-none" />
               <div className="absolute bottom-0 left-0 -ml-6 -mb-6 w-36 h-36 rounded-full bg-blue-500/20 blur-2xl pointer-events-none" />
-              
+
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-400 border border-white/20 text-white flex items-center justify-center mx-auto mb-3 shadow-xl ring-4 ring-white/10 animate-bounce">
                 <Sparkles className="w-8 h-8 text-white drop-shadow-md" />
               </div>
@@ -1130,11 +1175,10 @@ export const NewReservationWizard = ({
 
               {/* Email Delivery Feedback */}
               {emailStatus && (
-                <div className={`mb-4 mx-auto max-w-sm rounded-xl px-3.5 py-2 text-xs font-bold flex items-center gap-2 text-left ${
-                  emailStatus === 'EMAIL_SENT' ? 'bg-emerald-50 border border-emerald-300 text-emerald-800'
-                  : emailStatus === 'EMAIL_NOT_CONFIGURED' ? 'bg-amber-50 border border-amber-300 text-amber-800'
-                  : 'bg-rose-50 border border-rose-300 text-rose-800'
-                }`}>
+                <div className={`mb-4 mx-auto max-w-sm rounded-xl px-3.5 py-2 text-xs font-bold flex items-center gap-2 text-left ${emailStatus === 'EMAIL_SENT' ? 'bg-emerald-50 border border-emerald-300 text-emerald-800'
+                    : emailStatus === 'EMAIL_NOT_CONFIGURED' ? 'bg-amber-50 border border-amber-300 text-amber-800'
+                      : 'bg-rose-50 border border-rose-300 text-rose-800'
+                  }`}>
                   {emailStatus === 'EMAIL_SENT' ? (
                     <><CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /><span>Voucher sent to {recipientEmail}</span></>
                   ) : emailStatus === 'EMAIL_NOT_CONFIGURED' ? (
@@ -1147,11 +1191,10 @@ export const NewReservationWizard = ({
 
               {/* WhatsApp Delivery Feedback */}
               {whatsAppStatus && (
-                <div className={`mb-4 mx-auto max-w-sm rounded-xl px-3.5 py-2 text-xs font-bold flex flex-col gap-1.5 text-left animate-in fade-in duration-150 ${
-                  whatsAppStatus === 'WHATSAPP_SENT' ? 'bg-emerald-50 border border-emerald-300 text-emerald-800'
-                  : whatsAppStatus === 'WHATSAPP_SENDING' ? 'bg-blue-50 border border-blue-300 text-blue-800'
-                  : 'bg-rose-50 border border-rose-300 text-rose-800'
-                }`}>
+                <div className={`mb-4 mx-auto max-w-sm rounded-xl px-3.5 py-2 text-xs font-bold flex flex-col gap-1.5 text-left animate-in fade-in duration-150 ${whatsAppStatus === 'WHATSAPP_SENT' ? 'bg-emerald-50 border border-emerald-300 text-emerald-800'
+                    : whatsAppStatus === 'WHATSAPP_SENDING' ? 'bg-blue-50 border border-blue-300 text-blue-800'
+                      : 'bg-rose-50 border border-rose-300 text-rose-800'
+                  }`}>
                   <div className="flex items-center gap-2">
                     {whatsAppStatus === 'WHATSAPP_SENT' ? (
                       <><CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /><span>{whatsAppMessage}</span></>
@@ -1263,11 +1306,10 @@ export const NewReservationWizard = ({
                     handleBookFullHotel();
                     setStep(2);
                   }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition active:scale-95 cursor-pointer shadow-xs ${
-                    isFullHotelSelected
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition active:scale-95 cursor-pointer shadow-xs ${isFullHotelSelected
                       ? 'bg-amber-400 text-slate-950 font-black ring-2 ring-amber-300/40'
                       : 'bg-amber-500/20 text-amber-200 border border-amber-400/40 hover:bg-amber-500/30 hover:text-white'
-                  }`}
+                    }`}
                   title="Book all available rooms in the entire hotel"
                 >
                   <Building2 className="w-3.5 h-3.5 text-amber-300" />
@@ -1292,13 +1334,12 @@ export const NewReservationWizard = ({
                       type="button"
                       onClick={() => { if (isDone) setStep(s); }}
                       disabled={!isDone}
-                      className={`flex items-center justify-center sm:justify-start gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all w-full min-w-0 ${
-                        isActive
+                      className={`flex items-center justify-center sm:justify-start gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all w-full min-w-0 ${isActive
                           ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
                           : isDone
-                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-pointer hover:bg-emerald-100'
-                          : 'bg-slate-100 text-slate-400 border border-slate-200'
-                      }`}
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 cursor-pointer hover:bg-emerald-100'
+                            : 'bg-slate-100 text-slate-400 border border-slate-200'
+                        }`}
                     >
                       {isDone ? (
                         <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
@@ -1557,25 +1598,23 @@ export const NewReservationWizard = ({
                           const displayTariff = toNum(category.default_tariff) > 0
                             ? toNum(category.default_tariff)
                             : toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff) > 0
-                            ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
-                            : (toNum((settings as any)?.default_room_tariff) || 0);
+                              ? toNum(catRooms.find((r) => toNum(r.default_tariff) > 0)?.default_tariff)
+                              : (toNum((settings as any)?.default_room_tariff) || 0);
 
                           return (
                             <div key={category.id}
-                              className={`p-4 rounded-2xl border transition-all ${
-                                selectedCount > 0
+                              className={`p-4 rounded-2xl border transition-all ${selectedCount > 0
                                   ? 'bg-indigo-50/50 border-indigo-400 shadow-sm ring-2 ring-indigo-500/10'
                                   : 'bg-white border-slate-200 hover:border-slate-300'
-                              }`}>
+                                }`}>
                               <div className="flex items-start justify-between gap-2 mb-2">
                                 <div>
                                   <h4 className="text-sm font-black text-slate-900">{category.name}</h4>
                                   <div className="flex items-center gap-2 mt-0.5">
-                                    <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded-md ${
-                                      availableRooms > 0
+                                    <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded-md ${availableRooms > 0
                                         ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                                         : 'bg-rose-50 text-rose-700 border border-rose-200'
-                                    }`}>
+                                      }`}>
                                       Available: {availableRooms} Rooms
                                     </span>
                                   </div>
@@ -1908,9 +1947,8 @@ export const NewReservationWizard = ({
                               }
                             }}
                             placeholder="guest@example.com"
-                            className={`w-full pl-9 pr-3.5 py-3 text-sm text-slate-900 bg-white border ${
-                              emailError ? 'border-rose-400 focus:ring-rose-400/30' : 'border-slate-200 focus:ring-indigo-500/30 focus:border-indigo-500'
-                            } rounded-xl focus:outline-none focus:ring-2 transition font-semibold`}
+                            className={`w-full pl-9 pr-3.5 py-3 text-sm text-slate-900 bg-white border ${emailError ? 'border-rose-400 focus:ring-rose-400/30' : 'border-slate-200 focus:ring-indigo-500/30 focus:border-indigo-500'
+                              } rounded-xl focus:outline-none focus:ring-2 transition font-semibold`}
                           />
                         </div>
                         {emailError && (
@@ -2135,19 +2173,17 @@ export const NewReservationWizard = ({
                         </label>
                         <div className="grid grid-cols-2 gap-2.5">
                           <button type="button" onClick={() => setBookingStatus('confirmed')}
-                            className={`p-3 rounded-xl border text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 ${
-                              bookingStatus === 'confirmed'
+                            className={`p-3 rounded-xl border text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 ${bookingStatus === 'confirmed'
                                 ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}>
+                              }`}>
                             <ShieldCheck className="w-4 h-4" /> Confirm Booking
                           </button>
                           <button type="button" onClick={() => { setBookingStatus('hold'); setPaymentStatusType('pay_later'); }}
-                            className={`p-3 rounded-xl border text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 ${
-                              bookingStatus === 'hold'
+                            className={`p-3 rounded-xl border text-xs font-black transition cursor-pointer flex items-center justify-center gap-2 ${bookingStatus === 'hold'
                                 ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
                                 : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}>
+                              }`}>
                             <Clock className="w-4 h-4" /> Hold Booking
                           </button>
                         </div>
@@ -2161,27 +2197,24 @@ export const NewReservationWizard = ({
                           </label>
                           <div className="grid grid-cols-3 gap-2">
                             <button type="button" onClick={() => setPaymentStatusType('pay_later')}
-                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                                paymentStatusType === 'pay_later'
+                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${paymentStatusType === 'pay_later'
                                   ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                              }`}>
+                                }`}>
                               No Advance / Pay Later
                             </button>
                             <button type="button" onClick={() => setPaymentStatusType('partial')}
-                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                                paymentStatusType === 'partial'
+                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${paymentStatusType === 'partial'
                                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                              }`}>
+                                }`}>
                               Partial Payment
                             </button>
                             <button type="button" onClick={() => setPaymentStatusType('full')}
-                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${
-                                paymentStatusType === 'full'
+                              className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer ${paymentStatusType === 'full'
                                   ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
                                   : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                              }`}>
+                                }`}>
                               Full Payment
                             </button>
                           </div>
@@ -2222,11 +2255,10 @@ export const NewReservationWizard = ({
                               { label: 'Corporate', icon: Building2 },
                             ].map(({ label, icon: MIcon }) => (
                               <button key={label} type="button" onClick={() => setPayMode(label)}
-                                className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 ${
-                                  payMode === label
+                                className={`py-2 px-3 rounded-xl border text-xs font-bold transition cursor-pointer flex items-center justify-center gap-1.5 ${payMode === label
                                     ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
                                     : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                                }`}>
+                                  }`}>
                                 <MIcon className="w-3.5 h-3.5" />
                                 <span>{label}</span>
                               </button>
@@ -2403,11 +2435,9 @@ export const NewReservationWizard = ({
 const SRow = ({ label, value, bold, color }: { label: string; value: string; bold?: boolean; color?: 'emerald' | 'amber' | 'slate' | 'blue' | 'indigo' }) => (
   <div className="flex items-center justify-between text-xs">
     <span className="text-slate-500 font-medium">{label}</span>
-    <span className={`font-semibold ${
-      bold ? 'font-black text-slate-900' : ''
-    } ${
-      color === 'emerald' ? 'text-emerald-700 font-black' : color === 'amber' ? 'text-amber-700 font-black' : color === 'blue' || color === 'indigo' ? 'text-indigo-700 font-black' : 'text-slate-800'
-    }`}>
+    <span className={`font-semibold ${bold ? 'font-black text-slate-900' : ''
+      } ${color === 'emerald' ? 'text-emerald-700 font-black' : color === 'amber' ? 'text-amber-700 font-black' : color === 'blue' || color === 'indigo' ? 'text-indigo-700 font-black' : 'text-slate-800'
+      }`}>
       {value}
     </span>
   </div>

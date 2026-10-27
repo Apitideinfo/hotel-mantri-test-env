@@ -70,7 +70,10 @@ async function runWhintaTestSuite() {
   console.log(`Test Hotel A: "${hotelA.hotel_name}" (${hotelA.id})`);
   console.log(`Test Hotel B: "${hotelB.hotel_name}" (${hotelB.id})\n`);
 
-  // ─── 1. WHINTA CONFIGURATION & PHONE NORMALIZATION ───────────────────────
+  const createdOutboxIds = [];
+
+  try {
+    // ─── 1. WHINTA CONFIGURATION & PHONE NORMALIZATION ───────────────────────
   console.log('--- TEST GROUP 1: Whinta Client & Phone Normalization ---');
   {
     const config = getWhintaConfig();
@@ -298,6 +301,7 @@ async function runWhintaTestSuite() {
 
     assert(outboxRecord && outboxRecord.id, 'Successfully records entry into notification_outbox');
     assert(outboxRecord.status === OUTBOX_STATUS.QUEUED, 'Initial status is queued');
+    if (outboxRecord?.id) createdOutboxIds.push(outboxRecord.id);
   }
 
   // ─── 5. TRUTHFUL DELIVERY STATE MACHINE & WEBHOOK VERIFICATION ───────────
@@ -330,6 +334,7 @@ async function runWhintaTestSuite() {
       businessDate: '2026-10-11',
       idempotencyKey: `webhook_test_${Date.now()}`,
     });
+    if (testEntry?.id) createdOutboxIds.push(testEntry.id);
 
     // Update with provider message ID
     await supabaseServiceRole
@@ -478,6 +483,19 @@ async function runWhintaTestSuite() {
       assert(secretLeakFound === false, 'Zero Whinta secrets or env variable tokens leaked in dist/ JavaScript bundles');
     } else {
       console.log('  ⚠️ dist/ directory not found (skipping bundle file audit)');
+    }
+  }
+
+  } finally {
+    if (createdOutboxIds.length > 0) {
+      try {
+        await supabaseServiceRole
+          .from('notification_outbox')
+          .delete()
+          .in('id', createdOutboxIds);
+      } catch (cleanupErr) {
+        console.warn('  ⚠️ Note: outbox cleanup warning:', cleanupErr?.message);
+      }
     }
   }
 

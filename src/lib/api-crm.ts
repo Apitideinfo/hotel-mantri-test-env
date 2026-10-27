@@ -42,13 +42,13 @@ export const searchGuests = async (query: string): Promise<Guest[]> => {
   if (!q) return getGuests();
   const { data, error } = await supabase
     .from('guests')
-    .select('*')
+    .select('id,hotel_id,name,mobile,email,address,city,state_name,pin_code,gst_number,company_name,vip_type,total_stays,total_spend,updated_at')
     .eq('hotel_id', hotelId)
     .or(`name.ilike.%${q}%,mobile.ilike.%${q}%,email.ilike.%${q}%,company_name.ilike.%${q}%,gst_number.ilike.%${q}%`)
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(20);
   if (error) throw error;
-  return (data as Guest[]) ?? [];
+  return (data as unknown as Guest[]) ?? [];
 };
 
 export const saveGuest = async (guest: Partial<Guest>, id?: string): Promise<Guest> => {

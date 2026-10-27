@@ -5,6 +5,7 @@ import type { DashboardSummary } from '@/lib/api';
 import { getDayWiseRevenue, type DayWiseRevenueData } from '@/lib/api-revenue';
 import { getTodayLocal, addDays } from '@/lib/calc';
 import { useAuth } from '@/lib/auth';
+import { queryClient } from '@/lib/queryClient';
 
 import { DashboardContextBar, type RevenueDateFilter } from '@/components/dashboard/DashboardContextBar';
 import { KpiSection } from '@/components/dashboard/KpiSection';
@@ -22,11 +23,13 @@ interface DashboardProps {
 export const Dashboard = ({ onNavigate }: DashboardProps) => {
   const { role, hotelName, hotelId } = useAuth();
   void role; // Available for staff specific conditionals if needed
-  const [summary, setSummary] = useState<DashboardSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   const todayStr = useMemo(() => getTodayLocal(), []);
+
+  const [summary, setSummary] = useState<DashboardSummary | null>(() => {
+    return hotelId ? (queryClient.getQueryData(['hotel', hotelId, 'dashboardSummary', todayStr]) as DashboardSummary | null) : null;
+  });
+  const [loading, setLoading] = useState(() => !summary);
+  const [error, setError] = useState<string | null>(null);
 
   // Date filter state
   const [dateFilter, setDateFilter] = useState<RevenueDateFilter>('today');
@@ -42,19 +45,20 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historyModalDate, setHistoryModalDate] = useState<string | undefined>(undefined);
 
-  const loadSummary = useCallback(async (dateToFetch?: string) => {
+  const loadSummary = useCallback(async (dateToFetch?: string, forceRefresh = false) => {
     try {
-      setLoading(true);
+      if (!summary || forceRefresh) setLoading(true);
       setError(null);
       const target = dateToFetch ?? selectedDate;
-      const data = await getDashboardSummary(target);
+      const data = await getDashboardSummary(target, forceRefresh);
       setSummary(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
-  }, [selectedDate, hotelId]);
+  }, [selectedDate, hotelId, summary]);
+
 
   const loadPeriodRevenue = useCallback(async () => {
     try {
@@ -118,9 +122,10 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
   };
 
   const refreshAll = () => {
-    loadSummary();
+    loadSummary(undefined, true);
     loadPeriodRevenue();
   };
+
 
   // Dynamic month name based on selected date
   const monthName = useMemo(() => {

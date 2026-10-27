@@ -33,6 +33,7 @@ import {
   isAutoAssignEnabled,
   setAutoAssignEnabled,
 } from '../services/RoomAssignmentService.js';
+import { enqueueChannelSyncJob } from '../services/channelSyncQueueService.js';
 import {
   generateAndDeliverConfirmation,
   buildReservationConfirmationEmail,
@@ -55,8 +56,25 @@ import {
 import { sendEmail, isValidEmail } from '../services/emailService.js';
 import { sendWhatsAppMessage, buildWhatsAppDirectUrl, normalizeWhatsAppPhone } from '../services/whatsappService.js';
 import { resolveHotelOwnerEmail } from '../services/notificationService.js';
-import { resolveHotelOwnerWhatsApp } from '../services/dailySummaryService.js';
 import { getSourceCategoryFromType } from '../services/sourceClassification.js';
+import { buildTenantCacheKey, del, wrapTenant } from '../services/redisService.js';
+import { invalidateRevenueCache } from '../services/RevenueCalculationService.js';
+
+export const invalidateReservationCaches = async (hotelId) => {
+  if (!hotelId) return;
+  try {
+    const metricsKey = buildTenantCacheKey(hotelId, 'resv', 'metrics');
+    const conflictsKey = buildTenantCacheKey(hotelId, 'conflicts', 'scan');
+    await Promise.all([
+      del(metricsKey),
+      del(conflictsKey),
+      invalidateRevenueCache(hotelId),
+    ]);
+  } catch (e) {
+    console.warn('[Reservations] Non-fatal cache invalidation warning:', e.message);
+  }
+};
+
 
 const router = express.Router();
 
@@ -238,37 +256,47 @@ router.get('/', checkAuth, async (req, res) => {
       paginatedReservations.push(...groupsMap.get(k));
     }
 
-    // Calculate Global Metrics independent of filters & pagination
-    const { data: allHotelRes } = await supabaseServiceRole
-      .from('reservations')
-      .select('id, group_id, status, room_no, invoice_total, rate, nights')
-      .eq('hotel_id', hotelId);
+    // Calculate Global Metrics independent of filters & pagination (tenant-cached with fail-open fallback)
+    const metrics = await wrapTenant(hotelId, 'resv', 'metrics', async () => {
+      const { data: allHotelRes } = await supabaseServiceRole
+        .from('reservations')
+        .select('id, group_id, status, room_no, invoice_total, rate, nights')
+        .eq('hotel_id', hotelId);
 
-    const seenMetricsKeys = new Set();
-    let totalBookings = 0;
-    let confirmedCount = 0;
-    let checkedInCount = 0;
-    let unassignedCount = 0;
-    let pipelineTariff = 0;
+      const seenMetricsKeys = new Set();
+      let totalBookings = 0;
+      let confirmedCount = 0;
+      let checkedInCount = 0;
+      let unassignedCount = 0;
+      let pipelineTariff = 0;
 
-    for (const r of (allHotelRes || [])) {
-      const roomKey = (r.room_no || '').trim().toLowerCase();
-      const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
-      const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
-      const key = dedupeKey || r.id;
+      for (const r of (allHotelRes || [])) {
+        const roomKey = (r.room_no || '').trim().toLowerCase();
+        const isPhysical = roomKey && roomKey !== 'unassigned' && roomKey !== 'tbd';
+        const dedupeKey = r.group_id && isPhysical ? `${r.group_id}::${roomKey}` : null;
+        const key = dedupeKey || r.id;
 
-      if (!seenMetricsKeys.has(key)) {
-        seenMetricsKeys.add(key);
-        totalBookings++;
-        if (r.status === 'confirmed') confirmedCount++;
-        if (r.status === 'checked_in') checkedInCount++;
-        if (!isPhysical) unassignedCount++;
-        const invoiceTotal = Number(r.invoice_total) || 0;
-        const rate = Number(r.rate) || 0;
-        const nights = Number(r.nights) || 1;
-        pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+        if (!seenMetricsKeys.has(key)) {
+          seenMetricsKeys.add(key);
+          totalBookings++;
+          if (r.status === 'confirmed') confirmedCount++;
+          if (r.status === 'checked_in') checkedInCount++;
+          if (!isPhysical) unassignedCount++;
+          const invoiceTotal = Number(r.invoice_total) || 0;
+          const rate = Number(r.rate) || 0;
+          const nights = Number(r.nights) || 1;
+          pipelineTariff += (invoiceTotal > 0 ? invoiceTotal : (rate * nights));
+        }
       }
-    }
+
+      return {
+        totalBookings,
+        confirmed: confirmedCount,
+        checkedIn: checkedInCount,
+        unassigned: unassignedCount,
+        totalRevenue: pipelineTariff
+      };
+    }, { ttlSeconds: 60 });
 
     res.json({
       success: true,
@@ -277,12 +305,12 @@ router.get('/', checkAuth, async (req, res) => {
       page: pageNum,
       pageSize: limit,
       totalPages: Math.ceil(totalGroupsCount / limit),
-      metrics: {
-        totalBookings,
-        confirmed: confirmedCount,
-        checkedIn: checkedInCount,
-        unassigned: unassignedCount,
-        totalRevenue: pipelineTariff
+      metrics: metrics || {
+        totalBookings: 0,
+        confirmed: 0,
+        checkedIn: 0,
+        unassigned: 0,
+        totalRevenue: 0
       }
     });
   } catch (err) {
@@ -306,11 +334,11 @@ router.get('/conflicts', checkAuth, async (req, res) => {
       return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.' });
     }
 
-    const conflicts = await detectExistingConflicts(hotelId);
+    const conflicts = await wrapTenant(hotelId, 'conflicts', 'scan', () => detectExistingConflicts(hotelId), { ttlSeconds: 60 });
     res.json({
       success: true,
-      conflicts,
-      count: conflicts.length,
+      conflicts: conflicts || [],
+      count: (conflicts || []).length,
     });
   } catch (err) {
     console.error('Error checking reservation conflicts:', err);
@@ -464,7 +492,34 @@ router.post('/', checkAuth, async (req, res) => {
       idempotencyKey,
     });
 
-    // Generate confirmation PDF and deliver confirmation email/notification in non-blocking background task
+    // Invalidate cached metrics, conflict scans, and revenue aggregates
+    invalidateReservationCaches(hotelId).catch(() => {});
+
+    // 1. Enqueue durable Aiosell channel manager inventory synchronization
+    try {
+      const dates = cleanList.map(r => ({ checkIn: r.check_in_date, checkOut: r.check_out_date }));
+      const minDate = dates.map(d => String(d.checkIn).slice(0, 10)).sort()[0];
+      const maxDate = dates.map(d => String(d.checkOut).slice(0, 10)).sort().reverse()[0];
+      const catIds = [...new Set(result.map(r => r.room_category_id).filter(Boolean))];
+
+      if (minDate && maxDate) {
+        enqueueChannelSyncJob({
+          hotelId,
+          jobType: 'INVENTORY_SYNC',
+          payload: {
+            startDate: minDate,
+            endDate: maxDate,
+            roomCategoryIds: catIds.length > 0 ? catIds : null,
+            triggeredBy: 'RESERVATION_CREATED'
+          },
+          idempotencyKey: `INV_SYNC:${hotelId}:${minDate}:${maxDate}`
+        }).catch(err => console.warn('[Reservations] Enqueue sync job non-fatal warning:', err.message));
+      }
+    } catch (qErr) {
+      console.warn('[Reservations] Enqueue sync job error (non-fatal):', qErr.message);
+    }
+
+    // 2. Generate confirmation PDF and deliver confirmation email/notification in non-blocking background task
     setImmediate(async () => {
       for (const resItem of result) {
         try {
@@ -562,6 +617,9 @@ router.put('/:id', checkAuth, async (req, res) => {
       userId,
     });
 
+    // Invalidate cached metrics, conflict scans, and revenue aggregates
+    invalidateReservationCaches(hotelId).catch(() => {});
+
     // Asynchronously generate versioned modification confirmation
     (async () => {
       try {
@@ -612,6 +670,9 @@ router.post('/:id/assign-room', checkAuth, async (req, res) => {
       roomId,
       userId,
     });
+
+    // Invalidate cached metrics, conflict scans, and revenue aggregates
+    invalidateReservationCaches(hotelId).catch(() => {});
 
     (async () => {
       try {
@@ -664,6 +725,7 @@ router.post('/:id/auto-assign', checkAuth, async (req, res) => {
     });
 
     if (result.success && !dryRun) {
+      invalidateReservationCaches(hotelId).catch(() => {});
       (async () => {
         try {
           const { data: updatedRes } = await supabaseServiceRole
@@ -707,6 +769,9 @@ router.post('/auto-assign-all', checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
     const result = await batchAutoAssignReservations(hotelId);
+    if (result.assignedCount > 0) {
+      invalidateReservationCaches(hotelId).catch(() => {});
+    }
     res.json({
       success: true,
       message: `Processed ${result.total} unassigned reservations: ${result.assignedCount} assigned, ${result.unassignedCount} remaining.`,
@@ -769,6 +834,9 @@ router.post('/:id/extend', checkAuth, async (req, res) => {
       userId,
     });
 
+    // Invalidate cached metrics, conflict scans, and revenue aggregates
+    invalidateReservationCaches(hotelId).catch(() => {});
+
     (async () => {
       try {
         await generateAndDeliverConfirmation({
@@ -815,6 +883,10 @@ router.post('/:id/check-in', checkAuth, async (req, res) => {
       reservationId: id,
       userId,
     });
+
+    if (result.success) {
+      invalidateReservationCaches(hotelId).catch(() => {});
+    }
 
     res.json(result);
   } catch (err) {
@@ -866,6 +938,9 @@ router.delete('/:id', checkAuth, async (req, res) => {
         }
       })().catch(e => console.error('[API /reservations/:id] Cancellation worker error:', e));
     }
+
+    // Invalidate cached metrics, conflict scans, and revenue aggregates
+    invalidateReservationCaches(hotelId).catch(() => {});
 
     res.json({ success: true, message: 'Reservation cancelled successfully.' });
   } catch (err) {

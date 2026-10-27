@@ -21,6 +21,7 @@ import {
 } from './ReservationConflictService.js';
 import { checkManualDuplicate, withBookingLock } from './ReservationIdempotencyService.js';
 import { isValidEmail } from './emailService.js';
+import { wrapTenant } from './redisService.js';
 
 /**
  * Authoritative set of PostgreSQL columns in the 'reservations' table.
@@ -971,30 +972,47 @@ export const resolveHotelRoomCategory = async (hotelId, {
 
   const rawCandidates = [roomCode, ratePlan, roomName].filter(Boolean).map(s => String(s).trim());
 
+  // Batch fetch & tenant-cache channel mappings and room categories (TTL 5 mins, fail-open)
+  const [roomMappings, rateMappings, categories] = await Promise.all([
+    wrapTenant(hotelId, 'channel_mappings', 'rooms', async () => {
+      const { data } = await supabase
+        .from('channel_room_mappings')
+        .select('room_category_id, external_room_code')
+        .eq('hotel_id', hotelId);
+      return data || [];
+    }, { ttlSeconds: 300 }),
+    wrapTenant(hotelId, 'channel_mappings', 'rates', async () => {
+      const { data } = await supabase
+        .from('channel_rate_mappings')
+        .select('room_category_id, external_room_code, external_rate_plan_code')
+        .eq('hotel_id', hotelId);
+      return data || [];
+    }, { ttlSeconds: 300 }),
+    wrapTenant(hotelId, 'metadata', 'room_categories', async () => {
+      const { data } = await supabase
+        .from('room_categories')
+        .select('id, name, is_active')
+        .eq('hotel_id', hotelId);
+      return data || [];
+    }, { ttlSeconds: 300 }),
+  ]);
+
+  const catMap = new Map((categories || []).map(c => [c.id, c.name]));
+
   // LEVEL 1 — Existing explicit mapping in channel_room_mappings
   for (const term of rawCandidates) {
     if (!term || term.toLowerCase() === 'ota') continue;
     const strippedTerm = term.replace(/[-_](s|d|t|q|p)?(ep|cp|map|ap)$/i, '');
-    const searchTerms = [term, strippedTerm];
+    const searchTerms = [term.toLowerCase(), strippedTerm.toLowerCase()];
 
     for (const st of searchTerms) {
-      const { data: mapping } = await supabase
-        .from('channel_room_mappings')
-        .select('room_category_id, external_room_code')
-        .eq('hotel_id', hotelId)
-        .ilike('external_room_code', st)
-        .maybeSingle();
-
-      if (mapping && mapping.room_category_id) {
-        const { data: cat } = await supabase
-          .from('room_categories')
-          .select('id, name')
-          .eq('id', mapping.room_category_id)
-          .maybeSingle();
-
-        if (cat) {
-          return { categoryId: cat.id, categoryName: cat.name, source: 'channel_room_mapping' };
-        }
+      const mapping = (roomMappings || []).find(m => (m.external_room_code || '').trim().toLowerCase() === st);
+      if (mapping && mapping.room_category_id && catMap.has(mapping.room_category_id)) {
+        return {
+          categoryId: mapping.room_category_id,
+          categoryName: catMap.get(mapping.room_category_id),
+          source: 'channel_room_mapping',
+        };
       }
     }
   }
@@ -1004,24 +1022,26 @@ export const resolveHotelRoomCategory = async (hotelId, {
   for (const term of rawCandidates) {
     if (!term || term.toLowerCase() === 'ota') continue;
     const strippedTerm = term.replace(/[-_](s|d|t|q|p)?(ep|cp|map|ap)$/i, '');
+    const tLow = term.toLowerCase();
+    const stLow = strippedTerm.toLowerCase();
 
-    const { data: rateMapping } = await supabase
-      .from('channel_rate_mappings')
-      .select('room_category_id, external_room_code, external_rate_plan_code')
-      .eq('hotel_id', hotelId)
-      .or(`external_rate_plan_code.ilike.%${term}%,external_room_code.ilike.%${term}%,external_rate_plan_code.ilike.%${strippedTerm}%,external_room_code.ilike.%${strippedTerm}%`)
-      .limit(1);
+    const rateMapping = (rateMappings || []).find(rm => {
+      const codeLow = (rm.external_room_code || '').toLowerCase();
+      const planLow = (rm.external_rate_plan_code || '').toLowerCase();
+      return (
+        codeLow.includes(tLow) ||
+        planLow.includes(tLow) ||
+        codeLow.includes(stLow) ||
+        planLow.includes(stLow)
+      );
+    });
 
-    if (rateMapping && rateMapping.length > 0 && rateMapping[0].room_category_id) {
-      const { data: cat } = await supabase
-        .from('room_categories')
-        .select('id, name')
-        .eq('id', rateMapping[0].room_category_id)
-        .maybeSingle();
-
-      if (cat) {
-        return { categoryId: cat.id, categoryName: cat.name, source: 'channel_rate_mapping' };
-      }
+    if (rateMapping && rateMapping.room_category_id && catMap.has(rateMapping.room_category_id)) {
+      return {
+        categoryId: rateMapping.room_category_id,
+        categoryName: catMap.get(rateMapping.room_category_id),
+        source: 'channel_rate_mapping',
+      };
     }
   }
 
@@ -1114,13 +1134,7 @@ export const resolveHotelRoomCategory = async (hotelId, {
     }
   }
 
-  // Fetch all active room categories for this hotel
-  const { data: categories, error: catErr } = await supabase
-    .from('room_categories')
-    .select('id, name, is_active')
-    .eq('hotel_id', hotelId);
-
-  if (catErr || !categories || categories.length === 0) {
+  if (!categories || categories.length === 0) {
     return null;
   }
 

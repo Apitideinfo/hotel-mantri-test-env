@@ -282,7 +282,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
     }
   }, [startDate, endDate]);
 
+  const lastRefreshTimeRef = useRef<number>(0);
   const refreshAll = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshTimeRef.current < 400) {
+      return; // Skip duplicate refresh storm within 400ms
+    }
+    lastRefreshTimeRef.current = now;
     checkConflicts();
     if (view === 'list') {
       loadListData();
@@ -2019,6 +2025,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
             const created = await saveReservations(list);
+            if (created && created.length > 0) {
+              setPaginatedData((prev) => ({
+                ...prev,
+                reservations: [...created, ...prev.reservations],
+                totalCount: prev.totalCount + created.length,
+              }));
+            }
             return created;
           }}
         />

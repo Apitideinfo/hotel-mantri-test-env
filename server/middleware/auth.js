@@ -32,6 +32,14 @@ export const timingSafeSecretEqual = (a, b) => {
   return crypto.timingSafeEqual(hashA, hashB);
 };
 
+// In-memory cache for validated auth contexts (TTL: 60s)
+const authContextCache = new Map();
+const AUTH_CACHE_TTL_MS = 60 * 1000;
+
+export const clearAuthCache = () => {
+  authContextCache.clear();
+};
+
 let customHotelResolver = null;
 
 export const setHotelResolverForTesting = (resolverFn) => {
@@ -97,7 +105,7 @@ export const resolveAuthorizedHotel = async (req) => {
       role: 'super_admin',
       isSuperAdmin: true,
       hotelId: requestedHotelId,
-      hotel: { id: requestedHotelId },
+      hotel: { id: requestedHotelId, hotel_name: 'System Service' },
       scopedSupabase: createClient(supabaseConfig.url, serviceKey, {
         auth: {
           persistSession: false,
@@ -106,6 +114,33 @@ export const resolveAuthorizedHotel = async (req) => {
       }),
     };
   }
+
+  // Fast-path: Check memory cache for validated user auth context
+  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const cacheKey = `${tokenHash}:${requestedHotelId || 'default'}`;
+  const now = Date.now();
+  const cachedAuth = authContextCache.get(cacheKey);
+
+  if (cachedAuth && cachedAuth.expiresAt > now) {
+    req.recordTiming?.('auth', 0.1, 'cache-hit');
+    return {
+      ...cachedAuth.context,
+      scopedSupabase: createClient(supabaseConfig.url, supabaseConfig.anonKey, {
+        global: {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }),
+    };
+  }
+
+  const tAuthStart = performance.now();
 
   // Normal user token validation via Supabase Auth
   const scopedSupabase = createClient(supabaseConfig.url, supabaseConfig.anonKey, {
@@ -129,8 +164,6 @@ export const resolveAuthorizedHotel = async (req) => {
       message: 'Authentication token is invalid or has expired.',
     };
   }
-
-  const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
 
   // Check Super Admin privilege via RPC is_super_admin()
   let isSuperAdmin = false;
@@ -182,7 +215,7 @@ export const resolveAuthorizedHotel = async (req) => {
       };
     }
 
-    return {
+    const superAdminContext = {
       success: true,
       user,
       userId: user.id,
@@ -190,6 +223,16 @@ export const resolveAuthorizedHotel = async (req) => {
       isSuperAdmin: true,
       hotelId: requestedHotelId,
       hotel,
+    };
+
+    authContextCache.set(cacheKey, {
+      context: superAdminContext,
+      expiresAt: now + AUTH_CACHE_TTL_MS,
+    });
+    req.recordTiming?.('auth', performance.now() - tAuthStart, 'super-admin-db');
+
+    return {
+      ...superAdminContext,
       scopedSupabase,
     };
   }
@@ -270,7 +313,7 @@ export const resolveAuthorizedHotel = async (req) => {
     shift: user.user_metadata?.shift || 'General',
   };
 
-  return {
+  const resolvedContext = {
     success: true,
     user,
     userId: user.id,
@@ -279,6 +322,22 @@ export const resolveAuthorizedHotel = async (req) => {
     isSuperAdmin: false,
     hotelId: authorizedHotelId,
     hotel: hotel || { id: authorizedHotelId, hotel_name: 'Hotel' },
+  };
+
+  if (authContextCache.size > 1000) {
+    for (const [k, v] of authContextCache.entries()) {
+      if (v.expiresAt <= now) authContextCache.delete(k);
+    }
+  }
+
+  authContextCache.set(cacheKey, {
+    context: resolvedContext,
+    expiresAt: now + AUTH_CACHE_TTL_MS,
+  });
+  req.recordTiming?.('auth', performance.now() - tAuthStart, 'user-db');
+
+  return {
+    ...resolvedContext,
     scopedSupabase,
   };
 };

@@ -755,17 +755,6 @@ export const OperationsBoard: React.FC<OperationsBoardProps> = ({
     try {
       const inputs = Array.isArray(input) ? input : [input];
       
-      for (const i of inputs) {
-        const available = await checkRoomAvailability(
-          i.room_no, i.check_in_date, i.check_out_date, id,
-        );
-        if (!available) {
-          const msg = `Room ${i.room_no} is already booked for part of this stay. Please choose another room or change the dates.`;
-          setError(msg);
-          throw new Error(msg);
-        }
-      }
-      
       let created = [];
       if (id && id.trim() !== '') {
         const single = await saveReservation(inputs[0], id);

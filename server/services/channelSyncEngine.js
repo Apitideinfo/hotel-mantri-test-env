@@ -2,6 +2,7 @@ import { supabaseServiceRole as supabase } from '../supabaseClient.js';
 import * as aiosellService from './aiosellService.js';
 import { getChannelProviderConfig } from './providerConfig.js';
 import { calculateAuthoritativeInventory } from '../routes/aiosell.js';
+import * as redisService from './redisService.js';
 
 /**
  * Deterministic UTC-based date list generator.
@@ -120,6 +121,14 @@ const pendingCoalescedEvents = new Map();
  */
 export const resolveAuthoritativeMappings = async (hotelId, hotelConfig, channelId = null, client = null) => {
   const db = client || supabase;
+
+  // Tenant-scoped Redis cache for channel mappings (10 min TTL)
+  const cacheKey = redisService.buildTenantCacheKey(hotelId, 'channel_mappings', channelId || 'all');
+  const cached = await redisService.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   // 1. Query Hotel Categories
   const { data: allCategories, error: catError } = await db
     .from('room_categories')
@@ -239,13 +248,18 @@ export const resolveAuthoritativeMappings = async (hotelId, hotelConfig, channel
     }
   }
 
-  return {
+  const result = {
     categories: allCategories || [],
     categoryToRoomCode,
     roomCodeToCategory,
     effectivePairs,
     externalCatalogue
   };
+
+  // Cache in Redis (10 min TTL)
+  redisService.set(cacheKey, result, { ttlSeconds: 600 }).catch(() => {});
+
+  return result;
 };
 
 /**

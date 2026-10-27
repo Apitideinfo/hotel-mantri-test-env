@@ -65,6 +65,12 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${port}`;
   console.log(`Test API server listening on ${baseUrl}\n`);
 
+  let hotelA = null;
+  let hotelB = null;
+  let channelA = null;
+  let originalSettings = null;
+  let originalChannelState = null;
+
   try {
     // 1. Fetch two valid hotel records from DB to test multi-tenancy & cross-hotel isolation
     const { data: hotels, error: hotelsErr } = await supabaseServiceRole
@@ -76,8 +82,8 @@ async function run() {
       throw new Error(`Need at least 2 hotels in database to test isolation. Found: ${hotels?.length || 0}`);
     }
 
-    const hotelA = hotels[0];
-    const hotelB = hotels[1];
+    hotelA = hotels[0];
+    hotelB = hotels[1];
     console.log(`Hotel A (Target): ${hotelA.hotel_name} (${hotelA.id})`);
     console.log(`Hotel B (Foreign): ${hotelB.hotel_name} (${hotelB.id})\n`);
 
@@ -104,7 +110,7 @@ async function run() {
       .limit(1)
       .maybeSingle();
 
-    let channelA = existingChannel;
+    channelA = existingChannel;
     if (!channelA) {
       const { data: newCh } = await supabaseServiceRole
         .from('channel_connections')
@@ -119,6 +125,19 @@ async function run() {
         .single();
       channelA = newCh;
     }
+
+    // Snapshot original channel settings and channel status to restore after test
+    const { data: settingsData } = await supabaseServiceRole
+      .from('channel_settings')
+      .select('*')
+      .eq('hotel_id', hotelA.id)
+      .maybeSingle();
+    originalSettings = settingsData;
+
+    originalChannelState = {
+      is_enabled: channelA?.is_enabled ?? true,
+      channel_name: channelA?.channel_name || channelA?.display_name || 'MakeMyTrip Test'
+    };
 
     // ─────────────────────────────────────────────────────────────────────────
     // TEST SECTION 1: Hotel Owner Restrictions (Mutations Forbidden - 403)
@@ -355,6 +374,50 @@ async function run() {
   } finally {
     setHotelResolverForTesting(null);
     server.close();
+
+    try {
+      // 1. Clean up test mapping if created
+      if (channelA) {
+        await supabaseServiceRole
+          .from('channel_room_mappings')
+          .delete()
+          .eq('channel_id', channelA.id)
+          .eq('channel_room_code', 'DELUXE_KG');
+
+        // 2. Restore channel_connections state
+        if (originalChannelState) {
+          await supabaseServiceRole
+            .from('channel_connections')
+            .update({
+              is_enabled: originalChannelState.is_enabled,
+              channel_name: originalChannelState.channel_name
+            })
+            .eq('id', channelA.id);
+        }
+      }
+
+      // 3. Restore channel_settings to original state or delete test code
+      if (hotelA) {
+        if (originalSettings) {
+          await supabaseServiceRole
+            .from('channel_settings')
+            .update({
+              aiosell_hotel_code: originalSettings.aiosell_hotel_code,
+              aiosell_partner_id: originalSettings.aiosell_partner_id,
+              environment: originalSettings.environment
+            })
+            .eq('hotel_id', hotelA.id);
+        } else {
+          await supabaseServiceRole
+            .from('channel_settings')
+            .delete()
+            .eq('hotel_id', hotelA.id)
+            .like('aiosell_hotel_code', 'TEST_CODE_%');
+        }
+      }
+    } catch (cleanupErr) {
+      console.warn('  ⚠️ Note: channel cleanup warning:', cleanupErr?.message);
+    }
   }
 }
 
