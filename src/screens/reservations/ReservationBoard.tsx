@@ -224,9 +224,11 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   }, []);
 
   // Load List View Data with stale-response protection
-  const loadListData = useCallback(async () => {
+  const loadListData = useCallback(async (isBackground = false) => {
     const currentSeq = ++listReqSeqRef.current;
-    setLoading(true);
+    if (!isBackground) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const res = await getReservationsPaginated({
@@ -283,15 +285,16 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
   }, [startDate, endDate]);
 
   const lastRefreshTimeRef = useRef<number>(0);
-  const refreshAll = useCallback(() => {
+  const refreshAll = useCallback((opts?: boolean | React.MouseEvent) => {
+    const isBackground = typeof opts === 'boolean' ? opts : false;
     const now = Date.now();
-    if (now - lastRefreshTimeRef.current < 400) {
-      return; // Skip duplicate refresh storm within 400ms
+    if (now - lastRefreshTimeRef.current < 500) {
+      return; // Skip duplicate refresh storm within 500ms
     }
     lastRefreshTimeRef.current = now;
     checkConflicts();
     if (view === 'list') {
-      loadListData();
+      loadListData(isBackground);
     } else {
       loadMatrixData();
     }
@@ -2020,7 +2023,7 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
             setFilterRoomNo('all');
             setPage(1);
             setSuccessMsg('Reservation created successfully.');
-            refreshAll();
+            // onSave already added newly created items into local state; background refresh handles sync smoothly
           }}
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];

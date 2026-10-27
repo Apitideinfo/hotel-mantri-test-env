@@ -242,12 +242,6 @@ export const saveReservation = async (
         body: JSON.stringify(input),
       });
       if (res?.reservation) {
-        dispatchChannelEvent('RESERVATION_CREATED', {
-          startDate: res.reservation.check_in_date,
-          endDate: res.reservation.check_out_date,
-          room_no: res.reservation.room_no,
-          room_id: res.reservation.room_id,
-        }).catch(e => console.warn('[saveReservation] Auto-sync warning:', e));
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
         }
@@ -577,14 +571,6 @@ export const saveReservations = async (
       body: JSON.stringify(normalizedInputs),
     });
     if (res?.reservations && Array.isArray(res.reservations) && res.reservations.length > 0) {
-      for (const r of res.reservations) {
-        dispatchChannelEvent('RESERVATION_CREATED', {
-          startDate: r.check_in_date,
-          endDate: r.check_out_date,
-          room_no: r.room_no,
-          room_id: r.room_id,
-        }).catch((e) => console.warn('[saveReservations] Auto-sync warning:', e));
-      }
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('hotel_mantri_reservations_updated'));
       }

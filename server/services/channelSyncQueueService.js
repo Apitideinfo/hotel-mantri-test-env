@@ -12,6 +12,7 @@
 import { supabaseServiceRole as supabase } from '../supabaseClient.js';
 import * as redisService from './redisService.js';
 import { syncRates, syncInventory, reconcileInventory } from './channelSyncEngine.js';
+import { generateAndDeliverConfirmation } from './reservationDeliveryService.js';
 
 const DEFAULT_MAX_ATTEMPTS = 5;
 const WORKER_LOCK_TTL_MS = 45000; // 45 seconds
@@ -309,6 +310,17 @@ export const processPendingSyncJobs = async (hotelId, { maxJobsToProcess = 5 } =
               endDate: job.payload.endDate,
               roomCategoryIds: job.payload.roomCategoryIds || null,
               autoRepair: true
+            });
+            break;
+          }
+
+          case 'NOTIFICATION_DELIVERY': {
+            const { reservationId, eventType, generatedBy } = job.payload || {};
+            result = await generateAndDeliverConfirmation({
+              hotelId: job.hotel_id,
+              reservationId,
+              eventType: eventType || 'NEW_RESERVATION',
+              generatedBy: generatedBy || 'SYSTEM',
             });
             break;
           }

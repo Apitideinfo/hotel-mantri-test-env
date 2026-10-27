@@ -157,7 +157,10 @@ export const checkManualDuplicate = async (hotelId, payload, excludeId = null) =
   const paymentRef = (payload.payment_ref || '').trim();
   const idempKey = (payload.idempotency_key || payload.idempotencyKey || payload.client_reference || '').trim();
 
-  // 1. Check client idempotency key if supplied
+  // 1. Prepare independent query promises to execute concurrently
+  const checks = [];
+
+  // Check client idempotency key if supplied
   if (idempKey) {
     const marker = `[CLIENT_IDEMP: ${idempKey}]`;
     let q = supabase
@@ -170,40 +173,49 @@ export const checkManualDuplicate = async (hotelId, payload, excludeId = null) =
 
     if (excludeId) q = q.neq('id', excludeId);
 
-    const { data: existing } = await q;
-    if (existing && existing.length > 0) {
-      return {
-        duplicate: true,
-        code: 'RESERVATION_IDEMPOTENT_EXISTS',
-        message: `Reservation already created for reference '${idempKey}'.`,
-        existing: existing[0],
-      };
-    }
+    checks.push(
+      q.then(({ data: existing, error }) => {
+        if (!error && existing && existing.length > 0) {
+          return {
+            duplicate: true,
+            code: 'RESERVATION_IDEMPOTENT_EXISTS',
+            message: `Reservation already created for reference '${idempKey}'.`,
+            existing: existing[0],
+          };
+        }
+        return null;
+      })
+    );
   }
 
-  // 2. If a non-empty payment reference / UTR is provided, verify uniqueness
+  // If a non-empty payment reference / UTR is provided, verify uniqueness concurrently
   if (paymentRef) {
     let q = supabase
       .from('reservations')
       .select('id, guest_name, check_in_date, check_out_date, room_no')
       .eq('hotel_id', hotelId)
       .eq('payment_ref', paymentRef)
-      .in('status', ['confirmed', 'checked_in']);
+      .in('status', ['confirmed', 'checked_in'])
+      .limit(1);
 
     if (excludeId) q = q.neq('id', excludeId);
 
-    const { data: existing } = await q;
-    if (existing && existing.length > 0) {
-      return {
-        duplicate: true,
-        code: 'RESERVATION_DUPLICATE',
-        message: `A booking with payment reference '${paymentRef}' already exists (${existing[0].guest_name}, Room ${existing[0].room_no}).`,
-        existing: existing[0],
-      };
-    }
+    checks.push(
+      q.then(({ data: existing, error }) => {
+        if (!error && existing && existing.length > 0) {
+          return {
+            duplicate: true,
+            code: 'RESERVATION_DUPLICATE',
+            message: `A booking with payment reference '${paymentRef}' already exists (${existing[0].guest_name}, Room ${existing[0].room_no}).`,
+            existing: existing[0],
+          };
+        }
+        return null;
+      })
+    );
   }
 
-  // 3. Rapid double-click protection (identical guest, phone, dates, room within 15 seconds)
+  // Rapid double-click protection (identical guest, phone, dates, room within 15 seconds)
   const phone = (payload.guest_phone || payload.phone || '').trim().replace(/\D/g, '');
   const roomNo = (payload.room_no || '').trim().toLowerCase();
   const checkIn = (payload.check_in_date || '').slice(0, 10);
@@ -224,15 +236,26 @@ export const checkManualDuplicate = async (hotelId, payload, excludeId = null) =
 
     if (excludeId) q = q.neq('id', excludeId);
 
-    const { data: recent } = await q;
-    if (recent && recent.length > 0) {
-      return {
-        duplicate: true,
-        code: 'RESERVATION_DUPLICATE_RAPID',
-        message: `A booking for Room ${recent[0].room_no} with identical dates was just created (${recent[0].guest_name}).`,
-        existing: recent[0],
-      };
-    }
+    checks.push(
+      q.then(({ data: recent, error }) => {
+        if (!error && recent && recent.length > 0) {
+          return {
+            duplicate: true,
+            code: 'RESERVATION_DUPLICATE_RAPID',
+            message: `A booking for Room ${recent[0].room_no} with identical dates was just created (${recent[0].guest_name}).`,
+            existing: recent[0],
+          };
+        }
+        return null;
+      })
+    );
+  }
+
+  if (checks.length === 0) return { duplicate: false };
+
+  const results = await Promise.all(checks);
+  for (const res of results) {
+    if (res && res.duplicate) return res;
   }
 
   return { duplicate: false };
