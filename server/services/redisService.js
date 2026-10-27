@@ -16,6 +16,28 @@ import crypto from 'crypto';
 // In-memory fallback mutexes for when Redis is unconfigured or degraded
 const localMutexes = new Map();
 
+// In-memory fallback cache with TTL support for fail-open resilience
+const localFallbackCache = new Map();
+const MAX_LOCAL_CACHE_ENTRIES = 2000;
+
+const pruneLocalCacheIfNeeded = () => {
+  if (localFallbackCache.size <= MAX_LOCAL_CACHE_ENTRIES) return;
+  const now = Date.now();
+  for (const [k, v] of localFallbackCache.entries()) {
+    if (v.expiresAt <= now) {
+      localFallbackCache.delete(k);
+    }
+  }
+  if (localFallbackCache.size > MAX_LOCAL_CACHE_ENTRIES) {
+    const iter = localFallbackCache.keys();
+    for (let i = 0; i < 200; i++) {
+      const n = iter.next();
+      if (n.done) break;
+      localFallbackCache.delete(n.value);
+    }
+  }
+};
+
 // Runtime metrics
 const metrics = {
   hits: 0,
@@ -78,6 +100,7 @@ export const getRedisClient = () => {
 export const resetRedisClient = () => {
   clientInstance = null;
   clientInitialized = false;
+  localFallbackCache.clear();
 };
 
 /**
@@ -89,16 +112,24 @@ export const isRedisConfigured = () => {
 
 /**
  * Probes Redis health with a fast PING.
- * Returns { healthy: boolean, latencyMs: number, status: string }.
+ * Returns detailed connectivity, latency, and mode without exposing credentials.
  */
 export const checkRedisHealth = async () => {
-  const configured = isRedisConfigured();
+  const urlConfigured = Boolean(process.env.UPSTASH_REDIS_REST_URL);
+  const tokenConfigured = Boolean(process.env.UPSTASH_REDIS_REST_TOKEN);
+  const configured = urlConfigured && tokenConfigured;
+
   if (!configured) {
     return {
       healthy: false,
       latencyMs: 0,
       status: 'UNCONFIGURED',
       mode: 'LOCAL_IN_PROCESS_FALLBACK',
+      remoteConfigured: false,
+      remoteUrlConfigured: urlConfigured,
+      remoteTokenConfigured: tokenConfigured,
+      fallbackCacheSize: localFallbackCache.size,
+      diagnosticNote: 'Operating in local in-process fallback mode. To activate remote Redis, configure UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN in Vercel environment variables.',
     };
   }
 
@@ -109,6 +140,10 @@ export const checkRedisHealth = async () => {
       latencyMs: 0,
       status: 'INIT_FAILED',
       mode: 'LOCAL_IN_PROCESS_FALLBACK',
+      remoteConfigured: true,
+      remoteUrlConfigured: urlConfigured,
+      remoteTokenConfigured: tokenConfigured,
+      fallbackCacheSize: localFallbackCache.size,
     };
   }
 
@@ -122,6 +157,10 @@ export const checkRedisHealth = async () => {
       latencyMs,
       status: healthy ? 'HEALTHY' : 'UNEXPECTED_RESPONSE',
       mode: 'REMOTE_UPSTASH_REST',
+      remoteConfigured: true,
+      remoteUrlConfigured: true,
+      remoteTokenConfigured: true,
+      fallbackCacheSize: localFallbackCache.size,
     };
   } catch (err) {
     metrics.errors++;
@@ -133,6 +172,10 @@ export const checkRedisHealth = async () => {
       status: 'ERROR',
       mode: 'LOCAL_IN_PROCESS_FALLBACK',
       error: err.message,
+      remoteConfigured: true,
+      remoteUrlConfigured: urlConfigured,
+      remoteTokenConfigured: tokenConfigured,
+      fallbackCacheSize: localFallbackCache.size,
     };
   }
 };
@@ -149,11 +192,20 @@ export const buildTenantCacheKey = (hotelId, namespace, subKey = 'default') => {
 /**
  * Safe GET from cache.
  * Returns parsed JSON object or primitive, or null on cache miss / failure.
+ * Reads from remote Upstash Redis when available; falls back to local in-process cache.
  */
 export const get = async (key) => {
   const client = getRedisClient();
   if (!client) {
-    metrics.bypasses++;
+    const entry = localFallbackCache.get(key);
+    if (entry) {
+      if (entry.expiresAt > Date.now()) {
+        metrics.hits++;
+        return typeof entry.value === 'object' ? JSON.parse(JSON.stringify(entry.value)) : entry.value;
+      }
+      localFallbackCache.delete(key);
+    }
+    metrics.misses++;
     return null;
   }
 
@@ -166,23 +218,33 @@ export const get = async (key) => {
     metrics.misses++;
     return null;
   } catch (err) {
-    // Non-fatal fail-open fallback
-    metrics.misses++;
+    // Non-fatal fail-open fallback to local cache
     metrics.errors++;
     metrics.lastError = err.message;
     metrics.lastErrorAt = new Date().toISOString();
+    const entry = localFallbackCache.get(key);
+    if (entry && entry.expiresAt > Date.now()) {
+      metrics.hits++;
+      return typeof entry.value === 'object' ? JSON.parse(JSON.stringify(entry.value)) : entry.value;
+    }
+    metrics.misses++;
     return null;
   }
 };
 
 /**
  * Safe SET into cache with explicit TTL.
+ * Writes to remote Upstash Redis and caches in local memory fail-open.
  */
 export const set = async (key, value, { ttlSeconds = 300 } = {}) => {
+  const expiresAt = Date.now() + (ttlSeconds > 0 ? ttlSeconds * 1000 : 300 * 1000);
+  pruneLocalCacheIfNeeded();
+  localFallbackCache.set(key, { value, expiresAt });
+
   const client = getRedisClient();
   if (!client) {
-    metrics.bypasses++;
-    return false;
+    metrics.sets++;
+    return true;
   }
 
   try {
@@ -198,7 +260,8 @@ export const set = async (key, value, { ttlSeconds = 300 } = {}) => {
     metrics.errors++;
     metrics.lastError = err.message;
     metrics.lastErrorAt = new Date().toISOString();
-    return false;
+    // Return true because in-memory fallback already succeeded
+    return true;
   }
 };
 
@@ -206,8 +269,12 @@ export const set = async (key, value, { ttlSeconds = 300 } = {}) => {
  * Safe DEL key from cache.
  */
 export const del = async (key) => {
+  localFallbackCache.delete(key);
   const client = getRedisClient();
-  if (!client) return false;
+  if (!client) {
+    metrics.dels++;
+    return true;
+  }
 
   try {
     await client.del(key);
@@ -223,6 +290,13 @@ export const del = async (key) => {
  * Deletes all keys matching a specific pattern (e.g. hm:cache:{hotelId}:*).
  */
 export const delPattern = async (pattern) => {
+  const regexPattern = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+  for (const k of localFallbackCache.keys()) {
+    if (regexPattern.test(k)) {
+      localFallbackCache.delete(k);
+    }
+  }
+
   const client = getRedisClient();
   if (!client) return 0;
 

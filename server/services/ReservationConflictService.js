@@ -270,7 +270,7 @@ export const checkRoomAvailability = async ({
     }
   }
 
-  return { available: true };
+  return { available: true, roomId: physicalRoom?.id || null };
 };
 
 /**
@@ -374,11 +374,14 @@ export const checkCategoryCapacity = async ({
 export const detectExistingConflicts = async (hotelId) => {
   const supabase = supabaseServiceRole;
 
+  // Bounded scan: query only non-historical active stays (past 30 days onward) with projected columns
+  const cutoffDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const { data: reservations, error } = await supabase
     .from('reservations')
-    .select('*')
+    .select('id, room_no, room_id, guest_name, check_in_date, check_out_date, status, source_name, source_category, group_id')
     .eq('hotel_id', hotelId)
     .in('status', ['confirmed', 'checked_in'])
+    .gte('check_out_date', cutoffDate)
     .order('check_in_date', { ascending: true });
 
   if (error || !reservations) return [];

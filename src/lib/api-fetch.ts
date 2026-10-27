@@ -81,6 +81,7 @@ export const apiFetch = async (
     ...options.headers,
   };
 
+  const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   let response: Response;
   try {
     response = await fetch(url, { ...options, headers });
@@ -105,6 +106,13 @@ export const apiFetch = async (
         : error.message || 'A network error occurred.',
       status: 0
     } as ApiError;
+  }
+
+  const ttfb = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+  const serverTiming = response.headers.get('Server-Timing');
+  const reqId = response.headers.get('x-request-id') || response.headers.get('X-Request-Id');
+  if (ttfb > 250 || options.method === 'POST') {
+    console.debug(`[API_FETCH] ${options.method || 'GET'} ${cleanEndpoint} -> ${response.status} (TTFB: ${Math.round(ttfb)}ms${serverTiming ? `, Server-Timing: ${serverTiming}` : ''}${reqId ? `, ReqID: ${reqId}` : ''})`);
   }
 
   // Handle 401 token expiry with single retry

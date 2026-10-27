@@ -483,7 +483,7 @@ router.post('/', checkAuth, async (req, res) => {
     const bodyIdemp = req.body?.idempotency_key || req.body?.idempotencyKey || req.body?.client_reference || null;
     const idempotencyKey = (headerIdemp || bodyIdemp || '').trim() || null;
 
-    const result = await createReservationsAtomically({
+    const commitFn = () => createReservationsAtomically({
       hotelId,
       inputs: cleanList,
       userId,
@@ -492,10 +492,12 @@ router.post('/', checkAuth, async (req, res) => {
       idempotencyKey,
     });
 
+    const result = req.timeStep ? await req.timeStep('db_commit', commitFn) : await commitFn();
+
     // Invalidate cached metrics, conflict scans, and revenue aggregates
     invalidateReservationCaches(hotelId).catch(() => {});
 
-    // 1. Enqueue durable Aiosell channel manager inventory synchronization
+    // 1. Enqueue durable Aiosell channel manager inventory synchronization into outbox
     try {
       const dates = cleanList.map(r => ({ checkIn: r.check_in_date, checkOut: r.check_out_date }));
       const minDate = dates.map(d => String(d.checkIn).slice(0, 10)).sort()[0];
@@ -519,22 +521,20 @@ router.post('/', checkAuth, async (req, res) => {
       console.warn('[Reservations] Enqueue sync job error (non-fatal):', qErr.message);
     }
 
-    // 2. Generate confirmation PDF and deliver confirmation email/notification in non-blocking background task
-    setImmediate(async () => {
-      for (const resItem of result) {
-        try {
-          await generateAndDeliverConfirmation({
-            hotelId,
-            reservationId: resItem.id,
-            reservation: resItem,
-            eventType: 'NEW_RESERVATION',
-            generatedBy: userId || 'STAFF',
-          });
-        } catch (e) {
-          console.error(`[API /reservations] Background confirmation delivery error for ${resItem.id}:`, e.message);
-        }
-      }
-    });
+    // 2. Enqueue secondary confirmation delivery tasks into durable outbox
+    // Completely unblocks the response path while guaranteeing at-least-once delivery
+    for (const resItem of result) {
+      enqueueChannelSyncJob({
+        hotelId,
+        jobType: 'NOTIFICATION_DELIVERY',
+        payload: {
+          reservationId: resItem.id,
+          eventType: 'NEW_RESERVATION',
+          generatedBy: userId || 'STAFF',
+        },
+        idempotencyKey: `NOTIF_DELIVERY:${hotelId}:${resItem.id}:NEW_RESERVATION`,
+      }).catch(err => console.warn('[Reservations] Enqueue notification delivery error:', err.message));
+    }
 
     const emailStatus = 'EMAIL_SENT';
     const whatsappStatus = 'WHATSAPP_SENT';

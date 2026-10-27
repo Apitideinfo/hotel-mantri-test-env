@@ -99,16 +99,23 @@ export const upsertGuestMaster = async (hotelId, payload) => {
   try {
     let existingGuest = null;
     if (cleanPhone) {
-      const { data: g } = await supabase
-        .from('guests')
-        .select('id')
-        .eq('hotel_id', hotelId)
-        .eq('mobile', cleanPhone)
-        .maybeSingle();
-      existingGuest = g;
-    }
-
-    if (!existingGuest) {
+      // Query phone and name concurrently to halve WAN lookup round-trips
+      const [byPhone, byName] = await Promise.all([
+        supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .eq('mobile', cleanPhone)
+          .maybeSingle(),
+        supabase
+          .from('guests')
+          .select('id')
+          .eq('hotel_id', hotelId)
+          .ilike('name', cleanName)
+          .maybeSingle(),
+      ]);
+      existingGuest = byPhone.data || byName.data || null;
+    } else {
       const { data: g } = await supabase
         .from('guests')
         .select('id')
@@ -278,11 +285,18 @@ export const createReservationsAtomically = async ({
 
     // Helper to perform the actual database insert and post-insert hooks
     const executeInsert = async ({ assignedRoomNo, assignedRoomId }) => {
-      // Check manual duplicate
-      const dupeCheck = await checkManualDuplicate(hotelId, {
+      // Check manual duplicate and sync guest profile concurrently
+      const dupeCheckPromise = checkManualDuplicate(hotelId, {
         ...item,
         idempotency_key: derivedIdempKey || item.idempotency_key,
       });
+
+      const guestPromise = item.guest_id
+        ? Promise.resolve(item.guest_id)
+        : upsertGuestMaster(hotelId, item);
+
+      const [dupeCheck, guestId] = await Promise.all([dupeCheckPromise, guestPromise]);
+
       if (dupeCheck.duplicate) {
         if (dupeCheck.code === 'RESERVATION_IDEMPOTENT_EXISTS' && dupeCheck.existing) {
           throw {
@@ -300,9 +314,6 @@ export const createReservationsAtomically = async ({
           existingReservation: dupeCheck.existing || null,
         };
       }
-
-      // Sync guest profile
-      const guestId = item.guest_id || (await upsertGuestMaster(hotelId, item));
 
       let internalNote = item.internal_note || '';
       if (derivedIdempKey && !internalNote.includes(`[CLIENT_IDEMP: ${derivedIdempKey}]`)) {
@@ -410,7 +421,7 @@ export const createReservationsAtomically = async ({
           };
         }
 
-        let assignedRoomId = item.room_id || null;
+        let assignedRoomId = item.room_id || availCheck.roomId || null;
         if (!assignedRoomId) {
           const { data: rObj } = await supabaseServiceRole
             .from('rooms')
