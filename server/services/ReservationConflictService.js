@@ -138,6 +138,7 @@ export const checkRoomAvailability = async ({
     .from('reservations')
     .select('id, guest_name, room_no, check_in_date, check_out_date, status, room_chart_entry_id')
     .eq('hotel_id', hotelId)
+    .eq('room_no', normRoom)
     .in('status', ['confirmed', 'checked_in'])
     .lt('check_in_date', cleanCheckOut)
     .gt('check_out_date', cleanCheckIn);
@@ -150,12 +151,16 @@ export const checkRoomAvailability = async ({
     .from('room_chart_entries')
     .select('id, guest_name, room_no, arrival, departure, report_date, reservation_id, checked_out_at')
     .eq('hotel_id', hotelId)
+    .eq('room_no', normRoom)
     .is('checked_out_at', null);
 
   const blocksQuery = supabase
     .from('room_blocks')
     .select('id, room_no, block_type, start_date, end_date, reason')
-    .eq('hotel_id', hotelId);
+    .eq('hotel_id', hotelId)
+    .eq('room_no', normRoom)
+    .lt('start_date', cleanCheckOut)
+    .gt('end_date', cleanCheckIn);
 
   const physicalRoomQuery = supabase
     .from('rooms')

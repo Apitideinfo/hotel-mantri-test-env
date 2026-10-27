@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Plus, Phone, Mail, Building2, Star, X, Loader2, AlertCircle, Users, MessageCircle } from 'lucide-react';
 import type { Guest } from '@/lib/types-crm';
 import { VIP_BADGE_COLORS, LOYALTY_COLORS, GUEST_TAGS } from '@/lib/types-crm';
@@ -8,11 +8,14 @@ import { Guest360 } from './Guest360';
 export const GuestDirectory = ({ onBack }: { onBack: () => void }) => {
   const [guests, setGuests] = useState<Guest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [selectedGuestId, setSelectedGuestId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState<Guest | null>(null);
+  const searchSeqRef = useRef(0);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -29,13 +32,49 @@ export const GuestDirectory = ({ onBack }: { onBack: () => void }) => {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleSearch = async (q: string) => {
-    setSearch(q);
-    if (!q.trim()) { load(); return; }
-    try {
-      const results = await searchGuests(q);
-      setGuests(results);
-    } catch { /* keep current */ }
+  // Debounced guest search with race condition sequence tracking (Phase 3 Optimization)
+  useEffect(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    const trimmed = search.trim();
+    if (!trimmed) {
+      setIsSearching(false);
+      return;
+    }
+
+    setIsSearching(true);
+    const seq = ++searchSeqRef.current;
+
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await searchGuests(trimmed);
+        if (seq === searchSeqRef.current) {
+          setGuests(results);
+        }
+      } catch {
+        // preserve current results on error
+      } finally {
+        if (seq === searchSeqRef.current) {
+          setIsSearching(false);
+        }
+      }
+    }, 280);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [search]);
+
+  const handleSearchChange = (val: string) => {
+    setSearch(val);
+    if (!val.trim()) {
+      searchSeqRef.current++;
+      load();
+    }
   };
 
   if (selectedGuestId) {
@@ -70,8 +109,12 @@ export const GuestDirectory = ({ onBack }: { onBack: () => void }) => {
 
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-        <input type="text" value={search} onChange={(e) => handleSearch(e.target.value)}
+        {isSearching ? (
+          <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-brand-600 animate-spin" />
+        ) : (
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        )}
+        <input type="text" value={search} onChange={(e) => handleSearchChange(e.target.value)}
           placeholder="Search by name, mobile, email, company, GST, booking ID…"
           className="w-full pl-10 pr-4 py-2.5 text-sm border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-brand-500/30" />
       </div>

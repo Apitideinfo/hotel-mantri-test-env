@@ -164,11 +164,13 @@ export const calculateDayWiseRevenue = async ({
 
   const totalRooms = Number(settings?.total_rooms || hotelObj?.total_rooms || 22);
 
-  // 3. Wide lookback for stay entries to catch reservations spanning into this period
-  const lookbackDate = addDays(fromDate, -180);
+  // 3. Bounded lookback for stay entries to catch reservations spanning into this period
+  const lookbackDate = addDays(fromDate, -60);
   const lookaheadDate = addDays(toDate, 30);
+  const timelineLookback = addDays(fromDate, -60);
+  const timelineLookahead = addDays(toDate, 2);
 
-  // 4. Fetch all necessary data in parallel
+  // 4. Fetch all necessary data in parallel with targeted projected columns
   const [
     { data: activeResvs, error: resvErr },
     { data: chartRows, error: chartErr },
@@ -180,14 +182,14 @@ export const calculateDayWiseRevenue = async ({
   ] = await Promise.all([
     supabase
       .from('reservations')
-      .select('*')
+      .select('id, hotel_id, group_id, parent_reservation_id, guest_name, room_no, check_in_date, check_out_date, rate, invoice_total, advance_paid, pay_cash, pay_bank, pay_upi, pay_card, payment_mode, source_name, source_category, status, created_at')
       .eq('hotel_id', hotelId)
       .in('status', ['confirmed', 'checked_in', 'checked_out'])
       .lte('check_in_date', toDate)
       .gte('check_out_date', fromDate),
     supabase
       .from('room_chart_entries')
-      .select('*')
+      .select('id, hotel_id, reservation_id, guest_name, room_no, room_category, arrival, departure, report_date, room_rate, total, company, source_category, revenue_category, is_complimentary, pay_mode, pay_cash, pay_bank, pay_upi, pay_card')
       .eq('hotel_id', hotelId)
       .gte('report_date', lookbackDate)
       .lte('report_date', lookaheadDate),
@@ -213,9 +215,11 @@ export const calculateDayWiseRevenue = async ({
     Promise.resolve(
       supabase
         .from('booking_timeline')
-        .select('*')
+        .select('id, hotel_id, reservation_id, event_type, event_amount, event_data, status, created_at')
         .eq('hotel_id', hotelId)
         .gt('event_amount', 0)
+        .gte('created_at', timelineLookback)
+        .lte('created_at', timelineLookahead + 'T23:59:59.999Z')
     ).then((r) => r).catch(() => ({ data: [] })),
     Promise.resolve(
       supabase

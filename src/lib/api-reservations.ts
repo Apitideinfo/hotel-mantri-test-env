@@ -213,14 +213,7 @@ export const saveReservation = async (
   const normRoom = (input.room_no || '').trim().toLowerCase();
   const isPhysical = normRoom && normRoom !== 'unassigned' && normRoom !== 'tbd';
 
-  if (isPhysical) {
-    const isAvail = await checkRoomAvailability(input.room_no, ci, co, id);
-    if (!isAvail) {
-      throw new Error(`Room ${input.room_no} is already booked for part of this stay. Please choose another room or change the dates.`);
-    }
-  }
-
-  // Try authoritative backend endpoint
+  // Try authoritative backend endpoint (checks availability atomically inside distributed transaction locks)
   try {
     if (id && id.trim() !== '') {
       const res = await apiFetch(`/api/reservations/${id}`, {
@@ -281,7 +274,13 @@ export const saveReservation = async (
     console.warn('[saveReservation] Backend call deferred to direct database update:', err?.message || err);
   }
 
-  // Direct Supabase fallback
+  // Direct Supabase fallback: perform client-side availability check
+  if (isPhysical) {
+    const isAvail = await checkRoomAvailability(input.room_no, ci, co, id);
+    if (!isAvail) {
+      throw new Error(`Room ${input.room_no} is already booked for part of this stay. Please choose another room or change the dates.`);
+    }
+  }
   const rawPayload = sanitizeReservationPayload({ ...input, hotel_id: hotelId });
 
   if (isNew && !isOta && !allowEmptyEmail) {

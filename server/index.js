@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import aiosellRoutes from './routes/aiosell.js';
 import aiosellIntegrationRoutes from './services/integrations/aiosell/AiosellWebhookController.js';
 import { processPendingRoomAllocations } from './services/RoomAssignmentService.js';
+import { timingMiddleware } from './middleware/timing.js';
 
 dotenv.config();
 
@@ -109,6 +110,8 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+app.use(timingMiddleware);
 
 // Route-specific large payload handler for logo upload (up to 10MB base64 images) (SEC-10)
 const LOGO_UPLOAD_LIMIT = '10mb';

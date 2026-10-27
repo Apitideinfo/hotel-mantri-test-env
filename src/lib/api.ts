@@ -950,11 +950,14 @@ export const getDerivedReportsForMonth = async (
   year: number, month: number, totalRooms: number, openingBalance: number
 ): Promise<DerivedReport[]> => {
   const hotelId = getCurrentHotelId();
-  const entries = await getRoomChartForMonth(year, month);
   const start = `${year}-${String(month).padStart(2, '0')}-01`;
   const lastDay = new Date(year, month, 0).getDate();
   const end = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-  const [financeEntries, revenueEntries, otherEntries, closedRecords, monthReservations, timelineEntries] = await Promise.all([
+  const timelineStart = addDays(start, -30);
+  const timelineEnd = addDays(end, 2);
+
+  const [entries, financeEntries, revenueEntries, otherEntries, closedRecords, monthReservations, timelineEntries] = await Promise.all([
+    getRoomChartForMonth(year, month),
     getExpenseEntriesForDateRange(start, end),
     getRevenueEntriesForDateRange(start, end),
     supabase.from('other_daily_entries').select('*')
@@ -980,6 +983,8 @@ export const getDerivedReportsForMonth = async (
     Promise.resolve(
       supabase.from('booking_timeline').select('*')
         .eq('hotel_id', hotelId)
+        .gte('created_at', timelineStart)
+        .lte('created_at', timelineEnd + 'T23:59:59.999Z')
     ).then(({ data }) => data ?? []).catch(() => []),
   ]);
   const closedDates = new Set(closedRecords.map((r: { business_date: string }) => r.business_date));
@@ -1484,13 +1489,12 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
     const monthStart = `${year}-${String(month).padStart(2, '0')}-01`;
     const yearStart = `${year}-01-01`;
 
-    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, yearReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks, todayRestrictions, todayTimeline] = await Promise.all([
+    const [todayEntries, todayOther, todayFinance, todayRevenue, monthReports, ranking, closeRecords, allRooms, allCategories, todayReservations, todayBlocks, todayRestrictions, todayTimeline] = await Promise.all([
       getRoomChart(todayStr).catch(() => []),
       getOtherEntries(todayStr).catch(() => null),
       getExpenseEntriesForDate(todayStr).catch(() => []),
       getRevenueEntriesForDate(todayStr).catch(() => []),
       getDerivedReportsForMonth(year, month, totalRooms, openingBalance).catch(() => []),
-      getDerivedReportsForYear(year, totalRooms, openingBalance).catch(() => []),
       getCompanyRevenueRanking(yearStart, todayStr).catch(() => []),
       Promise.resolve(
         supabase.from('day_close_records')
@@ -1562,17 +1566,16 @@ export const getOperationsBoardData = async (targetDate?: string): Promise<Dashb
       : monthReports.filter((r: DerivedReport) => r.report_date <= todayStr);
     const mtdAgg = aggregateDerived(mtdReportsToUse, totalRooms, new Date(year, month, 0).getDate());
 
-    const closedYearReports = yearReports.filter((r: DerivedReport) => r.day_status === 'closed');
+    const closedYearReports = monthReports.filter((r: DerivedReport) => r.day_status === 'closed');
     const ytdReportsToUse = closedYearReports.length > 0
       ? closedYearReports
-      : yearReports.filter((r: DerivedReport) => r.report_date <= todayStr);
+      : monthReports.filter((r: DerivedReport) => r.report_date <= todayStr);
     const ytdAgg = aggregateDerived(ytdReportsToUse, totalRooms, 365);
 
     const weekReports: DerivedReport[] = [];
     for (let i = 6; i >= 0; i--) {
       const wStr = addDays(todayStr, -i);
       const wr = monthReports.find((r: DerivedReport) => r.report_date === wStr)
-        ?? yearReports.find((r: DerivedReport) => r.report_date === wStr)
         ?? (wStr === todayStr ? todayReport : null);
       if (wr) {
         weekReports.push(wr);

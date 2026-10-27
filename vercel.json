@@ -17,10 +17,6 @@
     {
       "path": "/api/notifications/whatsapp/cron?type=evening",
       "schedule": "0 22 * * *"
-    },
-    {
-      "path": "/api/channels/sync/cron-worker",
-      "schedule": "*/5 * * * *"
     }
   ],
   "rewrites": [

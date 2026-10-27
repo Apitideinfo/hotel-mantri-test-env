@@ -2025,6 +2025,13 @@ export const ReservationBoard = ({ onBack, initialView }: { onBack: () => void; 
           onSave={async (inputs) => {
             const list = Array.isArray(inputs) ? inputs : [inputs];
             const created = await saveReservations(list);
+            if (created && created.length > 0) {
+              setPaginatedData((prev) => ({
+                ...prev,
+                reservations: [...created, ...prev.reservations],
+                totalCount: prev.totalCount + created.length,
+              }));
+            }
             return created;
           }}
         />
