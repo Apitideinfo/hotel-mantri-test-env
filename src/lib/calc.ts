@@ -109,8 +109,12 @@ export const generateOccupiedNights = (checkIn: string, checkOut: string): strin
 export const calcArr = (roomSale: number, roomsOccupied: number): number =>
   roomsOccupied > 0 ? toNum(roomSale) / roomsOccupied : 0;
 
-export const calcOcc = (roomsOccupied: number, totalRooms: number): number =>
-  totalRooms > 0 ? (toNum(roomsOccupied) / totalRooms) * 100 : 0;
+export const calcOcc = (roomsOccupied: number, totalRooms: number): number => {
+  const tot = Math.max(0, toNum(totalRooms));
+  if (tot <= 0) return 0;
+  const occ = Math.min(Math.max(0, toNum(roomsOccupied)), tot);
+  return (occ / tot) * 100;
+};
 
 export const calcRevpar = (roomRevenue: number, totalRooms: number, periodDays: number = 1): number =>
   totalRooms > 0 && periodDays > 0 ? toNum(roomRevenue) / (totalRooms * periodDays) : 0;
@@ -339,7 +343,8 @@ export const getNightlyRoomRevenue = (e: RoomChartEntry, date?: string): number 
 export const aggregateRoomChart = (
   entries: RoomChartEntry[],
   targetDate?: string,
-  paymentTransactions?: PaymentTransaction[]
+  paymentTransactions?: PaymentTransaction[],
+  hotelId?: string
 ): RoomChartAggregate => {
   const agg: RoomChartAggregate = {
     roomsOccupied: 0, complimentary: 0, roomRevenue: 0,
@@ -349,8 +354,12 @@ export const aggregateRoomChart = (
     payCash: 0, payUpi: 0, payCard: 0, payBank: 0, payAdvance: 0, payBalance: 0,
   };
 
+  const seenOccupiedRooms = new Set<string>();
+
   // 1. REVENUE ACCRUAL: Strictly across occupied nights [checkIn, checkOut)
   for (const e of entries) {
+    if (hotelId && e.hotel_id && e.hotel_id !== hotelId) continue;
+
     const arr = String((e.arrival && e.arrival.trim() !== '') ? e.arrival : (e.report_date || '')).slice(0, 10);
     const dep = String((e.departure && e.departure.trim() !== '') ? e.departure : (e.report_date || '')).slice(0, 10);
 
@@ -368,17 +377,26 @@ export const aggregateRoomChart = (
       const nightlyTaxable = toNum(e.taxable_amount) > 0 ? toNum(e.taxable_amount) / derivedNights : nightlyRate;
       const nightlyGst = toNum(e.gst_amount) > 0 ? toNum(e.gst_amount) / derivedNights : 0;
 
-      if (e.is_complimentary) {
-        agg.complimentary += 1;
-      } else {
-        agg.roomsOccupied += 1;
-        if (isRoomRev) {
-          agg.roomRevenue += nightlyRate;
-          const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
-          (agg[key] as number) += nightlyRate;
-          agg.taxableRevenue += nightlyTaxable;
-          agg.gstCollected += nightlyGst;
+      // Count each physical room only once for occupancy
+      const rawRoom = (e.room_no || '').trim().toLowerCase();
+      const isPhysical = rawRoom && rawRoom !== 'unassigned' && rawRoom !== 'tbd';
+      const roomKey = isPhysical ? `room_${rawRoom}` : `entry_${e.id || e.reservation_id || Math.random()}`;
+
+      if (!seenOccupiedRooms.has(roomKey)) {
+        seenOccupiedRooms.add(roomKey);
+        if (e.is_complimentary) {
+          agg.complimentary += 1;
+        } else {
+          agg.roomsOccupied += 1;
         }
+      }
+
+      if (!e.is_complimentary && isRoomRev) {
+        agg.roomRevenue += nightlyRate;
+        const key = SOURCE_KEYS[e.source_category] ?? 'directWalking';
+        (agg[key] as number) += nightlyRate;
+        agg.taxableRevenue += nightlyTaxable;
+        agg.gstCollected += nightlyGst;
       }
     }
   }

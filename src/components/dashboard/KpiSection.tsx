@@ -51,10 +51,15 @@ const PrimaryKpiCard = ({
   <div
     className={`bg-white rounded-2xl border border-slate-200/80 shadow-card hover:shadow-card-hover hover:-translate-y-0.5 transition-all duration-200 p-5 flex flex-col justify-between space-y-4 group relative overflow-hidden min-w-0 ${accentBorder}`}
     style={{ animationDelay: `${index * 50}ms` }}
+    role="region"
+    aria-label={label}
   >
     {/* Top Row: Label + Icon */}
     <div className="flex items-center justify-between gap-2">
-      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors truncate">
+      <span
+        className="text-xs font-bold text-slate-500 uppercase tracking-wider group-hover:text-slate-700 transition-colors truncate"
+        title={label}
+      >
         {label}
       </span>
       <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${iconBg} shrink-0 shadow-xs transition-transform group-hover:scale-105`}>
@@ -64,11 +69,15 @@ const PrimaryKpiCard = ({
 
     {/* Center Value */}
     <div className="space-y-1">
-      <p className="text-2xl sm:text-3xl font-extrabold tabular-nums tracking-tight text-slate-900 truncate" title={value}>
+      <p
+        className="text-2xl sm:text-3xl font-extrabold tabular-nums tracking-tight text-slate-900 truncate"
+        title={value}
+        aria-label={`${label}: ${value}`}
+      >
         {value}
       </p>
       <div className="flex items-center justify-between gap-2 pt-0.5">
-        <p className="text-xs font-medium text-slate-500 truncate">{sublabel}</p>
+        <p className="text-xs font-medium text-slate-500 truncate" title={sublabel}>{sublabel}</p>
         {pillText && (
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap shadow-2xs ${pillColor}`}>
             {pillText}
@@ -141,10 +150,13 @@ export const KpiSection = ({
   const dailyMiscRev = (today?.misc_revenue || today?.other_income || 0) + (today?.other_revenue_entries || 0);
   const dailyEarnedRevenue = dailyRoomRev + dailyFbRev + dailyMiscRev || (today?.net_revenue || 0);
 
-  const dailyRoomsOccupied = today?.rooms_occupied || 0;
-  const dailyOcc = totalRooms > 0 ? (dailyRoomsOccupied / totalRooms) * 100 : 0;
+  const safeTotalRooms = Math.max(0, totalRooms);
+  const dailyRoomsOccupied = Math.max(0, today?.rooms_occupied || 0);
+  // Ensure occupied rooms cannot exceed valid total room count
+  const effectiveDailyOccupied = safeTotalRooms > 0 ? Math.min(dailyRoomsOccupied, safeTotalRooms) : 0;
+  const dailyOcc = safeTotalRooms > 0 ? (effectiveDailyOccupied / safeTotalRooms) * 100 : 0;
   const dailyArr = dailyRoomsOccupied > 0 ? dailyRoomRev / dailyRoomsOccupied : 0;
-  const dailyRevpar = totalRooms > 0 ? dailyRoomRev / totalRooms : 0;
+  const dailyRevpar = safeTotalRooms > 0 ? dailyRoomRev / safeTotalRooms : 0;
 
   const dailyTotalCollections = (today?.pay_cash || 0) + (today?.pay_bank || 0) + (today?.pay_upi || 0) + (today?.pay_card || 0);
   const dailyCash = today?.cash || today?.pay_cash || 0;
@@ -173,9 +185,12 @@ export const KpiSection = ({
     ? periodRevpar
     : isDaily ? dailyRevpar : (mtd?.revpar ?? 0);
 
-  const displayOcc = periodOcc !== undefined
+  // In daily mode, displayed occupancy strictly corresponds to (dailyRoomsOccupied / totalRooms) * 100
+  const displayOcc = isDaily
+    ? dailyOcc
+    : periodOcc !== undefined
     ? periodOcc
-    : isDaily ? dailyOcc : (mtd?.occ ?? 0);
+    : (mtd?.occ ?? 0);
 
   const displayRoomRev = isDaily ? dailyRoomRev : (mtd?.roomRevenue ?? 0);
   const displayTotalCollections = periodTotalCollections !== undefined
@@ -233,17 +248,17 @@ export const KpiSection = ({
           index={0}
         />
 
-        {/* Occupancy Rate */}
+        {/* Occupancy Percentage */}
         <PrimaryKpiCard
-          label="Occupancy Rate"
-          value={`${displayOcc.toFixed(0)}%`}
+          label="Occupancy Percentage"
+          value={`${Math.round(displayOcc)}%`}
           sublabel={isDaily ? `${dailyRoomsOccupied} of ${totalRooms} Rooms Occupied` : `${fmtInt(mtd?.roomNights ?? 0)} Room Nights Sold`}
           pillText={displayOcc >= 70 ? 'High Demand' : displayOcc >= 40 ? 'Moderate' : 'Capacity Available'}
           pillColor={displayOcc >= 70 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' : 'bg-amber-50 text-amber-700 border border-amber-200/60'}
           icon={<Percent className="w-5 h-5 text-amber-600" />}
           iconBg="bg-amber-50 text-amber-600"
           accentBorder="hover:border-amber-300"
-          progressValue={displayOcc}
+          progressValue={Math.min(100, Math.max(0, displayOcc))}
           index={1}
         />
 
