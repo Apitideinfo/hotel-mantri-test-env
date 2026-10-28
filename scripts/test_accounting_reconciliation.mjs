@@ -6,6 +6,7 @@ import {
   isStayOccupiedOnDate,
   buildDerivedReport,
   aggregateRoomChart,
+  calcOcc,
 } from '../src/lib/calc.ts';
 import { reconcilePaymentLedger } from '../src/lib/financialLedger.ts';
 
@@ -78,6 +79,67 @@ async function runTests() {
   it('4. A future reservation does not count as today\'s occupied room', () => {
     const futureStay = { arrival: '2026-10-05', departure: '2026-10-07' };
     assert.strictEqual(isStayOccupiedOnDate(futureStay, '2026-10-02'), false);
+  });
+
+  it('4a. 21 occupied out of 22 rooms calculates to 95%', () => {
+    const occ = calcOcc(21, 22);
+    // 21 / 22 * 100 = 95.4545...% which rounds to 95%
+    assert.strictEqual(Math.round(occ), 95);
+    assert.strictEqual(occ.toFixed(0), '95');
+  });
+
+  it('4b. 22 occupied out of 22 rooms calculates to 100%', () => {
+    const occ = calcOcc(22, 22);
+    assert.strictEqual(Math.round(occ), 100);
+    assert.strictEqual(occ.toFixed(0), '100');
+  });
+
+  it('4c. 0 occupied out of 22 rooms calculates to 0%', () => {
+    const occ = calcOcc(0, 22);
+    assert.strictEqual(Math.round(occ), 0);
+    assert.strictEqual(occ.toFixed(0), '0');
+  });
+
+  it('4d. 1 occupied out of 3 rooms calculates to 33%', () => {
+    const occ = calcOcc(1, 3);
+    assert.strictEqual(Math.round(occ), 33);
+    assert.strictEqual(occ.toFixed(0), '33');
+  });
+
+  it('4e. Zero total rooms is handled safely without NaN or Infinity', () => {
+    const occ = calcOcc(21, 0);
+    assert.strictEqual(occ, 0);
+    assert.strictEqual(Number.isNaN(occ), false);
+    assert.strictEqual(Number.isFinite(occ), true);
+    assert.strictEqual(Math.round(occ), 0);
+  });
+
+  it('4f. Occupied rooms cannot exceed total room count', () => {
+    const occ = calcOcc(25, 22);
+    assert.strictEqual(occ, 100);
+    assert.strictEqual(Math.round(occ), 100);
+  });
+
+  it('4g. Room counts that include duplicate records count physical rooms only once', () => {
+    const duplicateEntries = [
+      { id: '1', hotel_id: HOTEL_A, report_date: '2026-10-02', room_no: '101', guest_name: 'Guest 1', room_rate: 2000 },
+      { id: '2', hotel_id: HOTEL_A, report_date: '2026-10-02', room_no: '101', guest_name: 'Guest 1 duplicate', room_rate: 1500 },
+      { id: '3', hotel_id: HOTEL_A, report_date: '2026-10-02', room_no: '102', guest_name: 'Guest 2', room_rate: 2500 },
+    ];
+    const agg = aggregateRoomChart(duplicateEntries, '2026-10-02');
+    assert.strictEqual(agg.roomsOccupied, 2);
+    const occ = calcOcc(agg.roomsOccupied, 22);
+    assert.strictEqual(Math.round(occ), 9); // 2 / 22 = 9.09% -> 9%
+  });
+
+  it('4h. Room counts belonging to another hotel are excluded under tenant scoping', () => {
+    const crossHotelEntries = [
+      { id: '1', hotel_id: HOTEL_A, report_date: '2026-10-02', room_no: '101', guest_name: 'Hotel A Guest', room_rate: 2000 },
+      { id: '2', hotel_id: HOTEL_B, report_date: '2026-10-02', room_no: '201', guest_name: 'Hotel B Guest', room_rate: 3000 },
+    ];
+    const scopedAgg = aggregateRoomChart(crossHotelEntries, '2026-10-02', [], HOTEL_A);
+    assert.strictEqual(scopedAgg.roomsOccupied, 1);
+    assert.strictEqual(scopedAgg.roomRevenue, 2000);
   });
 
   console.log('\n--- TEST GROUP 2: Cash Drawer & Physical Money Isolation ---');

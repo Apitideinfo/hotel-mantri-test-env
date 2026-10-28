@@ -258,6 +258,7 @@ export const Dashboard = ({ onNavigate }: DashboardProps) => {
         periodArr={periodRevenue?.summary.arr}
         periodRevpar={periodRevenue?.summary.revpar}
         periodOcc={periodRevenue?.summary.occupancyPercent}
+        viewScope={dateFilter === 'mtd' || dateFilter === 'last_month' || dateFilter === 'range' ? 'mtd' : 'daily'}
         selectedDate={selectedDate}
         totalRooms={totalRooms}
       />

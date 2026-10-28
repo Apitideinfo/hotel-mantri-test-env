@@ -431,6 +431,7 @@ export const calculateDayWiseRevenue = async ({
     let dayRoomRevenue = 0;
     let dayPayingRooms = 0;
     let dayCompRooms = 0;
+    const occupiedRoomSet = new Set();
 
     for (const stay of activeStays) {
       const rawSource = (stay.sourceName || '').trim();
@@ -444,13 +445,25 @@ export const calculateDayWiseRevenue = async ({
         sourceCategoryMap.set(sourceKey, stay.revenueCategory || 'Direct');
       }
 
-      if (stay.is_complimentary) {
-        dayCompRooms++;
-      } else {
+      // Count each physical room only once for the day's occupancy
+      const rawRoom = String(stay.roomNo || '').trim().toLowerCase();
+      const isPhysical = rawRoom && rawRoom !== 'unassigned' && rawRoom !== 'tbd';
+      const roomKey = isPhysical ? `room_${rawRoom}` : `stay_${stay.reservationId || stay.id}`;
+      const isNewRoom = !occupiedRoomSet.has(roomKey);
+
+      if (isNewRoom) {
+        occupiedRoomSet.add(roomKey);
+        if (stay.is_complimentary) {
+          dayCompRooms++;
+        } else {
+          dayPayingRooms++;
+        }
+      }
+
+      if (!stay.is_complimentary) {
         const nightlyAmount = getNightlyRoomRevenue(stay, dStr);
         if (stay.revenueCategory === 'Room Revenue') {
           dayRoomRevenue += nightlyAmount;
-          dayPayingRooms++;
           sourceRevenueMap.set(sourceKey, (sourceRevenueMap.get(sourceKey) || 0) + nightlyAmount);
         }
         // Include in reservation line-item drilldown
@@ -503,9 +516,11 @@ export const calculateDayWiseRevenue = async ({
 
     const availableRooms = Math.max(0, totalRooms - oooCount);
     const daySoldRooms = dayPayingRooms + dayCompRooms;
+    // Occupied rooms cannot exceed valid available rooms
+    const validSoldRooms = Math.min(daySoldRooms, availableRooms);
     const dayArr = dayPayingRooms > 0 ? dayRoomRevenue / dayPayingRooms : 0;
     const dayRevpar = availableRooms > 0 ? dayRoomRevenue / availableRooms : 0;
-    const dayOcc = availableRooms > 0 ? (daySoldRooms / availableRooms) * 100 : 0;
+    const dayOcc = availableRooms > 0 ? (validSoldRooms / availableRooms) * 100 : 0;
 
     const col = collectionsByDate.get(dStr) || { total: 0, payCash: 0, payBank: 0, payUpi: 0, payCard: 0 };
     const isClosed = closedDates.has(dStr);
@@ -556,7 +571,7 @@ export const calculateDayWiseRevenue = async ({
       availableRoomNights: availableRooms,
       arr: Math.round(dayArr * 100) / 100,
       revpar: Math.round(dayRevpar * 100) / 100,
-      occupancyPercent: Math.round(dayOcc * 10) / 10,
+      occupancyPercent: Math.round(dayOcc * 100) / 100,
       collections: effectiveCollections,
       grossCollections: {
         total: Math.round(col.total * 100) / 100,
@@ -624,7 +639,8 @@ export const calculateDayWiseRevenue = async ({
   const avgDailyRevenue = Math.round((totalEarnedRevenue / daysCount) * 100) / 100;
   const overallArr = totalSoldNights > 0 ? Math.round((totalRoomRevenue / totalSoldNights) * 100) / 100 : 0;
   const overallRevpar = totalAvailableNights > 0 ? Math.round((totalRoomRevenue / totalAvailableNights) * 100) / 100 : 0;
-  const overallOcc = totalAvailableNights > 0 ? Math.round((totalSoldNights / totalAvailableNights) * 1000) / 10 : 0;
+  const validTotalSoldNights = Math.min(totalSoldNights, totalAvailableNights);
+  const overallOcc = totalAvailableNights > 0 ? Math.round((validTotalSoldNights / totalAvailableNights) * 10000) / 100 : 0;
 
   const bookingSources = Array.from(sourceBookingsMap.entries()).map(([name, resvSet]) => {
     const rev = Math.round((sourceRevenueMap.get(name) || 0) * 100) / 100;
@@ -638,7 +654,7 @@ export const calculateDayWiseRevenue = async ({
     };
   }).sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings);
 
-  return {
+  const result = {
     hotelId,
     hotelName: hotelObj?.hotel_name || 'Hotel Property',
     period: {
