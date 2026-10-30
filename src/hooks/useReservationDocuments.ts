@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import {
   getReservationConfirmationData,
   sendReservationConfirmationEmail,
@@ -134,20 +134,20 @@ export const useReservationDocuments = ({
     setDocFallbackUrl(null);
     try {
       const res = await sendReservationConfirmationWhatsApp(targetResId, phone);
-      setDocSuccess(res.message || 'Confirmation dispatched via Whinta WhatsApp.');
+      setDocSuccess(res.message || 'Confirmation dispatched via Meta WhatsApp.');
     } catch (err: any) {
-      // Do NOT auto open WhatsApp Web! Report the exact Whinta / Meta error
+      // Do NOT auto open WhatsApp Web! Report the exact Meta WhatsApp error
       const cleanPhone = (phone || '').replace(/\D/g, '');
       let fallbackUrl: string | null = null;
       if (err?.whatsappDirectUrl) {
         fallbackUrl = err.whatsappDirectUrl;
       } else if (cleanPhone) {
-        const msg = `Dear ${guestName},\n\nYour reservation details at ${hotelName}:\n🏨 Room: ${roomNo} (${roomCategoryName || 'Room'})\n📅 Check-In: ${fmtDate(checkIn)}\n📅 Check-Out: ${fmtDate(checkOut)}\n🌙 Nights: ${nights}\n💰 Rate: ₹${fmtInt(rate)}/night\n💵 Total: ₹${fmtInt(rate * nights)}\n\nWe look forward to hosting you!`;
+        const msg = `Dear ${guestName},\n\nYour reservation details at ${hotelName}:\nðŸ¨ Room: ${roomNo} (${roomCategoryName || 'Room'})\nðŸ“… Check-In: ${fmtDate(checkIn)}\nðŸ“… Check-Out: ${fmtDate(checkOut)}\nðŸŒ™ Nights: ${nights}\nðŸ’° Rate: â‚¹${fmtInt(rate)}/night\nðŸ’µ Total: â‚¹${fmtInt(rate * nights)}\n\nWe look forward to hosting you!`;
         const waPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
         fallbackUrl = `https://wa.me/${waPhone}?text=${encodeURIComponent(msg)}`;
       }
       setDocFallbackUrl(fallbackUrl);
-      setDocError(err.message || 'Failed to send WhatsApp confirmation via Whinta.');
+      setDocError(err.message || 'Failed to send WhatsApp confirmation via WhatsApp.');
     } finally {
       setActiveDocAction(null);
       setTimeout(() => setDocSuccess(null), 6000);

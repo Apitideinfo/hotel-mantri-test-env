@@ -28,6 +28,9 @@ import {
   Globe,
   FileText,
   ShieldCheck,
+  CheckCircle,
+  Database,
+  Layers,
 } from 'lucide-react';
 import {
   fetchWhatsAppSummary,
@@ -36,13 +39,18 @@ import {
   fetchWhatsAppHistory,
   saveWhatsAppSettings,
   fetchWhatsAppSettings,
-  verifyWhintaConnection,
+  verifyMetaConnection,
   fetchWhatsAppConfig,
+  fetchWhatsAppTemplates,
+  syncWhatsAppTemplates,
   retryWhatsAppSend,
   type WhatsAppReportType,
   type WhatsAppSummaryResponse,
   type WhatsAppHistoryItem,
   type WhatsAppSettingsResponse,
+  type WhatsAppConfigResponse,
+  type MetaConnectionResponse,
+  type WhatsAppTemplateItem,
 } from '@/lib/api-whatsapp';
 import { useClipboard } from '@/lib/useClipboard';
 
@@ -60,29 +68,20 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Server Provider Config & Whinta Verification
-  const [providerConfig, setProviderConfig] = useState<{
-    provider: string;
-    configured: boolean;
-    enabled: boolean;
-    active: boolean;
-    baseUrl: string;
-    defaultCountryCode: string;
-    hasWebhookSecret: boolean;
-  } | null>(null);
+  // Meta Cloud API Provider Configuration & Diagnostics
+  const [providerConfig, setProviderConfig] = useState<WhatsAppConfigResponse | null>(null);
   const [verifyingConn, setVerifyingConn] = useState(false);
-  const [connTestResult, setConnTestResult] = useState<{
-    success: boolean;
-    connected: boolean;
-    message: string;
-    templateCount?: number;
-  } | null>(null);
+  const [connTestResult, setConnTestResult] = useState<MetaConnectionResponse | null>(null);
+  const [templatesList, setTemplatesList] = useState<WhatsAppTemplateItem[]>([]);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<{ success: boolean; text: string } | null>(null);
+  const [showTemplatesGallery, setShowTemplatesGallery] = useState(true);
 
   // Hotel settings state
   const [hotelSettings, setHotelSettings] = useState<WhatsAppSettingsResponse | null>(null);
 
   // Sending state machine
-  type DeliveryStatus = 'Not Configured' | 'Configuration Error' | 'Ready' | 'Queued' | 'Submitted to Provider' | 'Delivered' | 'Failed' | 'Sending...';
+  type DeliveryStatus = 'Not Configured' | 'Configuration Error' | 'Ready' | 'Queued' | 'Submitted to Meta' | 'Delivered' | 'Failed' | 'Sending...';
   const [deliveryStatus, setDeliveryStatus] = useState<DeliveryStatus>('Ready');
   const [sending, setSending] = useState(false);
   const [sendSuccessMsg, setSendSuccessMsg] = useState<string | null>(null);
@@ -98,19 +97,23 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
   const [editPhone, setEditPhone] = useState('');
   const [editCountryCode, setEditCountryCode] = useState('91');
   const [editDailyEnabled, setEditDailyEnabled] = useState(true);
+  const [editReservationEnabled, setEditReservationEnabled] = useState(true);
+  const [editReservationTemplate, setEditReservationTemplate] = useState('reservation_confirmation');
+  const [editDailyReportTemplate, setEditDailyReportTemplate] = useState('daily_hotel_report');
+  const [editTemplateLanguage, setEditTemplateLanguage] = useState('en');
   const [editLaundryEnabled, setEditLaundryEnabled] = useState(true);
-  const [editPreferredTime, setEditPreferredTime] = useState('23:00');
+  const [editPreferredTime, setEditPreferredTime] = useState('22:00');
   const [editTimezone, setEditTimezone] = useState('Asia/Kolkata');
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ success: boolean; text: string } | null>(null);
 
   const [copied, copy] = useClipboard();
 
-  // Helper to safely mask external provider message IDs (Section 16)
+  // Helper to safely mask message IDs
   const maskMessageId = (id?: string | null): string => {
     if (!id) return '';
     if (id.length <= 4) return id;
-    return `****${id.slice(-4)}`;
+    return `wamid...${id.slice(-4)}`;
   };
 
   // Load summary, history, provider config & settings
@@ -137,8 +140,12 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
         setEditPhone(settingsRes.reportRecipientPhone || settingsRes.whatsappNumber || '');
         setEditCountryCode(settingsRes.countryCode || '91');
         setEditDailyEnabled(settingsRes.dailyReportEnabled ?? true);
+        setEditReservationEnabled(settingsRes.reservationConfirmationEnabled ?? true);
+        setEditReservationTemplate(settingsRes.reservationTemplate || configRes?.reservationTemplate || 'reservation_confirmation');
+        setEditDailyReportTemplate(settingsRes.dailyReportTemplate || configRes?.dailyReportTemplate || 'daily_hotel_report');
+        setEditTemplateLanguage(settingsRes.templateLanguage || 'en');
         setEditLaundryEnabled(settingsRes.laundryStatementEnabled ?? true);
-        setEditPreferredTime(settingsRes.preferredDeliveryTime || '23:00');
+        setEditPreferredTime(settingsRes.preferredDeliveryTime || '22:00');
         setEditTimezone(settingsRes.timezone || 'Asia/Kolkata');
       } else if (summaryRes.ownerWhatsApp?.rawPhone) {
         setEditPhone(summaryRes.ownerWhatsApp.rawPhone);
@@ -154,7 +161,8 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
       }
     } catch (err: any) {
       console.error('[WhatsAppScreen] Load error:', err);
-      setError(err.message || 'Failed to load daily hotel summary.');
+      setError(err.message || 'Failed to load daily report data.');
+      setDeliveryStatus('Failed');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -162,24 +170,70 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
   };
 
   useEffect(() => {
-    loadSummary(true);
-  }, [selectedDate]);
+    loadSummary();
+  }, [selectedDate, activeTab]);
 
-  // Navigate date by +/- days
-  const handleShiftDate = (days: number) => {
+  // Load templates on initial mount
+  useEffect(() => {
+    fetchWhatsAppTemplates()
+      .then((res) => {
+        if (res.templates && res.templates.length > 0) {
+          setTemplatesList(res.templates);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Sync templates directly from Meta WABA
+  const handleSyncTemplates = async () => {
+    if (syncingTemplates) return;
+    setSyncingTemplates(true);
+    setSyncMsg(null);
     try {
-      const [y, m, d] = selectedDate.split('-').map(Number);
-      const dt = new Date(Date.UTC(y, m - 1, d + days));
-      const newY = dt.getUTCFullYear();
-      const newM = String(dt.getUTCMonth() + 1).padStart(2, '0');
-      const newD = String(dt.getUTCDate()).padStart(2, '0');
-      setSelectedDate(`${newY}-${newM}-${newD}`);
-    } catch {
-      /* ignore invalid date */
+      const res = await syncWhatsAppTemplates();
+      if (res.success && res.templates) {
+        setTemplatesList(res.templates);
+        setSyncMsg({
+          success: true,
+          text: `✓ Synchronized ${res.templates.length} templates from Meta WhatsApp Business Account.`,
+        });
+      } else {
+        setSyncMsg({
+          success: false,
+          text: res.error || res.message || 'Failed to synchronize templates from Meta.',
+        });
+      }
+    } catch (err: any) {
+      setSyncMsg({
+        success: false,
+        text: err.message || 'Error synchronizing templates with Meta API.',
+      });
+    } finally {
+      setSyncingTemplates(false);
     }
   };
 
-  // Get active text & direct URL based on current active tab
+  const approvedTemplates = useMemo(() => {
+    return templatesList.filter((t) => String(t.status).toUpperCase() === 'APPROVED');
+  }, [templatesList]);
+
+  // Date Navigation helpers
+  const handlePrevDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() - 1);
+    setSelectedDate(d.toISOString().slice(0, 10));
+  };
+
+  const handleNextDay = () => {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + 1);
+    setSelectedDate(d.toISOString().slice(0, 10));
+  };
+
+  const handleToday = () => {
+    setSelectedDate(new Date().toISOString().slice(0, 10));
+  };
+
   const activeReportText = useMemo(() => {
     if (!data?.text) return '';
     return data.text[activeTab] || data.text.daily || '';
@@ -190,9 +244,9 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     return fallbackDirectUrl || data.whatsappDirectUrls[activeTab] || data.whatsappDirectUrls.daily || null;
   }, [data, activeTab, fallbackDirectUrl]);
 
-  // Handle Send WhatsApp Summary with complete state machine & double-click protection (Section 15 & 16)
+  // Handle Send WhatsApp Summary
   const handleSendNow = async () => {
-    if (sending) return; // Prevent double-click duplicates
+    if (sending) return;
     setSending(true);
     setDeliveryStatus('Sending...');
     setSendSuccessMsg(null);
@@ -207,67 +261,52 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
       });
 
       if (res.success) {
-        setDeliveryStatus('Submitted to Provider');
-        const idSuffix = res.messageId ? ` (Provider ID: ${maskMessageId(res.messageId)})` : '';
-        setSendSuccessMsg(`✓ Summary submitted to ${res.provider || 'Whinta'} provider${idSuffix}. Delivery status will update upon provider confirmation.`);
+        setDeliveryStatus('Submitted to Meta');
+        const idSuffix = res.messageId ? ` (${maskMessageId(res.messageId)})` : '';
+        setSendSuccessMsg(`✓ Summary submitted to Meta WhatsApp Cloud API${idSuffix}. Delivery status will update upon receipt.`);
         fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
       } else if (res.status === 'provider_not_configured' || res.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED') {
         setDeliveryStatus('Not Configured');
-        setSendErrorMsg(res.message || 'Whinta WhatsApp delivery is not configured on the server. Configure WHINTA_ACCESS_TOKEN in server environment.');
-        if (res.whatsappDirectUrl) {
-          setFallbackDirectUrl(res.whatsappDirectUrl);
-        }
+        setSendErrorMsg(res.message || 'Meta WhatsApp delivery is not configured on the server. Configure META_WHATSAPP_ACCESS_TOKEN and META_WHATSAPP_PHONE_NUMBER_ID.');
+        if (res.whatsappDirectUrl) setFallbackDirectUrl(res.whatsappDirectUrl);
       } else if (res.status === 'invalid_recipient' || res.errorCode === 'WHATSAPP_RECIPIENT_INVALID') {
         setDeliveryStatus('Configuration Error');
         setSendErrorMsg(res.message || 'Owner WhatsApp recipient number is missing or invalid. Please configure it in settings.');
       } else {
         setDeliveryStatus('Failed');
         setSendErrorMsg(res.message || 'Failed to dispatch WhatsApp summary.');
-        if (res.whatsappDirectUrl) {
-          setFallbackDirectUrl(res.whatsappDirectUrl);
-        }
+        if (res.whatsappDirectUrl) setFallbackDirectUrl(res.whatsappDirectUrl);
       }
     } catch (err: any) {
       setDeliveryStatus('Failed');
-      const msg = err.message || 'An error occurred while dispatching WhatsApp message.';
-      setSendErrorMsg(msg);
-      if (err.whatsappDirectUrl) {
-        setFallbackDirectUrl(err.whatsappDirectUrl);
-      }
+      setSendErrorMsg(err.message || 'An error occurred while dispatching WhatsApp message.');
+      if (err.whatsappDirectUrl) setFallbackDirectUrl(err.whatsappDirectUrl);
     } finally {
       setSending(false);
     }
   };
 
-  // Handle Verify Whinta Connection (Phase 4)
+  // Handle Live Meta Connection Verification
   const handleVerifyConnection = async () => {
     if (verifyingConn) return;
     setVerifyingConn(true);
     setConnTestResult(null);
 
     try {
-      const res = await verifyWhintaConnection();
+      const res = await verifyMetaConnection();
+      setConnTestResult(res);
       if (res.connected) {
-        setConnTestResult({
-          success: true,
-          connected: true,
-          message: `✓ Connected to Whinta Web API successfully (${res.templateCount ?? 0} templates found).`,
-          templateCount: res.templateCount,
-        });
         setDeliveryStatus(owner?.valid ? 'Ready' : 'Configuration Error');
       } else {
-        setConnTestResult({
-          success: false,
-          connected: false,
-          message: res.message || `Connection failed: ${res.error || 'Check WHINTA_ACCESS_TOKEN'}`,
-        });
         setDeliveryStatus('Configuration Error');
       }
     } catch (err: any) {
       setConnTestResult({
         success: false,
+        configured: true,
         connected: false,
-        message: err.message || 'Failed to verify Whinta API connection.',
+        error: 'CONNECTION_FAILED',
+        message: err.message || 'Failed to verify Meta WhatsApp Cloud API connection.',
       });
       setDeliveryStatus('Configuration Error');
     } finally {
@@ -275,203 +314,184 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     }
   };
 
-  // Handle Send Test WhatsApp with complete state machine & double-click protection (Section 7)
+  // Handle Send Test WhatsApp
   const handleSendTest = async () => {
-    if (testing) return; // Prevent double-click duplicates
+    if (testing) return;
     setTesting(true);
     setTestResult(null);
 
     try {
       const res = await sendTestWhatsApp();
       if (res.success) {
-        const idSuffix = res.messageId ? ` • Provider ID: ${maskMessageId(res.messageId)}` : '';
         setTestResult({
           success: true,
-          message: `✓ Test message submitted to provider for ${res.recipient || 'owner number'}${idSuffix}`,
+          message: `✓ Test message dispatched via Meta WhatsApp Cloud API to ${res.recipient || 'configured number'}.`,
         });
-      } else if (res.status === 'provider_not_configured' || res.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED') {
-        setTestResult({
-          success: false,
-          message: 'Automated WhatsApp delivery is not configured. Configure WHINTA_ACCESS_TOKEN in server environment.',
-        });
-        if (res.whatsappDirectUrl) {
-          setFallbackDirectUrl(res.whatsappDirectUrl);
-        }
-      } else if (res.status === 'invalid_recipient' || res.errorCode === 'WHATSAPP_RECIPIENT_INVALID') {
-        setTestResult({
-          success: false,
-          message: res.message || 'Owner WhatsApp number is missing or invalid.',
-        });
+        fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
       } else {
         setTestResult({
           success: false,
-          message: res.message || 'WhatsApp test send failed.',
+          message: res.message || 'Failed to send test message via Meta WhatsApp Cloud API.',
         });
-        if (res.whatsappDirectUrl) {
-          setFallbackDirectUrl(res.whatsappDirectUrl);
-        }
       }
-      fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: err.message || 'Failed to send test WhatsApp message.',
+        message: err.message || 'Failed to send test message.',
       });
-      if (err.whatsappDirectUrl) {
-        setFallbackDirectUrl(err.whatsappDirectUrl);
-      }
     } finally {
       setTesting(false);
     }
   };
 
-  // Save WhatsApp settings (Phase 3 & 4: recipient, daily toggle, laundry toggle, timezone, time)
+  // Retry sending a failed message
+  const handleRetry = async (notificationId: string) => {
+    try {
+      const res = await retryWhatsAppSend(notificationId);
+      if (res.success) {
+        setSendSuccessMsg('✓ Message re-dispatched successfully via Meta WhatsApp Cloud API.');
+        fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
+      } else {
+        setSendErrorMsg(res.message || 'Failed to retry notification.');
+      }
+    } catch (err: any) {
+      setSendErrorMsg(err.message || 'Retry failed.');
+    }
+  };
+
+  // Save Settings
   const handleSaveSettings = async () => {
-    if (!editPhone.trim()) return;
     setSavingSettings(true);
     setSettingsMsg(null);
 
     try {
       const res = await saveWhatsAppSettings({
-        reportRecipientPhone: editPhone,
         whatsappNumber: editPhone,
+        reportRecipientPhone: editPhone,
         countryCode: editCountryCode,
         dailyReportEnabled: editDailyEnabled,
+        reservationConfirmationEnabled: editReservationEnabled,
+        reservationTemplate: editReservationTemplate,
+        dailyReportTemplate: editDailyReportTemplate,
+        templateLanguage: editTemplateLanguage,
         laundryStatementEnabled: editLaundryEnabled,
         preferredDeliveryTime: editPreferredTime,
         timezone: editTimezone,
       });
 
-      setSettingsMsg({
-        success: true,
-        text: `Settings saved successfully for ${res.normalizedNumber || editPhone}.`,
-      });
-      setTimeout(() => setShowConfig(false), 1200);
-      loadSummary(false);
+      if (res.success) {
+        setSettingsMsg({ success: true, text: '✓ WhatsApp integration settings saved successfully.' });
+        loadSummary(false);
+        setTimeout(() => setShowConfig(false), 1500);
+      } else {
+        setSettingsMsg({ success: false, text: res.message || 'Failed to save settings.' });
+      }
     } catch (err: any) {
-      setSettingsMsg({
-        success: false,
-        text: err.message || 'Failed to update WhatsApp settings.',
-      });
+      setSettingsMsg({ success: false, text: err.message || 'Failed to save settings.' });
     } finally {
       setSavingSettings(false);
     }
   };
 
-  // Handle retry
-  const handleRetry = async (notificationId: string) => {
-    try {
-      await retryWhatsAppSend(notificationId);
-      fetchWhatsAppHistory(20).then(setHistory).catch(() => {});
-    } catch (err: any) {
-      alert(`Retry error: ${err.message}`);
-    }
-  };
-
-  const summary = data?.summary;
   const owner = data?.ownerWhatsApp;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-28">
-      {/* ─── Top Header ────────────────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-20 bg-emerald-700 text-white px-4 py-3.5 shadow-md flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 -ml-1 hover:bg-emerald-600 active:bg-emerald-800 rounded-lg transition"
-            title="Go Back"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-base font-semibold leading-tight tracking-tight">WhatsApp Hotel Summary</h1>
-              <span className="bg-emerald-800/80 text-emerald-200 text-[10px] font-medium px-2 py-0.5 rounded-full border border-emerald-600/60">
-                {data?.hotelName || 'Hotel Mantri'}
-              </span>
+      {/* ─── Top Header ──────────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-20 bg-white border-b border-slate-200 px-4 py-3 shadow-xs">
+        <div className="max-w-4xl mx-auto flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={onBack}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200 text-slate-600 transition"
+              title="Back"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="font-bold text-slate-900 text-base sm:text-lg flex items-center gap-1.5">
+                  <MessageCircle className="w-5 h-5 text-emerald-600" />
+                  Meta WhatsApp Business Integration
+                </h1>
+                <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  Official Cloud API
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 hidden sm:block">
+                Direct Meta WhatsApp Cloud API messaging for reservations &amp; automated daily MIS reports
+              </p>
             </div>
-            <p className="text-emerald-200 text-xs flex items-center gap-1.5 mt-0.5">
-              <span>Business Date: <strong>{data?.businessDateReadable || selectedDate}</strong></span>
-              <span>•</span>
-              <span className={summary?.dayStatus === 'CLOSED' ? 'text-amber-200 font-semibold' : 'text-emerald-100'}>
-                Day {summary?.dayStatus || 'OPEN'}
-              </span>
-            </p>
-          </div>
-        </div>
-
-        {/* Date Selector & Config Button */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center bg-emerald-800/60 rounded-lg border border-emerald-600/50 p-0.5 text-xs">
-            <button
-              onClick={() => handleShiftDate(-1)}
-              className="p-1 hover:bg-emerald-600 rounded text-emerald-100"
-              title="Previous Day"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <label className="flex items-center px-1.5 cursor-pointer font-mono font-medium text-emerald-100">
-              <Calendar className="w-3.5 h-3.5 mr-1 text-emerald-300" />
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => e.target.value && setSelectedDate(e.target.value)}
-                className="bg-transparent border-none text-emerald-100 text-xs font-mono focus:outline-none cursor-pointer w-24"
-              />
-            </label>
-            <button
-              onClick={() => handleShiftDate(1)}
-              className="p-1 hover:bg-emerald-600 rounded text-emerald-100"
-              title="Next Day"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
           </div>
 
-          <button
-            onClick={() => setShowConfig(!showConfig)}
-            className="p-2 hover:bg-emerald-600 rounded-lg text-emerald-100 border border-emerald-600/50"
-            title="Configure Owner WhatsApp"
-          >
-            <Sliders className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowConfig(!showConfig)}
+              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200 text-slate-600 transition flex items-center gap-1.5 text-xs font-medium"
+              title="Configure WhatsApp recipient and template settings"
+            >
+              <Sliders className="w-4 h-4 text-emerald-600" />
+              <span className="hidden sm:inline">Settings</span>
+            </button>
+
+            <button
+              onClick={() => loadSummary(false)}
+              disabled={refreshing}
+              className="p-2 rounded-lg border border-slate-200 hover:bg-slate-100 active:bg-slate-200 text-slate-600 transition disabled:opacity-50"
+              title="Refresh Data"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+            </button>
+
+            <button
+              onClick={() => copy(activeReportText)}
+              disabled={!activeReportText}
+              className="px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm transition disabled:opacity-50 cursor-pointer"
+              title="Copy text summary to clipboard"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-4 space-y-4">
-        {/* ─── Recipient & Provider Status Banner (Phase 4) ─────────────────────── */}
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold">
-                <Phone className="w-4 h-4" />
+      <main className="max-w-4xl mx-auto px-4 py-5 space-y-4">
+        {/* ─── Meta Cloud API Status & Diagnostics Card (Section 9) ───────────── */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-900 text-sm">
+                  {data?.hotelName || 'Hotel Mantri'}
+                </span>
+                <span className="text-slate-400">|</span>
+                <span className="text-xs text-slate-600 font-medium">Meta WhatsApp Cloud API</span>
               </div>
-              <div>
-                <div className="text-slate-500 font-medium">Owner WhatsApp Recipient</div>
-                <div className="text-slate-900 font-semibold text-sm flex items-center gap-2">
-                  {owner?.valid ? (
-                    <span className="font-mono text-emerald-700">{owner.formattedPhone}</span>
-                  ) : (
-                    <span className="text-red-600 flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5" /> Not configured
-                    </span>
-                  )}
-                  {owner?.ownerName && <span className="text-slate-500 font-normal text-xs">({owner.ownerName})</span>}
-                </div>
+              <div className="flex items-center gap-3 text-xs text-slate-500">
+                <span className="flex items-center gap-1 font-mono">
+                  <Phone className="w-3.5 h-3.5 text-slate-400" />
+                  Recipient: <strong className="text-slate-800 font-semibold">{owner?.valid ? owner.formattedPhone : 'Not configured'}</strong>
+                </span>
+                {providerConfig?.graphApiVersion && (
+                  <span className="bg-slate-100 text-slate-700 font-mono text-[11px] px-2 py-0.5 rounded">
+                    Graph {providerConfig.graphApiVersion}
+                  </span>
+                )}
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {/* Provider Badge */}
+              {/* Provider Status Badge */}
               <span
                 className={`px-2.5 py-1 rounded-full font-medium text-xs flex items-center gap-1.5 ${
-                  providerConfig?.active || data?.providerConfig?.configured
+                  providerConfig?.configured
                     ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                     : 'bg-amber-50 text-amber-800 border border-amber-200'
                 }`}
               >
                 <Wifi className="w-3 h-3" />
-                Provider: {providerConfig?.provider || data?.providerConfig?.provider || 'Whinta'}
+                {providerConfig?.configured ? 'Meta API Connected' : 'Meta API Not Configured'}
               </span>
 
               {/* Status Indicator Badge */}
@@ -479,7 +499,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                 className={`px-2.5 py-1 rounded-full font-semibold text-[11px] ${
                   deliveryStatus === 'Delivered'
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : deliveryStatus === 'Submitted to Provider'
+                    : deliveryStatus === 'Submitted to Meta'
                     ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                     : deliveryStatus === 'Ready'
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
@@ -497,8 +517,8 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               <button
                 onClick={handleVerifyConnection}
                 disabled={verifyingConn}
-                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition"
-                title="Verify connection to Whinta Web API"
+                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
+                title="Verify connection to Meta WhatsApp Cloud API"
               >
                 {verifyingConn ? <Loader2 className="w-3 h-3 animate-spin" /> : <ShieldCheck className="w-3 h-3 text-emerald-600" />}
                 Test Connection
@@ -508,7 +528,8 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               <button
                 onClick={handleSendTest}
                 disabled={testing || !owner?.valid}
-                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition"
+                className="px-2.5 py-1 rounded-lg border border-slate-300 hover:bg-slate-100 active:bg-slate-200 text-slate-700 font-medium text-xs flex items-center gap-1 disabled:opacity-50 transition cursor-pointer"
+                title="Send test WhatsApp message to configured phone"
               >
                 {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3 h-3 text-slate-600" />}
                 Send Test Message
@@ -519,63 +540,128 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
           {/* Connection Test Live Result */}
           {connTestResult && (
             <div
-              className={`p-2.5 rounded-lg text-xs flex items-center justify-between border ${
+              className={`p-3 rounded-lg text-xs border ${
                 connTestResult.connected
-                  ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                  : 'bg-red-50 text-red-900 border-red-200'
+                  ? 'bg-emerald-50 text-emerald-950 border-emerald-200'
+                  : 'bg-red-50 text-red-950 border-red-200'
               }`}
             >
-              <div className="flex items-center gap-2">
-                {connTestResult.connected ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                )}
-                <span>{connTestResult.message}</span>
+              <div className="flex items-start justify-between gap-2">
+                <div className="space-y-1">
+                  <div className="font-bold flex items-center gap-1.5">
+                    {connTestResult.connected ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                    )}
+                    <span>{connTestResult.message}</span>
+                  </div>
+                  {connTestResult.connected && (
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-emerald-900 pt-1 font-mono">
+                      {connTestResult.verifiedName && <span>Verified Name: <strong>{connTestResult.verifiedName}</strong></span>}
+                      {connTestResult.displayPhoneNumber && <span>Display Number: <strong>{connTestResult.displayPhoneNumber}</strong></span>}
+                      {connTestResult.qualityRating && <span>Quality Rating: <strong className="text-emerald-700">{connTestResult.qualityRating}</strong></span>}
+                      {connTestResult.codeVerificationStatus && <span>Status: <strong>{connTestResult.codeVerificationStatus}</strong></span>}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setConnTestResult(null)}
+                  className="text-slate-400 hover:text-slate-600 text-xs px-1"
+                >
+                  ✕
+                </button>
               </div>
-              <button
-                onClick={() => setConnTestResult(null)}
-                className="text-slate-400 hover:text-slate-600 text-xs px-1"
-              >
-                ✕
-              </button>
             </div>
           )}
+
+          {/* Configuration Metadata Pill Row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs pt-1">
+            <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Phone Number ID</span>
+              <span className="font-mono font-medium text-slate-800">
+                {providerConfig?.phoneNumberIdSuffix ? `ID: ${providerConfig.phoneNumberIdSuffix}` : (providerConfig?.configured ? 'Configured' : 'Missing')}
+              </span>
+            </div>
+            <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Reservation Template</span>
+              <span className="font-mono font-medium text-slate-800 truncate block" title={providerConfig?.reservationTemplate || 'reservation_confirmation'}>
+                {providerConfig?.reservationTemplate || 'reservation_confirmation'}
+              </span>
+            </div>
+            <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Daily Report Template</span>
+              <span className="font-mono font-medium text-slate-800 truncate block" title={providerConfig?.dailyReportTemplate || 'daily_hotel_report'}>
+                {providerConfig?.dailyReportTemplate || 'daily_hotel_report'}
+              </span>
+            </div>
+            <div className="bg-slate-50 p-2 rounded-lg border border-slate-100">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">Access Token</span>
+              <span className="font-mono font-medium text-emerald-700 flex items-center gap-1">
+                <CheckCircle className="w-3 h-3" />
+                •••••••• (Server-side)
+              </span>
+            </div>
+          </div>
         </div>
 
-        {/* ─── Provider Unconfigured Notice Banner (Section 5) ────────────────── */}
+        {/* ─── Provider Unconfigured Notice Banner ────────────────────────────── */}
         {providerConfig && !providerConfig.configured && (
-          <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-3 shadow-sm">
+          <div className="bg-amber-50/90 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-3 shadow-xs">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <div className="font-semibold text-amber-950">Whinta WhatsApp provider is not configured.</div>
+              <div className="font-semibold text-amber-950">Meta WhatsApp Cloud API is not configured.</div>
               <div className="text-amber-800 text-[11px] leading-relaxed">
-                To enable direct background delivery, configure Whinta credentials in your server environment variables.
+                To enable direct background delivery, configure <code className="font-mono bg-amber-100 px-1 py-0.5 rounded text-amber-900">META_WHATSAPP_ACCESS_TOKEN</code> and <code className="font-mono bg-amber-100 px-1 py-0.5 rounded text-amber-900">META_WHATSAPP_PHONE_NUMBER_ID</code> in your server environment variables.
               </div>
             </div>
           </div>
         )}
 
-        {/* ─── Settings Drawer / Modal (Phase 3 & 4) ────────────────────────────── */}
+        {/* ─── Settings Drawer / Modal (Section 9) ────────────────────────────── */}
         {showConfig && (
           <div className="bg-white rounded-xl border-2 border-emerald-500 p-5 shadow-lg space-y-4">
-            <div className="flex items-center justify-between border-b pb-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b pb-2">
               <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-emerald-600" /> WhatsApp Report &amp; Recipient Configuration
+                <Sliders className="w-4 h-4 text-emerald-600" /> WhatsApp Integration &amp; Template Configuration
               </h3>
-              <button
-                onClick={() => setShowConfig(false)}
-                className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1 rounded"
-              >
-                Close ✕
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncTemplates}
+                  disabled={syncingTemplates}
+                  className="px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                  title="Fetch latest approved templates from Meta WhatsApp Business Account"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${syncingTemplates ? 'animate-spin' : ''}`} />
+                  <span>{syncingTemplates ? 'Syncing...' : 'Sync Templates from Meta'}</span>
+                </button>
+                <button
+                  onClick={() => setShowConfig(false)}
+                  className="text-slate-400 hover:text-slate-600 text-xs px-2 py-1 rounded"
+                >
+                  Close ✕
+                </button>
+              </div>
             </div>
+
+            {syncMsg && (
+              <div
+                className={`p-2.5 rounded-lg text-xs border ${
+                  syncMsg.success
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              >
+                {syncMsg.text}
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               {/* Recipient Phone & Country Code */}
               <div className="space-y-1.5 sm:col-span-2">
                 <label className="font-medium text-slate-700 flex items-center gap-1">
-                  <Phone className="w-3.5 h-3.5 text-slate-500" /> WhatsApp Recipient Phone Number
+                  <Phone className="w-3.5 h-3.5 text-slate-500" /> WhatsApp Admin / Owner Recipient Phone Number
                 </label>
                 <div className="flex items-center gap-2">
                   <div className="w-20">
@@ -592,47 +678,100 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                     type="text"
                     value={editPhone}
                     onChange={(e) => setEditPhone(e.target.value)}
-                    placeholder="9909442195 or +919909442195"
+                    placeholder="9876543210 or +919876543210"
                     className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  Reports will be sent exclusively to this authorized owner WhatsApp number.
+                  Daily reports will be sent automatically to this authorized owner WhatsApp number.
                 </p>
               </div>
 
-              {/* Daily Report Toggle */}
-              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                <input
-                  type="checkbox"
-                  id="toggleDailyReport"
-                  checked={editDailyEnabled}
-                  onChange={(e) => setEditDailyEnabled(e.target.checked)}
-                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                />
-                <label htmlFor="toggleDailyReport" className="cursor-pointer space-y-0.5">
-                  <div className="font-semibold text-slate-800">Daily Business Report</div>
-                  <p className="text-[11px] text-slate-500 leading-normal">
-                    Occupancy, revenue, cash &amp; bank collections, expenses, and operational KPIs.
-                  </p>
-                </label>
+              {/* Reservation Template Selector */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-medium text-slate-700 flex items-center gap-1">
+                    <FileText className="w-3.5 h-3.5 text-slate-500" /> Meta Reservation Template
+                  </label>
+                  <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    Approved Only
+                  </span>
+                </div>
+                {approvedTemplates.length > 0 ? (
+                  <select
+                    value={editReservationTemplate}
+                    onChange={(e) => setEditReservationTemplate(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {approvedTemplates.map((tpl) => (
+                      <option key={tpl.name} value={tpl.name}>
+                        {tpl.name} ({tpl.language}) {tpl.headerType === 'DOCUMENT' ? '📄 [PDF Header]' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editReservationTemplate}
+                    onChange={(e) => setEditReservationTemplate(e.target.value)}
+                    placeholder="reservation_confirmation"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                )}
+                <p className="text-[11px] text-slate-500">
+                  Approved Meta template for guest booking confirmations with dynamic PDF document header.
+                </p>
               </div>
 
-              {/* Laundry Statement Toggle */}
-              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                <input
-                  type="checkbox"
-                  id="toggleLaundryStatement"
-                  checked={editLaundryEnabled}
-                  onChange={(e) => setEditLaundryEnabled(e.target.checked)}
-                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                />
-                <label htmlFor="toggleLaundryStatement" className="cursor-pointer space-y-0.5">
-                  <div className="font-semibold text-slate-800">Daily Laundry &amp; Linen Statement</div>
-                  <p className="text-[11px] text-slate-500 leading-normal">
-                    Linen sent, received, pending balance, and approved billable totals per vendor.
-                  </p>
+              {/* Daily Report Template Selector */}
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="font-medium text-slate-700 flex items-center gap-1">
+                    <FileText className="w-3.5 h-3.5 text-slate-500" /> Meta Daily Report Template
+                  </label>
+                  <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                    Approved Only
+                  </span>
+                </div>
+                {approvedTemplates.length > 0 ? (
+                  <select
+                    value={editDailyReportTemplate}
+                    onChange={(e) => setEditDailyReportTemplate(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {approvedTemplates.map((tpl) => (
+                      <option key={tpl.name} value={tpl.name}>
+                        {tpl.name} ({tpl.language}) {tpl.headerType === 'DOCUMENT' ? '📄 [PDF Header]' : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={editDailyReportTemplate}
+                    onChange={(e) => setEditDailyReportTemplate(e.target.value)}
+                    placeholder="daily_hotel_report"
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                )}
+                <p className="text-[11px] text-slate-500">
+                  Approved Meta template for daily summary and PDF delivery to hotel admin.
+                </p>
+              </div>
+
+              {/* Template Language */}
+              <div className="space-y-1">
+                <label className="font-medium text-slate-700 flex items-center gap-1">
+                  <Globe className="w-3.5 h-3.5 text-slate-500" /> Template Language Code
                 </label>
+                <input
+                  type="text"
+                  value={editTemplateLanguage}
+                  onChange={(e) => setEditTemplateLanguage(e.target.value)}
+                  placeholder="en"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[11px] text-slate-500">e.g. en, en_US, hi</p>
               </div>
 
               {/* Preferred Delivery Time */}
@@ -650,7 +789,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               </div>
 
               {/* Timezone */}
-              <div className="space-y-1">
+              <div className="space-y-1 sm:col-span-2">
                 <label className="font-medium text-slate-700 flex items-center gap-1">
                   <Globe className="w-3.5 h-3.5 text-slate-500" /> Hotel Timezone
                 </label>
@@ -659,12 +798,45 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                   onChange={(e) => setEditTimezone(e.target.value)}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
                 >
-                  <option value="Asia/Kolkata">Asia/Kolkata (IST +05:30)</option>
+                  <option value="Asia/Kolkata">Asia/Kolkata (IST +05:30) [Default]</option>
                   <option value="UTC">UTC (GMT +00:00)</option>
                   <option value="Asia/Dubai">Asia/Dubai (GST +04:00)</option>
                   <option value="Asia/Singapore">Asia/Singapore (SGT +08:00)</option>
                 </select>
                 <p className="text-[11px] text-slate-500">Business dates and midnight roll-overs follow this zone.</p>
+              </div>
+
+              {/* Toggles */}
+              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                <input
+                  type="checkbox"
+                  id="toggleDailyReport"
+                  checked={editDailyEnabled}
+                  onChange={(e) => setEditDailyEnabled(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                />
+                <label htmlFor="toggleDailyReport" className="cursor-pointer space-y-0.5">
+                  <div className="font-semibold text-slate-800">Automated Daily Report</div>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    Deliver daily summary PDF and KPIs via WhatsApp cron to admin.
+                  </p>
+                </label>
+              </div>
+
+              <div className="flex items-start gap-2.5 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                <input
+                  type="checkbox"
+                  id="toggleReservationReport"
+                  checked={editReservationEnabled}
+                  onChange={(e) => setEditReservationEnabled(e.target.checked)}
+                  className="mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                />
+                <label htmlFor="toggleReservationReport" className="cursor-pointer space-y-0.5">
+                  <div className="font-semibold text-slate-800">Reservation Confirmations</div>
+                  <p className="text-[11px] text-slate-500 leading-normal">
+                    Send booking confirmation with PDF slip to guest upon reservation.
+                  </p>
+                </label>
               </div>
             </div>
 
@@ -719,7 +891,33 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
           </div>
         )}
 
-        {/* ─── Test Result Feedback ──────────────────────────────────────────── */}
+        {/* ─── Feedback Messages ──────────────────────────────────────────────── */}
+        {sendSuccessMsg && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs flex items-center gap-2 shadow-xs">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{sendSuccessMsg}</span>
+          </div>
+        )}
+
+        {sendErrorMsg && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs flex items-start gap-2 shadow-xs">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <div className="font-semibold">{sendErrorMsg}</div>
+              {fallbackDirectUrl && (
+                <a
+                  href={fallbackDirectUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-700 underline font-medium pt-1"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" /> Click here to open WhatsApp Web with pre-filled message
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+
         {testResult && (
           <div
             className={`p-3 rounded-xl border text-xs flex items-center justify-between gap-2 ${
@@ -739,202 +937,291 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
           </div>
         )}
 
-        {/* ─── Send Feedback ─────────────────────────────────────────────────── */}
-        {sendSuccessMsg && (
-          <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2 shadow-sm">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="font-medium">{sendSuccessMsg}</span>
+        {/* ─── Date Picker & Tab Selector ────────────────────────────────────── */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
+          {/* Date Selector */}
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <button
+              onClick={handlePrevDay}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600"
+              title="Previous Day"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            />
+            <button
+              onClick={handleNextDay}
+              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600"
+              title="Next Day"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleToday}
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-xs font-medium text-slate-600"
+            >
+              Today
+            </button>
+          </div>
+
+          {/* Report Tab Selector */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-full sm:w-auto overflow-x-auto">
+            <button
+              onClick={() => setActiveTab('daily')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                activeTab === 'daily'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Executive Daily
+            </button>
+            <button
+              onClick={() => setActiveTab('morning')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1 ${
+                activeTab === 'morning'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Sun className="w-3 h-3 text-amber-500" /> Morning Brief
+            </button>
+            <button
+              onClick={() => setActiveTab('evening')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1 ${
+                activeTab === 'evening'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Moon className="w-3 h-3 text-indigo-500" /> Evening Summary
+            </button>
+            <button
+              onClick={() => setActiveTab('ota')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1 ${
+                activeTab === 'ota'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Radio className="w-3 h-3 text-sky-500" /> OTA Performance
+            </button>
+          </div>
+        </div>
+
+        {/* ─── Loading & Error State ─────────────────────────────────────────── */}
+        {loading && (
+          <div className="p-12 text-center bg-white rounded-xl border border-slate-200">
+            <Loader2 className="w-8 h-8 text-emerald-600 animate-spin mx-auto mb-2" />
+            <p className="text-xs text-slate-500">Calculating PMS report metrics...</p>
           </div>
         )}
 
-        {sendErrorMsg && (
-          <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-2 shadow-sm">
-            <div className="flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <strong className="font-semibold block">{sendErrorMsg}</strong>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl p-3.5 flex items-center gap-2">
-            <XCircle className="w-4 h-4 text-red-600 shrink-0" />
+        {error && !loading && (
+          <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-red-900 text-xs flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
             <span>{error}</span>
           </div>
         )}
 
-        {/* ─── Loading / Data State ───────────────────────────────────────────── */}
-        {loading ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-500 space-y-2">
-            <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-600" />
-            <p className="text-sm">Calculating daily business-date summary…</p>
-          </div>
-        ) : !summary || (!summary.hasData && summary.occupancy.occupied === 0 && summary.revenue.grossRevenue === 0) ? (
-          <div className="bg-white rounded-xl border border-slate-200 p-8 text-center space-y-3">
-            <AlertCircle className="w-8 h-8 text-slate-400 mx-auto" />
-            <h3 className="font-semibold text-slate-700 text-base">No Hotel Activity for this Business Date</h3>
-            <p className="text-slate-500 text-sm max-w-md mx-auto">
-              No reservations, room stays, or revenue transactions were recorded for{' '}
-              <strong>{data?.businessDateReadable || selectedDate}</strong>.
-            </p>
-            <div className="pt-2 flex justify-center gap-2">
-              <button
-                onClick={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
-                className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg border"
-              >
-                View Today
-              </button>
-            </div>
-          </div>
-        ) : (
+        {/* ─── Content Preview & Outbox ──────────────────────────────────────── */}
+        {!loading && !error && data && (
           <>
-            {/* ─── Live KPI Badges ──────────────────────────────────────────────── */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-                  <span>Occupancy</span>
-                  <Building className="w-3.5 h-3.5 text-emerald-600" />
+            {/* KPI Overview Strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Occupancy</span>
+                <div className="text-xl font-bold text-slate-900 mt-0.5">
+                  {data.summary.occupancy.percentage}%
                 </div>
-                <div className="text-lg font-bold text-slate-900">
-                  {summary.occupancy.percentage}%
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  {summary.occupancy.occupied} / {summary.occupancy.totalRooms} rooms occupied
-                </div>
-              </div>
-
-              <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-                  <span>Front Office</span>
-                  <Users className="w-3.5 h-3.5 text-blue-600" />
-                </div>
-                <div className="text-lg font-bold text-slate-900">
-                  {summary.frontOffice.inHouse} In-House
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  {summary.frontOffice.arrivals} Arr • {summary.frontOffice.departures} Dep
-                </div>
-              </div>
-
-              <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-                  <span>Room Revenue</span>
-                  <IndianRupee className="w-3.5 h-3.5 text-emerald-600" />
-                </div>
-                <div className="text-lg font-bold text-emerald-700 font-mono">
-                  ₹{summary.revenue.roomRevenue.toLocaleString('en-IN')}
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  ADR: ₹{summary.performance.adr.toLocaleString('en-IN')}
-                </div>
-              </div>
-
-              <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
-                <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-                  <span>Total Collection</span>
-                  <TrendingUp className="w-3.5 h-3.5 text-indigo-600" />
-                </div>
-                <div className="text-lg font-bold text-indigo-700 font-mono">
-                  ₹{summary.collection.total.toLocaleString('en-IN')}
-                </div>
-                <div className="text-[11px] text-slate-500">
-                  Due: ₹{summary.collection.pendingDue.toLocaleString('en-IN')}
-                </div>
-              </div>
-            </div>
-
-            {/* ─── Summary Type Tabs ────────────────────────────────────────────── */}
-            <div className="flex items-center gap-1.5 border-b border-slate-200 pb-2">
-              <button
-                onClick={() => setActiveTab('daily')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-                  activeTab === 'daily'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
-              >
-                <Building className="w-3.5 h-3.5" /> Daily Summary
-              </button>
-              <button
-                onClick={() => setActiveTab('morning')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-                  activeTab === 'morning'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
-              >
-                <Sun className="w-3.5 h-3.5 text-amber-400" /> Morning Briefing
-              </button>
-              <button
-                onClick={() => setActiveTab('evening')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-                  activeTab === 'evening'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
-              >
-                <Moon className="w-3.5 h-3.5 text-indigo-400" /> Closing Summary
-              </button>
-              <button
-                onClick={() => setActiveTab('ota')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
-                  activeTab === 'ota'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
-              >
-                <Radio className="w-3.5 h-3.5 text-purple-400" /> OTA Channels
-              </button>
-            </div>
-
-            {/* ─── Summary Message Preview Card ─────────────────────────────────── */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="bg-slate-100/80 px-4 py-2.5 border-b border-slate-200 flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-700 flex items-center gap-1.5">
-                  <MessageCircle className="w-4 h-4 text-emerald-600" />
-                  WhatsApp Live Message Preview ({activeTab.toUpperCase()})
+                <span className="text-[11px] text-slate-500">
+                  {data.summary.occupancy.occupied} / {data.summary.occupancy.totalRooms} Rooms
                 </span>
-                <button
-                  onClick={() => copy(activeReportText)}
-                  className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-slate-200 rounded-md font-medium text-slate-700 flex items-center gap-1 transition"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? 'Copied!' : 'Copy Text'}
-                </button>
               </div>
 
-              <div className="p-4 bg-slate-900 text-emerald-400 font-mono text-xs leading-relaxed overflow-x-auto select-all max-h-[480px]">
-                <pre className="whitespace-pre-wrap font-mono">{activeReportText}</pre>
+              <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Gross Revenue</span>
+                <div className="text-xl font-bold text-emerald-700 mt-0.5">
+                  ₹{Math.round(data.summary.revenue.grossRevenue).toLocaleString('en-IN')}
+                </div>
+                <span className="text-[11px] text-slate-500">
+                  Room: ₹{Math.round(data.summary.revenue.roomRevenue).toLocaleString('en-IN')}
+                </span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Closing Cash</span>
+                <div className="text-xl font-bold text-amber-700 mt-0.5">
+                  ₹{Math.round(data.summary.collection.cash).toLocaleString('en-IN')}
+                </div>
+                <span className="text-[11px] text-slate-500">Physical in drawer</span>
+              </div>
+
+              <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">Operations</span>
+                <div className="text-xl font-bold text-slate-900 mt-0.5">
+                  {data.summary.frontOffice.inHouse} In-House
+                </div>
+                <span className="text-[11px] text-slate-500">
+                  {data.summary.frontOffice.arrivals} In | {data.summary.frontOffice.departures} Out
+                </span>
               </div>
             </div>
 
-            {/* ─── Send History Table ──────────────────────────────────────────── */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+            {/* Formatted Text Preview Card */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+              <div className="bg-slate-50 border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4 text-emerald-600" />
+                  <span className="font-semibold text-xs text-slate-800">
+                    Preview ({activeTab.toUpperCase()})
+                  </span>
+                </div>
+                {activeDirectUrl && (
+                  <a
+                    href={activeDirectUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-emerald-700 hover:text-emerald-800 font-medium inline-flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" /> wa.me Web Link
+                  </a>
+                )}
+              </div>
+              <div className="p-4 bg-slate-900 text-slate-100 font-mono text-xs whitespace-pre-wrap leading-relaxed max-h-[380px] overflow-y-auto selection:bg-emerald-500 selection:text-white">
+                {activeReportText}
+              </div>
+            </div>
+
+            {/* ─── Synchronized Meta Message Templates Gallery (Phase 2 & 7) ──── */}
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-emerald-600" />
+                  <h3 className="font-semibold text-slate-900 text-xs uppercase tracking-wider">
+                    Synchronized Meta Message Templates
+                  </h3>
+                  <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                    {templatesList.length} templates
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowTemplatesGallery(!showTemplatesGallery)}
+                    className="text-xs text-slate-600 hover:text-slate-800 font-medium px-2 py-1 rounded border border-slate-200"
+                  >
+                    {showTemplatesGallery ? 'Hide Templates' : 'View Templates'}
+                  </button>
+                  <button
+                    onClick={handleSyncTemplates}
+                    disabled={syncingTemplates}
+                    className="px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-medium flex items-center gap-1.5 transition disabled:opacity-50 cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${syncingTemplates ? 'animate-spin' : ''}`} />
+                    <span>{syncingTemplates ? 'Syncing...' : 'Sync from Meta'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {showTemplatesGallery && (
+                <div className="space-y-3 pt-1">
+                  {templatesList.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
+                      No templates synchronized yet. Click &quot;Sync from Meta&quot; to fetch your approved templates.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {templatesList.map((tpl) => {
+                        const isApproved = String(tpl.status).toUpperCase() === 'APPROVED';
+                        const isPending = String(tpl.status).toUpperCase() === 'PENDING';
+                        return (
+                          <div
+                            key={`${tpl.name}_${tpl.language}`}
+                            className="p-3 rounded-lg border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-emerald-300 transition space-y-2 text-xs"
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <span className="font-bold text-slate-900 font-mono text-xs">{tpl.name}</span>
+                                <div className="text-[11px] text-slate-500 flex items-center gap-1 font-mono">
+                                  <span>Lang: <strong>{tpl.language}</strong></span>
+                                  {tpl.templateId && <span>• ID: {tpl.templateId}</span>}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                    isApproved
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                      : isPending
+                                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                      : 'bg-red-100 text-red-800 border border-red-300'
+                                  }`}
+                                >
+                                  {tpl.status}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                              {tpl.category && (
+                                <span className="bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-mono">
+                                  {tpl.category}
+                                </span>
+                              )}
+                              {tpl.headerType && tpl.headerType !== 'NONE' && (
+                                <span className="bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded font-medium flex items-center gap-0.5">
+                                  {tpl.headerType === 'DOCUMENT' ? '📄 Header: DOCUMENT' : `Header: ${tpl.headerType}`}
+                                </span>
+                              )}
+                              {Array.isArray(tpl.bodyVariables) && tpl.bodyVariables.length > 0 && (
+                                <span className="bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded font-mono">
+                                  {tpl.bodyVariables.length} vars ({tpl.bodyVariables.map(v => `{{${v}}}`).join(', ')})
+                                </span>
+                              )}
+                            </div>
+
+                            {tpl.bodyText && (
+                              <p className="text-[11px] text-slate-600 line-clamp-2 italic bg-white p-1.5 rounded border border-slate-100">
+                                &quot;{tpl.bodyText}&quot;
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ─── Recent Delivery Logs (Section 9) ────────────────────────────── */}
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4 text-slate-500" /> WhatsApp Send History
+                <h3 className="font-semibold text-slate-900 text-xs uppercase tracking-wider">
+                  Recent WhatsApp Delivery Logs
                 </h3>
-                <button
-                  onClick={() => fetchWhatsAppHistory(15).then(setHistory).catch(() => {})}
-                  className="text-xs text-slate-500 hover:text-slate-800 flex items-center gap-1"
-                >
-                  <RefreshCw className="w-3 h-3" /> Refresh
-                </button>
+                <span className="text-[11px] text-slate-500">
+                  {history.length} recent dispatches
+                </span>
               </div>
 
               {history.length === 0 ? (
-                <p className="text-slate-400 text-xs italic text-center py-3">
-                  No previous WhatsApp sends recorded for this property.
-                </p>
+                <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-lg">
+                  No WhatsApp messages logged for this property yet.
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 font-medium">
+                      <tr className="border-b text-slate-400 uppercase text-[10px]">
                         <th className="pb-2">Date</th>
-                        <th className="pb-2">Report</th>
+                        <th className="pb-2">Report / Ref</th>
                         <th className="pb-2">Recipient</th>
                         <th className="pb-2">Type</th>
                         <th className="pb-2">Status</th>
@@ -944,9 +1231,9 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {history.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50">
+                        <tr key={item.id} className="hover:bg-slate-50/60">
                           <td className="py-2 font-mono text-slate-600">{item.business_date || '—'}</td>
-                          <td className="py-2 font-medium text-slate-800">
+                          <td className="py-2 font-medium text-slate-900">
                             {item.report_type.replace('WHATSAPP_', '').replace('_SUMMARY', '')}
                           </td>
                           <td className="py-2 font-mono text-slate-600">+{item.recipient}</td>
@@ -961,8 +1248,8 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                                 ✓ Delivered
                               </span>
                             ) : item.status === 'submitted' || item.status === 'sent' ? (
-                              <span className="text-indigo-700 font-medium flex items-center gap-1" title="Accepted by Whinta, awaiting delivery event">
-                                Submitted to Provider
+                              <span className="text-indigo-700 font-medium flex items-center gap-1" title="Accepted by Meta Cloud API">
+                                Submitted to Meta
                               </span>
                             ) : item.status === 'queued' ? (
                               <span className="text-blue-700 font-medium flex items-center gap-1">
@@ -988,7 +1275,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                             {item.status === 'failed' && (
                               <button
                                 onClick={() => handleRetry(item.id)}
-                                className="text-emerald-600 hover:text-emerald-800 text-[11px] underline font-medium"
+                                className="text-emerald-600 hover:text-emerald-800 text-[11px] underline font-medium cursor-pointer"
                               >
                                 Retry
                               </button>
@@ -1018,7 +1305,7 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
                 className={`text-[11px] px-2.5 py-0.5 rounded-full font-medium ${
                   deliveryStatus === 'Delivered'
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : deliveryStatus === 'Submitted to Provider'
+                    : deliveryStatus === 'Submitted to Meta'
                     ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
                     : deliveryStatus === 'Sending...'
                     ? 'bg-blue-100 text-blue-800'
@@ -1039,17 +1326,17 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
               onClick={handleSendNow}
               disabled={sending || !owner?.valid}
               className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold px-6 py-3 rounded-xl text-xs shadow-md transition disabled:opacity-50 cursor-pointer"
-              title="Dispatch report directly via Whinta WhatsApp API"
+              title="Dispatch report directly via Meta WhatsApp Cloud API"
             >
               {sending ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Sending via Whinta…</span>
+                  <span>Sending via Meta…</span>
                 </>
               ) : (
                 <>
                   <MessageCircle className="w-4 h-4" />
-                  <span>Send WhatsApp Summary (via Whinta)</span>
+                  <span>Send WhatsApp Summary (via Meta)</span>
                 </>
               )}
             </button>
@@ -1059,3 +1346,5 @@ export const WhatsAppScreen = ({ date: initialDate, onBack }: WhatsAppScreenProp
     </div>
   );
 };
+
+export default WhatsAppScreen;

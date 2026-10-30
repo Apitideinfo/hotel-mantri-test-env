@@ -97,7 +97,7 @@ From inspection of `supabase/migrations/20260814000000_initial_schema.sql`, subs
 | `20261002230000_strict_multi_tenant_security.sql` | 12.4 KB | **YES** | `auth_hotel_id()` RPC verified functional; strict tenant RLS policies active across 29 tables. |
 | `20261008000000_laundry_linen_production.sql` | 20.6 KB | **YES** | Linen/laundry tables exist. |
 | `20261011000000_payment_security_ledger.sql` | 7.4 KB | **PARTIAL** | Table `payment_transactions` exists with unique constraint `uq_payment_transactions_payment_id`. However, stored procedure `process_verified_payment` is **missing from the PostgREST schema cache** (held pending staging deployment per `HOTELMANTRI_FINAL_STAGING_AND_PERFORMANCE_VERIFICATION_REPORT.md`). |
-| `20261011000000_whinta_whatsapp_integration.sql` | 5.4 KB | **YES** | Whinta columns and tables verified. |
+| `20261011000000_whinta_whatsapp_integration.sql` | 5.4 KB | **YES** | WhatsApp Cloud API columns and tables verified. |
 | `20261015000000_whinta_template_and_cron_tracking.sql` | 3.0 KB | **YES** | Template and cron tracking tables verified. |
 
 ---

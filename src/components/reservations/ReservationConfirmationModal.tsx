@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import {
   X, FileText, Download, Eye, Mail, MessageCircle, RefreshCw,
   CheckCircle2, AlertCircle, Clock, Loader2, Send,
@@ -127,7 +127,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
   }, 0);
   const totalBalanceDue = Math.max(0, totalStayAmount - totalAdvancePaid);
 
-  // Email recipient — seeded immediately from the reservation's saved guest email
+  // Email recipient â€” seeded immediately from the reservation's saved guest email
   const [showEmailInput, setShowEmailInput] = useState(false);
   const [customEmail, setCustomEmail] = useState<string>(
     (reservation.guest_email || '').trim()
@@ -147,8 +147,8 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
       if (res.success) {
         setDocData(res);
         // Priority order for email pre-fill:
-        // 1. Guest contact email from reservation (authoritative — what was entered at booking)
-        // 2. Recipient email resolved by the server (may differ for OTA → hotel owner)
+        // 1. Guest contact email from reservation (authoritative â€” what was entered at booking)
+        // 2. Recipient email resolved by the server (may differ for OTA â†’ hotel owner)
         // 3. Owner contact email (OTA fallback)
         const resolvedEmail =
           res.guestContact?.email?.trim() ||
@@ -168,13 +168,13 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
       }
     } catch (err: any) {
       console.warn('Failed to fetch server confirmation status, using fallback:', err?.message);
-      // Keep the value seeded from reservation.guest_email — it is still valid
+      // Keep the value seeded from reservation.guest_email â€” it is still valid
     } finally {
       setLoading(false);
     }
   }, [reservation.id]);
 
-  // Reset email when a different reservation is opened — prevents stale data
+  // Reset email when a different reservation is opened â€” prevents stale data
   useEffect(() => {
     setCustomEmail((reservation.guest_email || '').trim());
     setCustomPhone((reservation.guest_phone || '').trim());
@@ -186,7 +186,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     fetchConfirmationInfo();
   }, [fetchConfirmationInfo]);
 
-  // ── Secure Authenticated PDF Fetcher (No credentials in URL query parameters) ──
+  // â”€â”€ Secure Authenticated PDF Fetcher (No credentials in URL query parameters) â”€â”€
   const fetchPdfBlob = async (version?: number): Promise<string> => {
     let token: string | undefined;
     try {
@@ -223,7 +223,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     return URL.createObjectURL(blob);
   };
 
-  // ── Preview PDF ──
+  // â”€â”€ Preview PDF â”€â”€
   const handlePreviewPdf = async () => {
     try {
       setActing(true);
@@ -236,7 +236,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     }
   };
 
-  // ── Print PDF ──
+  // â”€â”€ Print PDF â”€â”€
   const handlePrintPdf = async () => {
     try {
       setActing(true);
@@ -252,7 +252,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     }
   };
 
-  // ── Download PDF ──
+  // â”€â”€ Download PDF â”€â”€
   const handleDownloadPdf = async () => {
     try {
       downloadReservationConfirmationPdf({
@@ -284,7 +284,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     }
   };
 
-  // ── Send / Retry Email ──
+  // â”€â”€ Send / Retry Email â”€â”€
   const handleSendEmail = async () => {
     setActing(true);
     setActionError(null);
@@ -313,7 +313,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
     }
   };
 
-  // ── Send WhatsApp via Whinta ──
+  // â”€â”€ Send WhatsApp via WhatsApp â”€â”€
   const handleSendWhatsApp = async () => {
     setActing(true);
     setActionError(null);
@@ -327,22 +327,22 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
       });
 
       if (res.success) {
-        setActionSuccess('WhatsApp confirmation dispatched successfully via Whinta.');
+        setActionSuccess('WhatsApp confirmation dispatched successfully via WhatsApp.');
         setShowPhoneInput(false);
         await fetchConfirmationInfo();
         onUpdated?.();
       } else {
-        setActionError(res.message || 'Whinta WhatsApp delivery unavailable.');
+        setActionError(res.message || 'WhatsApp delivery unavailable.');
       }
     } catch (err: any) {
-      setActionError(err?.message || 'Whinta WhatsApp delivery unavailable.');
+      setActionError(err?.message || 'WhatsApp delivery unavailable.');
     } finally {
       setActing(false);
       setTimeout(() => setActionSuccess(null), 5000);
     }
   };
 
-  // ── Regenerate Confirmation ──
+  // â”€â”€ Regenerate Confirmation â”€â”€
   const handleRegenerate = async (newVersion: boolean) => {
     setActing(true);
     setActionError(null);
@@ -588,9 +588,9 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase font-bold">Total / Balance</span>
                 <span className="font-semibold text-brand-700">
-                  ₹{Math.round(totalStayAmount).toLocaleString('en-IN')}
+                  â‚¹{Math.round(totalStayAmount).toLocaleString('en-IN')}
                   {totalBalanceDue > 0 && (
-                    <span className="text-xs text-amber-600 font-bold block">Due: ₹{Math.round(totalBalanceDue).toLocaleString('en-IN')}</span>
+                    <span className="text-xs text-amber-600 font-bold block">Due: â‚¹{Math.round(totalBalanceDue).toLocaleString('en-IN')}</span>
                   )}
                 </span>
               </div>
@@ -616,9 +616,9 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
                       </div>
                       <div className="text-right">
                         <span className="font-extrabold text-slate-900 block">
-                          ₹{Math.round(r.invoice_total || (r.rate * (r.nights || 1))).toLocaleString('en-IN')}
+                          â‚¹{Math.round(r.invoice_total || (r.rate * (r.nights || 1))).toLocaleString('en-IN')}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-medium">₹{Math.round(r.rate)}/nt</span>
+                        <span className="text-[10px] text-slate-400 font-medium">â‚¹{Math.round(r.rate)}/nt</span>
                       </div>
                     </div>
                   ))}
@@ -678,7 +678,7 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
                   className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold flex items-center gap-1.5 shadow-sm disabled:opacity-50 transition"
                 >
                   {acting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-                  Dispatch via Whinta
+                  Dispatch via WhatsApp
                 </button>
               </div>
             </div>
@@ -728,11 +728,11 @@ export const ReservationConfirmationModal: React.FC<Props> = ({
             <button
               onClick={() => setShowPhoneInput(!showPhoneInput)}
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-              title="Send WhatsApp confirmation via Whinta"
+              title="Send WhatsApp confirmation via WhatsApp"
             >
               <MessageCircle className="w-4 h-4" />
               <span>
-                {whatsappStatus === 'SENT' ? 'Resend WhatsApp (Whinta)' : whatsappStatus === 'FAILED' ? 'Retry WhatsApp (Whinta)' : 'Send WhatsApp (Whinta)'}
+                {whatsappStatus === 'SENT' ? 'Resend WhatsApp' : whatsappStatus === 'FAILED' ? 'Retry WhatsApp' : 'Send WhatsApp'}
               </span>
             </button>
 

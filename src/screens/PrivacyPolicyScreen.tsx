@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+﻿import React, { useEffect } from 'react';
 import {
   ShieldCheck,
   Lock,
@@ -35,7 +35,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
   // Update document title and canonical meta tags
   useEffect(() => {
     const prevTitle = document.title;
-    document.title = 'Privacy Policy — HotelMantri Cloud Hotel Management Platform';
+    document.title = 'Privacy Policy â€” HotelMantri Cloud Hotel Management Platform';
 
     let metaDesc = document.querySelector('meta[name="description"]');
     const prevDesc = metaDesc ? metaDesc.getAttribute('content') : '';
@@ -92,7 +92,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased selection:bg-brand-500 selection:text-white">
-      {/* ── Header Navigation Bar ── */}
+      {/* â”€â”€ Header Navigation Bar â”€â”€ */}
       <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -151,7 +151,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
         </div>
       </header>
 
-      {/* ── Hero / Page Title ── */}
+      {/* â”€â”€ Hero / Page Title â”€â”€ */}
       <section className="bg-gradient-to-b from-slate-900 via-slate-900 to-slate-800 text-white py-12 sm:py-16 px-4 sm:px-6 lg:px-8 border-b border-slate-800">
         <div className="max-w-5xl mx-auto text-center sm:text-left">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-500/10 border border-brand-400/30 text-brand-300 text-xs font-bold uppercase tracking-wider mb-4">
@@ -169,15 +169,15 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
               <Clock className="w-3.5 h-3.5 text-slate-400" />
               Effective Date: <strong className="text-slate-200">October 15, 2026</strong>
             </span>
-            <span className="text-slate-600">•</span>
+            <span className="text-slate-600">â€¢</span>
             <span>Version: <strong className="text-slate-200">3.2 (Production Release)</strong></span>
-            <span className="text-slate-600">•</span>
+            <span className="text-slate-600">â€¢</span>
             <span>Canonical URL: <code className="text-brand-300 bg-slate-800/80 px-2 py-0.5 rounded">https://www.hotelmantri.com/privacy-policy</code></span>
           </div>
         </div>
       </section>
 
-      {/* ── Main Content Grid with Sticky Table of Contents ── */}
+      {/* â”€â”€ Main Content Grid with Sticky Table of Contents â”€â”€ */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
           {/* Left Column: Sticky Table of Contents */}
@@ -271,11 +271,11 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                     Guest & Reservation Data
                   </h4>
                   <ul className="text-xs text-slate-600 space-y-1.5">
-                    <li>• Guest full legal name, contact phone number, and email.</li>
-                    <li>• Physical address, city, state, country, and postal pincode.</li>
-                    <li>• Government ID proof type (Passport, Driving License, Voter ID, Aadhaar) and verified masked identification number as mandated by local hospitality compliance.</li>
-                    <li>• Booking dates (check-in, check-out), room assignments, guest count (adults/children), and specific requests.</li>
-                    <li>• Booking channel (Direct, Walk-in, OTA partners, Corporate, Travel Agent).</li>
+                    <li>â€¢ Guest full legal name, contact phone number, and email.</li>
+                    <li>â€¢ Physical address, city, state, country, and postal pincode.</li>
+                    <li>â€¢ Government ID proof type (Passport, Driving License, Voter ID, Aadhaar) and verified masked identification number as mandated by local hospitality compliance.</li>
+                    <li>â€¢ Booking dates (check-in, check-out), room assignments, guest count (adults/children), and specific requests.</li>
+                    <li>â€¢ Booking channel (Direct, Walk-in, OTA partners, Corporate, Travel Agent).</li>
                   </ul>
                 </div>
 
@@ -285,10 +285,10 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                     Hotel & Staff Accounts
                   </h4>
                   <ul className="text-xs text-slate-600 space-y-1.5">
-                    <li>• Property business name, legal entity name, GSTIN number, and registered address.</li>
-                    <li>• Administrator name, official mobile number, and billing email.</li>
-                    <li>• Staff employee usernames, mobile numbers, assigned roles (Admin, Manager, Reception, Housekeeping, Accounts), and shift logs.</li>
-                    <li>• Encrypted authentication credentials and multi-tenant session tokens.</li>
+                    <li>â€¢ Property business name, legal entity name, GSTIN number, and registered address.</li>
+                    <li>â€¢ Administrator name, official mobile number, and billing email.</li>
+                    <li>â€¢ Staff employee usernames, mobile numbers, assigned roles (Admin, Manager, Reception, Housekeeping, Accounts), and shift logs.</li>
+                    <li>â€¢ Encrypted authentication credentials and multi-tenant session tokens.</li>
                   </ul>
                 </div>
 
@@ -298,10 +298,10 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                     Financial & Invoice Records
                   </h4>
                   <ul className="text-xs text-slate-600 space-y-1.5">
-                    <li>• Room tariffs, applicable taxes (CGST, SGST, IGST), and HSN/SAC codes.</li>
-                    <li>• Payment methods (Cash, UPI, Bank Transfer, Card POS, Online Payment Gateway).</li>
-                    <li>• Payment transaction IDs, advance deposits, refunds, and final balances.</li>
-                    <li>• <em>Note:</em> HotelMantri does NOT collect, store, or process raw 16-digit credit card numbers or CVVs. All online transactions are handled through certified PCI-DSS Level 1 payment gateways (such as Razorpay).</li>
+                    <li>â€¢ Room tariffs, applicable taxes (CGST, SGST, IGST), and HSN/SAC codes.</li>
+                    <li>â€¢ Payment methods (Cash, UPI, Bank Transfer, Card POS, Online Payment Gateway).</li>
+                    <li>â€¢ Payment transaction IDs, advance deposits, refunds, and final balances.</li>
+                    <li>â€¢ <em>Note:</em> HotelMantri does NOT collect, store, or process raw 16-digit credit card numbers or CVVs. All online transactions are handled through certified PCI-DSS Level 1 payment gateways (such as Razorpay).</li>
                   </ul>
                 </div>
 
@@ -311,10 +311,10 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                     WhatsApp, Meta & Technical Data
                   </h4>
                   <ul className="text-xs text-slate-600 space-y-1.5">
-                    <li>• Guest phone numbers for transactional WhatsApp alerts (booking confirmation, digital invoice link).</li>
-                    <li>• Message transmission timestamps and delivery statuses (sent, delivered, read, failed).</li>
-                    <li>• Server access logs, IP addresses (used strictly for session validation, security rate limiting, and DDoS defense).</li>
-                    <li>• Device user-agent, browser type, and internal correlation IDs (<code>X-Request-Id</code>).</li>
+                    <li>â€¢ Guest phone numbers for transactional WhatsApp alerts (booking confirmation, digital invoice link).</li>
+                    <li>â€¢ Message transmission timestamps and delivery statuses (sent, delivered, read, failed).</li>
+                    <li>â€¢ Server access logs, IP addresses (used strictly for session validation, security rate limiting, and DDoS defense).</li>
+                    <li>â€¢ Device user-agent, browser type, and internal correlation IDs (<code>X-Request-Id</code>).</li>
                   </ul>
                 </div>
               </div>
@@ -345,7 +345,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                   <strong>Automated Technical Collection:</strong> Session management headers, system cookies, and security telemetry captured automatically during platform use to maintain authentication state.
                 </li>
                 <li>
-                  <strong>Messaging Webhooks:</strong> Webhook delivery receipts received from the Meta WhatsApp Cloud API / Whinta platform to confirm that transactional booking slips were successfully delivered.
+                  <strong>Messaging Webhooks:</strong> Webhook delivery receipts received from the Meta WhatsApp Cloud API platform to confirm that transactional booking slips were successfully delivered.
                 </li>
               </ul>
             </section>
@@ -407,7 +407,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                 Because HotelMantri is a software provider to hotels, individual hotel operators are responsible for establishing legal grounds for collecting guest data (such as fulfilling a reservation contract or complying with local innkeeper regulations).
               </p>
               <p className="mb-3">
-                When a guest stays at a hotel powered by HotelMantri, their data is isolated within the specific hotel’s secure partition. HotelMantri will never disclose, cross-reference, or sell guest lists across different hotels or to advertising networks.
+                When a guest stays at a hotel powered by HotelMantri, their data is isolated within the specific hotelâ€™s secure partition. HotelMantri will never disclose, cross-reference, or sell guest lists across different hotels or to advertising networks.
               </p>
               <p className="text-xs sm:text-sm text-slate-600">
                 Guests seeking to access, correct, or update their stay details should direct requests primarily to the hotel where they held a reservation. Guests may also submit a verification request via our central compliance desk at <a href="mailto:privacy@hotelmantri.com" className="text-brand-600 font-semibold underline">privacy@hotelmantri.com</a>.
@@ -425,7 +425,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                 </h2>
               </div>
               <p className="mb-3">
-                HotelMantri integrates with <strong>Meta Platforms, Inc.</strong> technologies, including the <strong>WhatsApp Business Cloud API</strong> (operated in conjunction with certified Business Solution Provider Whinta).
+                HotelMantri integrates with <strong>Meta Platforms, Inc.</strong> technologies, including the <strong>WhatsApp Business Cloud API</strong>.
               </p>
               
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 my-4 space-y-2 text-xs sm:text-sm text-emerald-950">
@@ -450,7 +450,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
               </div>
 
               <p className="text-xs sm:text-sm text-slate-600">
-                In transmitting messages, technical payload data (such as recipient mobile number and message delivery timestamps) passes through Meta’s infrastructure subject to Meta’s Terms of Service and Privacy Policy. HotelMantri maintains a dedicated Data Deletion Callback endpoint for Meta App reviews and user privacy enforcement.
+                In transmitting messages, technical payload data (such as recipient mobile number and message delivery timestamps) passes through Metaâ€™s infrastructure subject to Metaâ€™s Terms of Service and Privacy Policy. HotelMantri maintains a dedicated Data Deletion Callback endpoint for Meta App reviews and user privacy enforcement.
               </p>
             </section>
 
@@ -497,7 +497,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                       <td className="p-3">Order IDs, payment amounts, customer contact tokens.</td>
                     </tr>
                     <tr>
-                      <td className="p-3 font-semibold text-slate-900">Meta Platforms Inc. / Whinta</td>
+                      <td className="p-3 font-semibold text-slate-900">Meta Platforms, Inc.</td>
                       <td className="p-3">WhatsApp Business Cloud API Messaging Gateway</td>
                       <td className="p-3">Mobile numbers, pre-approved utility notification templates.</td>
                     </tr>
@@ -575,7 +575,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
               </p>
               <ul className="list-disc list-inside space-y-2 text-xs sm:text-sm text-slate-700">
                 <li>
-                  <strong>Active Hotel Accounts:</strong> Operational data is maintained for the duration of the hotel’s active subscription to provide historical booking registers and analytics.
+                  <strong>Active Hotel Accounts:</strong> Operational data is maintained for the duration of the hotelâ€™s active subscription to provide historical booking registers and analytics.
                 </li>
                 <li>
                   <strong>Statutory Financial & Tax Invoices:</strong> In accordance with <strong>Section 44AA of the Indian Income Tax Act</strong> and <strong>Section 36 of the Central Goods and Services Tax (CGST) Act</strong>, financial books of account, tax invoices, and payment receipts must be preserved for a minimum of <strong>6 to 8 years</strong>. Financial transactions cannot be deleted prematurely.
@@ -648,7 +648,7 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
                   href="/data-deletion"
                   className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-sm transition whitespace-nowrap"
                 >
-                  Go to Data Deletion Page →
+                  Go to Data Deletion Page â†’
                 </a>
               </div>
               <p className="text-xs sm:text-sm text-slate-600">
@@ -785,15 +785,15 @@ export const PrivacyPolicyScreen: React.FC<PrivacyPolicyScreenProps> = ({
         </div>
       </main>
 
-      {/* ── Sub-Footer ── */}
+      {/* â”€â”€ Sub-Footer â”€â”€ */}
       <footer className="bg-slate-900 text-slate-400 py-8 border-t border-slate-800 text-xs text-center">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p>© {new Date().getFullYear()} HotelMantri (Apitide Information Technologies). All rights reserved.</p>
+          <p>Â© {new Date().getFullYear()} HotelMantri (Apitide Information Technologies). All rights reserved.</p>
           <div className="flex items-center gap-4">
             <a href="/privacy-policy" className="text-slate-300 hover:text-white transition">Privacy Policy</a>
-            <span>•</span>
+            <span>â€¢</span>
             <a href="/data-deletion" className="text-slate-300 hover:text-white transition">Data Deletion</a>
-            <span>•</span>
+            <span>â€¢</span>
             <a href="/terms" className="text-slate-300 hover:text-white transition">Terms of Service</a>
           </div>
         </div>

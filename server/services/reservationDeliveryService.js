@@ -1045,6 +1045,30 @@ export const generateAndDeliverConfirmation = async ({
   // 6. Step 4: WhatsApp Notification (Hotel Owner for OTA / Guest for Direct/Manual)
   let whatsappDeliveryResult = { status: 'pending' };
   try {
+    const resStatus = String(resRecord.status || '').toLowerCase();
+    const isUnconfirmedOrCancelled = isCancellation || ['cancelled', 'incomplete', 'draft'].includes(resStatus);
+
+    if (isUnconfirmedOrCancelled && eventType !== 'RESERVATION_CANCELLED') {
+      console.log(`[DELIVERY_SERVICE] WhatsApp skipped: reservation status is "${resRecord.status || 'unconfirmed'}"`);
+      whatsappDeliveryResult = {
+        status: 'skipped',
+        recipientType: recipientResolution.sourceType === 'OTA' ? 'HOTEL_OWNER' : 'CUSTOMER',
+        reason: 'RESERVATION_NOT_CONFIRMED',
+        message: `WhatsApp confirmation skipped: reservation status is ${resRecord.status || 'not confirmed'}.`,
+      };
+      await updateDocumentDeliveryStatus(hotelId, reservationId, version, {
+        whatsappStatus: DELIVERY_STATUS.SKIPPED,
+        errorDetails: `Reservation status: ${resRecord.status || 'not confirmed'}`,
+      });
+      return {
+        success: true,
+        pdf: { status: 'generated', fileName, url: signedUrl },
+        recipient: recipientResolution,
+        email: emailDeliveryResult,
+        whatsapp: whatsappDeliveryResult,
+      };
+    }
+
     const isOta = recipientResolution.sourceType === 'OTA';
     const targetRecipientType = isOta ? 'HOTEL_OWNER' : 'CUSTOMER';
     let targetPhone = null;
@@ -1266,6 +1290,8 @@ export const generateAndDeliverConfirmation = async ({
           fileName,
           caption: `Reservation Confirmation — ${hotelName} (#${confirmationNumber})`,
           mediaType: 'document',
+          documentBuffer: pdfBuffer,
+          buffer: pdfBuffer,
         });
 
         if (waSendResult.success) {

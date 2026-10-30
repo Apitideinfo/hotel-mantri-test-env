@@ -75,7 +75,6 @@ router.post('/data-deletion-callback', async (req, res) => {
     const appSecret =
       process.env.META_APP_SECRET ||
       process.env.WHATSAPP_APP_SECRET ||
-      process.env.WHINTA_WEBHOOK_SECRET ||
       '';
 
     if (!signedRequest) {

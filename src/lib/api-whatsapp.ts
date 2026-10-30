@@ -96,6 +96,8 @@ export interface WhatsAppSendResult {
   error?: string;
   errorCode?: string;
   whatsappDirectUrl?: string | null;
+  pdfUrl?: string | null;
+  pdfFilename?: string | null;
 }
 
 export interface WhatsAppHistoryItem {
@@ -113,6 +115,22 @@ export interface WhatsAppHistoryItem {
   created_at: string;
 }
 
+export interface WhatsAppTemplateItem {
+  id?: string;
+  templateId?: string;
+  name: string;
+  status: 'APPROVED' | 'PENDING' | 'REJECTED' | 'PAUSED' | string;
+  language: string;
+  category?: string;
+  headerType?: string;
+  headerFormat?: string | null;
+  bodyText?: string;
+  bodyVariables?: string[];
+  footerText?: string | null;
+  buttons?: any[];
+  components?: any[];
+}
+
 export interface WhatsAppSettingsResponse {
   success: boolean;
   hotelId?: string;
@@ -122,6 +140,14 @@ export interface WhatsAppSettingsResponse {
   normalizedNumber: string;
   countryCode?: string;
   dailyReportEnabled?: boolean;
+  reservationConfirmationEnabled?: boolean;
+  reservationTemplate?: string;
+  dailyReportTemplate?: string;
+  whatsappReservationLanguage?: string;
+  whatsappDailyReportLanguage?: string;
+  templatesLastSyncedAt?: string | null;
+  templateHasDocumentHeader?: boolean;
+  templateLanguage?: string;
   laundryStatementEnabled?: boolean;
   preferredDeliveryTime?: string;
   timezone?: string;
@@ -146,6 +172,11 @@ export interface SaveWhatsAppSettingsParams {
   reportRecipientPhone?: string;
   countryCode?: string;
   dailyReportEnabled?: boolean;
+  reservationConfirmationEnabled?: boolean;
+  reservationTemplate?: string;
+  dailyReportTemplate?: string;
+  templateHasDocumentHeader?: boolean;
+  templateLanguage?: string;
   laundryStatementEnabled?: boolean;
   preferredDeliveryTime?: string;
   timezone?: string;
@@ -167,6 +198,42 @@ export interface SendWhatsAppParams {
   includePdf?: boolean;
 }
 
+export interface WhatsAppConfigResponse {
+  success: boolean;
+  provider: string;
+  configured: boolean;
+  enabled?: boolean;
+  active?: boolean;
+  graphApiVersion?: string;
+  hasAccessToken?: boolean;
+  hasPhoneNumberId?: boolean;
+  hasBusinessAccountId?: boolean;
+  phoneNumberIdSuffix?: string | null;
+  businessAccountIdSuffix?: string | null;
+  reservationTemplate?: string;
+  dailyReportTemplate?: string;
+  isTemplateApproved?: boolean;
+  testMode?: boolean;
+  diagnostics?: any;
+}
+
+export interface MetaConnectionResponse {
+  success: boolean;
+  configured: boolean;
+  connected: boolean;
+  provider?: string;
+  graphApiVersion?: string;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string | null;
+  verifiedName?: string | null;
+  qualityRating?: string;
+  codeVerificationStatus?: string;
+  nameStatus?: string;
+  message?: string;
+  error?: string;
+  errorCode?: string;
+}
+
 /**
  * Fetch calculated WhatsApp summary for a hotel and business date.
  */
@@ -178,9 +245,7 @@ export const fetchWhatsAppSummary = async (
 };
 
 /**
- * Dispatches WhatsApp summary via the server-side WhatsApp provider.
- * Uses the canonical request contract:
- *   { hotelId, recipientPhone, message, summaryType, businessDate, deliveryType }
+ * Dispatches WhatsApp summary via official Meta WhatsApp Business Cloud API.
  */
 export const sendWhatsAppSummary = async (
   dateOrParams: string | SendWhatsAppParams,
@@ -226,7 +291,6 @@ export const sendWhatsAppSummary = async (
     });
     return res;
   } catch (err: any) {
-    // Gracefully handle structured error responses (e.g. 422 WHATSAPP_PROVIDER_NOT_CONFIGURED, 400 WHATSAPP_RECIPIENT_INVALID)
     return {
       success: false,
       status: err.status === 422 || err.error === 'WHATSAPP_PROVIDER_NOT_CONFIGURED' || err.errorCode === 'WHATSAPP_PROVIDER_NOT_CONFIGURED'
@@ -238,13 +302,13 @@ export const sendWhatsAppSummary = async (
       errorCode: err.errorCode || err.error || 'WHATSAPP_SEND_FAILED',
       message: typeof err.message === 'string' ? err.message : 'WhatsApp summary delivery failed',
       whatsappDirectUrl: err.whatsappDirectUrl || null,
-      provider: err.provider || 'NONE',
+      provider: err.provider || 'META',
     };
   }
 };
 
 /**
- * Sends a test message to the hotel owner's configured WhatsApp number.
+ * Sends a test message via official Meta WhatsApp Business Cloud API.
  */
 export const sendTestWhatsApp = async (testPhone?: string): Promise<WhatsAppSendResult> => {
   try {
@@ -265,7 +329,7 @@ export const sendTestWhatsApp = async (testPhone?: string): Promise<WhatsAppSend
       errorCode: err.errorCode || err.error || 'WHATSAPP_TEST_FAILED',
       message: typeof err.message === 'string' ? err.message : 'Test WhatsApp message failed',
       whatsappDirectUrl: err.whatsappDirectUrl || null,
-      provider: err.provider || 'NONE',
+      provider: err.provider || 'META',
     };
   }
 };
@@ -306,35 +370,57 @@ export const saveWhatsAppSettings = async (
 };
 
 /**
- * Tests connection with Whinta Web API without sending any message.
+ * Tests connection with Meta WhatsApp Cloud API.
  */
-export const verifyWhintaConnection = async (): Promise<{
-  success: boolean;
-  configured: boolean;
-  connected: boolean;
-  provider?: string;
-  templateCount?: number;
-  message?: string;
-  error?: string;
-}> => {
+export const verifyMetaConnection = async (): Promise<MetaConnectionResponse> => {
   return apiFetch('/api/reports/whatsapp/verify-connection', {
     method: 'POST',
   });
 };
 
+
+/**
+ * Fetches approved WhatsApp message templates from Meta WABA or Supabase cache.
+ */
+export const fetchWhatsAppTemplates = async (force = false): Promise<{
+  success: boolean;
+  fromCatalog?: boolean;
+  fromDatabase?: boolean;
+  count?: number;
+  templates: WhatsAppTemplateItem[];
+  message?: string;
+}> => {
+  return apiFetch(`/api/reports/whatsapp/templates${force ? '?force=true' : ''}`);
+};
+
+/**
+ * Synchronizes templates directly from Meta WhatsApp Business Account into Supabase.
+ */
+export const syncWhatsAppTemplates = async (hotelId?: string): Promise<{
+  success: boolean;
+  fromCatalog?: boolean;
+  count?: number;
+  templates: WhatsAppTemplateItem[];
+  message?: string;
+  error?: string;
+}> => {
+  try {
+    return await apiFetch('/api/reports/whatsapp/templates/sync', {
+      method: 'POST',
+      body: JSON.stringify({ hotelId }),
+    });
+  } catch {
+    return apiFetch('/api/whatsapp/templates/sync', {
+      method: 'POST',
+      body: JSON.stringify({ hotelId }),
+    });
+  }
+};
+
 /**
  * Fetches server-side WhatsApp provider status without exposing credentials.
  */
-export const fetchWhatsAppConfig = async (): Promise<{
-  success: boolean;
-  provider: string;
-  configured: boolean;
-  enabled: boolean;
-  active: boolean;
-  baseUrl: string;
-  defaultCountryCode: string;
-  hasWebhookSecret: boolean;
-}> => {
+export const fetchWhatsAppConfig = async (): Promise<WhatsAppConfigResponse> => {
   return apiFetch('/api/reports/whatsapp/config');
 };
 

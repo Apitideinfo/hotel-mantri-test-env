@@ -7,7 +7,7 @@
  * 3. Channel Inventory Exact Matching & Capacity Suite
  * 4. Housekeeping Board RBAC & Access Guard Suite
  * 5. Meta WhatsApp Cloud API Webhook & Signature Suite
- * 6. Whinta WhatsApp Outbox & Delivery State Machine Suite
+ * 6. Meta WhatsApp Cloud API Outbox & Delivery State Machine Suite
  * 7. Accounting & Financial Reconciliation Suite
  */
 
@@ -41,8 +41,8 @@ const SUITES = [
     file: 'scripts/test_meta_whatsapp_webhook_suite.mjs',
   },
   {
-    name: 'Whinta Integration & Outbox State Machine',
-    file: 'scripts/test_whinta_integration.mjs',
+    name: 'Meta WhatsApp Cloud API & Outbox State Machine',
+    file: 'scripts/test_meta_whatsapp_integration.mjs',
   },
   {
     name: 'Accounting & Financial Reconciliation',

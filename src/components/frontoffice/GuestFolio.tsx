@@ -157,9 +157,9 @@ export const GuestFolio = ({ entry, roomNo, rooms, categories, settings, booking
     try {
       const data = await getReservationConfirmationData(entry.reservation_id || entry.id);
       const res = await openWhatsAppConfirmation(data);
-      setActionSuccess(res?.message || 'WhatsApp confirmation dispatched via Whinta.');
+      setActionSuccess(res?.message || 'WhatsApp confirmation dispatched successfully.');
     } catch (err: any) {
-      setActionError(err.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
+      setActionError(err.message || 'Failed to dispatch WhatsApp confirmation.');
     } finally {
       setActiveAction(null);
       setTimeout(() => setActionSuccess(null), 4000);

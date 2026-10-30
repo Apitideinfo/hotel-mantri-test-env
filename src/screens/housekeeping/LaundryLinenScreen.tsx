@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+﻿import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   Shirt, Plus, X, RefreshCw, Loader2, AlertTriangle, CheckCircle2, Clock,
   ArrowDownToLine, ArrowUpFromLine, Trash2, Eye, Save, Building2, Package,
@@ -36,7 +36,7 @@ const todayStr = (): string => new Date().toISOString().slice(0, 10);
 const rs = (n: number): string => '\u20B9' + fmtMoney(typeof n === 'number' ? n : 0);
 
 const fmtDate = (d: string): string => {
-  if (!d) return '—';
+  if (!d) return 'â€”';
   const dt = new Date(d + 'T00:00:00');
   return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
@@ -51,9 +51,9 @@ const STATUS_STYLES: Record<string, string> = {
   'CLOSED': 'bg-emerald-100 text-emerald-700 border-emerald-200',
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MAIN LAUNDRY & LINEN SCREEN
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
   const [tab, setTab] = useState<Tab>('overview');
@@ -129,7 +129,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
 
   return (
     <div className="px-4 lg:px-6 py-5 w-full max-w-[1500px] mx-auto space-y-5">
-      {/* ── Top Notifications ── */}
+      {/* â”€â”€ Top Notifications â”€â”€ */}
       {successMsg && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl flex items-center justify-between shadow-sm animate-fade-in">
           <div className="flex items-center gap-2">
@@ -154,7 +154,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         </div>
       )}
 
-      {/* ── Header ── */}
+      {/* â”€â”€ Header â”€â”€ */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white rounded-2xl border border-slate-200 p-4 lg:p-5 shadow-card">
         <div className="flex items-center gap-3">
           <button
@@ -169,7 +169,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
           </div>
           <div>
             <h1 className="text-lg lg:text-xl font-bold text-brand-navy-900 tracking-tight">Laundry & Linen Management</h1>
-            <p className="text-xs text-slate-500">Production Linen Stock • Partial Receiving • Vendor Ledger • WhatsApp Statements</p>
+            <p className="text-xs text-slate-500">Production Linen Stock â€¢ Partial Receiving â€¢ Vendor Ledger â€¢ WhatsApp Statements</p>
           </div>
         </div>
 
@@ -221,7 +221,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         </div>
       </div>
 
-      {/* ── Executive KPI Cards (Row 1: Physical Stock) ── */}
+      {/* â”€â”€ Executive KPI Cards (Row 1: Physical Stock) â”€â”€ */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-card">
           <div className="flex items-center justify-between">
@@ -234,7 +234,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
             <span className="text-2xl font-black text-slate-900 tabular-nums">{data?.total_linen_stock ?? 0}</span>
             <span className="text-xs text-slate-400 font-medium">pcs</span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">Opening + additions − discards</p>
+          <p className="text-[11px] text-slate-400 mt-1">Opening + additions âˆ’ discards</p>
         </div>
 
         <div className="bg-white rounded-2xl border border-emerald-100 bg-gradient-to-b from-white to-emerald-50/20 p-4 shadow-card">
@@ -280,7 +280,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         </div>
       </div>
 
-      {/* ── Daily Activity Strip (Row 2: Physical & Financial Activity) ── */}
+      {/* â”€â”€ Daily Activity Strip (Row 2: Physical & Financial Activity) â”€â”€ */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
         <div className="bg-slate-900 text-white rounded-2xl p-3.5 shadow-sm">
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Today Sent</div>
@@ -303,7 +303,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         </div>
       </div>
 
-      {/* ── Tabs Navigation ── */}
+      {/* â”€â”€ Tabs Navigation â”€â”€ */}
       <div className="flex items-center gap-1.5 border-b border-slate-200 overflow-x-auto pb-1">
         {tabs.map((t) => (
           <button
@@ -327,7 +327,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         ))}
       </div>
 
-      {/* ── Active Tab Content ── */}
+      {/* â”€â”€ Active Tab Content â”€â”€ */}
       {loading && !data ? (
         <div className="flex items-center justify-center py-20 text-slate-400">
           <Loader2 className="w-8 h-8 animate-spin text-brand-600" />
@@ -406,7 +406,7 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
         </>
       ) : null}
 
-      {/* ── Modals ── */}
+      {/* â”€â”€ Modals â”€â”€ */}
       {showReceiveSelect && data && (
         <SelectDispatchToReceiveModal
           dispatches={(data.dispatches || []).filter((d) => d.status !== 'Completed' && d.status !== 'CLOSED')}
@@ -534,9 +534,9 @@ export const LaundryLinenScreen = ({ onBack }: LaundryLinenScreenProps) => {
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 1. OVERVIEW TAB
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const OverviewTab = ({
   data,
@@ -689,7 +689,7 @@ const OverviewTab = ({
                     </span>
                   </div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
-                    {d.dispatch_no} • {fmtDate(d.dispatch_date)} • Sent by {d.sent_by || 'Staff'}
+                    {d.dispatch_no} â€¢ {fmtDate(d.dispatch_date)} â€¢ Sent by {d.sent_by || 'Staff'}
                   </div>
                 </div>
               </div>
@@ -717,9 +717,9 @@ const OverviewTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 2. STOCK MASTER TAB
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const StockTab = ({
   linenItems,
@@ -890,7 +890,7 @@ const StockTab = ({
                     <td className="px-4 py-2.5 text-right font-bold text-brand-600 tabular-nums">+{m.quantity}</td>
                     <td className="px-4 py-2.5 text-right text-slate-400 tabular-nums">{m.before_qty}</td>
                     <td className="px-4 py-2.5 text-right font-semibold text-slate-800 tabular-nums">{m.after_qty}</td>
-                    <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{m.reason || '—'}</td>
+                    <td className="px-4 py-2.5 text-slate-500 max-w-xs truncate">{m.reason || 'â€”'}</td>
                     <td className="px-4 py-2.5 text-slate-400">{m.created_by || 'Staff'}</td>
                   </tr>
                 ))}
@@ -907,9 +907,9 @@ const StockTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 3. DISPATCHES TAB (Dispatch & Receive)
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const DispatchesTab = ({
   dispatches,
@@ -1011,7 +1011,7 @@ const DispatchesTab = ({
                     <td className="px-4 py-3 font-mono font-bold text-slate-700">{d.dispatch_no}</td>
                     <td className="px-4 py-3 text-slate-500">{fmtDate(d.dispatch_date)}</td>
                     <td className="px-4 py-3 font-bold text-slate-800">{d.vendor_name}</td>
-                    <td className="px-4 py-3 text-slate-400 font-mono">{d.challan_no || '—'}</td>
+                    <td className="px-4 py-3 text-slate-400 font-mono">{d.challan_no || 'â€”'}</td>
                     <td className="px-4 py-3 text-center">
                       <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${STATUS_STYLES[d.status] || STATUS_STYLES['Sent']}`}>
                         {d.status}
@@ -1104,9 +1104,9 @@ const DispatchesTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 4. PENDING LINEN TAB
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const PendingTab = ({
   dispatches,
@@ -1256,9 +1256,9 @@ const PendingTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 5. VENDOR LEDGER TAB
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const VendorLedgerTab = ({
   vendors,
@@ -1354,7 +1354,7 @@ const VendorLedgerTab = ({
       // Generate draft bill for selected date
       const bill = await generateDailyBill(selectedVendorId, selectedDate);
       if (bill.total_amount <= 0) {
-        alert('Today has no approved received linen for this vendor. Bill amount is ₹0.');
+        alert('Today has no approved received linen for this vendor. Bill amount is â‚¹0.');
         return;
       }
       // Approve bill and sync to Finance
@@ -1395,7 +1395,7 @@ const VendorLedgerTab = ({
               className="text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white focus:outline-none"
               title="From Date"
             />
-            <span className="text-slate-400">→</span>
+            <span className="text-slate-400">â†’</span>
             <input
               type="date"
               value={toDate}
@@ -1463,7 +1463,7 @@ const VendorLedgerTab = ({
             {ledger?.physical_pending_pieces ?? 0} <span className="text-sm font-semibold text-amber-700">pieces</span>
           </div>
           <p className="text-xs text-amber-700/80 mt-1">
-            Physical items still with vendor. Incurs <strong className="font-bold text-amber-900">₹0 billing</strong> until received back.
+            Physical items still with vendor. Incurs <strong className="font-bold text-amber-900">â‚¹0 billing</strong> until received back.
           </p>
         </div>
 
@@ -1481,7 +1481,7 @@ const VendorLedgerTab = ({
             {rs(ledger?.financial_due_amount ?? 0)}
           </div>
           <p className="text-xs text-rose-700/80 mt-1">
-            Total Approved Bills: <strong>{rs(ledger?.total_billed_amount ?? 0)}</strong> • Total Paid: <strong>{rs(ledger?.total_paid_amount ?? 0)}</strong>
+            Total Approved Bills: <strong>{rs(ledger?.total_billed_amount ?? 0)}</strong> â€¢ Total Paid: <strong>{rs(ledger?.total_paid_amount ?? 0)}</strong>
           </p>
         </div>
       </div>
@@ -1492,7 +1492,7 @@ const VendorLedgerTab = ({
         <div>
           <strong className="font-bold">Important: </strong>
           <span>
-            <strong>Linen Pending</strong> ({ledger?.physical_pending_pieces ?? 0} pcs) and <strong>Payment Due</strong> ({rs(ledger?.financial_due_amount ?? 0)}) are two completely different things and are tracked separately. Pending laundry pieces have ₹0 billing until actually returned and approved.
+            <strong>Linen Pending</strong> ({ledger?.physical_pending_pieces ?? 0} pcs) and <strong>Payment Due</strong> ({rs(ledger?.financial_due_amount ?? 0)}) are two completely different things and are tracked separately. Pending laundry pieces have â‚¹0 billing until actually returned and approved.
           </span>
         </div>
       </div>
@@ -1552,7 +1552,7 @@ const VendorLedgerTab = ({
             <Loader2 className="w-6 h-6 animate-spin mx-auto text-brand-600" />
           </div>
         ) : viewMode === 'daily' ? (
-          /* ── 1. DATE-WISE LEDGER TABLE (Exact Requested Columns) ── */
+          /* â”€â”€ 1. DATE-WISE LEDGER TABLE (Exact Requested Columns) â”€â”€ */
           ledger?.daily_ledger && ledger.daily_ledger.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[850px]">
@@ -1573,10 +1573,10 @@ const VendorLedgerTab = ({
                     <tr key={idx} className="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 text-xs">
                       <td className="px-4 py-3 text-slate-600 font-mono font-medium">{fmtDate(row.date)}</td>
                       <td className="px-4 py-3 text-right font-bold text-slate-700 tabular-nums">
-                        {row.sent_qty > 0 ? `${row.sent_qty} pcs` : '—'}
+                        {row.sent_qty > 0 ? `${row.sent_qty} pcs` : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
-                        {row.received_qty > 0 ? `${row.received_qty} pcs` : '—'}
+                        {row.received_qty > 0 ? `${row.received_qty} pcs` : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums">
                         <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] ${
@@ -1586,16 +1586,16 @@ const VendorLedgerTab = ({
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
-                        {row.bill_amount > 0 ? rs(row.bill_amount) : '—'}
+                        {row.bill_amount > 0 ? rs(row.bill_amount) : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
-                        {row.paid_amount > 0 ? rs(row.paid_amount) : '—'}
+                        {row.paid_amount > 0 ? rs(row.paid_amount) : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right font-black text-brand-navy-900 tabular-nums">
                         {rs(row.payment_due)}
                       </td>
                       <td className="px-4 py-3 text-slate-500 text-[11px] max-w-xs truncate" title={row.details}>
-                        {row.details || '—'}
+                        {row.details || 'â€”'}
                       </td>
                     </tr>
                   ))}
@@ -1608,7 +1608,7 @@ const VendorLedgerTab = ({
             </div>
           )
         ) : (
-          /* ── 2. INDIVIDUAL TRANSACTION AUDIT TRAIL ── */
+          /* â”€â”€ 2. INDIVIDUAL TRANSACTION AUDIT TRAIL â”€â”€ */
           ledger?.transactions && ledger.transactions.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[750px]">
@@ -1640,10 +1640,10 @@ const VendorLedgerTab = ({
                       <td className="px-4 py-3 font-mono text-slate-600">{t.reference}</td>
                       <td className="px-4 py-3 text-slate-700">{t.description}</td>
                       <td className="px-4 py-3 text-right font-bold text-slate-800 tabular-nums">
-                        {t.bill_amount > 0 ? rs(t.bill_amount) : '—'}
+                        {t.bill_amount > 0 ? rs(t.bill_amount) : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-600 tabular-nums">
-                        {t.paid_amount > 0 ? rs(t.paid_amount) : '—'}
+                        {t.paid_amount > 0 ? rs(t.paid_amount) : 'â€”'}
                       </td>
                       <td className="px-4 py-3 text-right font-black text-slate-900 tabular-nums">
                         {rs(t.balance_due)}
@@ -1664,9 +1664,9 @@ const VendorLedgerTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // 6. AUDIT HISTORY TAB
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
 const AuditHistoryTab = ({
   dispatches,
@@ -1720,12 +1720,12 @@ const AuditHistoryTab = ({
   );
 };
 
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // MODALS
-// ══════════════════════════════════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-// ── New Dispatch Modal ──
-// ── Select Dispatch to Receive Modal (Direct Entry) ──
+// â”€â”€ New Dispatch Modal â”€â”€
+// â”€â”€ Select Dispatch to Receive Modal (Direct Entry) â”€â”€
 const SelectDispatchToReceiveModal = ({
   dispatches,
   onSelect,
@@ -1798,7 +1798,7 @@ const SelectDispatchToReceiveModal = ({
                       </span>
                     </div>
                     <div className="text-[11px] text-slate-500 font-mono">
-                      {d.dispatch_no} • {fmtDate(d.dispatch_date)}
+                      {d.dispatch_no} â€¢ {fmtDate(d.dispatch_date)}
                     </div>
                     <div className="flex items-center gap-3 text-xs">
                       <span className="text-slate-600">Sent: <strong>{totalSent} pcs</strong></span>
@@ -1834,7 +1834,7 @@ const SelectDispatchToReceiveModal = ({
   );
 };
 
-// ── New Dispatch Modal (With Vendor Pricing / Charges) ──
+// â”€â”€ New Dispatch Modal (With Vendor Pricing / Charges) â”€â”€
 const NewDispatchModal = ({
   vendors,
   linenItems,
@@ -2003,8 +2003,8 @@ const NewDispatchModal = ({
           <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-slate-500 uppercase px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
             <div className="col-span-5">Linen Item</div>
             <div className="col-span-2 text-right">Sent Qty (Pcs)</div>
-            <div className="col-span-2 text-right">Vendor Rate (₹/pc)</div>
-            <div className="col-span-2 text-right">Est. Charge (₹)</div>
+            <div className="col-span-2 text-right">Vendor Rate (â‚¹/pc)</div>
+            <div className="col-span-2 text-right">Est. Charge (â‚¹)</div>
             <div className="col-span-1 text-center"></div>
           </div>
 
@@ -2036,7 +2036,7 @@ const NewDispatchModal = ({
                       <option value="">-- Select Linen Item --</option>
                       {linenItems.map((l) => (
                         <option key={l.id} value={l.id}>
-                          {l.item_name} ({l.category} • In Hotel: {l.available_in_hotel ?? 0} pcs)
+                          {l.item_name} ({l.category} â€¢ In Hotel: {l.available_in_hotel ?? 0} pcs)
                         </option>
                       ))}
                     </select>
@@ -2066,7 +2066,7 @@ const NewDispatchModal = ({
 
                   <div className="col-span-2">
                     <div className="relative">
-                      <span className="absolute left-2 top-2 text-xs text-slate-400">₹</span>
+                      <span className="absolute left-2 top-2 text-xs text-slate-400">â‚¹</span>
                       <input
                         type="number"
                         min="0"
@@ -2114,7 +2114,7 @@ const NewDispatchModal = ({
             <span className="text-xs text-slate-400 ml-2">({totalPieces} pieces total)</span>
           </div>
           <div className="text-[11px] text-slate-500 max-w-sm">
-            💡 The washing rate set here is used when linen is received back. Pending linen is billed at ₹0 until returned.
+            ðŸ’¡ The washing rate set here is used when linen is received back. Pending linen is billed at â‚¹0 until returned.
           </div>
         </div>
 
@@ -2129,7 +2129,7 @@ const NewDispatchModal = ({
   );
 };
 
-// ── Receive Modal (With Full Accounting: Received Clean, Damaged, Lost & Remaining Pending) ──
+// â”€â”€ Receive Modal (With Full Accounting: Received Clean, Damaged, Lost & Remaining Pending) â”€â”€
 const ReceiveModal = ({
   dispatch,
   onClose,
@@ -2308,8 +2308,8 @@ const ReceiveModal = ({
               Receive from Laundry Vendor
             </h3>
             <p className="text-xs text-slate-500">
-              Dispatch <span className="font-mono font-bold text-slate-700">{dispatch.dispatch_no}</span> •{' '}
-              <span className="font-semibold text-slate-800">{dispatch.vendor_name}</span> •{' '}
+              Dispatch <span className="font-mono font-bold text-slate-700">{dispatch.dispatch_no}</span> â€¢{' '}
+              <span className="font-semibold text-slate-800">{dispatch.vendor_name}</span> â€¢{' '}
               Sent on {fmtDate(dispatch.dispatch_date)}
             </p>
           </div>
@@ -2368,7 +2368,7 @@ const ReceiveModal = ({
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 shrink-0">
           <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-2.5">
             <div className="text-[11px] font-semibold text-emerald-800 flex items-center justify-between">
-              <span>🧺 Received Clean</span>
+              <span>ðŸ§º Received Clean</span>
               <span className="text-[10px] bg-emerald-200/70 text-emerald-900 px-1.5 py-0.2 rounded font-mono">Billable</span>
             </div>
             <div className="text-lg font-black text-emerald-700 mt-0.5">{totalCleanReceived} pcs</div>
@@ -2377,8 +2377,8 @@ const ReceiveModal = ({
 
           <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-2.5">
             <div className="text-[11px] font-semibold text-amber-900 flex items-center justify-between">
-              <span>⚠️ Damaged</span>
-              <span className="text-[10px] bg-amber-200/70 text-amber-900 px-1.5 py-0.2 rounded font-mono">₹0 Bill</span>
+              <span>âš ï¸ Damaged</span>
+              <span className="text-[10px] bg-amber-200/70 text-amber-900 px-1.5 py-0.2 rounded font-mono">â‚¹0 Bill</span>
             </div>
             <div className="text-lg font-black text-amber-700 mt-0.5">{totalDamaged} pcs</div>
             <div className="text-[10px] text-amber-600">Recorded as damaged</div>
@@ -2386,8 +2386,8 @@ const ReceiveModal = ({
 
           <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-2.5">
             <div className="text-[11px] font-semibold text-rose-900 flex items-center justify-between">
-              <span>❌ Lost / Missing</span>
-              <span className="text-[10px] bg-rose-200/70 text-rose-900 px-1.5 py-0.2 rounded font-mono">₹0 Bill</span>
+              <span>âŒ Lost / Missing</span>
+              <span className="text-[10px] bg-rose-200/70 text-rose-900 px-1.5 py-0.2 rounded font-mono">â‚¹0 Bill</span>
             </div>
             <div className="text-lg font-black text-rose-700 mt-0.5">{totalLost} pcs</div>
             <div className="text-[10px] text-rose-600">Subtracted from linen stock</div>
@@ -2395,7 +2395,7 @@ const ReceiveModal = ({
 
           <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-2.5">
             <div className="text-[11px] font-semibold text-indigo-900 flex items-center justify-between">
-              <span>⏳ Remaining Pending</span>
+              <span>â³ Remaining Pending</span>
               <span className="text-[10px] bg-indigo-200/70 text-indigo-900 px-1.5 py-0.2 rounded font-mono">OPEN</span>
             </div>
             <div className="text-lg font-black text-indigo-700 mt-0.5">{totalStillPending} pcs</div>
@@ -2442,7 +2442,7 @@ const ReceiveModal = ({
                   <th className="text-right p-2.5 text-indigo-700 font-bold">Remaining Pending</th>
                   <th className="text-center p-2.5">Billable?</th>
                   <th className="text-right p-2.5">Rate</th>
-                  <th className="text-right p-2.5 font-bold">Bill (₹)</th>
+                  <th className="text-right p-2.5 font-bold">Bill (â‚¹)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -2517,7 +2517,7 @@ const ReceiveModal = ({
                             {remaining} pcs
                           </span>
                         ) : (
-                          <span className="text-emerald-600 font-semibold text-[11px]">0 pcs ✓</span>
+                          <span className="text-emerald-600 font-semibold text-[11px]">0 pcs âœ“</span>
                         )}
                       </td>
 
@@ -2538,10 +2538,10 @@ const ReceiveModal = ({
 
                       {/* Rate */}
                       <td className="p-2.5 text-right tabular-nums text-slate-500 font-mono">
-                        ₹{it.rate_applied}
+                        â‚¹{it.rate_applied}
                       </td>
 
-                      {/* Bill (₹) */}
+                      {/* Bill (â‚¹) */}
                       <td className="p-2.5 text-right tabular-nums font-bold text-slate-800">
                         {rs(lineBill)}
                       </td>
@@ -2561,7 +2561,7 @@ const ReceiveModal = ({
             <span className="text-xs text-slate-400 ml-2">({totalCleanReceived} clean returned pieces approved as billable)</span>
           </div>
           <div className="text-[11px] text-slate-500 max-w-sm">
-            🛡️ <strong>Rule:</strong> Pending pieces ({totalStillPending} pcs), damaged ({totalDamaged} pcs), and lost ({totalLost} pcs) have <strong>₹0 washing billing</strong>.
+            ðŸ›¡ï¸ <strong>Rule:</strong> Pending pieces ({totalStillPending} pcs), damaged ({totalDamaged} pcs), and lost ({totalLost} pcs) have <strong>â‚¹0 washing billing</strong>.
           </div>
         </div>
 
@@ -2577,7 +2577,7 @@ const ReceiveModal = ({
   );
 };
 
-// ── Dispatch Detail Modal ──
+// â”€â”€ Dispatch Detail Modal â”€â”€
 const DispatchDetailModal = ({
   dispatchId,
   onClose,
@@ -2601,7 +2601,7 @@ const DispatchDetailModal = ({
         <div className="flex items-center justify-between border-b border-slate-100 pb-3 shrink-0">
           <div>
             <h3 className="text-base font-bold text-slate-800">Dispatch Details: {detail.dispatch_no}</h3>
-            <p className="text-xs text-slate-400">{detail.vendor_name} • {fmtDate(detail.dispatch_date)} • Status: <span className="font-semibold">{detail.status}</span></p>
+            <p className="text-xs text-slate-400">{detail.vendor_name} â€¢ {fmtDate(detail.dispatch_date)} â€¢ Status: <span className="font-semibold">{detail.status}</span></p>
           </div>
           <button onClick={onClose}><X className="w-5 h-5 text-slate-400" /></button>
         </div>
@@ -2659,7 +2659,7 @@ const DispatchDetailModal = ({
                           <strong>{entry.item_name}:</strong> {entry.received_now || 0} clean
                           {(Number(entry.damaged_qty) || 0) > 0 && `, ${entry.damaged_qty} damaged`}
                           {(Number(entry.lost_qty) || 0) > 0 && `, ${entry.lost_qty} lost`}
-                          {entry.bill_amount ? ` (₹${entry.bill_amount})` : ''}
+                          {entry.bill_amount ? ` (â‚¹${entry.bill_amount})` : ''}
                         </span>
                       ))}
                     </div>
@@ -2681,7 +2681,7 @@ const DispatchDetailModal = ({
   );
 };
 
-// ── Stock Movement Modal (Add / Adjust Stock) ──
+// â”€â”€ Stock Movement Modal (Add / Adjust Stock) â”€â”€
 const StockMovementModal = ({
   linenItems,
   onClose,
@@ -2778,7 +2778,7 @@ const StockMovementModal = ({
               <option value="" disabled>-- Select Linen Item --</option>
               {linenItems.map((l) => (
                 <option key={l.id} value={l.id}>
-                  {l.item_name} ({l.category} • Total Stock: {l.total_active_stock} pcs)
+                  {l.item_name} ({l.category} â€¢ Total Stock: {l.total_active_stock} pcs)
                 </option>
               ))}
             </select>
@@ -2847,7 +2847,7 @@ const StockMovementModal = ({
   );
 };
 
-// ── Resolve Missing Linen Modal ──
+// â”€â”€ Resolve Missing Linen Modal â”€â”€
 const ResolveLostDamagedModal = ({
   item,
   onClose,
@@ -2887,7 +2887,7 @@ const ResolveLostDamagedModal = ({
           <h3 className="text-sm font-bold">Resolve Missing Linen</h3>
           <button onClick={onClose}><X className="w-4 h-4 text-slate-400" /></button>
         </div>
-        <p className="text-xs text-slate-500">Dispatch {item.dispatch_no} • Item: {item.item_name} (Pending: {item.pending_qty})</p>
+        <p className="text-xs text-slate-500">Dispatch {item.dispatch_no} â€¢ Item: {item.item_name} (Pending: {item.pending_qty})</p>
         <div className="space-y-3">
           <div>
             <label className="text-[10px] text-slate-400 block mb-1">Resolution Type</label>
@@ -2916,7 +2916,7 @@ const ResolveLostDamagedModal = ({
   );
 };
 
-// ── Vendor Payment Modal ──
+// â”€â”€ Vendor Payment Modal â”€â”€
 const VendorPaymentModal = ({
   vendors,
   defaultDate,
@@ -2969,7 +2969,7 @@ const VendorPaymentModal = ({
             </select>
           </div>
           <div>
-            <label className="text-[10px] text-slate-400 block mb-1">Amount (₹)</label>
+            <label className="text-[10px] text-slate-400 block mb-1">Amount (â‚¹)</label>
             <input type="number" min="1" value={amount} onChange={(e) => setAmount(Number(e.target.value))} className="w-full text-xs border rounded p-2 font-bold" />
           </div>
           <div>
@@ -2996,7 +2996,7 @@ const VendorPaymentModal = ({
   );
 };
 
-// ── Close Laundry Day & WhatsApp Modal ──
+// â”€â”€ Close Laundry Day & WhatsApp Modal â”€â”€
 const CloseLaundryDayModal = ({
   vendors,
   selectedDate,
@@ -3030,7 +3030,7 @@ const CloseLaundryDayModal = ({
         date: selectedDate,
       });
       if (!res?.success) {
-        throw new Error(res?.message || 'Failed to dispatch WhatsApp statement via Whinta');
+        throw new Error(res?.message || 'Failed to dispatch WhatsApp statement via Meta WhatsApp');
       }
       onDayClosed();
     } catch (e: any) {
@@ -3129,7 +3129,7 @@ const CloseLaundryDayModal = ({
   );
 };
 
-// ── Vendor Master Modal ──
+// â”€â”€ Vendor Master Modal â”€â”€
 const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) => {
   const [vendors, setVendors] = useState<LaundryVendor[]>([]);
   const [name, setName] = useState('');
@@ -3231,7 +3231,7 @@ const VendorMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 };
 
-// ── Linen Item Master Modal ──
+// â”€â”€ Linen Item Master Modal â”€â”€
 const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) => {
   const [items, setItems] = useState<LinenItem[]>([]);
   const [name, setName] = useState('');
@@ -3280,7 +3280,7 @@ const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: 
           <select value={category} onChange={(e) => setCategory(e.target.value)} className="text-xs border rounded p-2">
             {LINEN_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <input type="number" placeholder="Std Rate (₹)" value={rate} onChange={(e) => setRate(Number(e.target.value))} className="text-xs border rounded p-2" />
+          <input type="number" placeholder="Std Rate (â‚¹)" value={rate} onChange={(e) => setRate(Number(e.target.value))} className="text-xs border rounded p-2" />
           <input type="number" placeholder="Initial Stock (pcs)" value={initialStock} onChange={(e) => setInitialStock(Number(e.target.value))} className="text-xs border rounded p-2" />
         </div>
 
@@ -3295,7 +3295,7 @@ const LinenMasterModal = ({ onClose, onSaved }: { onClose: () => void; onSaved: 
             <div key={it.id} className="py-2 flex justify-between items-center text-xs">
               <div>
                 <div className="font-bold text-slate-800">{it.item_name}</div>
-                <div className="text-[10px] text-slate-400">{it.category} • Rs.{it.standard_rate}/pc</div>
+                <div className="text-[10px] text-slate-400">{it.category} â€¢ Rs.{it.standard_rate}/pc</div>
               </div>
               <button
                 onClick={() => setDeletingItem(it)}

@@ -1713,7 +1713,7 @@ export const sendDailyWhatsAppStatement = async (hotelId, params, userId = '') =
 
   // Log delivery attempt truthfully
   const logStatus = result.success ? 'sent' : (result.whatsappDirectUrl ? 'manual' : 'failed');
-  const provider = result.provider || 'WHINTA';
+  const provider = result.provider || 'META';
   const providerMessageId = result.messageId || null;
 
   // 1. Record in laundry_statement_log
