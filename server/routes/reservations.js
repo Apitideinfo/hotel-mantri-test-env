@@ -187,10 +187,12 @@ router.get('/', checkAuth, async (req, res) => {
       query = query.lte('check_in_date', toDate);
     }
 
-    // Search query: guest name, phone, email, room, id
+    // Search query: guest name, phone, email, room, id (Sanitized to prevent PostgREST grammar injection)
     if (search && search.trim()) {
-      const s = search.trim();
-      query = query.or(`guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%,guest_email.ilike.%${s}%,room_no.ilike.%${s}%,payment_ref.ilike.%${s}%`);
+      const sanitized = search.trim().replace(/[,()"'\\]/g, '');
+      if (sanitized) {
+        query = query.or(`guest_name.ilike.%${sanitized}%,guest_phone.ilike.%${sanitized}%,guest_email.ilike.%${sanitized}%,room_no.ilike.%${sanitized}%,payment_ref.ilike.%${sanitized}%`);
+      }
     }
 
     // Sort order

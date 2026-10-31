@@ -2785,6 +2785,10 @@ router.get('/:channelId', checkAuth, async (req, res) => {
   try {
     const hotelId = (req.hotelId || req.auth?.hotelId);
     const { channelId } = req.params;
+    const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!channelId || !UUID_REGEX.test(channelId)) {
+      return res.status(400).json({ success: false, code: 'INVALID_CHANNEL_ID', message: 'Channel ID must be a valid UUID.', requestId: req.requestId });
+    }
     if (!hotelId) return res.status(400).json({ success: false, code: 'HOTEL_CONTEXT_REQUIRED', message: 'Hotel context is required.', requestId: req.requestId });
 
     const { data: channel, error } = await supabaseServiceRole

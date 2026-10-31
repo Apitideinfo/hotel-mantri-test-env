@@ -252,12 +252,21 @@ export const resolvePlanPricing = async (planIdentifier) => {
 
   // Fallback: check database subscription_plans table if available
   try {
-    const { data: dbPlan } = await supabaseServiceRole
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
+    let planQuery = supabaseServiceRole
       .from('subscription_plans')
       .select('id, name, price, price_monthly')
-      .or(`id.eq.${clean},name.ilike.${clean},slug.ilike.${clean}`)
-      .eq('is_active', true)
-      .maybeSingle();
+      .eq('is_active', true);
+
+    if (isUuid) {
+      planQuery = planQuery.eq('id', clean);
+    } else {
+      const sanitized = clean.replace(/[,()"'\\]/g, '');
+      if (!sanitized) return null;
+      planQuery = planQuery.or(`name.ilike.${sanitized},slug.ilike.${sanitized}`);
+    }
+
+    const { data: dbPlan } = await planQuery.maybeSingle();
 
     if (dbPlan) {
       const price = Number(dbPlan.price_monthly ?? dbPlan.price ?? 0);
