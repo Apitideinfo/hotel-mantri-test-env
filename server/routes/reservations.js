@@ -80,8 +80,11 @@ const router = express.Router();
 
 // Strict RBAC: All reservation operations require valid hotel context and forbid Housekeeping role
 // Guest confirmation PDF route (/:id/confirmation/pdf) handles its own scoped HMAC token authentication
+const CONFIRMATION_PDF_REGEX = /^\/[0-9a-f-]{36}\/confirmation\/pdf$/i;
+
 router.use((req, res, next) => {
-  if (req.path.includes('/confirmation/pdf')) {
+  // L2: Exact anchored regex match to prevent path traversal / bypass
+  if (CONFIRMATION_PDF_REGEX.test(req.path)) {
     return next();
   }
   return checkAuth(req, res, (err) => {
