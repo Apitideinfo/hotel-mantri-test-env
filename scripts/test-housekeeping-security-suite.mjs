@@ -89,6 +89,7 @@ async function runTest() {
       user_id: hkUserId,
       hotel_id: TEST_HOTEL_ID,
       role: 'hotel_staff',
+      staff_role: 'housekeeping',
       email: testEmail,
       status: 'Active',
     });
