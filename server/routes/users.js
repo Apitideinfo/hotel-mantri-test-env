@@ -558,16 +558,19 @@ router.put('/:id', async (req, res) => {
         .eq('hotel_id', hotelId)
         .eq('id', targetHkStaff.id);
     } else if (targetAdmin && (name || mobile)) {
-      // If updating a linked housekeeping staff record
-      await supabaseServiceRole
-        .from('housekeeping_staff')
-        .update({
-          is_active: status !== 'Inactive',
-          ...(name ? { name: name.trim() } : {}),
-          ...(mobile ? { phone: mobile.trim() } : {}),
-        })
-        .eq('hotel_id', hotelId)
-        .eq('phone', (targetAdmin.email || '').replace(/\D/g, ''));
+      // Require valid phone digits (>= 10) to prevent empty-phone mass updates
+      const adminPhone = (targetAdmin.email || '').replace(/\D/g, '');
+      if (adminPhone && adminPhone.length >= 10) {
+        await supabaseServiceRole
+          .from('housekeeping_staff')
+          .update({
+            is_active: status !== 'Inactive',
+            ...(name ? { name: name.trim() } : {}),
+            ...(mobile ? { phone: mobile.trim() } : {}),
+          })
+          .eq('hotel_id', hotelId)
+          .eq('phone', adminPhone);
+      }
     }
 
     return res.json({

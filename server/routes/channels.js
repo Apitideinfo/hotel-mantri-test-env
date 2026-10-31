@@ -1486,7 +1486,8 @@ router.get('/sync/logs', checkAuth, async (req, res) => {
       query = query.eq('channel_connection_id', channelId);
     }
     if (logType && logType !== 'all') {
-      query = query.ilike('log_type', `%${logType}%`);
+      const sanitizedLogType = String(logType).replace(/[(),.%]/g, '').trim();
+      query = query.ilike('log_type', `%${sanitizedLogType}%`);
     }
     if (status && status !== 'all') {
       if (status === 'success') {

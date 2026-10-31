@@ -30,7 +30,8 @@ export const initializeHotelTenant = async () => {
     query = query.eq('id', targetId);
   } else if (targetSlug) {
     // If slug lookup is supported or matches hotel name
-    query = query.ilike('hotel_name', `%${targetSlug.replace(/-/g, ' ')}%`);
+    const sanitizedSlug = String(targetSlug || '').replace(/[(),.%]/g, '').replace(/-/g, ' ').trim();
+    query = query.ilike('hotel_name', `%${sanitizedSlug}%`);
   }
 
   const { data: hotels, error } = await query;
