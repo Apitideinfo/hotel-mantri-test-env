@@ -1060,7 +1060,7 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching reservation confirmation:', err);
-    res.status(500).json({ success: false, code: 'CONFIRMATION_FETCH_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'CONFIRMATION_FETCH_FAILED', message: 'Failed to retrieve confirmation document.' });
   }
 });
 
@@ -1288,7 +1288,7 @@ router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (re
     });
   } catch (err) {
     console.error('Error regenerating confirmation:', err);
-    res.status(500).json({ success: false, code: 'REGENERATE_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'REGENERATE_FAILED', message: 'Failed to regenerate confirmation document.' });
   }
 });
 
@@ -1460,7 +1460,7 @@ router.post('/:id/confirmation/send-email', checkAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Error sending confirmation email:', err);
-    res.status(500).json({ success: false, code: 'EMAIL_SEND_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'EMAIL_SEND_FAILED', message: 'Failed to send confirmation email.' });
   }
 });
 
@@ -1618,7 +1618,7 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Error sending confirmation WhatsApp:', err);
-    res.status(500).json({ success: false, code: 'WHATSAPP_SEND_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'WHATSAPP_SEND_FAILED', message: 'Failed to send confirmation WhatsApp message.' });
   }
 });
 

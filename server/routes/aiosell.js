@@ -1061,7 +1061,7 @@ router.post('/inventory-restrictions/push', async (req, res) => {
     res.json({ success: true, result });
   } catch (err) {
     await logSync((req.hotelId || req.auth?.hotelId), 'INVENTORY_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, error: (err.status && err.status < 500) ? err.message : 'An error occurred processing the Aiosell request.', code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
@@ -1074,7 +1074,7 @@ router.post('/rate-restrictions/push', async (req, res) => {
     res.json({ success: true, result });
   } catch (err) {
     await logSync((req.hotelId || req.auth?.hotelId), 'RATE_RESTRICTION_PUSH', 'outbound', 'failure', 'Push failed', err.message);
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, error: (err.status && err.status < 500) ? err.message : 'An error occurred processing the Aiosell request.', code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
@@ -1124,7 +1124,7 @@ router.post('/reservations/fetch', async (req, res) => {
     }
   } catch (err) {
     await logSync((req.hotelId || req.auth?.hotelId), 'RESERVATION_FETCH', 'inbound', 'failure', 'Fetch failed', err.message);
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, error: (err.status && err.status < 500) ? err.message : 'An error occurred processing the Aiosell request.', code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
@@ -1136,7 +1136,7 @@ router.post('/reservation/no-show', async (req, res) => {
     const result = await aiosellService.markNoShow(bookingId, hotelConfig);
     res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, error: (err.status && err.status < 500) ? err.message : 'An error occurred processing the Aiosell request.', code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 
@@ -1147,7 +1147,7 @@ router.post('/channel-multiplier', async (req, res) => {
     const result = await aiosellService.channelMultiplier(req.body, hotelConfig);
     res.json({ success: true, result });
   } catch (err) {
-    res.status(err.status || 500).json({ success: false, error: err.message, code: err.code || 'API_ERROR', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, error: (err.status && err.status < 500) ? err.message : 'An error occurred processing the Aiosell request.', code: err.code || 'API_ERROR', requestId: req.requestId });
   }
 });
 

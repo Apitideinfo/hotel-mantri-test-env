@@ -1009,7 +1009,7 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
       providerEnabled: providerConfig.enabled ?? false,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to fetch WhatsApp configuration.' });
   }
 });
 
@@ -1153,7 +1153,7 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       message: 'WhatsApp recipient and report delivery settings saved successfully.',
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to save WhatsApp settings.' });
   }
 });
 

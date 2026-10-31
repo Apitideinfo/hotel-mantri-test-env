@@ -82,7 +82,8 @@ app.use(corsMiddleware);
 
 app.use((req, res, next) => {
   const incomingReqId = req.headers['x-request-id'];
-  const requestId = incomingReqId || `HM-REQ-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  const isValidReqId = typeof incomingReqId === 'string' && /^[A-Za-z0-9-_]{8,64}$/.test(incomingReqId);
+  const requestId = isValidReqId ? incomingReqId : `HM-REQ-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   req.requestId = requestId;
   res.setHeader('X-Request-Id', requestId);
 
@@ -192,12 +193,19 @@ import { validateCronConfiguration } from './middleware/cronAuth.js';
 import { supabaseServiceRole } from './supabaseClient.js';
 import * as redisService from './services/redisService.js';
 
-// Root / Health check endpoints (P4 Operations Telemetry)
+// Root / Health check endpoints (M2 Minimal Public Health Check)
 app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Detailed diagnostic health check behind requireHotelAccess + super admin (M2)
+app.get(['/api/health/detailed', '/health/detailed'], requireHotelAccess, (req, res) => {
+  if (req.hotelRole !== 'super_admin' && !req.isSuperAdmin) {
+    return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Detailed diagnostics require super admin privileges.' });
+  }
   const mem = process.memoryUsage();
   res.status(200).json({
-    success: true,
-    status: 'healthy',
+    status: 'ok',
     message: 'Hotel Mantri Backend API Server is running',
     version: '1.0.0',
     uptime: Number(process.uptime().toFixed(2)),

@@ -131,7 +131,7 @@ router.get('/rooms', async (req, res) => {
     });
   } catch (err) {
     console.error(`[${requestId}] GET /api/housekeeping/rooms exception:`, err);
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Server error loading rooms.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Server error loading rooms.' });
   }
 });
 
@@ -216,7 +216,7 @@ router.post('/start-cleaning', async (req, res) => {
     });
   } catch (err) {
     console.error(`[${requestId}] start-cleaning error:`, err);
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Failed to start cleaning.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to start cleaning.' });
   }
 });
 
@@ -278,7 +278,7 @@ router.post('/complete-cleaning', async (req, res) => {
     });
   } catch (err) {
     console.error(`[${requestId}] complete-cleaning error:`, err);
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Failed to complete cleaning.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to complete cleaning.' });
   }
 });
 
@@ -317,7 +317,7 @@ router.post('/send-for-inspection', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to submit room inspection.' });
   }
 });
 
@@ -399,7 +399,7 @@ router.post('/approve-inspection', async (req, res) => {
     });
   } catch (err) {
     console.error(`[${requestId}] approve-inspection error:`, err);
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Failed to approve room inspection.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to approve room inspection.' });
   }
 });
 
@@ -468,7 +468,7 @@ router.post('/reject-inspection', async (req, res) => {
     });
   } catch (err) {
     console.error(`[${requestId}] reject-inspection error:`, err);
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Failed to reject inspection.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to reject inspection.' });
   }
 });
 
@@ -505,7 +505,7 @@ router.post('/priority', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update priority.' });
   }
 });
 
@@ -542,7 +542,7 @@ router.post('/note', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update note.' });
   }
 });
 
@@ -586,7 +586,7 @@ router.post('/maintenance', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message || 'Failed to report maintenance issue.' });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to report maintenance issue.' });
   }
 });
 
@@ -615,7 +615,7 @@ router.get('/maintenance', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to update maintenance issue.' });
   }
 });
 
@@ -644,7 +644,7 @@ router.get('/staff', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to fetch staff.' });
   }
 });
 
@@ -700,7 +700,7 @@ router.post('/assign', async (req, res) => {
       requestId,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: err?.message });
+    return res.status(500).json({ success: false, error: 'SERVER_ERROR', message: 'Failed to assign staff.' });
   }
 });
 

@@ -1040,7 +1040,7 @@ router.get('/settings', checkAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching channel settings:', err);
-    res.status(500).json({ success: false, code: 'SETTINGS_FETCH_FAILED', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'SETTINGS_FETCH_FAILED', message: 'Failed to retrieve channel settings.', requestId: req.requestId });
   }
 });
 
@@ -1145,7 +1145,7 @@ router.post('/settings', checkAuth, requireRoles(['super_admin']), async (req, r
     });
   } catch (err) {
     console.error('Error saving channel settings:', err);
-    res.status(500).json({ success: false, code: 'SETTINGS_SAVE_FAILED', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'SETTINGS_SAVE_FAILED', message: 'Failed to save channel settings.', requestId: req.requestId });
   }
 });
 
@@ -1177,7 +1177,7 @@ router.get('/audit-history', checkAuth, requireRoles(['super_admin']), async (re
     });
   } catch (err) {
     console.error('Error fetching channel audit history:', err);
-    res.status(500).json({ success: false, code: 'AUDIT_FETCH_FAILED', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'AUDIT_FETCH_FAILED', message: 'Failed to fetch audit log.', requestId: req.requestId });
   }
 });
 
@@ -1520,7 +1520,7 @@ router.get('/sync/logs', checkAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching sync logs:', err);
-    res.status(500).json({ success: false, code: 'SYNC_LOGS_FETCH_FAILED', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'SYNC_LOGS_FETCH_FAILED', message: 'Failed to fetch channel sync logs.', requestId: req.requestId });
   }
 });
 
@@ -2919,7 +2919,7 @@ router.patch('/:channelId', checkAuth, requireRoles(['super_admin']), async (req
     });
   } catch (err) {
     console.error('Error updating channel:', err);
-    res.status(500).json({ success: false, code: 'CHANNEL_UPDATE_FAILED', message: err.message || 'Failed to update channel', requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'CHANNEL_UPDATE_FAILED', message: 'Failed to update channel', requestId: req.requestId });
   }
 });
 
@@ -3066,7 +3066,7 @@ router.get('/:channelId/mapping-validation', checkAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Error validating channel mappings:', err);
-    res.status(500).json({ success: false, code: 'VALIDATION_FAILED', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'VALIDATION_FAILED', message: 'Failed to validate channel mappings.', requestId: req.requestId });
   }
 });
 
@@ -3257,7 +3257,7 @@ router.post('/:channelId/mappings', checkAuth, requireRoles(['super_admin']), as
     res.json({ success: true, count: normalizedMappings.length, mappings: normalizedMappings, requestId: req.requestId });
   } catch (err) {
     console.error('Error saving channel mappings:', err);
-    res.status(err.status || 500).json({ success: false, code: err.code || 'MAPPINGS_SAVE_FAILED', message: err.message || 'Failed to save mappings', requestId: req.requestId });
+    res.status(err.status || 500).json({ success: false, code: err.code || 'MAPPINGS_SAVE_FAILED', message: 'Failed to save channel mappings.', requestId: req.requestId });
   }
 });
 
@@ -3782,7 +3782,7 @@ router.get('/sync/queue-status', checkAuth, async (req, res) => {
       requestId: req.requestId
     });
   } catch (err) {
-    res.status(500).json({ success: false, code: 'QUEUE_STATUS_ERROR', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'QUEUE_STATUS_ERROR', message: 'Failed to retrieve channel queue status.', requestId: req.requestId });
   }
 });
 
@@ -3798,7 +3798,7 @@ router.post('/sync/trigger-worker', checkAuth, async (req, res) => {
     const result = await processPendingSyncJobs(hotelId, { maxJobsToProcess: 10 });
     res.json({ success: true, result, requestId: req.requestId });
   } catch (err) {
-    res.status(500).json({ success: false, code: 'TRIGGER_WORKER_ERROR', message: err.message, requestId: req.requestId });
+    res.status(500).json({ success: false, code: 'TRIGGER_WORKER_ERROR', message: 'Failed to trigger channel sync worker.', requestId: req.requestId });
   }
 });
 

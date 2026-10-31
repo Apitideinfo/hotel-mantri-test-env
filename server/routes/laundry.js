@@ -58,7 +58,7 @@ router.get('/dashboard', checkAuth, async (req, res) => {
     return res.json({ success: true, ...data });
   } catch (err) {
     console.error('[LaundryAPI /dashboard] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -70,7 +70,7 @@ router.get('/linen-items', checkAuth, async (req, res) => {
     return res.json({ success: true, items });
   } catch (err) {
     console.error('[LaundryAPI /linen-items] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -94,7 +94,7 @@ router.post('/linen-items/seed-defaults', checkAuth, async (req, res) => {
     return res.json({ success: true, created, count: created.length });
   } catch (err) {
     console.error('[LaundryAPI POST /linen-items/seed-defaults] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -112,7 +112,7 @@ router.get('/stock-movements', checkAuth, async (req, res) => {
     return res.json({ success: true, movements });
   } catch (err) {
     console.error('[LaundryAPI /stock-movements] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -136,7 +136,7 @@ router.get('/vendors', checkAuth, async (req, res) => {
     return res.json({ success: true, vendors });
   } catch (err) {
     console.error('[LaundryAPI /vendors] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -160,7 +160,7 @@ router.get('/vendor-rates', checkAuth, async (req, res) => {
     return res.json({ success: true, rates });
   } catch (err) {
     console.error('[LaundryAPI /vendor-rates] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -226,7 +226,7 @@ router.get('/bills/calculate', checkAuth, async (req, res) => {
     return res.json({ success: true, preview });
   } catch (err) {
     console.error('[LaundryAPI /bills/calculate] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -280,7 +280,7 @@ router.get('/vendor-ledger', checkAuth, async (req, res) => {
     return res.json({ success: true, ledger });
   } catch (err) {
     console.error('[LaundryAPI /vendor-ledger] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
@@ -297,7 +297,7 @@ router.get('/statement', checkAuth, async (req, res) => {
     return res.json({ success: true, statement });
   } catch (err) {
     console.error('[LaundryAPI /statement] Error:', err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, error: 'Internal server error processing laundry request.' });
   }
 });
 
