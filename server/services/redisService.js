@@ -458,3 +458,23 @@ export const resetRedisMetrics = () => {
   metrics.lastError = null;
   metrics.lastErrorAt = null;
 };
+
+/**
+ * Atomic rate-limit increment backed by Upstash Redis (H5).
+ * Uses INCR + EXPIRE on the first hit.
+ * Returns null if Redis is not configured or throws, triggering in-memory fallback.
+ */
+export const incrRateLimit = async (key, windowSeconds = 60) => {
+  const redis = getRedisClient();
+  if (!redis) return null;
+  try {
+    const count = await redis.incr(key);
+    if (count === 1) {
+      await redis.expire(key, windowSeconds);
+    }
+    return count;
+  } catch (err) {
+    console.warn('[RedisService] Rate limit incr failed, using in-memory fallback:', err.message);
+    return null;
+  }
+};

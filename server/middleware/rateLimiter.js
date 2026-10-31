@@ -16,19 +16,26 @@
  * This architecture is documented per SEC-10 requirements.
  */
 
+import { incrRateLimit } from '../services/redisService.js';
+
 const rateLimitStores = new Map();
 let rateLimitBypassActive = false;
 
 /**
- * Extracts normalized client IP address from request headers or socket.
+ * Extracts normalized client IP address from request (H5: strictly uses req.ip under trust proxy).
+ * Never trusts raw unverified X-Forwarded-For headers from the client.
  */
 export const getClientIp = (req) => {
-  const xForwardedFor = req.headers?.['x-forwarded-for'];
-  if (typeof xForwardedFor === 'string' && xForwardedFor.trim().length > 0) {
-    const clientIp = xForwardedFor.split(',')[0].trim();
-    if (clientIp) return clientIp;
-  }
   return req.ip || req.socket?.remoteAddress || '127.0.0.1';
+};
+
+/**
+ * Generates rate limit key scoped by authenticated user ID (where available) and IP.
+ */
+export const getRateLimitKey = (req, prefix = 'RL') => {
+  const ip = getClientIp(req);
+  const userId = req.user?.id || req.auth?.user?.id || req.userId || req.hotelAdmin?.user_id;
+  return userId ? `${prefix}:usr:${userId}:${ip}` : `${prefix}:ip:${ip}`;
 };
 
 /**
@@ -65,26 +72,48 @@ export const createRateLimiter = (options = {}) => {
     cleanupInterval.unref(); // Prevent timer from keeping Node process alive in tests
   }
 
-  const limiterMiddleware = (req, res, next) => {
+  const limiterMiddleware = async (req, res, next) => {
     if (rateLimitBypassActive) {
       return next();
     }
 
-    const key = keyGenerator(req);
+    const key = keyGenerator ? keyGenerator(req) : getRateLimitKey(req, name);
     const now = Date.now();
-    const windowStart = now - windowMs;
-
-    const timestamps = store.get(key) || [];
-    const validTimestamps = timestamps.filter((t) => t > windowStart);
-
+    const windowSeconds = Math.ceil(windowMs / 1000);
     const resetTime = Math.ceil((now + windowMs) / 1000);
+
     res.setHeader('X-RateLimit-Limit', max);
     res.setHeader('X-RateLimit-Reset', resetTime);
 
-    if (validTimestamps.length >= max) {
+    // 1. Try atomic Upstash Redis limiter first (H5)
+    let isExceeded = false;
+    let currentCount = 0;
+    const redisCount = await incrRateLimit(`rl:${name}:${key}`, windowSeconds);
+
+    if (typeof redisCount === 'number') {
+      currentCount = redisCount;
+      if (redisCount > max) {
+        isExceeded = true;
+      }
+    } else {
+      // 2. In-memory sliding-window fallback
+      const windowStart = now - windowMs;
+      const timestamps = store.get(key) || [];
+      const validTimestamps = timestamps.filter((t) => t > windowStart);
+      currentCount = validTimestamps.length;
+
+      if (validTimestamps.length >= max) {
+        isExceeded = true;
+      } else {
+        validTimestamps.push(now);
+        store.set(key, validTimestamps);
+        currentCount = validTimestamps.length;
+      }
+    }
+
+    if (isExceeded) {
       res.setHeader('X-RateLimit-Remaining', 0);
-      const oldestValid = validTimestamps[0] || now;
-      const retryAfterSeconds = Math.max(1, Math.ceil((oldestValid + windowMs - now) / 1000));
+      const retryAfterSeconds = Math.max(1, windowSeconds);
       res.setHeader('Retry-After', retryAfterSeconds);
 
       return res.status(429).json({
@@ -96,10 +125,7 @@ export const createRateLimiter = (options = {}) => {
       });
     }
 
-    validTimestamps.push(now);
-    store.set(key, validTimestamps);
-
-    const remaining = Math.max(0, max - validTimestamps.length);
+    const remaining = Math.max(0, max - currentCount);
     res.setHeader('X-RateLimit-Remaining', remaining);
     next();
   };
@@ -117,19 +143,55 @@ export const createRateLimiter = (options = {}) => {
 // ─── Standard Configured Limiters ─────────────────────────────────────────────
 
 /**
- * 1. Payment Rate Limiter: 40 requests/minute per IP
+ * 1. Payment Rate Limiter: 20 requests/minute per IP/User (H5)
  * Protects Razorpay order creation and payment verification from brute-force / abuse.
  */
 export const paymentRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 40,
+  max: 20,
   name: 'PAYMENT',
   errorCode: 'RATE_LIMIT_EXCEEDED',
-  message: 'Too many payment requests from this address. Please try again in one minute.',
+  message: 'Too many payment requests. Please try again in one minute.',
 });
 
 /**
- * 2. Cron Rate Limiter: 10 requests/minute per IP
+ * 2. Auth Rate Limiter: 10 requests/minute per IP/User (H5)
+ * Protects login, registration, and password recovery against credential stuffing.
+ */
+export const authRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 10,
+  name: 'AUTH',
+  errorCode: 'AUTH_RATE_LIMIT_EXCEEDED',
+  message: 'Too many authentication attempts. Please wait one minute before trying again.',
+});
+
+/**
+ * 3. Webhook Rate Limiter: 60 requests/minute per IP (H5)
+ * Strict threshold for inbound webhooks while preventing DDoS / flooding.
+ */
+export const webhookRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  name: 'WEBHOOK',
+  errorCode: 'WEBHOOK_RATE_LIMIT_EXCEEDED',
+  message: 'Too many webhook requests from this address. Please throttle submission rate.',
+});
+
+/**
+ * 4. Export Rate Limiter: 5 requests/minute per IP/User (H5)
+ * Protects heavy database aggregations and data exfiltration routes.
+ */
+export const exportRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 5,
+  name: 'EXPORT',
+  errorCode: 'EXPORT_RATE_LIMIT_EXCEEDED',
+  message: 'Too many data export requests. Please wait a minute before requesting another export.',
+});
+
+/**
+ * 5. Cron Rate Limiter: 10 requests/minute per IP
  * Protects scheduled cron endpoints from high-frequency invocation bursts.
  */
 export const cronRateLimiter = createRateLimiter({
@@ -141,7 +203,7 @@ export const cronRateLimiter = createRateLimiter({
 });
 
 /**
- * 3. PDF Generation Rate Limiter: 30 requests/minute per IP
+ * 6. PDF Generation Rate Limiter: 30 requests/minute per IP
  * Protects computationally expensive PDF document rendering from CPU starvation.
  */
 export const pdfRateLimiter = createRateLimiter({
@@ -153,24 +215,12 @@ export const pdfRateLimiter = createRateLimiter({
 });
 
 /**
- * 4. Webhook Rate Limiter: 120 requests/minute per IP
- * Generous threshold for legitimate OTA webhooks while mitigating unbounded floods.
- */
-export const webhookRateLimiter = createRateLimiter({
-  windowMs: 60 * 1000,
-  max: 120,
-  name: 'WEBHOOK',
-  errorCode: 'WEBHOOK_RATE_LIMIT_EXCEEDED',
-  message: 'Too many webhook requests from this address. Please throttle submission rate.',
-});
-
-/**
- * 5. General API Rate Limiter: 300 requests/minute per IP
- * Broad safety net against aggressive scraping / automated floods.
+ * 7. General API Rate Limiter: 120 requests/minute per IP/User (H5)
+ * Broad safety net across all /api/* routes.
  */
 export const generalApiRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 300,
+  max: 120,
   name: 'GENERAL',
   errorCode: 'API_RATE_LIMIT_EXCEEDED',
   message: 'Too many requests to Hotel Mantri API from this address. Please try again later.',

@@ -1,4 +1,4 @@
-﻿import express from 'express';
+import express from 'express';
 import { corsMiddleware, getAllowedOrigins } from './middleware/corsConfig.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -53,6 +53,9 @@ process.on('uncaughtException', (err) => {
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// H5: Trust Vercel / reverse proxy 1-hop for accurate req.ip rate limiting
+app.set('trust proxy', 1);
 
 app.use(corsMiddleware);
 
@@ -157,6 +160,12 @@ import {
   fetchOrderAssociation,
   getRazorpayClient,
 } from './services/paymentSecurityService.js';
+import {
+  authRateLimiter,
+  webhookRateLimiter,
+  exportRateLimiter,
+  generalApiRateLimiter,
+} from './middleware/rateLimiter.js';
 import { resolveAuthorizedHotel, requireHotelAccess } from './middleware/auth.js';
 import { validateCronConfiguration } from './middleware/cronAuth.js';
 import { supabaseServiceRole } from './supabaseClient.js';
@@ -229,6 +238,15 @@ app.get(['/api/redis/status', '/redis/status'], requireHotelAccess, async (req, 
     requestId: req.requestId,
   });
 });
+
+// H5: Global API rate limiting on all /api routes (120 req/min per IP/user)
+app.use('/api', generalApiRateLimiter);
+
+// Specific stricter limiters on sensitive routes (H5)
+app.use(['/api/onboarding', '/onboarding'], authRateLimiter);
+app.use(['/api/whatsapp/webhook', '/whatsapp/webhook'], webhookRateLimiter);
+app.use(['/api/meta/data-deletion-callback', '/meta/data-deletion-callback'], webhookRateLimiter);
+app.use(['/api/reservations/export', '/reservations/export'], exportRateLimiter);
 
 // Mount API routes with both /api prefix and direct path for total serverless compatibility
 app.use('/api/aiosell', aiosellRoutes);
