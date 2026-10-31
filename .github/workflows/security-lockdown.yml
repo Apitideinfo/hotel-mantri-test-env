@@ -42,3 +42,28 @@ jobs:
 
       - name: Tenant Scope Static Analysis
         run: node scripts/lint_tenant_scope.mjs
+
+      - name: Staff Role Escalation Prevention Audit
+        run: node scripts/test_role_escalation.mjs
+
+      - name: Hardcoded Secrets & Fail-Closed Audit
+        run: node scripts/test_hardcoded_secrets.mjs
+
+      - name: Payment Settlement Hardening Audit
+        run: node scripts/test_verify_payment_hardening.mjs
+
+      - name: Adversarial Hostile-User Security Attack Suite
+        run: node scripts/security_attack_suite.mjs
+        env:
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          GUEST_CHECKOUT_SECRET: ${{ secrets.GUEST_CHECKOUT_SECRET }}
+          WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}
+          WHATSAPP_VERIFY_TOKEN: ${{ secrets.WHATSAPP_VERIFY_TOKEN }}
+          RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true

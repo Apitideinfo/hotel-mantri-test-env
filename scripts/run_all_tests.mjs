@@ -68,6 +68,10 @@ const SUITES = [
     name: 'Tenant Scope Static Analysis & Isolation Audit',
     file: 'scripts/lint_tenant_scope.mjs',
   },
+  {
+    name: 'Adversarial Hostile-User Security Attack Suite',
+    file: 'scripts/security_attack_suite.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {
