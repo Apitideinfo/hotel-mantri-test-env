@@ -74,6 +74,13 @@ export const base64UrlDecode = (input) => {
  * @returns {{ valid: boolean, error?: string, data?: object }}
  */
 export const parseAndVerifyMetaSignedRequest = (signedRequest, appSecret) => {
+  if (!appSecret) {
+    const err = new Error('Meta App Secret is not configured on server.');
+    err.statusCode = 503;
+    err.code = 'APP_SECRET_NOT_CONFIGURED';
+    throw err;
+  }
+
   if (!signedRequest || typeof signedRequest !== 'string') {
     return { valid: false, error: 'MISSING_SIGNED_REQUEST' };
   }
@@ -105,24 +112,24 @@ export const parseAndVerifyMetaSignedRequest = (signedRequest, appSecret) => {
     return { valid: false, error: 'EMPTY_PAYLOAD' };
   }
 
-  if (payload.algorithm && payload.algorithm.toUpperCase() !== 'HMAC-SHA256') {
-    return { valid: false, error: 'UNSUPPORTED_ALGORITHM' };
+  if (!payload.algorithm || String(payload.algorithm).toUpperCase() !== 'HMAC-SHA256') {
+    return { valid: false, error: 'UNSUPPORTED_OR_MISSING_ALGORITHM' };
   }
 
-  // If app secret is provided, verify HMAC SHA-256
-  if (appSecret) {
-    try {
-      const expectedHmac = crypto
-        .createHmac('sha256', appSecret)
-        .update(encodedPayload)
-        .digest();
+  try {
+    const expectedHmac = crypto
+      .createHmac('sha256', appSecret)
+      .update(encodedPayload)
+      .digest();
 
-      if (sigBuffer.length !== expectedHmac.length || !crypto.timingSafeEqual(sigBuffer, expectedHmac)) {
-        return { valid: false, error: 'SIGNATURE_MISMATCH' };
-      }
-    } catch (err) {
-      return { valid: false, error: `VERIFICATION_FAILED: ${err.message}` };
+    const sigDigest = crypto.createHash('sha256').update(sigBuffer).digest();
+    const expDigest = crypto.createHash('sha256').update(expectedHmac).digest();
+
+    if (!crypto.timingSafeEqual(sigDigest, expDigest)) {
+      return { valid: false, error: 'SIGNATURE_MISMATCH' };
     }
+  } catch (err) {
+    return { valid: false, error: `VERIFICATION_FAILED: ${err.message}` };
   }
 
   return { valid: true, data: payload };

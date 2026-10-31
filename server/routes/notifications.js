@@ -1167,9 +1167,35 @@ const handleMetaNotificationWebhook = async (req, res) => {
     return res.status(200).type('text/plain').send(result.challenge);
   }
 
+  const signatureHeader = req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'];
+  const rawBody = req.rawBody;
+
+  if (!rawBody) {
+    return res.status(400).json({
+      success: false,
+      code: 'RAW_BODY_MISSING',
+      error: 'Missing raw request body for webhook signature verification.',
+    });
+  }
+
+  const appSecret = (process.env.WHATSAPP_APP_SECRET || process.env.META_WHATSAPP_APP_SECRET || '').trim();
+  const sigResult = verifyMetaWebhookSignature({
+    rawBody,
+    signatureHeader,
+    appSecret,
+  });
+
+  if (!sigResult.valid) {
+    console.warn(`[MetaNotificationWebhook] Rejected invalid webhook: ${sigResult.error}`);
+    return res.status(sigResult.statusCode).json({
+      success: false,
+      error: sigResult.error,
+    });
+  }
+
   res.status(200).json({ success: true, received: true });
   try {
-    const payload = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const payload = typeof req.body === 'object' ? req.body : JSON.parse(rawBody.toString('utf8') || '{}');
     await processMetaWebhookEvents(payload);
   } catch (err) {
     console.error('[MetaWebhookHandler] Error:', err.message);
