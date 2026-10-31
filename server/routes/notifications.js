@@ -1129,7 +1129,7 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
         .eq('id', hotelId);
 
       if (retryResult.error) {
-        return res.status(500).json({ success: false, message: retryResult.error.message });
+        return res.status(500).json({ success: false, error: 'RETRY_FAILED', message: 'Failed to retry notification.' });
       }
     }
 
@@ -1275,7 +1275,7 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
       whatsappDirectUrl: sendResult.whatsappDirectUrl,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Failed to retry notification: ' + err.message });
+    return res.status(500).json({ success: false, error: 'RETRY_ERROR', message: 'Internal error retrying notification.' });
   }
 });
 

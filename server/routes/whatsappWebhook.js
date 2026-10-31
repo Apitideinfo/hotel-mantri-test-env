@@ -371,7 +371,7 @@ router.post('/retry-send', requireHotelAccess, async (req, res) => {
       whatsappDirectUrl: sendResult.whatsappDirectUrl,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Failed to retry notification: ' + err.message });
+    return res.status(500).json({ success: false, error: 'RETRY_ERROR', message: 'Internal error retrying notification.' });
   }
 });
 
