@@ -62,8 +62,8 @@ export const setRazorpayClient = (client) => {
 
 export const getRazorpayClient = () => {
   if (customRazorpayClient) return customRazorpayClient;
-  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
-  const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (keyId && keySecret) {
     customRazorpayClient = new Razorpay({
       key_id: keyId,

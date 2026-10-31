@@ -503,7 +503,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
         }
       } catch { /* proceed */ }
     }
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
     if (!keySecret) {
       return res.status(503).json({
         success: false,

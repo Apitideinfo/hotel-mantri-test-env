@@ -364,7 +364,7 @@ export const autoOnboardHotel = async (hotelCode, partnerId = 'hotel-mantri-pms'
         noshow: {},
         ...(op === 'res_out' ? {
           username: process.env.AIOSELL_WEBHOOK_USERNAME || 'hotel-mantri-webhook',
-          password: process.env.AIOSELL_WEBHOOK_PASSWORD || '',
+          password: process.env.AIOSELL_WEBHOOK_PASSWORD || undefined,
           notifyBookings: true,
           base_url: webhookUrl
         } : {})
