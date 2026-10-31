@@ -830,8 +830,15 @@ function validatePayload(body: OnboardingPayload): { valid: boolean; error?: str
       return { valid: false, error: "All room categories must have a valid name." };
     }
   }
-  if (!body.password || typeof body.password !== "string" || body.password.length < 6) {
-    return { valid: false, error: "Password must be at least 6 characters long." };
+  if (!body.password || typeof body.password !== "string" || body.password.length < 12) {
+    return { valid: false, error: "Password must be at least 12 characters long." };
+  }
+  const WEAK_PASSWORDS = new Set([
+    "password1234", "password12345", "admin1234567", "hotelmantri12", "welcome12345",
+    "123456789012", "qwerty123456", "letmein12345", "password@1234", "admin@123456"
+  ]);
+  if (WEAK_PASSWORDS.has(body.password.toLowerCase().trim())) {
+    return { valid: false, error: "Password is too common or insecure. Please choose a stronger password." };
   }
   return { valid: true };
 }
