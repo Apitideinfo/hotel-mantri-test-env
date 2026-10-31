@@ -36,3 +36,6 @@ jobs:
 
       - name: Build Check
         run: npm run build
+
+      - name: Dependency Vulnerability Audit
+        run: npm audit --omit=dev --audit-level=high
