@@ -56,6 +56,8 @@ const Ctx = createContext<AuthContext | undefined>(undefined);
 
 interface ProfileRow {
   role: UserRole;
+  staff_role?: UserRole | null;
+  permissions?: UserPermissions;
   hotel_id: string | null;
   status: string;
   email: string;
@@ -173,40 +175,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // Hotel Admin / Staff lookup from hotel_admins
         const { data: adminRows, error } = await supabase
           .from('hotel_admins')
-          .select('role, hotel_id, status, email')
+          .select('role, staff_role, permissions, hotel_id, status, email')
           .eq('user_id', u.id)
           .eq('status', 'Active');
 
         if (error) throw error;
 
-        const rows = (adminRows ?? []) as { role: string; hotel_id: string | null; status: string; email: string }[];
+        const rows = (adminRows ?? []) as ProfileRow[];
         const adminRow = rows[0] ?? null;
 
         if (!adminRow) {
-          // If no hotel_admins record exists for user_id, check if user's verified email matches hotels.admin_email
-          if (u.email) {
-            const { data: matchedHotel } = await supabase
-              .from('hotels')
-              .select('id, hotel_name, subscription_status')
-              .ilike('admin_email', u.email.trim())
-              .eq('is_active', true)
-              .maybeSingle();
-
-            if (matchedHotel) {
-              const h = matchedHotel as HotelRow;
-              setRole('hotel_admin');
-              setCompanyRole(null);
-              setHotelId(h.id || null);
-              setCurrentHotelId(h.id || null);
-              setHotelName(h.hotel_name);
-              setSubscriptionStatus((h.subscription_status as AuthContext['subscriptionStatus']) || 'Active');
-              setProfileLoaded(true);
-              profileLoadedRef.current = u.id;
-              return;
-            }
-          }
-
-          // No role found — do NOT silently assume hotel_admin. Surface as no-role.
+          // No active hotel_admins record exists for user_id. Surface as no-role.
           setRole(null);
           setCompanyRole(null);
           setHotelId(null);
@@ -218,19 +197,26 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           return;
         }
 
-        const profile = adminRow as ProfileRow;
+        const profile = adminRow;
 
-        const metaRole = u.user_metadata?.role as UserRole | undefined;
-        let effectiveRole = (metaRole || profile.role) as UserRole;
-        if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+        // C2: Derive role and permissions strictly from database, NEVER client user_metadata
+        const ALLOWED_STAFF_ROLES: UserRole[] = ['hotel_admin', 'manager', 'reception', 'accounts', 'housekeeping'];
+        let rawStaffRole = (profile.staff_role || profile.role) as string;
+        if (rawStaffRole === 'owner') rawStaffRole = 'hotel_admin';
+        if (rawStaffRole === 'hotel_staff') rawStaffRole = 'reception';
 
+        const effectiveRole: UserRole = ALLOWED_STAFF_ROLES.includes(rawStaffRole as UserRole)
+          ? (rawStaffRole as UserRole)
+          : 'reception';
+
+        const dbPerms = (profile.permissions || {}) as Record<string, any>;
         const userPerms: UserPermissions = {
-          canLaundry: Boolean(u.user_metadata?.can_laundry),
-          canMaintenance: u.user_metadata?.can_maintenance !== false,
-          canApproveInspection: Boolean(u.user_metadata?.can_approve_inspection),
-          assignedFloor: u.user_metadata?.assigned_floor || '',
-          assignedCategoryId: u.user_metadata?.assigned_category_id || '',
-          shift: u.user_metadata?.shift || 'General',
+          canLaundry: Boolean(dbPerms.canLaundry ?? dbPerms.can_laundry),
+          canMaintenance: (dbPerms.canMaintenance ?? dbPerms.can_maintenance) !== false,
+          canApproveInspection: Boolean(dbPerms.canApproveInspection ?? dbPerms.can_approve_inspection),
+          assignedFloor: dbPerms.assignedFloor ?? dbPerms.assigned_floor ?? '',
+          assignedCategoryId: dbPerms.assignedCategoryId ?? dbPerms.assigned_category_id ?? '',
+          shift: dbPerms.shift ?? 'General',
         };
 
         setRole(effectiveRole);

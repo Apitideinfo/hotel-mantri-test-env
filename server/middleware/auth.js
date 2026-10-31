@@ -34,7 +34,16 @@ export const timingSafeSecretEqual = (a, b) => {
 
 // In-memory cache for validated auth contexts (TTL: 60s)
 const authContextCache = new Map();
-const AUTH_CACHE_TTL_MS = 60 * 1000;
+const AUTH_CACHE_TTL_MS = 15 * 1000;
+
+export const clearUserAuthCache = (userId) => {
+  if (!userId) return;
+  for (const [k, v] of authContextCache.entries()) {
+    if (v.context?.userId === userId) {
+      authContextCache.delete(k);
+    }
+  }
+};
 
 export const clearAuthCache = () => {
   authContextCache.clear();
@@ -241,7 +250,7 @@ export const resolveAuthorizedHotel = async (req) => {
   // Authoritatively query assigned hotel from database
   const { data: adminRecords, error: dbError } = await scopedSupabase
     .from('hotel_admins')
-    .select('role, hotel_id, status')
+    .select('role, staff_role, permissions, hotel_id, status')
     .eq('user_id', user.id)
     .eq('status', 'Active');
 
@@ -259,18 +268,14 @@ export const resolveAuthorizedHotel = async (req) => {
   let authorizedHotelId = activeRecord?.hotel_id;
   let userRole = activeRecord?.role || 'hotel_admin';
 
-  if (!authorizedHotelId && user.email) {
-    const { data: matchedHotel } = await scopedSupabase
-      .from('hotels')
-      .select('id, hotel_name, subscription_status, is_active')
-      .ilike('admin_email', user.email.trim())
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (matchedHotel) {
-      authorizedHotelId = matchedHotel.id;
-      userRole = 'hotel_admin';
-    }
+  // H1: Require confirmed email for non-synthetic accounts
+  if (user.email && !user.email.endsWith('.internal') && !user.email.endsWith('@internal') && !user.email_confirmed_at) {
+    return {
+      success: false,
+      status: 403,
+      code: 'EMAIL_NOT_CONFIRMED',
+      message: 'Email address has not been confirmed. Please confirm your email to proceed.',
+    };
   }
 
   if (!authorizedHotelId) {
@@ -299,19 +304,17 @@ export const resolveAuthorizedHotel = async (req) => {
     .eq('id', authorizedHotelId)
     .maybeSingle();
 
-  // Check user metadata role first (e.g. housekeeping, manager, reception, accounts)
-  const metaRole = user.user_metadata?.role;
-  let effectiveRole = metaRole || userRole;
-  if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+  // C2: Authoritative role resolution from hotel_admins / app_metadata (NEVER user_metadata)
+  const ALLOWED_STAFF_ROLES = ['hotel_admin', 'manager', 'reception', 'accounts', 'housekeeping'];
+  let rawRole = activeRecord?.staff_role || user.app_metadata?.role || activeRecord?.role || 'reception';
+  if (rawRole === 'owner') rawRole = 'hotel_admin';
+  if (rawRole === 'hotel_staff') rawRole = 'reception';
 
-  const userPermissions = user.user_metadata?.permissions || {
-    canLaundry: Boolean(user.user_metadata?.can_laundry),
-    canMaintenance: user.user_metadata?.can_maintenance !== false,
-    canApproveInspection: Boolean(user.user_metadata?.can_approve_inspection),
-    assignedFloor: user.user_metadata?.assigned_floor || '',
-    assignedCategoryId: user.user_metadata?.assigned_category_id || '',
-    shift: user.user_metadata?.shift || 'General',
-  };
+  const effectiveRole = ALLOWED_STAFF_ROLES.includes(rawRole) ? rawRole : 'reception';
+
+  // C2: Authoritative permissions from hotel_admins / app_metadata (NEVER user_metadata)
+  const dbPermissions = activeRecord?.permissions || user.app_metadata?.permissions || {};
+  const userPermissions = typeof dbPermissions === 'object' && dbPermissions !== null ? dbPermissions : {};
 
   const resolvedContext = {
     success: true,

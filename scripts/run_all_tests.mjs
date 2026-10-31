@@ -52,6 +52,10 @@ const SUITES = [
     name: 'RLS Lockdown & Zero Anon Access Audit',
     file: 'scripts/test_rls_lockdown.mjs',
   },
+  {
+    name: 'Staff Role Escalation Prevention Audit',
+    file: 'scripts/test_role_escalation.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {
