@@ -24,7 +24,7 @@
     "helmet": "^8.3.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
-    "lucide-react": "^0.344.0",
+    "lucide-react": "^1.63.0",
     "nodemailer": "^10.0.12",
     "razorpay": "^2.9.8",
     "react": "^18.3.1",
