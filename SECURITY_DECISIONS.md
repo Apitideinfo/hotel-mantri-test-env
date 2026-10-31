@@ -80,3 +80,14 @@ All webhook and token secrets must be configured in environment variables and fa
 - `WHINTA_WEBHOOK_SECRET`: Required for Whinta webhook verification (constant-time comparison).
 - `META_WHATSAPP_APP_SECRET`: Required for Meta webhook HMAC-SHA256 signature verification.
 - `INTERNAL_API_SECRET`: Required for server-to-server inter-service calls.
+
+---
+
+## 4. Hotel Admin & Auth Policy (H1)
+
+- **Removal of Email-Based Admin Fallback:** Matching `hotels.admin_email` directly to grant admin privileges is completely removed. Authorization strictly requires an active record in `hotel_admins`. Existing owners were migrated via `20261101010000_staff_roles.sql`.
+- **Mandatory Email Confirmation:** Non-synthetic accounts require `user.email_confirmed_at` to access hotel endpoints.
+- **Client-Side Sign-Up Removal:** Client-side `supabase.auth.signUp` is completely removed from the frontend. Owner accounts are created exclusively through server-side admin APIs (`hotel-onboarding` Edge Function).
+- **Supabase Dashboard Actions Required:**
+  1. Disable public signups: Supabase Dashboard -> Authentication -> Sign In / Sign Up -> disable "Allow new users to sign up".
+  2. Enable email confirmation: Supabase Dashboard -> Authentication -> Sign In / Sign Up -> enable "Confirm email".

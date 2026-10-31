@@ -197,22 +197,8 @@ export const HotelProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const adminRecord = (adminRows && adminRows[0]) as { hotel_id: string } | undefined;
       let assignedHotelId = adminRecord?.hotel_id;
 
-      if (!assignedHotelId && user.email) {
-        // Fallback: check if user's verified email matches an active hotel's admin_email
-        const { data: matchedHotel } = await supabase
-          .from('hotels')
-          .select('id, hotel_name, owner_name, admin_email, mobile, total_rooms, subscription_status, is_active')
-          .ilike('admin_email', user.email.trim())
-          .eq('is_active', true)
-          .maybeSingle();
-
-        if (matchedHotel) {
-          const assignedHotel = matchedHotel as HotelSummary;
-          setAvailableHotels([assignedHotel]);
-          applyHotelSelection(assignedHotel, false);
-          return;
-        }
-      }
+      // H1: Fallback to hotels.admin_email removed per security policy.
+      // Access must come strictly from an active hotel_admins row.
 
       if (!assignedHotelId) {
         setHotelIdState(null);

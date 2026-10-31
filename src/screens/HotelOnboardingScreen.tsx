@@ -69,50 +69,38 @@ export const HotelOnboardingScreen: React.FC<HotelOnboardingScreenProps> = ({
     try {
       setLoading(true);
 
-      // Attempt Supabase backend registration
+      // H1 Remediation: Client-side supabase.auth.signUp removed.
+      // Owner accounts must be provisioned server-side by administrators via the hotel-onboarding Edge Function.
       try {
-        if (password) {
-          const { data: authData, error: authError } = await supabase.auth.signUp({
+        let { data: { session: currentSession } } = await supabase.auth.getSession();
+
+        if (!currentSession && ownerEmail && password) {
+          const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
             email: ownerEmail.trim(),
             password,
-            options: {
-              data: {
-                full_name: ownerName.trim(),
-                mobile: ownerMobile.replace(/\D/g, ''),
-              },
-            },
           });
-
-          if (authError && !authError.message.includes('already registered')) {
-            console.warn('Supabase auth error:', authError);
+          if (loginError) {
+            throw new Error('Public registration is disabled. Please contact your administrator to provision your account.');
           }
-
-          let currentSession = authData?.session;
-
-          if (!currentSession) {
-            const { data: loginData } = await supabase.auth.signInWithPassword({
-              email: ownerEmail.trim(),
-              password,
-            });
-            currentSession = loginData?.session ?? null;
-          }
-
-          if (currentSession) {
-            const { error: rpcError } = await supabase.rpc('register_new_hotel', {
-              p_hotel_name: hotelName.trim(),
-              p_owner_name: ownerName.trim(),
-              p_mobile: ownerMobile.replace(/\D/g, ''),
-              p_address: fullAddress || address.trim(),
-              p_total_rooms: parseInt(totalRooms, 10),
-              p_number_of_floors: floors.trim() ? parseInt(floors, 10) : 1,
-            });
-            if (rpcError) throw rpcError;
-          }
+          currentSession = loginData?.session ?? null;
         }
+
+        if (!currentSession) {
+          throw new Error('Public self-signup is disabled. Owner accounts must be provisioned server-side.');
+        }
+
+        const { error: rpcError } = await supabase.rpc('register_new_hotel', {
+          p_hotel_name: hotelName.trim(),
+          p_owner_name: ownerName.trim(),
+          p_mobile: ownerMobile.replace(/\D/g, ''),
+          p_address: fullAddress || address.trim(),
+          p_total_rooms: parseInt(totalRooms, 10),
+          p_number_of_floors: floors.trim() ? parseInt(floors, 10) : 1,
+        });
+        if (rpcError) throw rpcError;
       } catch (backendErr: any) {
         throw new Error(backendErr?.message || 'Hotel property registration failed.');
       }
-
       setLoading(false);
       onOnboardingSuccess();
     } catch (err) {
