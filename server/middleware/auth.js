@@ -73,6 +73,53 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
+  // M3: Internal server-to-server call with dedicated INTERNAL_API_SECRET header
+  const internalSecret = req.headers['x-internal-secret'];
+  if (internalSecret) {
+    const configuredInternalSecret = process.env.INTERNAL_API_SECRET;
+    if (!configuredInternalSecret) {
+      return {
+        success: false,
+        status: 503,
+        code: 'INTERNAL_SECRET_UNCONFIGURED',
+        message: 'Internal API secret is not configured on the server.',
+      };
+    }
+    if (!timingSafeSecretEqual(internalSecret, configuredInternalSecret)) {
+      return {
+        success: false,
+        status: 401,
+        code: 'INVALID_INTERNAL_SECRET',
+        message: 'Invalid internal API secret.',
+      };
+    }
+    const requestedHotelId = req.headers['x-hotel-id'];
+    if (!requestedHotelId) {
+      return {
+        success: false,
+        status: 400,
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context (x-hotel-id header) is required for internal service operations.',
+      };
+    }
+    const supabaseConfig = getSupabaseConfig();
+    return {
+      success: true,
+      user: { id: 'internal-service', email: 'service@hotelmantri.com' },
+      userId: 'internal-service',
+      role: 'super_admin',
+      isSuperAdmin: true,
+      hotelId: requestedHotelId,
+      hotel: { id: requestedHotelId, hotel_name: 'System Service' },
+      scopedSupabase: createClient(supabaseConfig.url, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }),
+    };
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return {
@@ -94,35 +141,6 @@ export const resolveAuthorizedHotel = async (req) => {
   }
 
   const supabaseConfig = getSupabaseConfig();
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  // Privileged internal server-to-server call with service role key ONLY (SEC-09 timing-safe)
-  if (serviceKey && timingSafeSecretEqual(token, serviceKey)) {
-    const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
-    if (!requestedHotelId) {
-      return {
-        success: false,
-        status: 400,
-        code: 'HOTEL_CONTEXT_REQUIRED',
-        message: 'Hotel context is required for service role operations.',
-      };
-    }
-    return {
-      success: true,
-      user: { id: 'service-role-admin', email: 'service@hotelmantri.com' },
-      userId: 'service-role-admin',
-      role: 'super_admin',
-      isSuperAdmin: true,
-      hotelId: requestedHotelId,
-      hotel: { id: requestedHotelId, hotel_name: 'System Service' },
-      scopedSupabase: createClient(supabaseConfig.url, serviceKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      }),
-    };
-  }
 
   // Fast-path: Check memory cache for validated user auth context
   const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
