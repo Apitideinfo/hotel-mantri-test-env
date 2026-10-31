@@ -15,7 +15,8 @@
 -- ─────────────────────────────────────────────────────────────────────────
 DROP VIEW IF EXISTS public.public_hotel_branding CASCADE;
 
-CREATE OR REPLACE VIEW public.public_hotel_branding AS
+CREATE OR REPLACE VIEW public.public_hotel_branding
+WITH (security_invoker = true) AS
 SELECT
   h.id,
   h.hotel_name,
@@ -28,8 +29,8 @@ FROM public.hotels h
 LEFT JOIN public.hotel_settings s ON h.id = s.id
 WHERE h.is_active = true;
 
--- Ensure postgres/owner executes view securely
-ALTER VIEW public.public_hotel_branding OWNER TO postgres;
+-- Enforce security_invoker = true to satisfy Supabase security linter
+ALTER VIEW public.public_hotel_branding SET (security_invoker = true);
 
 -- Grant read access on view to anon and authenticated
 GRANT SELECT ON public.public_hotel_branding TO anon, authenticated, service_role;
