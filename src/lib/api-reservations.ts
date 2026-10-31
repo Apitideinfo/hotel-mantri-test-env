@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+﻿import { supabase } from './supabase';
 import { getCurrentHotelId, getRooms, getRoomCategories, getRoomChartForDateRange } from './api';
 import { toNum, calcStayNights, isStayOverlapping, calcGstFull } from './calc';
 import { dispatchChannelEvent } from './api-channel';
@@ -1334,7 +1334,7 @@ export const extendReservation = async (params: {
   return updated as Reservation;
 };
 
-// ── Phase 9: Drag & Drop — Move Reservation ──
+// â”€â”€ Phase 9: Drag & Drop â€” Move Reservation â”€â”€
 
 export const moveReservation = async (params: {
   reservationId: string;
@@ -1397,7 +1397,7 @@ export const moveReservation = async (params: {
   return updated as Reservation;
 };
 
-// ── Phase 9: Split Reservation ──
+// â”€â”€ Phase 9: Split Reservation â”€â”€
 
 export const splitReservation = async (params: {
   reservationId: string;
@@ -1469,7 +1469,7 @@ export const splitReservation = async (params: {
   return newRes as Reservation;
 };
 
-// ── Phase 9: Group Bookings ──
+// â”€â”€ Phase 9: Group Bookings â”€â”€
 
 export const createGroupBooking = async (params: {
   group: ReservationGroupInput;
@@ -1578,7 +1578,7 @@ export const getGroupReservations = async (groupId: string): Promise<Reservation
   });
 };
 
-// ── Phase 9: Rate Plans ──
+// â”€â”€ Phase 9: Rate Plans â”€â”€
 
 export const getRatePlans = async (): Promise<RatePlan[]> => {
   const { data, error } = await supabase
@@ -1620,7 +1620,7 @@ export const getApplicableRate = (plan: RatePlan, date: string): number => {
   return plan.base_rate;
 };
 
-// ── Phase 9: Waitlist ──
+// â”€â”€ Phase 9: Waitlist â”€â”€
 
 export const getWaitlist = async (status?: WaitlistStatus): Promise<WaitlistEntry[]> => {
   let q = supabase
@@ -1693,7 +1693,7 @@ export const checkWaitlistAvailability = async (): Promise<WaitlistEntry[]> => {
   return notified;
 };
 
-// ── Phase 9: Room Blocks ──
+// â”€â”€ Phase 9: Room Blocks â”€â”€
 
 export const getRoomBlocks = async (): Promise<RoomBlock[]> => {
   const { data, error } = await supabase
@@ -1740,7 +1740,7 @@ export const deleteRoomBlock = async (id: string): Promise<void> => {
   }
 };
 
-// ── Phase 9: Bulk Operations ──
+// â”€â”€ Phase 9: Bulk Operations â”€â”€
 
 export const bulkCheckIn = async (reservationIds: string[]): Promise<Reservation[]> => {
   const results: Reservation[] = [];
@@ -1769,7 +1769,7 @@ export const bulkCancel = async (reservationIds: string[]): Promise<Reservation[
   return results;
 };
 
-// ── Phase 9: Alerts ──
+// â”€â”€ Phase 9: Alerts â”€â”€
 
 export interface ReservationAlert {
   type: 'overbooking' | 'duplicate' | 'guest_overlap' | 'payment_pending' | 'vip_arrival' | 'room_not_ready';
@@ -1871,7 +1871,7 @@ export const getReservationAlerts = async (reservations: Reservation[]): Promise
   return alerts;
 };
 
-// ── Phase 9: Availability Engine ──
+// â”€â”€ Phase 9: Availability Engine â”€â”€
 
 export interface RoomAvailability {
   room_no: string;
@@ -1994,7 +1994,7 @@ export const getRoomAvailabilityForDate = async (date: string): Promise<RoomAvai
   });
 };
 
-// ── Phase 9: Room Upgrade Suggestion ──
+// â”€â”€ Phase 9: Room Upgrade Suggestion â”€â”€
 
 export const suggestRoomUpgrade = async (params: {
   checkIn: string;
@@ -2026,7 +2026,7 @@ export const suggestRoomUpgrade = async (params: {
   return null;
 };
 
-// ── Phase 9: Quick Reservation ──
+// â”€â”€ Phase 9: Quick Reservation â”€â”€
 
 export const quickReservation = async (params: {
   roomNo: string;
@@ -2057,7 +2057,7 @@ export const quickReservation = async (params: {
   });
 };
 
-// ── Phase 10: Server-side Paginated Reservations & Conflict Diagnostic ──
+// â”€â”€ Phase 10: Server-side Paginated Reservations & Conflict Diagnostic â”€â”€
 
 export interface ReservationFilterParams {
   page?: number;
@@ -2683,15 +2683,15 @@ export const buildWhatsAppConfirmationText = (data: ReservationConfirmationData)
     `Check-out: ${data.dates.checkOut}`,
     `Nights: ${data.dates.nights}`,
     '',
-    `Grand Total: ₹${Math.round(data.charges.totalAmount).toLocaleString('en-IN')}`,
-    `Received: ₹${Math.round(data.payments.advancePaid).toLocaleString('en-IN')}`,
-    `Balance: ₹${Math.round(data.balance).toLocaleString('en-IN')}`,
+    `Grand Total: â‚¹${Math.round(data.charges.totalAmount).toLocaleString('en-IN')}`,
+    `Received: â‚¹${Math.round(data.payments.advancePaid).toLocaleString('en-IN')}`,
+    `Balance: â‚¹${Math.round(data.balance).toLocaleString('en-IN')}`,
   ];
   return lines.join('\n');
 };
 
 /**
- * Sends reservation confirmation via Whinta WhatsApp Business API (server-side)
+ * Sends reservation confirmation via Meta WhatsApp Cloud API (server-side)
  */
 export const sendReservationConfirmationWhatsApp = async (
   reservationId: string,
@@ -2705,7 +2705,7 @@ export const sendReservationConfirmationWhatsApp = async (
   });
 
   if (!res.success) {
-    const error: any = new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Whinta.');
+    const error: any = new Error(res.message || 'Failed to dispatch WhatsApp confirmation via Meta WhatsApp.');
     error.whatsappDirectUrl = res.whatsappDirectUrl;
     error.code = res.code;
     throw error;
@@ -2715,7 +2715,7 @@ export const sendReservationConfirmationWhatsApp = async (
 };
 
 /**
- * Dispatches WhatsApp reservation confirmation via Whinta (Section 15)
+ * Dispatches WhatsApp reservation confirmation via Meta WhatsApp Cloud API
  */
 export const openWhatsAppConfirmation = async (
   data: ReservationConfirmationData

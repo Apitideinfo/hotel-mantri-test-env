@@ -1,5 +1,5 @@
-/**
- * HOTEL MANTRI — Chatbot Booking API: Razorpay Payment & Webhook Service
+﻿/**
+ * HOTEL MANTRI â€” Chatbot Booking API: Razorpay Payment & Webhook Service
  * 
  * Provides:
  * 1. Authoritative Razorpay order creation bound to booking attempt & hotel
@@ -118,7 +118,7 @@ export const createPaymentOrderForBooking = async ({ bookingReference }) => {
     : Math.round(dueInr * 100);
 
   if (amountPaise < 100) {
-    const err = new Error('Payment amount must be at least ₹1 (100 paise).');
+    const err = new Error('Payment amount must be at least â‚¹1 (100 paise).');
     err.status = 400;
     err.code = 'INVALID_PAYMENT_AMOUNT';
     throw err;
@@ -445,7 +445,7 @@ export const settleVerifiedPaymentDurable = async ({
         hotel_id: hotelId,
         reservation_id: resv.id,
         event_type: 'online_payment',
-        event_description: `Chatbot online payment via Razorpay: ₹${paidInr.toFixed(2)} (${pId})`,
+        event_description: `Chatbot online payment via Razorpay: â‚¹${paidInr.toFixed(2)} (${pId})`,
         event_amount: paidInr,
         event_data: {
           order_id: oId,
@@ -606,7 +606,7 @@ export const dispatchN8nPaymentConfirmationWebhook = async ({
   const eventId = `evt_${Date.now().toString(36)}_${crypto.randomBytes(6).toString('hex')}`;
   const timestamp = new Date().toISOString();
 
-  // Normalize guest details and phone for Whinta
+  // Normalize guest details and phone for Meta WhatsApp
   const guestName = reservation.guest_name || 'Guest';
   const rawPhone = String(reservation.guest_phone || reservation.phone || '').trim();
   const cleanDigits = rawPhone.replace(/\D/g, '');
@@ -644,9 +644,9 @@ export const dispatchN8nPaymentConfirmationWebhook = async ({
       status: 'confirmed',
       paymentMethod: metadata.payment_method || 'Razorpay',
     },
-    // Pre-mapped for Whinta / Meta Cloud API Template: hotel_mantri_reservation_confirmation_
-    whintaTemplate: {
-      templateName: process.env.WHINTA_RESERVATION_TEMPLATE || 'hotel_mantri_reservation_confirmation_',
+    // Pre-mapped for Meta WhatsApp Cloud API Template: reservation_confirmation
+    whatsappTemplate: {
+      templateName: process.env.META_WHATSAPP_RESERVATION_TEMPLATE || 'hotel_mantri_reservation_confirmation_',
       language: 'en',
       recipientPhone,
       bodyParameters: [

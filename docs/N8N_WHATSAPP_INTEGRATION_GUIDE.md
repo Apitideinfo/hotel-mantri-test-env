@@ -1,6 +1,6 @@
-# Hotel Mantri × n8n Cloud × Whinta WhatsApp Integration Guide
+# Hotel Mantri × n8n Cloud × Meta WhatsApp Business Cloud API Integration Guide
 
-This guide details the complete architecture and step-by-step setup for connecting an **n8n Cloud** WhatsApp chatbot with **Hotel Mantri** and **Whinta WhatsApp Provider**.
+This guide details the complete architecture and step-by-step setup for connecting an **n8n Cloud** WhatsApp chatbot with **Hotel Mantri** and the official **Meta WhatsApp Business Cloud API**.
 
 ---
 
@@ -10,15 +10,15 @@ This guide details the complete architecture and step-by-step setup for connecti
 sequenceDiagram
     autonumber
     actor Guest as Guest (WhatsApp)
-    participant Whinta as Whinta WhatsApp API
+    participant Meta as Meta WhatsApp Cloud API
     participant n8n as n8n Cloud Chatbot
     participant API as Hotel Mantri Booking API (Port 5050)
     participant DB as Supabase PostgreSQL
     participant RZP as Razorpay Gateway
 
-    Note over Guest,Whinta: Phase 1 — Availability & Booking Hold
-    Guest->>Whinta: "I want a deluxe room for Oct 20-22"
-    Whinta->>n8n: Inbound WhatsApp Webhook
+    Note over Guest,Meta: Phase 1 — Availability & Booking Hold
+    Guest->>Meta: "I want a deluxe room for Oct 20-22"
+    Meta->>n8n: Inbound WhatsApp Webhook
     n8n->>API: POST /v1/public/availability (Stay dates & guests)
     API->>DB: Check room inventory & active holds
     API-->>n8n: Available categories & live count
@@ -33,18 +33,18 @@ sequenceDiagram
     API->>RZP: Create Order & Payment Link
     RZP-->>API: Payment Link URL (https://rzp.io/i/xxxx)
     API-->>n8n: { paymentUrl: "https://rzp.io/i/xxxx" }
-    n8n->>Whinta: Send WhatsApp message with paymentUrl
-    Whinta->>Guest: "Please complete your payment here: https://rzp.io/i/xxxx"
+    n8n->>Meta: Send WhatsApp message with paymentUrl
+    Meta->>Guest: "Please complete your payment here: https://rzp.io/i/xxxx"
 
-    Note over Guest,Whinta: Phase 3 — Payment Capture & Confirmation
+    Note over Guest,Meta: Phase 3 — Payment Capture & Confirmation
     Guest->>RZP: Completes UPI/Card payment on mobile link
     RZP->>API: POST /v1/payments/razorpay/webhook (payment.captured)
     API->>API: Verify Raw HMAC-SHA256 signature
     API->>DB: Atomic RPC: Finalize booking, update ledger & clear hold
     API->>n8n: POST /webhook/hotelmantri-payment-confirmed (HMAC-SHA256 signed)
     n8n->>n8n: Verify X-HotelMantri-Signature
-    n8n->>Whinta: Send Template "hotel_mantri_reservation_confirmation_"
-    Whinta->>Guest: Official WhatsApp Booking Confirmation Message
+    n8n->>Meta: Send Approved Template "hotel_mantri_reservation_confirmation_"
+    Meta->>Guest: Official WhatsApp Booking Confirmation Message
 ```
 
 ---
@@ -65,8 +65,8 @@ N8N_PAYMENT_WEBHOOK_URL=https://your-workspace.app.n8n.cloud/webhook/hotelmantri
 # Dedicated signing secret for backend-to-n8n webhook events (HMAC-SHA256)
 N8N_WEBHOOK_SECRET=your_secure_n8n_webhook_signing_secret_min_32_chars
 
-# Approved Whinta WhatsApp Template Name
-WHINTA_RESERVATION_TEMPLATE=hotel_mantri_reservation_confirmation_
+# Approved Meta WhatsApp Template Name
+META_WHATSAPP_RESERVATION_TEMPLATE=hotel_mantri_reservation_confirmation_
 ```
 
 ---
@@ -184,7 +184,7 @@ Configure the following HTTP Request nodes in your n8n conversational workflow:
 
 ---
 
-## 4. n8n Cloud Workflow 2: Automated Payment Confirmation & Whinta Dispatch
+## 4. n8n Cloud Workflow 2: Automated Payment Confirmation & Meta WhatsApp Dispatch
 
 Create a separate workflow in n8n Cloud to handle asynchronous confirmation:
 
@@ -221,27 +221,34 @@ return $input.item;
 
 ---
 
-### Step 3: Whinta Dispatch (HTTP Request Node)
-Hotel Mantri automatically generates a pre-formatted `whintaTemplate` object in the event payload. Map this directly into your Whinta HTTP Request node:
+### Step 3: Meta WhatsApp Cloud API Dispatch (HTTP Request Node)
+Hotel Mantri automatically generates a pre-formatted `whatsappTemplate` object in the event payload. Map this directly into your Meta WhatsApp HTTP Request node:
 
 - **Method**: `POST`
-- **URL**: `https://app.whinta.com/api/v1/whatsapp/messages/template`
+- **URL**: `https://graph.facebook.com/v22.0/{{ $env.META_WHATSAPP_PHONE_NUMBER_ID }}/messages`
 - **Headers**:
-  - `Authorization`: `Bearer your_whinta_api_token_here`
+  - `Authorization`: `Bearer your_meta_whatsapp_access_token_here`
   - `Content-Type`: `application/json`
 - **Body (JSON)**:
   ```json
   {
-    "recipient": "={{ $json.whintaTemplate.recipientPhone }}",
-    "template_name": "={{ $json.whintaTemplate.templateName }}",
-    "language": "={{ $json.whintaTemplate.language }}",
-    "components": "={{ $json.whintaTemplate.components }}"
+    "messaging_product": "whatsapp",
+    "recipient_type": "individual",
+    "to": "={{ $json.whatsappTemplate.recipientPhone }}",
+    "type": "template",
+    "template": {
+      "name": "={{ $json.whatsappTemplate.templateName }}",
+      "language": {
+        "code": "en"
+      },
+      "components": "={{ $json.whatsappTemplate.components }}"
+    }
   }
   ```
 
 ---
 
-## 5. Whinta Template Variable Specification
+## 5. Meta WhatsApp Template Variable Specification
 
 Approved Template: `hotel_mantri_reservation_confirmation_`
 
@@ -263,3 +270,4 @@ Approved Template: `hotel_mantri_reservation_confirmation_`
 2. **Fail-Closed Verification**: The backend verifies Razorpay payment status directly with Razorpay API and confirms `status === 'captured'` before finalizing the booking.
 3. **Signed Quote Integrity**: Quotes cannot be manipulated by the chatbot or client; the total price is cryptographically sealed in the `quoteToken`.
 4. **Single-Hotel Isolation**: All availability, bookings, and payments are strictly bound to the configured hotel property (`bd8f18de-2f97-48e7-b029-d2e536feb7cb`).
+

@@ -7,7 +7,7 @@
  * 3. Durable notification_outbox idempotency (duplicate prevention)
  * 4. Recipient routing: Direct -> Guest Mobile vs OTA -> Hotel Owner
  * 5. Provider failure resilience (error logging, outbox tracking, non-blocking booking)
- * 6. Whinta provider dispatch (mocked)
+ * 6. Meta WhatsApp provider dispatch (mocked)
  * 7. API endpoints (confirmation details & send-whatsapp route logic)
  */
 
@@ -92,9 +92,10 @@ async function runDirectWhatsAppTests() {
     checkIn: '2026-11-01',
     checkOut: '2026-11-04',
     totalAmount: 9408,
+    templateName: 'booking_confirmation',
   });
 
-  assert(templatePayload.name === 'booking_confirmation' || templatePayload.name === process.env.WHINTA_RESERVATION_TEMPLATE, 'Template name matches expected booking confirmation template');
+  assert(templatePayload.name === 'booking_confirmation' || templatePayload.name === process.env.META_WHATSAPP_RESERVATION_TEMPLATE, 'Template name matches expected booking confirmation template');
   assert(templatePayload.language?.code === 'en', 'Template language code is en');
   assert(Array.isArray(templatePayload.components), 'Template components is an array');
 
@@ -167,8 +168,8 @@ async function runDirectWhatsAppTests() {
       return {
         success: true,
         status: 'submitted',
-        provider: 'WHINTA',
-        messageId: 'whinta_MOCK_TEST_DISPATCH_123',
+        provider: 'META',
+        messageId: 'meta_wamid_MOCK_TEST_DISPATCH_123',
       };
     },
   });
@@ -178,8 +179,8 @@ async function runDirectWhatsAppTests() {
   assert(dispatchedWhatsAppTemplate === 'booking_confirmation', `WhatsApp template used: ${dispatchedWhatsAppTemplate}`);
   const whatsAppStatus = deliveryResult.whatsApp?.status;
   assert(whatsAppStatus === 'submitted' || whatsAppStatus === 'sent', `deliveryResult.whatsApp status is "${whatsAppStatus}"`);
-  assert(deliveryResult.whatsApp?.provider === 'WHINTA', 'deliveryResult.whatsApp provider is WHINTA');
-  assert(deliveryResult.whatsApp?.messageId === 'whinta_MOCK_TEST_DISPATCH_123', 'deliveryResult.whatsApp has messageId');
+  assert(deliveryResult.whatsApp?.provider === 'META', 'deliveryResult.whatsApp provider is META');
+  assert(deliveryResult.whatsApp?.messageId === 'meta_wamid_MOCK_TEST_DISPATCH_123', 'deliveryResult.whatsApp has messageId');
 
   // Check document record
   const docs = await getReservationDocuments(hotelId, createdRes.id);
@@ -201,7 +202,7 @@ async function runDirectWhatsAppTests() {
     eventType: 'NEW_RESERVATION',
     whatsAppSenderFn: async () => {
       secondDispatchCalled = true;
-      return { success: true, status: 'submitted', provider: 'WHINTA' };
+      return { success: true, status: 'submitted', provider: 'META' };
     },
   });
 
@@ -245,7 +246,7 @@ async function runDirectWhatsAppTests() {
     eventType: 'NEW_OTA_RESERVATION',
     whatsAppSenderFn: async (options) => {
       otaDispatchedRecipient = options.to;
-      return { success: true, status: 'submitted', provider: 'WHINTA' };
+      return { success: true, status: 'submitted', provider: 'META' };
     },
   });
 
@@ -284,7 +285,7 @@ async function runDirectWhatsAppTests() {
   const failRes = failCreatedList[0];
   assert(!!failRes?.id, 'Booking created in database');
 
-  // Simulate Whinta API 500 error
+  // Simulate Meta WhatsApp API 500 error
   const failDeliveryResult = await generateAndDeliverConfirmation({
     hotelId,
     reservationId: failRes.id,
@@ -294,8 +295,8 @@ async function runDirectWhatsAppTests() {
       return {
         success: false,
         status: 'failed',
-        errorCode: 'WHINTA_API_500_SERVER_ERROR',
-        error: 'Whinta API returned 500 Internal Server Error',
+        errorCode: 'META_API_500_SERVER_ERROR',
+        error: 'Meta API returned 500 Internal Server Error',
         whatsappDirectUrl: 'https://wa.me/919911223344?text=FallbackText',
       };
     },
@@ -304,7 +305,7 @@ async function runDirectWhatsAppTests() {
   // Verify delivery handled failure gracefully
   assert(failDeliveryResult.success === true, 'Overall confirmation execution returned success (non-blocking)');
   assert(failDeliveryResult.whatsApp?.status === 'failed', 'whatsApp status recorded as "failed"');
-  assert(failDeliveryResult.whatsApp?.errorCode === 'WHINTA_API_500_SERVER_ERROR', 'errorCode preserved');
+  assert(failDeliveryResult.whatsApp?.errorCode === 'META_API_500_SERVER_ERROR', 'errorCode preserved');
   assert(!!failDeliveryResult.whatsApp?.whatsappDirectUrl, 'Direct wa.me URL returned as fallback');
 
   // Verify booking STILL EXISTS in database
@@ -321,13 +322,11 @@ async function runDirectWhatsAppTests() {
   // TEST 7 — Unconfigured Provider Resilience & wa.me Fallback
   // ──────────────────────────────────────────────────────────────────────────
   console.log('─── TEST 7: Unconfigured Provider Fallback ───');
-  const savedToken = process.env.WHINTA_ACCESS_TOKEN;
-  const savedApiToken = process.env.WHINTA_API_TOKEN;
-  const savedEnabled = process.env.WHINTA_ENABLED;
-  delete process.env.WHINTA_ACCESS_TOKEN;
-  delete process.env.WHINTA_API_TOKEN;
-  delete process.env.WHINTA_ENABLED;
-
+  const savedToken = process.env.META_WHATSAPP_ACCESS_TOKEN;
+  const savedApiToken = process.env.META_WHATSAPP_PHONE_NUMBER_ID;
+    delete process.env.META_WHATSAPP_ACCESS_TOKEN;
+  delete process.env.META_WHATSAPP_PHONE_NUMBER_ID;
+  
   try {
     const unconfiguredDeliveryResult = await generateAndDeliverConfirmation({
       hotelId,
@@ -342,10 +341,9 @@ async function runDirectWhatsAppTests() {
     assert(!!unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl, 'Fallback wa.me direct URL is generated');
     assert(unconfiguredDeliveryResult.whatsApp?.whatsappDirectUrl.includes('https://wa.me/919911223344'), 'wa.me points to normalized guest mobile');
   } finally {
-    if (savedToken !== undefined) process.env.WHINTA_ACCESS_TOKEN = savedToken;
-    if (savedApiToken !== undefined) process.env.WHINTA_API_TOKEN = savedApiToken;
-    if (savedEnabled !== undefined) process.env.WHINTA_ENABLED = savedEnabled;
-  }
+    if (savedToken !== undefined) process.env.META_WHATSAPP_ACCESS_TOKEN = savedToken;
+    if (savedApiToken !== undefined) process.env.META_WHATSAPP_PHONE_NUMBER_ID = savedApiToken;
+      }
   console.log('');
 
   // ──────────────────────────────────────────────────────────────────────────

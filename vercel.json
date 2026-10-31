@@ -7,16 +7,16 @@
   },
   "crons": [
     {
-      "path": "/api/cron/whinta-daily-report",
-      "schedule": "30 15 * * *"
+      "path": "/api/cron/daily-report",
+      "schedule": "30 16 * * *"
     },
     {
       "path": "/api/notifications/whatsapp/cron?type=morning",
-      "schedule": "0 8 * * *"
+      "schedule": "30 2 * * *"
     },
     {
       "path": "/api/notifications/whatsapp/cron?type=evening",
-      "schedule": "0 22 * * *"
+      "schedule": "30 16 * * *"
     }
   ],
   "rewrites": [

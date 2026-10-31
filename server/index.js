@@ -1,4 +1,4 @@
-import express from 'express';
+﻿import express from 'express';
 import { corsMiddleware, getAllowedOrigins } from './middleware/corsConfig.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -258,8 +258,6 @@ app.use('/api/reports', notificationRoutes);
 app.use('/reports', notificationRoutes);
 app.use('/api/cron', notificationRoutes);
 app.use('/cron', notificationRoutes);
-app.use('/api/webhooks/whinta', notificationRoutes);
-app.use('/webhooks/whinta', notificationRoutes);
 
 app.use('/api/laundry', laundryRoutes);
 app.use('/laundry', laundryRoutes);
@@ -280,6 +278,8 @@ app.use('/onboarding', onboardingRoutes);
 
 app.use('/api/whatsapp', whatsappWebhookRoutes);
 app.use('/whatsapp', whatsappWebhookRoutes);
+app.use('/api/webhooks/meta-whatsapp', whatsappWebhookRoutes);
+app.use('/webhooks/meta-whatsapp', whatsappWebhookRoutes);
 
 /**
  * STEP 1: Backend Endpoint to Create Order (SEC-03 Hardened)

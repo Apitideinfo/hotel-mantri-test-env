@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert';
 import crypto from 'crypto';
 import http from 'http';
@@ -135,7 +135,7 @@ test('n8n Integration: Authentication & Webhook Verification', async (t) => {
     assert.strictEqual(paymentOrder.amountInr, 2500);
   });
 
-  await t.test('dispatchN8nPaymentConfirmationWebhook: sends HMAC-signed payload with Whinta 7-param format', async () => {
+  await t.test('dispatchN8nPaymentConfirmationWebhook: sends HMAC-signed payload with Meta WhatsApp 7-param format', async () => {
     const testSecret = 'n8n_webhook_secret_key_abcdef';
     config().n8n.webhookSecret = testSecret;
 
@@ -201,12 +201,12 @@ test('n8n Integration: Authentication & Webhook Verification', async (t) => {
       assert.strictEqual(receivedHeaders['x-signature-sha256'], expectedSig);
       assert.strictEqual(receivedHeaders['x-hotelmantri-signature'], `sha256=${expectedSig}`);
 
-      // Verify Whinta 7-parameter mapping
-      assert.ok(receivedPayload.whintaTemplate);
-      assert.strictEqual(receivedPayload.whintaTemplate.templateName, 'hotel_mantri_reservation_confirmation_');
-      assert.strictEqual(receivedPayload.whintaTemplate.recipientPhone, '919876543210');
+      // Verify Meta WhatsApp 7-parameter mapping
+      assert.ok(receivedPayload.whatsappTemplate);
+      assert.strictEqual(receivedPayload.whatsappTemplate.templateName, 'hotel_mantri_reservation_confirmation_');
+      assert.strictEqual(receivedPayload.whatsappTemplate.recipientPhone, '919876543210');
 
-      const params = receivedPayload.whintaTemplate.bodyParameters;
+      const params = receivedPayload.whatsappTemplate.bodyParameters;
       assert.strictEqual(params.length, 7);
       assert.strictEqual(params[0], 'Ananya Sharma'); // Guest name
       assert.strictEqual(params[1], testRef); // Booking reference
@@ -216,8 +216,8 @@ test('n8n Integration: Authentication & Webhook Verification', async (t) => {
       assert.strictEqual(params[5], '4,500'); // Formatted INR amount
       assert.strictEqual(params[6], 'https://www.hotelmantri.com'); // Invoice URL
 
-      // Verify Whinta component parameters
-      const compParams = receivedPayload.whintaTemplate.components[0].parameters;
+      // Verify Meta WhatsApp component parameters
+      const compParams = receivedPayload.whatsappTemplate.components[0].parameters;
       assert.strictEqual(compParams[0].text, 'Ananya Sharma');
       assert.strictEqual(compParams[1].text, testRef);
       assert.strictEqual(compParams[2].text, '204');

@@ -1,5 +1,5 @@
-/**
- * HOTEL MANTRI — Authoritative Reservation API Routes
+﻿/**
+ * HOTEL MANTRI â€” Authoritative Reservation API Routes
  * 
  * Provides:
  * - Authoritative hotel-scoped reservation queries with pagination & filtering
@@ -91,7 +91,7 @@ router.use((req, res, next) => {
 });
 
 const formatDateReadable = (iso) => {
-  if (!iso) return '—';
+  if (!iso) return 'â€”';
   const clean = String(iso).slice(0, 10);
   const parts = clean.split('-');
   if (parts.length === 3 && parts[0].length === 4) {
@@ -948,7 +948,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
   }
 });
 
-// ─── GET /api/reservations/:id/confirmation ──────────────────────────────────
+// â”€â”€â”€ GET /api/reservations/:id/confirmation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /**
  * Returns latest confirmation document status, versions history, and WhatsApp links.
  */
@@ -1062,7 +1062,7 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
   }
 });
 
-// ─── Helper: PDF Access Authentication ───────────────────────────────────────
+// â”€â”€â”€ Helper: PDF Access Authentication â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /**
  * Authorizes access to a reservation confirmation PDF.
  * Accepts:
@@ -1167,7 +1167,7 @@ const authenticatePdfAccess = async (req, reservationId) => {
   };
 };
 
-// ─── GET /api/reservations/:id/confirmation/pdf ──────────────────────────────
+// â”€â”€â”€ GET /api/reservations/:id/confirmation/pdf â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 /**
  * Streams or downloads the generated PDF document.
  * Strictly protected: requires verified Staff Bearer token or scoped Guest token.
@@ -1264,7 +1264,7 @@ router.get('/:id/confirmation/pdf', pdfRateLimiter, async (req, res) => {
   }
 });
 
-// ─── POST /api/reservations/:id/confirmation/regenerate ──────────────────────
+// â”€â”€â”€ POST /api/reservations/:id/confirmation/regenerate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
@@ -1290,7 +1290,7 @@ router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (re
   }
 });
 
-// ─── POST /api/reservations/:id/confirmation/send-email ──────────────────────
+// â”€â”€â”€ POST /api/reservations/:id/confirmation/send-email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/confirmation/send-email', checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
@@ -1462,7 +1462,7 @@ router.post('/:id/confirmation/send-email', checkAuth, async (req, res) => {
   }
 });
 
-// ─── POST /api/reservations/:id/confirmation/send-whatsapp ───────────────────
+// â”€â”€â”€ POST /api/reservations/:id/confirmation/send-whatsapp â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
   try {
     const hotelId = req.hotelId || req.auth?.hotelId;
@@ -1554,7 +1554,7 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     });
 
     // Append PDF download link to the text
-    waText = `${waText}\n\n📄 *Official PDF:* ${pdfUrl}`;
+    waText = `${waText}\n\nðŸ“„ *Official PDF:* ${pdfUrl}`;
 
     const directUrl = buildWhatsAppDirectUrl(targetPhone, waText);
 
@@ -1572,12 +1572,12 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
       checkIn: formatDateReadable(checkIn),
       checkOut: formatDateReadable(checkOut),
       totalAmount: totalVal,
-      invoiceUrl: pdfUrl || '—',
+      invoiceUrl: pdfUrl || 'â€”',
       documentUrl: pdfUrl || null,
       documentFilename: fileName,
     });
 
-    // Send via Whinta provider with PDF attachment
+    // Send via Meta WhatsApp Cloud API with PDF attachment
     const sendResult = await sendWhatsAppMessage({
       to: targetPhone,
       text: waText,

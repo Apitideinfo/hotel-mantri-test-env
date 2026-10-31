@@ -2,62 +2,22 @@
  * Hotel Mantri — WhatsApp Outbox & Idempotency Service
  *
  * Provides durable, audit-tracked, idempotent event storage for WhatsApp notifications.
- * Prevents duplicate scheduled deliveries (Section 15, 16).
  *
- * Unique logical event rule for scheduled summaries:
- *   (hotel_id, business_date, report_type, recipient, delivery_type='SCHEDULED')
- *
- * Storage Resilience:
- *   - Attempts Supabase table `notification_outbox`
- *   - Gracefully falls back to local durable store `server/data/whatsapp_outbox.json`
- *     if Supabase service role key is absent or RLS denies anon insertion.
+ * ARCHITECTURAL SPECIFICATION:
+ * - Supabase table `notification_outbox` is the sole, authoritative, durable notification store.
+ * - Ephemeral serverless container storage is strictly avoided for queue or state persistence.
+ * - Idempotency is enforced at both application level (SHA-256 keys) and database level
+ *   (unique indexes on idempotency_key and [hotel_id, reservation_id, event_type]).
+ * - State machine tracks: queued -> sending -> submitted -> delivered | failed.
  */
 
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import { supabaseServiceRole } from '../supabaseClient.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const isServerless = Boolean(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
-const DATA_DIR = isServerless
-  ? path.join('/tmp', 'hotel-mantri-data')
-  : path.join(__dirname, '..', 'data');
-const OUTBOX_FILE = path.join(DATA_DIR, 'whatsapp_outbox.json');
-
-// Ensure data directory exists
-try {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-} catch (err) {
-  console.warn('[OUTBOX] Could not create storage directory (non-fatal):', err.message);
-}
-
-// ─── Local Outbox Helpers ─────────────────────────────────────────────────────
-
-const readLocalOutbox = () => {
-  try {
-    if (!fs.existsSync(OUTBOX_FILE)) return [];
-    const content = fs.readFileSync(OUTBOX_FILE, 'utf-8');
-    return JSON.parse(content || '[]');
-  } catch (err) {
-    console.warn('[OUTBOX] Failed to read local outbox file:', err.message);
-    return [];
-  }
-};
-
-const writeLocalOutbox = (records) => {
-  try {
-    fs.writeFileSync(OUTBOX_FILE, JSON.stringify(records, null, 2), 'utf-8');
-  } catch (err) {
-    console.warn('[OUTBOX] Failed to write local outbox file:', err.message);
-  }
-};
-
 // ─── Event Types & Constants ──────────────────────────────────────────────────
+
+// In-process cache of recent outbox events for duplicate avoidance and testing runtime
+const inMemoryOutboxCache = new Map();
 
 export const REPORT_TYPES = {
   DAILY_SUMMARY: 'DAILY_SUMMARY',
@@ -87,7 +47,7 @@ export const OUTBOX_STATUS = {
 
 /**
  * Generates an authoritative SHA-256 idempotency key for logical report deliveries.
- * Form: hotel_id:report_type:business_date:normalized_recipient[:vendor_id]
+ * Format: hotel_id:report_type:business_date:normalized_recipient[:vendor_id]
  */
 export const generateIdempotencyKey = ({
   hotelId,
@@ -109,7 +69,7 @@ export const generateIdempotencyKey = ({
   return crypto.createHash('sha256').update(parts.join(':')).digest('hex');
 };
 
-// ─── Idempotency Check ────────────────────────────────────────────────────────
+// ─── Idempotency & Duplicate Verification (Authoritative Supabase Store) ──────
 
 /**
  * Checks if a scheduled notification has already been successfully sent
@@ -121,20 +81,24 @@ export const isScheduledReportAlreadySent = async ({
   reportType,
   recipient,
 }) => {
-  // 1. Check local durable outbox first
-  const localRecords = readLocalOutbox();
-  const foundLocal = localRecords.find((r) =>
-    r.hotel_id === hotelId &&
-    r.business_date === businessDate &&
-    r.report_type === reportType &&
-    r.recipient === recipient &&
-    r.delivery_type === DELIVERY_TYPES.SCHEDULED &&
-    r.status === OUTBOX_STATUS.SENT
-  );
+  if (!hotelId || !businessDate) return false;
 
-  if (foundLocal) return true;
+  // 1. In-process cache check
+  for (const item of inMemoryOutboxCache.values()) {
+    if (
+      item.hotel_id === hotelId &&
+      item.recipient === recipient &&
+      (item.event_type === `WHATSAPP_${reportType}` || item.report_type === reportType) &&
+      [OUTBOX_STATUS.SENT, OUTBOX_STATUS.DELIVERED, OUTBOX_STATUS.SUBMITTED].includes(item.status)
+    ) {
+      const meta = typeof item.metadata === 'string' ? JSON.parse(item.metadata) : (item.metadata || {});
+      const dateMatch = item.business_date === businessDate || meta.business_date === businessDate;
+      const deliveryMatch = item.delivery_type === DELIVERY_TYPES.SCHEDULED || meta.delivery_type === DELIVERY_TYPES.SCHEDULED;
+      if (dateMatch && deliveryMatch) return true;
+    }
+  }
 
-  // 2. Check Supabase outbox
+  // 2. Authoritative Supabase query
   try {
     const { data, error } = await supabaseServiceRole
       .from('notification_outbox')
@@ -142,9 +106,9 @@ export const isScheduledReportAlreadySent = async ({
       .eq('hotel_id', hotelId)
       .eq('event_type', `WHATSAPP_${reportType}`)
       .eq('recipient', recipient)
-      .eq('status', OUTBOX_STATUS.SENT);
+      .in('status', [OUTBOX_STATUS.SENT, OUTBOX_STATUS.DELIVERED, OUTBOX_STATUS.SUBMITTED]);
 
-    if (!error && data && data.length > 0) {
+    if (!error && Array.isArray(data) && data.length > 0) {
       const match = data.find((r) => {
         const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
         return meta.business_date === businessDate && meta.delivery_type === DELIVERY_TYPES.SCHEDULED;
@@ -152,7 +116,7 @@ export const isScheduledReportAlreadySent = async ({
       if (match) return true;
     }
   } catch (err) {
-    console.warn('[OUTBOX] Supabase check error:', err.message);
+    console.warn('[OUTBOX] Supabase isScheduledReportAlreadySent check error:', err.message);
   }
 
   return false;
@@ -162,27 +126,22 @@ export const isScheduledReportAlreadySent = async ({
  * Checks if an OTA reservation alert was already sent for this reservation.
  */
 export const isOtaReservationAlertSent = async ({ hotelId, reservationId }) => {
-  const localRecords = readLocalOutbox();
-  const foundLocal = localRecords.find((r) =>
-    r.hotel_id === hotelId &&
-    r.reservation_id === reservationId &&
-    r.report_type === REPORT_TYPES.OTA_NEW_RESERVATION_OWNER_WHATSAPP &&
-    r.status === OUTBOX_STATUS.SENT
-  );
-  if (foundLocal) return true;
+  if (!hotelId || !reservationId) return false;
 
   try {
-    const { data } = await supabaseServiceRole
+    const { data, error } = await supabaseServiceRole
       .from('notification_outbox')
       .select('id, status')
       .eq('hotel_id', hotelId)
       .eq('reservation_id', reservationId)
       .eq('event_type', REPORT_TYPES.OTA_NEW_RESERVATION_OWNER_WHATSAPP)
-      .eq('status', OUTBOX_STATUS.SENT)
+      .in('status', [OUTBOX_STATUS.SENT, OUTBOX_STATUS.DELIVERED, OUTBOX_STATUS.SUBMITTED])
       .limit(1);
 
-    if (data && data.length > 0) return true;
-  } catch { /* ignore */ }
+    if (!error && Array.isArray(data) && data.length > 0) return true;
+  } catch (err) {
+    console.warn('[OUTBOX] Supabase isOtaReservationAlertSent check error:', err.message);
+  }
 
   return false;
 };
@@ -196,39 +155,32 @@ export const isReservationConfirmationWhatsAppSent = async ({
   version = 1,
   targetRecipientType = 'CUSTOMER',
 }) => {
+  if (!hotelId || !reservationId) return false;
   const eventKey = `RESERVATION_CONFIRMATION_WHATSAPP_${targetRecipientType}_V${version}`;
 
-  // 1. Check local durable outbox
-  const localRecords = readLocalOutbox();
-  const foundLocal = localRecords.find((r) =>
-    r.hotel_id === hotelId &&
-    r.reservation_id === reservationId &&
-    (r.event_type === eventKey || r.report_type === eventKey) &&
-    r.status === OUTBOX_STATUS.SENT
-  );
-  if (foundLocal) return true;
-
-  // 2. Check Supabase notification_outbox
   try {
-    const { data } = await supabaseServiceRole
+    const { data, error } = await supabaseServiceRole
       .from('notification_outbox')
       .select('id, status')
       .eq('hotel_id', hotelId)
       .eq('reservation_id', reservationId)
       .eq('event_type', eventKey)
-      .eq('status', OUTBOX_STATUS.SENT)
+      .in('status', [OUTBOX_STATUS.SENT, OUTBOX_STATUS.DELIVERED, OUTBOX_STATUS.SUBMITTED])
       .limit(1);
 
-    if (data && data.length > 0) return true;
-  } catch { /* ignore */ }
+    if (!error && Array.isArray(data) && data.length > 0) return true;
+  } catch (err) {
+    console.warn('[OUTBOX] Supabase isReservationConfirmationWhatsAppSent check error:', err.message);
+  }
 
   return false;
 };
 
-// ─── Record Outbox Event ──────────────────────────────────────────────────────
+// ─── Record Outbox Event (Supabase Authoritative Insertion) ────────────────────
 
 /**
- * Creates or logs an outbox notification event with idempotency and provider tracking.
+ * Persistently logs an outbox notification event in Supabase before/during dispatch.
+ * Handles duplicate idempotency keys safely at database level.
  */
 export const recordWhatsAppOutboxEvent = async ({
   hotelId,
@@ -237,7 +189,7 @@ export const recordWhatsAppOutboxEvent = async ({
   deliveryType = DELIVERY_TYPES.MANUAL,
   recipient,
   status = OUTBOX_STATUS.QUEUED,
-  provider = 'WHINTA',
+  provider = 'META',
   providerMessageId = null,
   idempotencyKey = null,
   lastError = null,
@@ -277,15 +229,15 @@ export const recordWhatsAppOutboxEvent = async ({
   const record = {
     id: eventId,
     hotel_id: hotelId,
-    business_date: businessDate,
     reservation_id: reservationId,
+    event_type: `WHATSAPP_${reportType}`,
+    business_date: businessDate,
     report_type: reportType,
     delivery_type: deliveryType,
     recipient,
+    template_name: resolvedTemplateName,
     status,
     provider,
-    template_name: resolvedTemplateName,
-    media_url: resolvedMediaUrl,
     idempotency_key: resolvedIdempotencyKey,
     attempt_count: isTerminalSuccess || status === OUTBOX_STATUS.FAILED || isSubmitted ? 1 : 0,
     provider_message_id: providerMessageId,
@@ -299,57 +251,55 @@ export const recordWhatsAppOutboxEvent = async ({
     updated_at: now,
   };
 
-  // Always write to local durable store for guaranteed persistence
-  const localRecords = readLocalOutbox();
-  localRecords.unshift(record);
-  // Keep last 500 records
-  if (localRecords.length > 500) localRecords.length = 500;
-  writeLocalOutbox(localRecords);
-
-  // Also attempt Supabase notification_outbox
-  try {
-    const insertPayload = {
-      id: eventId,
-      hotel_id: hotelId,
-      reservation_id: reservationId,
-      event_type: `WHATSAPP_${reportType}`,
-      business_date: businessDate,
-      report_type: reportType,
-      delivery_type: deliveryType,
-      recipient,
-      template_name: resolvedTemplateName,
-      status,
-      provider,
-      idempotency_key: resolvedIdempotencyKey,
-      attempt_count: record.attempt_count,
-      provider_message_id: providerMessageId,
-      last_error: lastError,
-      metadata: JSON.stringify(metaObj),
-      submitted_at: record.submitted_at,
-      delivered_at: record.delivered_at,
-      failed_at: record.failed_at,
-      sent_at: record.sent_at,
-      created_at: now,
-      updated_at: now,
-    };
-    if (resolvedMediaUrl) {
-      insertPayload.media_url = resolvedMediaUrl;
-    }
-    await supabaseServiceRole.from('notification_outbox').insert(insertPayload);
-  } catch (err) {
-    // If Supabase fails (e.g. column not yet created), local record is already saved
-    console.warn('[OUTBOX] Supabase notification_outbox insert skipped:', err.message);
+  if (resolvedMediaUrl) {
+    record.media_url = resolvedMediaUrl;
   }
 
+  try {
+    const { data, error } = await supabaseServiceRole
+      .from('notification_outbox')
+      .insert(record)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      // 23505 = Unique constraint violation (duplicate idempotency key or reservation event)
+      if (error.code === '23505' || error.message?.includes('duplicate key') || error.message?.includes('unique constraint')) {
+        console.log(`[OUTBOX] Idempotent duplicate event detected for key: ${resolvedIdempotencyKey}`);
+        const { data: existing } = await supabaseServiceRole
+          .from('notification_outbox')
+          .select('*')
+          .eq('idempotency_key', resolvedIdempotencyKey)
+          .maybeSingle();
+
+        if (existing) {
+          return {
+            ...existing,
+            isDuplicate: true,
+            status: OUTBOX_STATUS.DUPLICATE,
+          };
+        }
+      }
+      console.warn('[OUTBOX] Supabase notification_outbox insert notice:', error.message);
+    } else if (data) {
+      inMemoryOutboxCache.set(record.id, data);
+      return data;
+    }
+  } catch (err) {
+    console.warn('[OUTBOX] Supabase recordWhatsAppOutboxEvent error:', err.message);
+  }
+
+  inMemoryOutboxCache.set(record.id, record);
   return record;
 };
 
 // ─── Update Outbox Event ──────────────────────────────────────────────────────
 
+/**
+ * Updates an outbox event in Supabase.
+ */
 export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
   const now = new Date().toISOString();
-  const localRecords = readLocalOutbox();
-  const idx = localRecords.findIndex((r) => r.id === eventId);
   const lastError = updates.last_error !== undefined ? updates.last_error : (updates.lastError || null);
   const providerMessageId = updates.provider_message_id !== undefined ? updates.provider_message_id : (updates.providerMessageId || null);
   const mediaUrl = updates.media_url !== undefined ? updates.media_url : (updates.mediaUrl || undefined);
@@ -360,40 +310,39 @@ export const updateWhatsAppOutboxEvent = async (eventId, updates) => {
   const isFailed = status === OUTBOX_STATUS.FAILED;
   const isSubmitted = status === OUTBOX_STATUS.SUBMITTED;
 
-  if (idx !== -1) {
-    localRecords[idx] = {
-      ...localRecords[idx],
-      ...updates,
-      media_url: mediaUrl !== undefined ? mediaUrl : localRecords[idx].media_url,
-      last_error: lastError !== undefined ? lastError : localRecords[idx].last_error,
-      provider_message_id: providerMessageId !== undefined ? providerMessageId : localRecords[idx].provider_message_id,
-      submitted_at: isSubmitted || isTerminalSuccess ? (localRecords[idx].submitted_at || now) : localRecords[idx].submitted_at,
-      delivered_at: isDelivered ? now : localRecords[idx].delivered_at,
-      failed_at: isFailed ? now : localRecords[idx].failed_at,
-      sent_at: isTerminalSuccess ? (localRecords[idx].sent_at || now) : localRecords[idx].sent_at,
-      updated_at: now,
-    };
-    writeLocalOutbox(localRecords);
+  const dbUpdates = {
+    ...updates,
+    last_error: lastError,
+    provider_message_id: providerMessageId,
+    updated_at: now,
+  };
+  if (mediaUrl !== undefined) dbUpdates.media_url = mediaUrl;
+  if (isTerminalSuccess) dbUpdates.sent_at = now;
+  if (isDelivered) dbUpdates.delivered_at = now;
+  if (isFailed) dbUpdates.failed_at = now;
+  if (isSubmitted) dbUpdates.submitted_at = now;
+
+  const cached = inMemoryOutboxCache.get(eventId);
+  if (cached) {
+    Object.assign(cached, dbUpdates);
   }
 
   try {
-    const dbUpdates = {
-      ...updates,
-      last_error: lastError,
-      provider_message_id: providerMessageId,
-      updated_at: now,
-    };
-    if (mediaUrl !== undefined) dbUpdates.media_url = mediaUrl;
-    if (isTerminalSuccess) dbUpdates.sent_at = now;
-    if (isDelivered) dbUpdates.delivered_at = now;
-    if (isFailed) dbUpdates.failed_at = now;
-    if (isSubmitted) dbUpdates.submitted_at = now;
-
-    await supabaseServiceRole
+    const { data, error } = await supabaseServiceRole
       .from('notification_outbox')
       .update(dbUpdates)
-      .eq('id', eventId);
-  } catch { /* ignore */ }
+      .eq('id', eventId)
+      .select()
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[OUTBOX] Supabase notification_outbox update notice:', error.message);
+    }
+    return data || { id: eventId, ...dbUpdates };
+  } catch (err) {
+    console.warn('[OUTBOX] Supabase updateWhatsAppOutboxEvent error:', err.message);
+    return { id: eventId, ...dbUpdates };
+  }
 };
 
 /**
@@ -405,87 +354,76 @@ export const updateDeliveryStatusByProviderMessageId = async ({
   error = null,
 }) => {
   if (!providerMessageId) return { updated: false, count: 0 };
-
   const now = new Date().toISOString();
-  let updatedCount = 0;
+  const dbUpdates = { status, updated_at: now };
+  if (status === OUTBOX_STATUS.DELIVERED) dbUpdates.delivered_at = now;
+  if (status === OUTBOX_STATUS.FAILED) {
+    dbUpdates.failed_at = now;
+    if (error) dbUpdates.last_error = error;
+  }
 
-  // 1. Update local records
-  const localRecords = readLocalOutbox();
-  for (let i = 0; i < localRecords.length; i++) {
-    if (localRecords[i].provider_message_id === providerMessageId) {
-      localRecords[i].status = status;
-      localRecords[i].updated_at = now;
-      if (status === OUTBOX_STATUS.DELIVERED) localRecords[i].delivered_at = now;
-      if (status === OUTBOX_STATUS.FAILED) {
-        localRecords[i].failed_at = now;
-        localRecords[i].last_error = error || localRecords[i].last_error;
-      }
-      updatedCount++;
+  for (const item of inMemoryOutboxCache.values()) {
+    if (item.provider_message_id === providerMessageId) {
+      Object.assign(item, dbUpdates);
     }
   }
-  if (updatedCount > 0) writeLocalOutbox(localRecords);
 
-  // 2. Update Supabase notification_outbox
   try {
-    const dbUpdates = { status, updated_at: now };
-    if (status === OUTBOX_STATUS.DELIVERED) dbUpdates.delivered_at = now;
-    if (status === OUTBOX_STATUS.FAILED) {
-      dbUpdates.failed_at = now;
-      if (error) dbUpdates.last_error = error;
-    }
-
-    await supabaseServiceRole
+    const { data, error: dbErr } = await supabaseServiceRole
       .from('notification_outbox')
       .update(dbUpdates)
-      .eq('provider_message_id', providerMessageId);
-  } catch { /* ignore */ }
+      .eq('provider_message_id', providerMessageId)
+      .select('id, hotel_id, reservation_id');
 
-  // 3. Also check laundry_statement_log if present
-  try {
-    await supabaseServiceRole
-      .from('laundry_statement_log')
-      .update({
-        status: status === OUTBOX_STATUS.DELIVERED ? 'delivered' : (status === OUTBOX_STATUS.FAILED ? 'failed' : status),
-        updated_at: now,
-      })
-      .eq('provider_message_id', providerMessageId);
-  } catch { /* ignore */ }
+    const count = Array.isArray(data) ? data.length : (data ? 1 : 0);
 
-  return { updated: true, count: updatedCount, status };
+    if (Array.isArray(data)) {
+      for (const row of data) {
+        if (row.reservation_id && row.hotel_id) {
+          const docStatus = status === OUTBOX_STATUS.DELIVERED ? 'DELIVERED' : status === OUTBOX_STATUS.FAILED ? 'FAILED' : 'SENT';
+          try {
+            await supabaseServiceRole
+              .from('reservation_documents')
+              .update({ whatsapp_status: docStatus, updated_at: now })
+              .eq('hotel_id', row.hotel_id)
+              .eq('reservation_id', row.reservation_id);
+          } catch {
+            // best-effort update
+          }
+        }
+      }
+    }
+
+    // Also update laundry_statement_log if present
+    try {
+      await supabaseServiceRole
+        .from('laundry_statement_log')
+        .update({
+          status: status === OUTBOX_STATUS.DELIVERED ? 'delivered' : (status === OUTBOX_STATUS.FAILED ? 'failed' : status),
+          updated_at: now,
+        })
+        .eq('provider_message_id', providerMessageId);
+    } catch {
+      // best-effort update
+    }
+
+    return { updated: count > 0, count, status };
+  } catch (err) {
+    console.warn('[OUTBOX] Supabase updateDeliveryStatusByProviderMessageId error:', err.message);
+    return { updated: false, count: 0, status };
+  }
 };
 
-// ─── Get Outbox History ───────────────────────────────────────────────────────
+// ─── Get Outbox History (Authoritative Supabase Query) ────────────────────────
 
 /**
- * Returns recent WhatsApp notifications for a hotel.
+ * Returns recent WhatsApp notifications for a hotel from Supabase.
  */
 export const getWhatsAppHistory = async (hotelId, limit = 20) => {
-  const localRecords = readLocalOutbox();
-  const filtered = localRecords
-    .filter((r) => r.hotel_id === hotelId && (r.report_type || r.event_type))
-    .slice(0, limit);
+  if (!hotelId) return [];
 
-  // If local has entries, return them
-  if (filtered.length > 0) {
-    return filtered.map((r) => ({
-      id: r.id,
-      hotel_id: r.hotel_id,
-      business_date: r.business_date || r.metadata?.business_date || '',
-      report_type: r.report_type || r.metadata?.report_type || r.event_type || 'DAILY_SUMMARY',
-      delivery_type: r.delivery_type || r.metadata?.delivery_type || 'MANUAL',
-      recipient: r.recipient || '',
-      status: r.status,
-      attempt_count: r.attempt_count || 1,
-      provider_message_id: r.provider_message_id || null,
-      last_error: r.last_error || null,
-      sent_at: r.sent_at,
-      created_at: r.created_at,
-    }));
-  }
-
-  // Fallback to Supabase
   try {
-    const { data } = await supabaseServiceRole
+    const { data, error } = await supabaseServiceRole
       .from('notification_outbox')
       .select('*')
       .eq('hotel_id', hotelId)
@@ -493,15 +431,20 @@ export const getWhatsAppHistory = async (hotelId, limit = 20) => {
       .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (data) {
+    if (error) {
+      console.warn('[OUTBOX] Supabase notification history fetch notice:', error.message);
+      return [];
+    }
+
+    if (Array.isArray(data)) {
       return data.map((r) => {
         const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {});
         return {
           id: r.id,
           hotel_id: r.hotel_id,
-          business_date: meta.business_date || '',
-          report_type: meta.report_type || r.event_type.replace('WHATSAPP_', ''),
-          delivery_type: meta.delivery_type || 'MANUAL',
+          business_date: r.business_date || meta.business_date || '',
+          report_type: r.report_type || meta.report_type || r.event_type.replace('WHATSAPP_', ''),
+          delivery_type: r.delivery_type || meta.delivery_type || 'MANUAL',
           recipient: r.recipient || '',
           status: r.status,
           attempt_count: r.attempt_count || 1,
@@ -513,7 +456,7 @@ export const getWhatsAppHistory = async (hotelId, limit = 20) => {
       });
     }
   } catch (err) {
-    console.warn('[OUTBOX] History fetch error:', err.message);
+    console.warn('[OUTBOX] Supabase notification history exception:', err.message);
   }
 
   return [];
@@ -526,6 +469,7 @@ export default {
   generateIdempotencyKey,
   isScheduledReportAlreadySent,
   isOtaReservationAlertSent,
+  isReservationConfirmationWhatsAppSent,
   recordWhatsAppOutboxEvent,
   updateWhatsAppOutboxEvent,
   updateDeliveryStatusByProviderMessageId,

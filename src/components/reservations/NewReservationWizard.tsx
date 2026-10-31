@@ -1022,7 +1022,7 @@ export const NewReservationWizard = ({
     }
   };
 
-  /* ── Action: WhatsApp Guest (Direct via Whinta API) ── */
+  /* ── Action: WhatsApp Guest (Direct via Meta WhatsApp Cloud API) ── */
   const handleWhatsAppGuest = async () => {
     if (!savedReservationId) {
       setError('Reservation must be saved before sending WhatsApp confirmation.');
@@ -1052,18 +1052,18 @@ export const NewReservationWizard = ({
 
     setSendingWhatsApp(true);
     setWhatsAppStatus('WHATSAPP_SENDING');
-    setWhatsAppMessage('Dispatching confirmation via Whinta WhatsApp...');
+    setWhatsAppMessage('Dispatching confirmation via WhatsApp...');
     setWhatsAppFallbackUrl(null);
 
     try {
       const res = await sendReservationConfirmationWhatsApp(savedReservationId, phone.trim());
       setWhatsAppStatus('WHATSAPP_SENT');
-      setWhatsAppMessage(res.message || 'Reservation confirmation sent via Whinta WhatsApp!');
+      setWhatsAppMessage(res.message || 'Reservation confirmation sent via WhatsApp!');
       setWhatsAppFallbackUrl(null);
     } catch (err: any) {
-      console.warn('[NewReservationWizard] Whinta WhatsApp send failed:', err);
+      console.warn('[NewReservationWizard] Meta WhatsApp send failed:', err);
       setWhatsAppStatus('WHATSAPP_FAILED');
-      setWhatsAppMessage(err?.message || 'Failed to send WhatsApp message via Whinta.');
+      setWhatsAppMessage(err?.message || 'Failed to send WhatsApp confirmation.');
       setWhatsAppFallbackUrl(err?.whatsappDirectUrl || manualDirectUrl);
     } finally {
       setSendingWhatsApp(false);
@@ -1208,7 +1208,7 @@ export const NewReservationWizard = ({
                     {whatsAppStatus === 'WHATSAPP_SENT' ? (
                       <><CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" /><span>{whatsAppMessage}</span></>
                     ) : whatsAppStatus === 'WHATSAPP_SENDING' ? (
-                      <><Loader2 className="w-4 h-4 shrink-0 animate-spin text-blue-600" /><span>Sending via Whinta WhatsApp...</span></>
+                      <><Loader2 className="w-4 h-4 shrink-0 animate-spin text-blue-600" /><span>Sending via WhatsApp...</span></>
                     ) : (
                       <><AlertCircle className="w-4 h-4 shrink-0 text-rose-600" /><span className="leading-snug">{whatsAppMessage}</span></>
                     )}
@@ -1257,7 +1257,7 @@ export const NewReservationWizard = ({
                 <button type="button" onClick={handleWhatsAppGuest} disabled={sendingWhatsApp}
                   className="flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl hover:bg-emerald-100 transition shadow-2xs active:scale-95 cursor-pointer disabled:opacity-60">
                   {sendingWhatsApp ? <Loader2 className="w-4 h-4 animate-spin text-emerald-600" /> : <MessageCircle className="w-4 h-4 text-emerald-600" />}
-                  <span>{sendingWhatsApp ? 'Sending via Whinta...' : 'WhatsApp Guest'}</span>
+                  <span>{sendingWhatsApp ? 'Sending via WhatsApp...' : 'WhatsApp Guest'}</span>
                 </button>
 
                 <button type="button" onClick={handleRetryEmail} disabled={retryingEmail}

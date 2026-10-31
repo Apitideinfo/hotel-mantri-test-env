@@ -1,12 +1,12 @@
 /**
- * Hotel Mantri — Notification Routes
+ * Hotel Mantri â€” Notification Routes
  *
  * Routes:
- *   POST /api/notifications/invoice/email     — Send invoice PDF via email to guest
- *   POST /api/notifications/invoice/whatsapp  — Generate WhatsApp share URL for invoice
- *   GET  /api/notifications/smtp/verify       — Test SMTP connection
- *   GET  /api/notifications/outbox            — List outbox records (admin diagnostics)
- *   POST /api/notifications/retry             — Retry failed notifications
+ *   POST /api/notifications/invoice/email     â€” Send invoice PDF via email to guest
+ *   POST /api/notifications/invoice/whatsapp  â€” Generate WhatsApp share URL for invoice
+ *   GET  /api/notifications/smtp/verify       â€” Test SMTP connection
+ *   GET  /api/notifications/outbox            â€” List outbox records (admin diagnostics)
+ *   POST /api/notifications/retry             â€” Retry failed notifications
  *
  * SECURITY:
  *   - All invoice/outbox routes require hotel authentication
@@ -41,7 +41,16 @@ import {
   buildWhatsAppDirectUrl,
   normalizeWhatsAppPhone,
 } from '../services/whatsappService.js';
-import { WhintaProvider, getWhintaConfig } from '../services/whintaService.js';
+import {
+  verifyMetaConnection,
+  fetchApprovedTemplates,
+  syncMetaTemplates,
+  getMetaWhatsAppConfig,
+  getMetaWhatsAppDiagnostics,
+  sendMetaTestMessage,
+  verifyMetaWebhookGet,
+  processMetaWebhookEvents,
+} from '../services/metaWhatsAppService.js';
 import {
   recordWhatsAppOutboxEvent,
   updateWhatsAppOutboxEvent,
@@ -57,7 +66,7 @@ import {
 const router = express.Router();
 const supabase = supabaseServiceRole;
 
-// ─── Helper: Safe Supabase fetch ──────────────────────────────────────────────
+// â”€â”€â”€ Helper: Safe Supabase fetch â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
   const { data: invoice, error } = await supabase
@@ -85,7 +94,7 @@ const fetchInvoiceWithDetails = async (invoiceId, hotelId) => {
 
 // Strict RBAC: All notification and report routes require hotel auth and forbid Housekeeping
 router.use((req, res, next) => {
-  if (req.path.includes('/cron') || req.path.includes('/webhook') || req.path.includes('whinta-daily-report')) {
+  if (req.path.includes('/cron') || req.path.includes('/webhook') || req.path.includes('daily-report')) {
     return next();
   }
   return requireHotelAccess(req, res, (err) => {
@@ -94,15 +103,15 @@ router.use((req, res, next) => {
   });
 });
 
-// ─── POST /api/notifications/invoice/email ────────────────────────────────────
+// â”€â”€â”€ POST /api/notifications/invoice/email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Send invoice via email with PDF attachment to the guest.
  *
  * Body:
- *   invoiceId: string  — Invoice UUID
- *   pdfBase64: string  — Base64-encoded PDF bytes from jsPDF (frontend generates it)
- *   filename: string   — e.g. "Hotel-Mantri-Invoice-INV-001.pdf"
+ *   invoiceId: string  â€” Invoice UUID
+ *   pdfBase64: string  â€” Base64-encoded PDF bytes from jsPDF (frontend generates it)
+ *   filename: string   â€” e.g. "Hotel-Mantri-Invoice-INV-001.pdf"
  *
  * Response:
  *   { success: true, messageId }
@@ -232,14 +241,14 @@ router.post('/invoice/email', requireHotelAccess, async (req, res) => {
   }
 });
 
-// ─── POST /api/notifications/invoice/whatsapp ─────────────────────────────────
+// â”€â”€â”€ POST /api/notifications/invoice/whatsapp â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Generate a WhatsApp share URL for an invoice.
  *
  * Body:
  *   invoiceId: string
- *   phoneNumber: string — Guest phone number (e.g. "919876543210")
+ *   phoneNumber: string â€” Guest phone number (e.g. "919876543210")
  *   invoiceNumber: string
  *   totalAmount: number
  *   balanceDue: number
@@ -286,8 +295,8 @@ router.post('/invoice/whatsapp', requireHotelAccess, async (req, res) => {
     }
 
     // 3. Build WhatsApp message text
-    const totalAmt = `₹${Number(invoice.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-    const balanceAmt = `₹${Number(invoice.balance_due || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    const totalAmt = `â‚¹${Number(invoice.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+    const balanceAmt = `â‚¹${Number(invoice.balance_due || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
     const waText = [
       `*${hotelName}*`,
       `Invoice: *${invoiceNumber}*`,
@@ -295,20 +304,20 @@ router.post('/invoice/whatsapp', requireHotelAccess, async (req, res) => {
       `Balance Due: *${balanceAmt}*`,
       invoice.due_date ? `Due Date: ${invoice.due_date}` : null,
       '',
-      'Thank you for your stay! 🙏',
+      'Thank you for your stay! ðŸ™',
     ].filter(line => line !== null).join('\n');
 
     const whatsappUrl = `https://wa.me/${rawPhone}?text=${encodeURIComponent(waText)}`;
 
-    // Dispatch via Whinta provider
+    // Dispatch via Meta WhatsApp provider
     const sendResult = await sendWhatsAppMessage({ to: rawPhone, text: waText });
-    console.log(`[INVOICE_WHATSAPP] Whinta send result for invoice=${invoiceNumber}: success=${sendResult.success}`);
+    console.log(`[INVOICE_WHATSAPP] Meta WhatsApp send result for invoice=${invoiceNumber}: success=${sendResult.success}`);
 
     return res.json({
       success: sendResult.success,
       messageId: sendResult.messageId,
       whatsappUrl,
-      message: sendResult.success ? 'Invoice sent via Whinta WhatsApp.' : (sendResult.message || 'Whinta dispatch failed.'),
+      message: sendResult.success ? 'Invoice sent via WhatsApp.' : (sendResult.message || 'WhatsApp dispatch failed.'),
       phoneNumber: rawPhone,
       invoiceNumber,
     });
@@ -322,7 +331,7 @@ router.post('/invoice/whatsapp', requireHotelAccess, async (req, res) => {
   }
 });
 
-// ─── GET /api/notifications/smtp/verify ──────────────────────────────────────
+// â”€â”€â”€ GET /api/notifications/smtp/verify â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Verify SMTP connection. Returns configuration status WITHOUT credentials.
@@ -355,7 +364,7 @@ router.get('/smtp/verify', requireHotelAccess, async (req, res) => {
   });
 });
 
-// ─── GET /api/notifications/outbox ───────────────────────────────────────────
+// â”€â”€â”€ GET /api/notifications/outbox â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * List notification outbox records for admin diagnostics.
@@ -386,7 +395,7 @@ router.get('/outbox', requireHotelAccess, async (req, res) => {
   }
 });
 
-// ─── POST /api/notifications/retry ───────────────────────────────────────────
+// â”€â”€â”€ POST /api/notifications/retry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Retry failed notifications. Admin use only.
@@ -402,47 +411,42 @@ router.post('/retry', requireHotelAccess, async (req, res) => {
   }
 });
 
-// ─── GET /api/notifications/whatsapp/config ──────────────────────────────────
+// ─── GET /api/notifications/whatsapp/config ───────────────────────────────────
 
 /**
- * Returns safe server-side WhatsApp & Whinta configuration status WITHOUT credentials.
+ * Returns safe server-side WhatsApp configuration status WITHOUT credentials.
  */
 router.get(['/whatsapp/config', '/config'], requireHotelAccess, (req, res) => {
   const providerConfig = getWhatsAppProviderConfig();
-  const whintaConfig = getWhintaConfig();
+  const diagnostics = getMetaWhatsAppDiagnostics();
 
   return res.json({
     success: true,
-    provider: providerConfig.provider,
+    provider: 'META',
     configured: providerConfig.configured,
-    enabled: providerConfig.enabled ?? false,
-    active: providerConfig.active ?? false,
-    baseUrl: whintaConfig.baseUrl,
-    defaultCountryCode: whintaConfig.defaultCountryCode,
-    hasWebhookSecret: whintaConfig.hasWebhookSecret,
+    enabled: providerConfig.enabled ?? true,
+    active: providerConfig.active ?? true,
+    graphApiVersion: diagnostics.graphApiVersion,
+    hasAccessToken: diagnostics.hasAccessToken,
+    hasPhoneNumberId: diagnostics.hasPhoneNumberId,
+    hasBusinessAccountId: diagnostics.hasBusinessAccountId,
+    phoneNumberIdSuffix: diagnostics.phoneNumberIdSuffix,
+    businessAccountIdSuffix: diagnostics.businessAccountIdSuffix,
+    reservationTemplate: diagnostics.reservationTemplate,
+    dailyReportTemplate: diagnostics.dailyReportTemplate,
+    isTemplateApproved: diagnostics.isTemplateApproved,
+    testMode: diagnostics.testMode,
   });
 });
 
 // ─── POST /api/notifications/whatsapp/verify-connection ───────────────────────
 
 /**
- * Tests connection with Whinta Web API without sending any message.
+ * Tests connection with Meta WhatsApp Cloud API without sending any message.
  */
 router.post(['/whatsapp/verify-connection', '/verify-connection'], requireHotelAccess, async (req, res) => {
   try {
-    const whinta = new WhintaProvider();
-    if (!whinta.isConfigured()) {
-      return res.status(412).json({
-        success: false,
-        configured: false,
-        connected: false,
-        error: 'WHATSAPP_PROVIDER_NOT_CONFIGURED',
-        errorCode: 'WHATSAPP_PROVIDER_NOT_CONFIGURED',
-        message: 'Whinta Access Token is missing or not configured on the server.',
-      });
-    }
-
-    const result = await whinta.verifyConnection();
+    const result = await verifyMetaConnection();
     const httpStatus = result.success ? 200 : (result.statusCode === 401 || result.statusCode === 403 ? 401 : 400);
     return res.status(httpStatus).json(result);
   } catch (err) {
@@ -451,21 +455,48 @@ router.post(['/whatsapp/verify-connection', '/verify-connection'], requireHotelA
       configured: true,
       connected: false,
       error: 'SERVER_ERROR',
-      message: 'Failed to verify Whinta connection: ' + err.message,
+      message: 'Failed to verify Meta WhatsApp Cloud API connection: ' + err.message,
     });
   }
 });
 
-// ─── GET /api/notifications/whatsapp/summary & /api/reports/whatsapp/summary ─
+// ─── GET & POST /api/notifications/whatsapp/templates ───────────────────────────────
 
 /**
- * Returns the calculated daily hotel summary for a given business date.
- * Does NOT require room chart entries — PMS reservations & inventory are authoritative.
- *
- * Query:
- *   date / businessDate: string (YYYY-MM-DD, defaults to current date)
- *   type / summaryType: 'daily' | 'morning' | 'evening' | 'ota'
+ * Fetches approved WhatsApp message templates from Meta WABA or Supabase cache.
  */
+router.get(['/whatsapp/templates', '/templates'], requireHotelAccess, async (req, res) => {
+  const hotelId = req.query.hotelId || req.hotelId || req.auth?.hotelId;
+  const force = req.query.force === 'true' || req.query.forceSync === 'true';
+  try {
+    const result = await fetchApprovedTemplates({ hotelId, forceSync: force });
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: 'TEMPLATE_FETCH_FAILED',
+      message: 'Failed to fetch templates from Meta: ' + err.message,
+    });
+  }
+});
+
+/**
+ * Synchronizes templates directly from Meta WhatsApp Business Account into Supabase.
+ */
+router.post(['/whatsapp/templates/sync', '/templates/sync', '/sync-templates'], requireHotelAccess, async (req, res) => {
+  const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
+  try {
+    const result = await syncMetaTemplates({ hotelId, force: true });
+    return res.status(result.success ? 200 : 502).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      error: 'TEMPLATE_SYNC_FAILED',
+      message: 'Failed to synchronize templates from Meta: ' + err.message,
+    });
+  }
+});
+
 router.get(['/whatsapp/summary', '/summary', '/whatsapp/preview', '/preview'], requireHotelAccess, async (req, res) => {
   const hotelId = req.query.hotelId || req.hotelId || req.auth?.hotelId;
   const businessDate = req.query.businessDate || req.query.date || new Date().toISOString().slice(0, 10);
@@ -523,7 +554,7 @@ router.get(['/whatsapp/summary', '/summary', '/whatsapp/preview', '/preview'], r
   }
 });
 
-// ─── POST /api/notifications/whatsapp/send & /api/reports/whatsapp/send ───────
+// â”€â”€â”€ POST /api/notifications/whatsapp/send & /api/reports/whatsapp/send â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Dispatches a WhatsApp summary to the hotel owner's configured number.
@@ -675,7 +706,7 @@ router.post(['/whatsapp/send', '/send'], requireHotelAccess, async (req, res) =>
   }
 });
 
-// ─── POST /api/notifications/whatsapp/test & /api/reports/whatsapp/test ────────
+// â”€â”€â”€ POST /api/notifications/whatsapp/test & /api/reports/whatsapp/test â”€â”€â”€â”€â”€â”€â”€â”€
 
 router.post(['/whatsapp/test', '/test'], requireHotelAccess, async (req, res) => {
   const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
@@ -767,10 +798,10 @@ router.post(['/whatsapp/test', '/test'], requireHotelAccess, async (req, res) =>
   }
 });
 
-// ─── POST /api/reports/whatsapp/send-test-report ──────────────────────────────
+// â”€â”€â”€ POST /api/reports/whatsapp/send-test-report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
- * Dispatches an explicit TEST daily report via Whinta template & text.
+ * Dispatches an explicit TEST daily report via Meta template & text.
  * Clearly identified with deliveryType: 'TEST', preserving scheduled idempotency records.
  */
 router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report', '/send-test-report'], requireHotelAccess, async (req, res) => {
@@ -808,7 +839,7 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
     }
 
     const summary = await calculateDailySummary({ hotelId, businessDate });
-    const text = `🧪 *[TEST REPORT]*\n\n` + buildDailySummaryText(summary);
+    const text = `ðŸ§ª *[TEST REPORT]*\n\n` + buildDailySummaryText(summary);
 
     // Generate authoritative daily report PDF for test dispatch
     let reportPdf = null;
@@ -833,7 +864,7 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
       checkOuts: summary.checkOuts || summary.frontOffice.departures || 0,
       dailyRevenue: summary.dailyRevenue || summary.revenue.grossRevenue,
       closingCash: summary.closingCash || summary.collection?.closingCash || 0,
-      templateName: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+      templateName: owner.dailyReportTemplate || process.env.META_WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
       templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
       documentUrl: reportPdf?.signedUrl || null,
       documentFilename: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${businessDate}.pdf`,
@@ -918,7 +949,7 @@ router.post(['/whatsapp/send-test-report', '/reports/whatsapp/send-test-report',
 });
 
 
-// ─── GET /api/notifications/whatsapp/history & /api/reports/whatsapp/history ──
+// â”€â”€â”€ GET /api/notifications/whatsapp/history & /api/reports/whatsapp/history â”€â”€
 
 router.get(['/whatsapp/history', '/history'], requireHotelAccess, async (req, res) => {
   const hotelId = req.query.hotelId || req.hotelId || req.auth?.hotelId;
@@ -940,7 +971,7 @@ router.get(['/whatsapp/history', '/history'], requireHotelAccess, async (req, re
   }
 });
 
-// ─── GET & POST /whatsapp/settings & /settings ────────────────────────────────
+// â”€â”€â”€ GET & POST /whatsapp/settings & /settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, res) => {
   const hotelId = req.query.hotelId || req.hotelId || req.auth?.hotelId;
@@ -959,8 +990,8 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
       countryCode: owner.countryCode || '91',
       dailyReportEnabled: owner.dailyReportEnabled ?? true,
       reservationConfirmationEnabled: owner.reservationConfirmationEnabled ?? true,
-      reservationTemplate: owner.reservationTemplate || process.env.WHINTA_RESERVATION_TEMPLATE || 'booking_confirmation',
-      dailyReportTemplate: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+      reservationTemplate: owner.reservationTemplate || process.env.META_WHATSAPP_RESERVATION_TEMPLATE || 'booking_confirmation',
+      dailyReportTemplate: owner.dailyReportTemplate || process.env.META_WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
       templateHasDocumentHeader: owner.templateHasDocumentHeader ?? true,
       templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
       laundryStatementEnabled: owner.laundryStatementEnabled ?? true,
@@ -1022,6 +1053,36 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
   }
 
   try {
+    if (reservationTemplate) {
+      const { data: resvTpl } = await supabase
+        .from('whatsapp_templates')
+        .select('status')
+        .eq('name', reservationTemplate.trim())
+        .maybeSingle();
+      if (resvTpl && resvTpl.status && resvTpl.status.toUpperCase() !== 'APPROVED') {
+        return res.status(400).json({
+          success: false,
+          error: 'TEMPLATE_NOT_APPROVED',
+          message: `Reservation template "${reservationTemplate}" is currently ${resvTpl.status}. Only APPROVED templates can be configured.`,
+        });
+      }
+    }
+
+    if (dailyReportTemplate) {
+      const { data: repTpl } = await supabase
+        .from('whatsapp_templates')
+        .select('status')
+        .eq('name', dailyReportTemplate.trim())
+        .maybeSingle();
+      if (repTpl && repTpl.status && repTpl.status.toUpperCase() !== 'APPROVED') {
+        return res.status(400).json({
+          success: false,
+          error: 'TEMPLATE_NOT_APPROVED',
+          message: `Daily report template "${dailyReportTemplate}" is currently ${repTpl.status}. Only APPROVED templates can be configured.`,
+        });
+      }
+    }
+
     const updatePayload = {
       whatsapp_number: rawPhone.trim(),
       whatsapp_report_recipient_phone: rawPhone.trim(),
@@ -1030,6 +1091,8 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       whatsapp_reservation_confirmation_enabled: Boolean(reservationConfirmationEnabled),
       whatsapp_reservation_template: String(reservationTemplate || 'booking_confirmation').trim(),
       whatsapp_daily_report_template: String(dailyReportTemplate || 'daily_hotel_report').trim(),
+      whatsapp_reservation_language: String(templateLanguage || 'en').trim(),
+      whatsapp_daily_report_language: String(templateLanguage || 'en').trim(),
       whatsapp_template_has_document_header: Boolean(templateHasDocumentHeader),
       whatsapp_template_language: String(templateLanguage || 'en').trim(),
       whatsapp_laundry_statement_enabled: Boolean(laundryStatementEnabled),
@@ -1094,71 +1157,29 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
   }
 });
 
-// ─── POST /api/notifications/whatsapp/webhook & /api/webhooks/whinta ───────────
 
-const handleWhintaWebhook = async (req, res) => {
-  const configuredSecret = (process.env.WHINTA_WEBHOOK_SECRET || '').trim();
+// ─── POST & GET /api/notifications/whatsapp/webhook ─────────────────────────
 
-  // Validate webhook authorization if secret is configured
-  if (configuredSecret) {
-    const authHeader = req.headers['authorization'];
-    const sigHeader = req.headers['x-whinta-signature'] || req.headers['x-webhook-secret'];
-    const bearerMatch = authHeader && (authHeader === `Bearer ${configuredSecret}` || authHeader === configuredSecret);
-    const sigMatch = sigHeader && sigHeader === configuredSecret;
-
-    if (!bearerMatch && !sigMatch) {
-      return res.status(401).json({
-        success: false,
-        error: 'UNAUTHORIZED_WEBHOOK',
-        message: 'Invalid or missing webhook signature/secret.',
-      });
-    }
+const handleMetaNotificationWebhook = async (req, res) => {
+  if (req.method === 'GET') {
+    const result = verifyMetaWebhookGet(req.query);
+    if (!result.valid) return res.status(result.statusCode).type('text/plain').send(result.error);
+    return res.status(200).type('text/plain').send(result.challenge);
   }
 
-  const { event, data } = req.body || {};
-  if (!event || !data) {
-    return res.status(400).json({
-      success: false,
-      error: 'INVALID_PAYLOAD',
-      message: 'Webhook payload missing required event or data fields.',
-    });
+  res.status(200).json({ success: true, received: true });
+  try {
+    const payload = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    await processMetaWebhookEvents(payload);
+  } catch (err) {
+    console.error('[MetaWebhookHandler] Error:', err.message);
   }
-
-  // Handle message status transitions
-  if (event === 'message.status.update') {
-    const messageId = data.id || data.message_id || data.messageId;
-    const rawStatus = (data.status || '').toLowerCase();
-
-    let status = OUTBOX_STATUS.SUBMITTED;
-    if (rawStatus === 'delivered' || rawStatus === 'read') {
-      status = OUTBOX_STATUS.DELIVERED;
-    } else if (rawStatus === 'failed') {
-      status = OUTBOX_STATUS.FAILED;
-    } else if (rawStatus === 'sent') {
-      status = OUTBOX_STATUS.SENT;
-    }
-
-    if (messageId) {
-      await updateDeliveryStatusByProviderMessageId({
-        providerMessageId: messageId,
-        status,
-        error: data.error || data.message || null,
-      });
-    }
-  }
-
-  // Return HTTP 200 within Whinta's 10-second SLA
-  return res.status(200).json({
-    success: true,
-    received: true,
-    event,
-    timestamp: new Date().toISOString(),
-  });
 };
 
-router.post(['/whatsapp/webhook', '/webhook'], handleWhintaWebhook);
+router.get(['/whatsapp/webhook', '/webhook'], handleMetaNotificationWebhook);
+router.post(['/whatsapp/webhook', '/webhook'], handleMetaNotificationWebhook);
 
-// ─── POST /api/notifications/whatsapp/retry-send ──────────────────────────────
+// â”€â”€â”€ POST /api/notifications/whatsapp/retry-send â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (req, res) => {
   const hotelId = req.body?.hotelId || req.hotelId || req.auth?.hotelId;
@@ -1174,6 +1195,22 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
 
     if (!target) {
       return res.status(404).json({ success: false, message: 'Notification delivery record not found.' });
+    }
+
+    if (target.status === 'delivered' || target.status === 'sent') {
+      return res.status(409).json({
+        success: false,
+        error: 'ALREADY_SENT',
+        message: 'This notification has already been accepted by Meta or delivered. Retrying would cause duplicate delivery.',
+      });
+    }
+
+    if (target.provider_message_id && target.status !== 'failed') {
+      return res.status(409).json({
+        success: false,
+        error: 'ALREADY_HAS_WAMID',
+        message: `Message already registered with Meta (ID: ${target.provider_message_id}). Blind retry prevented.`,
+      });
     }
 
     // Check permanent vs transient failure
@@ -1216,7 +1253,7 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
   }
 });
 
-// ─── GET & POST /whatsapp/cron & /cron (SEC-06 Hardened) ─────────────────────
+// â”€â”€â”€ GET & POST /whatsapp/cron & /cron (SEC-06 Hardened) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // In-memory active mutex to prevent concurrent duplicate execution of identical scheduled jobs
 const activeCronLocks = new Set();
@@ -1316,7 +1353,7 @@ const handleWhatsAppCron = async (req, res) => {
         console.warn(`[WHATSAPP_CRON] Failed to generate/store daily report PDF for hotel ${hotelId}:`, pdfErr.message);
       }
 
-      // Construct official Whinta template payload with 10 placeholders and dynamic document header
+      // Construct official Meta WhatsApp template payload with 10 placeholders and dynamic document header
       const metaTemplate = buildMetaDailyReportTemplate({
         hotelName: summary.hotelName,
         reportDate: summary.businessDateReadable || hotelDateStr,
@@ -1328,7 +1365,7 @@ const handleWhatsAppCron = async (req, res) => {
         checkOuts: summary.checkOuts || summary.frontOffice?.departures || 0,
         dailyRevenue: summary.dailyRevenue || summary.revenue?.grossRevenue || 0,
         closingCash: summary.closingCash || summary.collection?.closingCash || 0,
-        templateName: owner.dailyReportTemplate || process.env.WHINTA_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
+        templateName: owner.dailyReportTemplate || process.env.META_WHATSAPP_DAILY_REPORT_TEMPLATE || 'daily_hotel_report',
         templateLanguage: owner.templateLanguage || process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en',
         documentUrl: reportPdf?.signedUrl || null,
         documentFilename: reportPdf?.fileName || `HotelMantri-Daily-Report-${hotelId}-${hotelDateStr}.pdf`,
@@ -1433,8 +1470,8 @@ const handleWhatsAppCron = async (req, res) => {
   }
 };
 
-router.get(['/whinta-daily-report', '/cron/whinta-daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
-router.post(['/whinta-daily-report', '/cron/whinta-daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
+router.get(['/daily-report', '/cron/daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
+router.post(['/daily-report', '/cron/daily-report', '/whatsapp/cron', '/cron'], cronRateLimiter, requireCronAuth, handleWhatsAppCron);
 
 export { handleWhatsAppCron, activeCronLocks };
 export default router;

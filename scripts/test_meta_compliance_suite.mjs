@@ -137,7 +137,6 @@ async function runMetaComplianceSuite() {
     const serverActiveSecret =
       process.env.META_APP_SECRET ||
       process.env.WHATSAPP_APP_SECRET ||
-      process.env.WHINTA_WEBHOOK_SECRET ||
       testSecret;
 
     try {
