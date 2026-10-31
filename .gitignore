@@ -21,6 +21,13 @@ dist-ssr
 *.sln
 *.sw?
 .env
+.env.*
+.env.local
+.env.development
+.env.production
+.env.staging
+!.env.example
+!chatbot-booking-api/.env.example
 server/data/
 scratch/
 .vercel
