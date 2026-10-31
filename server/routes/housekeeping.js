@@ -341,8 +341,7 @@ router.post('/approve-inspection', async (req, res) => {
       userRole === 'hotel_admin' ||
       userRole === 'owner' ||
       userRole === 'manager' ||
-      req.auth?.permissions?.canApproveInspection ||
-      req.user?.user_metadata?.can_approve_inspection
+      Boolean(req.auth?.permissions?.canApproveInspection)
     );
 
     if (!canApprove) {

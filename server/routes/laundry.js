@@ -31,11 +31,7 @@ router.use(checkAuth);
 router.use((req, res, next) => {
   const role = (req.userRole || req.auth?.role || '').toLowerCase();
   if (role === 'housekeeping') {
-    const canLaundry = Boolean(
-      req.auth?.permissions?.canLaundry ||
-      req.user?.user_metadata?.can_laundry ||
-      req.auth?.userMetadata?.can_laundry
-    );
+    const canLaundry = Boolean(req.auth?.permissions?.canLaundry);
     if (!canLaundry) {
       return res.status(403).json({
         success: false,

@@ -273,14 +273,13 @@ export const resolveAuthorizedHotel = async (req) => {
     .eq('status', 'Active');
 
   if (dbError && (dbError.code === '42703' || dbError.message?.includes('staff_role') || dbError.message?.includes('permissions'))) {
-    // Transitional fallback if migration 20261101010000_staff_roles.sql is pending in live DB
-    const fallbackRes = await scopedSupabase
-      .from('hotel_admins')
-      .select('role, hotel_id, status')
-      .eq('user_id', user.id)
-      .eq('status', 'Active');
-    adminRecords = fallbackRes.data;
-    dbError = fallbackRes.error;
+    console.error('Database schema error: required staff_role/permissions columns missing in hotel_admins table.');
+    return {
+      success: false,
+      status: 503,
+      code: 'SCHEMA_MIGRATION_PENDING',
+      message: 'Database schema migration is pending. Required staff columns are not available.',
+    };
   }
 
   if (dbError) {
@@ -295,7 +294,7 @@ export const resolveAuthorizedHotel = async (req) => {
 
   const activeRecord = adminRecords && adminRecords[0];
   let authorizedHotelId = activeRecord?.hotel_id;
-  let userRole = activeRecord?.role || 'hotel_admin';
+  let userRole = activeRecord?.role || 'reception';
 
   // H1: Require confirmed email for non-synthetic accounts
   if (user.email && !user.email.endsWith('.internal') && !user.email.endsWith('@internal') && !user.email_confirmed_at) {
