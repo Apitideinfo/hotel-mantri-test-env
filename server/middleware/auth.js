@@ -32,7 +32,7 @@ export const timingSafeSecretEqual = (a, b) => {
   return crypto.timingSafeEqual(hashA, hashB);
 };
 
-// In-memory cache for validated auth contexts (TTL: 60s)
+// In-memory cache for validated auth contexts (TTL: 15s per L1)
 const authContextCache = new Map();
 const AUTH_CACHE_TTL_MS = 15 * 1000;
 
