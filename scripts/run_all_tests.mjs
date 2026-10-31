@@ -48,6 +48,10 @@ const SUITES = [
     name: 'Accounting & Financial Reconciliation',
     file: 'scripts/test_accounting_reconciliation.mjs',
   },
+  {
+    name: 'RLS Lockdown & Zero Anon Access Audit',
+    file: 'scripts/test_rls_lockdown.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {
