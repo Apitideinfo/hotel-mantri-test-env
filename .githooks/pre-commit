@@ -5,3 +5,4 @@ if [ $? -ne 0 ]; then
   echo "Secret scan failed. Commit aborted."
   exit 1
 fi
+

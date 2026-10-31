@@ -1,0 +1,8 @@
+# Hotel Mantri Security Policy (RFC 9116)
+Contact: mailto:security@hotelmantri.com
+Expires: 2027-10-31T23:59:59.000Z
+Preferred-Languages: en
+Canonical: https://hotelmantri.com/.well-known/security.txt
+Policy: https://hotelmantri.com/privacy-policy
+Acknowledgments: https://hotelmantri.com/security-acknowledgments
+
