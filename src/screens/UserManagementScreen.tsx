@@ -5,6 +5,7 @@ import {
   Phone, Building2, Clock, Check, ArrowLeft, RefreshCw, ChevronRight, Lock
 } from 'lucide-react';
 import { fetchStaffUsers, createStaffUser, updateStaffUser, deleteStaffUser, type StaffUser } from '@/lib/api-users';
+import { validatePasswordStrength } from '@/lib/passwordPolicy';
 import { getRoomCategories } from '@/lib/api';
 import type { RoomCategory } from '@/lib/types';
 
@@ -190,9 +191,18 @@ export const UserManagementScreen: React.FC<UserManagementScreenProps> = ({ onBa
       setModalError('Please enter Username / Login ID.');
       return;
     }
-    if (!editingUser && (!password || password.length < 6)) {
-      setModalError('Password must be at least 6 characters.');
-      return;
+    if (!editingUser) {
+      const pwErr = validatePasswordStrength(password);
+      if (pwErr) {
+        setModalError(pwErr);
+        return;
+      }
+    } else if (password) {
+      const pwErr = validatePasswordStrength(password);
+      if (pwErr) {
+        setModalError(pwErr);
+        return;
+      }
     }
 
     try {
@@ -668,7 +678,7 @@ export const UserManagementScreen: React.FC<UserManagementScreenProps> = ({ onBa
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
-                      placeholder={editingUser ? '••••••••' : 'Min 6 characters'}
+                      placeholder={editingUser ? '••••••••' : 'Min 12 characters'}
                       className="w-full pl-3 pr-10 py-2 bg-white border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                     <button

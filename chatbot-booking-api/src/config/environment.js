@@ -80,17 +80,14 @@ export const getEnvironmentConfig = () => {
 
   // 4. Token & Security Secrets
   let bookingTokenSecret = (process.env.BOOKING_TOKEN_SECRET || '').trim();
-  if (!bookingTokenSecret) {
-    if (isProd) {
-      errors.push('BOOKING_TOKEN_SECRET must be configured with at least 32 characters in production.');
-    } else {
-      // In development or test, fall back safely to Razorpay key secret or deterministic dev secret
-      bookingTokenSecret = razorpayKeySecret || 'hotel_mantri_dev_booking_token_secret_min_32_chars';
+  if (!isTest) {
+    if (!bookingTokenSecret) {
+      errors.push('BOOKING_TOKEN_SECRET is required with at least 32 characters in non-test environments.');
+    } else if (bookingTokenSecret.length < 32) {
+      errors.push('BOOKING_TOKEN_SECRET must be at least 32 characters long in non-test environments.');
     }
-  }
-
-  if (isProd && bookingTokenSecret.length < 32) {
-    errors.push('BOOKING_TOKEN_SECRET must be at least 32 characters long in production.');
+  } else if (!bookingTokenSecret) {
+    bookingTokenSecret = 'test_booking_token_secret_for_unit_tests_32ch';
   }
 
   // 5. Port & CORS

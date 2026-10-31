@@ -4,6 +4,7 @@ import {
   Shield, LogOut, RefreshCw, KeyRound, CheckCircle2, Database, LayoutDashboard, Eye, EyeOff, Trash2, AlertTriangle
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { validatePasswordStrength } from '@/lib/passwordPolicy';
 import { useAuth } from '@/lib/auth';
 import { sendWelcomeEmail } from '@/enterprise/api';
 
@@ -150,8 +151,9 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
 
     const isCreating = !editingId;
     if (isCreating) {
-      if (!form.admin_password || form.admin_password.length < 6) {
-        setError('Enter a password of at least 6 characters for the hotel admin.');
+      const pwErr = validatePasswordStrength(form.admin_password);
+      if (pwErr) {
+        setError(pwErr);
         return;
       }
       if (form.admin_password !== form.confirm_password) {
@@ -297,8 +299,9 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
 
   const handleResetSubmit = async () => {
     if (!resetHotel) return;
-    if (!resetPassword || resetPassword.length < 6) {
-      setError('Password must be at least 6 characters.');
+    const pwErr = validatePasswordStrength(resetPassword);
+    if (pwErr) {
+      setError(pwErr);
       return;
     }
     try {
