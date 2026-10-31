@@ -1,4 +1,5 @@
 import express from 'express';
+import helmet from 'helmet';
 import { corsMiddleware, getAllowedOrigins } from './middleware/corsConfig.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -56,6 +57,26 @@ const PORT = process.env.PORT || 5000;
 
 // H5: Trust Vercel / reverse proxy 1-hop for accurate req.ip rate limiting
 app.set('trust proxy', 1);
+
+// M1: Helmet security headers (HSTS, nosniff, Referrer-Policy, frameguard/frame-ancestors)
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        frameAncestors: ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    },
+    noSniff: true,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    frameguard: { action: 'deny' },
+  })
+);
 
 app.use(corsMiddleware);
 
