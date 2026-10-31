@@ -39,3 +39,6 @@ jobs:
 
       - name: Dependency Vulnerability Audit
         run: npm audit --omit=dev --audit-level=high
+
+      - name: Tenant Scope Static Analysis
+        run: node scripts/lint_tenant_scope.mjs

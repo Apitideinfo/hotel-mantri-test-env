@@ -1075,7 +1075,7 @@ export const createOrUpdateDailyBill = async (hotelId, { vendor_id, bill_date },
     bill = data;
 
     // Delete old items and insert updated items
-    await supabaseServiceRole.from('laundry_bill_items').delete().eq('bill_id', bill.id);
+    await supabaseServiceRole.from('laundry_bill_items').delete().eq('bill_id', bill.id).eq('hotel_id', hotelId);
   } else {
     const { data, error } = await supabaseServiceRole
       .from('laundry_bills')
@@ -1510,7 +1510,7 @@ export const generateDailyStatement = async (hotelId, vendorId, date) => {
 
   const [hotel, { data: vendor }] = await Promise.all([
     getHotelDetails(hotelId),
-    supabaseServiceRole.from('laundry_vendors').select('*').eq('id', vendorId).single(),
+    supabaseServiceRole.from('laundry_vendors').select('*').eq('id', vendorId).eq('hotel_id', hotelId).single(),
   ]);
 
   if (!vendor) throw new Error('Vendor not found');

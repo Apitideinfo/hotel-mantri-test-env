@@ -64,6 +64,10 @@ const SUITES = [
     name: 'Verify-Payment Authoritative Settlement Audit',
     file: 'scripts/test_verify_payment_hardening.mjs',
   },
+  {
+    name: 'Tenant Scope Static Analysis & Isolation Audit',
+    file: 'scripts/lint_tenant_scope.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {
