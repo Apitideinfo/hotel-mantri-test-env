@@ -556,42 +556,60 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
         });
       }
 
-      // 5. Order Context Binding: Verify order belongs to this tenant / reservation
+      // 5. Order Context Binding: Verify order belongs to this tenant / reservation (M7 Hardened)
       const orderRecord = await fetchOrderAssociation(razorpay_order_id, getRazorpayClient());
-      if (orderRecord) {
-        // Resolve optional caller auth context
-        let authContext = null;
-        const authHeader = req.headers?.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-          const authRes = await resolveAuthorizedHotel(req);
-          if (authRes.success) {
-            authContext = authRes;
-          }
-        }
+      if (!orderRecord) {
+        return res.status(404).json({
+          success: false,
+          code: 'ORDER_NOT_FOUND',
+          error: 'Razorpay order could not be resolved. Unverified orders cannot be settled.',
+          requestId,
+        });
+      }
 
-        // Cross-tenant check: if caller has hotel context and order has hotelId
-        if (authContext && !authContext.isSuperAdmin && orderRecord.hotelId) {
-          if (authContext.hotelId !== orderRecord.hotelId) {
-            return res.status(403).json({
-              success: false,
-              code: 'HOTEL_ACCESS_DENIED',
-              error: 'Cross-tenant payment violation: Order does not belong to authorized hotel.',
-              requestId,
-            });
-          }
+      // Resolve optional caller auth context
+      let authContext = null;
+      const authHeader = req.headers?.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success) {
+          authContext = authRes;
         }
+      }
 
-        // Reservation binding check
-        const targetReservationId = reservationId || req.body?.reservation_id;
-        const orderReservationId = orderRecord.notes?.reservationId;
-        if (targetReservationId && orderReservationId && targetReservationId !== orderReservationId) {
-          return res.status(400).json({
+      // Cross-tenant check: if caller has hotel context and order has hotelId
+      if (authContext && !authContext.isSuperAdmin && orderRecord.hotelId) {
+        if (authContext.hotelId !== orderRecord.hotelId) {
+          return res.status(403).json({
             success: false,
-            code: 'ORDER_MISMATCH',
-            error: 'Order does not match the target reservation.',
+            code: 'HOTEL_ACCESS_DENIED',
+            error: 'Cross-tenant payment violation: Order does not belong to authorized hotel.',
             requestId,
           });
         }
+      }
+
+      // Reservation binding check: ensure order is bound to the target reservation
+      const targetReservationId = reservationId || req.body?.reservation_id || orderRecord.notes?.reservationId;
+      const orderReservationId = orderRecord.notes?.reservationId;
+      if (orderReservationId && targetReservationId && orderReservationId !== targetReservationId) {
+        return res.status(400).json({
+          success: false,
+          code: 'ORDER_MISMATCH',
+          error: 'Order does not match the target reservation.',
+          requestId,
+        });
+      }
+
+      // Authoritative amount strictly from the resolved order record (M7: never trust req.body.amount)
+      const amountPaise = Number(orderRecord.amount);
+      if (!amountPaise || amountPaise <= 0 || isNaN(amountPaise)) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_ORDER_AMOUNT',
+          error: 'Resolved Razorpay order does not contain a valid authoritative amount.',
+          requestId,
+        });
       }
 
       // 6. Provider-side payment lifecycle verification
@@ -601,7 +619,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
           gateway,
           paymentId: razorpay_payment_id,
           expectedOrderId: razorpay_order_id,
-          expectedAmountPaise: orderRecord?.amount,
+          expectedAmountPaise: amountPaise,
           expectedCurrency: 'INR',
         });
 
@@ -616,9 +634,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
       }
 
       // 7. Atomic & Durable Settlement (via RPC or durable ledger fallback)
-      const targetReservationId = reservationId || req.body?.reservation_id || orderRecord?.notes?.reservationId;
-      const targetHotelId = orderRecord?.hotelId || null;
-      const amountPaise = orderRecord?.amount || (req.body?.amount ? Math.round(Number(req.body.amount)) : 0);
+      const targetHotelId = orderRecord.hotelId || null;
 
       const durableResult = await processVerifiedPaymentDurable({
         orderId: razorpay_order_id,

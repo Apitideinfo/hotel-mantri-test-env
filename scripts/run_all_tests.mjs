@@ -60,6 +60,10 @@ const SUITES = [
     name: 'Hardcoded Secrets & Fail-Closed Audit',
     file: 'scripts/test_hardcoded_secrets.mjs',
   },
+  {
+    name: 'Verify-Payment Authoritative Settlement Audit',
+    file: 'scripts/test_verify_payment_hardening.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {
