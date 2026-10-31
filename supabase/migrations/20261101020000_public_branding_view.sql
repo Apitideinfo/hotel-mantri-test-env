@@ -17,16 +17,16 @@ DROP VIEW IF EXISTS public.public_hotel_branding CASCADE;
 
 CREATE OR REPLACE VIEW public.public_hotel_branding AS
 SELECT
-  id,
-  hotel_name,
-  city,
-  state,
-  address,
-  logo_url,
-  brand_color,
-  is_active
-FROM public.hotels
-WHERE is_active = true;
+  h.id,
+  h.hotel_name,
+  h.city,
+  h.state,
+  h.address,
+  s.logo_url,
+  h.is_active
+FROM public.hotels h
+LEFT JOIN public.hotel_settings s ON h.id = s.id
+WHERE h.is_active = true;
 
 -- Ensure postgres/owner executes view securely
 ALTER VIEW public.public_hotel_branding OWNER TO postgres;
@@ -83,4 +83,3 @@ BEGIN
     END;
   END LOOP;
 END $$;
-
