@@ -266,11 +266,22 @@ export const resolveAuthorizedHotel = async (req) => {
 
   // Hotel Owner / Hotel Admin / Staff Flow:
   // Authoritatively query assigned hotel from database
-  const { data: adminRecords, error: dbError } = await scopedSupabase
+  let { data: adminRecords, error: dbError } = await scopedSupabase
     .from('hotel_admins')
     .select('role, staff_role, permissions, hotel_id, status')
     .eq('user_id', user.id)
     .eq('status', 'Active');
+
+  if (dbError && (dbError.code === '42703' || dbError.message?.includes('staff_role') || dbError.message?.includes('permissions'))) {
+    // Transitional fallback if migration 20261101010000_staff_roles.sql is pending in live DB
+    const fallbackRes = await scopedSupabase
+      .from('hotel_admins')
+      .select('role, hotel_id, status')
+      .eq('user_id', user.id)
+      .eq('status', 'Active');
+    adminRecords = fallbackRes.data;
+    dbError = fallbackRes.error;
+  }
 
   if (dbError) {
     console.error('Database error checking hotel_admins:', dbError);

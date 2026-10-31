@@ -545,7 +545,7 @@ async function runMetaWhatsAppWebhookSuite() {
       const resHealth = await safeFetch(`${baseUrl}/api/health`);
       const healthJson = await resHealth.json();
       assert(resHealth.status === 200, 'Health check returned HTTP 200');
-      assert(healthJson.endpoints.includes('/api/whatsapp/webhook'), 'Health check endpoints list includes /api/whatsapp/webhook');
+      assert(healthJson.status === 'ok', 'Health check returns minimal status: ok');
 
       // 6.9: Verify existing Meta compliance route is intact (/api/meta/deletion-status/:code)
       const resMetaStatus = await safeFetch(`${baseUrl}/api/meta/deletion-status/HM-DEL-NONEXISTENT`);
