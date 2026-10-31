@@ -48,6 +48,30 @@ const SUITES = [
     name: 'Accounting & Financial Reconciliation',
     file: 'scripts/test_accounting_reconciliation.mjs',
   },
+  {
+    name: 'RLS Lockdown & Zero Anon Access Audit',
+    file: 'scripts/test_rls_lockdown.mjs',
+  },
+  {
+    name: 'Staff Role Escalation Prevention Audit',
+    file: 'scripts/test_role_escalation.mjs',
+  },
+  {
+    name: 'Hardcoded Secrets & Fail-Closed Audit',
+    file: 'scripts/test_hardcoded_secrets.mjs',
+  },
+  {
+    name: 'Verify-Payment Authoritative Settlement Audit',
+    file: 'scripts/test_verify_payment_hardening.mjs',
+  },
+  {
+    name: 'Tenant Scope Static Analysis & Isolation Audit',
+    file: 'scripts/lint_tenant_scope.mjs',
+  },
+  {
+    name: 'Adversarial Hostile-User Security Attack Suite',
+    file: 'scripts/security_attack_suite.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {

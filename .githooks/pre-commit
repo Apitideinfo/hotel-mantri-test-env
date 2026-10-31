@@ -1,0 +1,8 @@
+#!/bin/sh
+echo "Running pre-commit secrets check..."
+node scripts/scan_git_history_secrets.mjs
+if [ $? -ne 0 ]; then
+  echo "Secret scan failed. Commit aborted."
+  exit 1
+fi
+

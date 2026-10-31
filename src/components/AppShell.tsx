@@ -46,6 +46,7 @@ import {
 import { BrandLogo, BrandIcon, HotelMantriVectorIcon } from '@/components/BrandLogo';
 import { layout } from '@/lib/theme';
 import { useAuth } from '@/lib/auth';
+import { validatePasswordStrength } from '@/lib/passwordPolicy';
 import { getTodayLocal } from '@/lib/calc';
 import { getEnabledHotelFeatures } from '@/lib/api';
 import { useChannelSyncStatus } from '@/lib/externalChannelSyncService';
@@ -942,8 +943,9 @@ export const AppShell = ({
   };
 
   const savePassword = async () => {
-    if (newPassword.length < 6) {
-      setPasswordMessage('Use at least 6 characters.');
+    const pwErr = validatePasswordStrength(newPassword);
+    if (pwErr) {
+      setPasswordMessage(pwErr);
       return;
     }
     if (newPassword !== confirmPassword) {

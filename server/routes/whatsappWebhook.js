@@ -68,25 +68,31 @@ router.get('/', handleWebhookVerification);
  */
 const handleWebhookNotification = async (req, res) => {
   const signatureHeader = req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'];
-  const rawBody = req.rawBody || req.body;
+  const rawBody = req.rawBody;
+
+  // H2: Webhook signature verification runs unconditionally (fail-closed, no dev bypass)
+  if (!rawBody) {
+    return res.status(400).json({
+      success: false,
+      code: 'RAW_BODY_MISSING',
+      error: 'Missing raw request body for webhook signature verification.',
+    });
+  }
 
   const appSecret = (process.env.WHATSAPP_APP_SECRET || process.env.META_WHATSAPP_APP_SECRET || '').trim();
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
 
-  if (isProduction || appSecret || signatureHeader) {
-    const sigResult = verifyMetaWebhookSignature({
-      rawBody: req.rawBody || (typeof req.body === 'string' ? req.body : JSON.stringify(req.body)),
-      signatureHeader,
-      appSecret,
+  const sigResult = verifyMetaWebhookSignature({
+    rawBody,
+    signatureHeader,
+    appSecret,
+  });
+
+  if (!sigResult.valid) {
+    console.warn(`[MetaWhatsAppWebhook] Rejected unsigned or invalid webhook POST: ${sigResult.error}`);
+    return res.status(sigResult.statusCode).json({
+      success: false,
+      error: sigResult.error,
     });
-
-    if (!sigResult.valid) {
-      console.warn(`[MetaWhatsAppWebhook] Rejected unsigned or invalid webhook POST: ${sigResult.error}`);
-      return res.status(sigResult.statusCode).json({
-        success: false,
-        error: sigResult.error,
-      });
-    }
   }
 
   // Meta expects an immediate HTTP 200 response
@@ -365,7 +371,7 @@ router.post('/retry-send', requireHotelAccess, async (req, res) => {
       whatsappDirectUrl: sendResult.whatsappDirectUrl,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Failed to retry notification: ' + err.message });
+    return res.status(500).json({ success: false, error: 'RETRY_ERROR', message: 'Internal error retrying notification.' });
   }
 });
 

@@ -324,7 +324,7 @@ export const saveCompanyUser = async (
     return data as CompanyUser;
   }
   // Create auth user first via edge function
-  if (!input.password || input.password.length < 6) throw new Error('Password must be at least 6 characters');
+  if (!input.password || input.password.length < 12) throw new Error('Password must be at least 12 characters');
   const { data: result, error: fetchErr } = await supabase.functions.invoke('setup-super-admin', {
     body: { action: 'create_company_user', email: input.email, password: input.password, name: input.name, role: input.role },
   });

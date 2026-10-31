@@ -585,7 +585,7 @@ export const verifyMetaWebhookSignature = ({
   if (!secret) {
     return {
       valid: false,
-      statusCode: 500,
+      statusCode: 503,
       error: 'SERVER_CONFIGURATION_MISSING: App secret is not configured on server.',
     };
   }
@@ -633,15 +633,15 @@ export const verifyMetaWebhookSignature = ({
       .update(rawBuffer)
       .digest('hex');
 
-    const expectedBuf = Buffer.from(expectedHash, 'utf8');
-    const providedBuf = Buffer.from(providedHash, 'utf8');
+    const expDigest = crypto.createHash('sha256').update(expectedHash).digest();
+    const actDigest = crypto.createHash('sha256').update(providedHash).digest();
 
-    if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    if (!crypto.timingSafeEqual(expDigest, actDigest)) {
       console.warn('[MetaWhatsAppWebhook] Signature verification failed: HMAC mismatch.');
       return {
         valid: false,
-        statusCode: 403,
-        error: 'FORBIDDEN: Invalid webhook signature.',
+        statusCode: 401,
+        error: 'UNAUTHORIZED: Invalid webhook signature.',
       };
     }
 
@@ -650,8 +650,8 @@ export const verifyMetaWebhookSignature = ({
     console.error('[MetaWhatsAppWebhook] Error during signature verification:', err.message);
     return {
       valid: false,
-      statusCode: 403,
-      error: 'FORBIDDEN: Cryptographic verification failed.',
+      statusCode: 401,
+      error: 'UNAUTHORIZED: Cryptographic verification failed.',
     };
   }
 };

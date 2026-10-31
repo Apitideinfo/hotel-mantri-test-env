@@ -62,8 +62,8 @@ export const setRazorpayClient = (client) => {
 
 export const getRazorpayClient = () => {
   if (customRazorpayClient) return customRazorpayClient;
-  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '';
-  const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
   if (keyId && keySecret) {
     customRazorpayClient = new Razorpay({
       key_id: keyId,
@@ -86,18 +86,17 @@ export { paymentRateLimiter };
  */
 export const getGuestCheckoutSecret = () => {
   const secret = process.env.GUEST_CHECKOUT_SECRET;
-  const isProd = process.env.NODE_ENV === 'production';
-  if (isProd) {
+  const isTest = process.env.NODE_ENV === 'test';
+  if (!isTest) {
     if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
-      throw new Error('GUEST_CHECKOUT_SECRET must be configured with at least 32 characters in production.');
+      throw new Error('GUEST_CHECKOUT_SECRET must be configured with at least 32 characters in all non-test environments.');
     }
     return secret.trim();
   }
-  return (
-    (typeof secret === 'string' && secret.trim()) ||
-    process.env.RAZORPAY_KEY_SECRET ||
-    'hotelmantri_guest_token_secret_key_2026'
-  );
+  if (secret && typeof secret === 'string' && secret.trim().length >= 32) {
+    return secret.trim();
+  }
+  return 'test_guest_checkout_secret_min_32_characters_123456';
 };
 
 /**
@@ -161,10 +160,10 @@ export const verifyGuestCheckoutToken = (token, expectedReservationId = null, al
   const [payloadB64, sig] = parts;
   const expectedSig = crypto.createHmac('sha256', secret).update(payloadB64).digest('hex');
 
-  const expBuf = Buffer.from(expectedSig, 'utf8');
-  const actBuf = Buffer.from(sig, 'utf8');
+  const expDigest = crypto.createHash('sha256').update(expectedSig).digest();
+  const actDigest = crypto.createHash('sha256').update(sig).digest();
 
-  if (expBuf.length !== actBuf.length || !crypto.timingSafeEqual(expBuf, actBuf)) {
+  if (!crypto.timingSafeEqual(expDigest, actDigest)) {
     return { valid: false, code: 'TOKEN_INVALID_SIGNATURE', message: 'Guest checkout token signature is invalid.' };
   }
 
@@ -253,12 +252,21 @@ export const resolvePlanPricing = async (planIdentifier) => {
 
   // Fallback: check database subscription_plans table if available
   try {
-    const { data: dbPlan } = await supabaseServiceRole
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean);
+    let planQuery = supabaseServiceRole
       .from('subscription_plans')
       .select('id, name, price, price_monthly')
-      .or(`id.eq.${clean},name.ilike.${clean},slug.ilike.${clean}`)
-      .eq('is_active', true)
-      .maybeSingle();
+      .eq('is_active', true);
+
+    if (isUuid) {
+      planQuery = planQuery.eq('id', clean);
+    } else {
+      const sanitized = clean.replace(/[,()"'\\]/g, '');
+      if (!sanitized) return null;
+      planQuery = planQuery.or(`name.ilike.${sanitized},slug.ilike.${sanitized}`);
+    }
+
+    const { data: dbPlan } = await planQuery.maybeSingle();
 
     if (dbPlan) {
       const price = Number(dbPlan.price_monthly ?? dbPlan.price ?? 0);
@@ -581,19 +589,9 @@ export const verifyRazorpayHmacSignature = ({
     .update(payload)
     .digest('hex');
 
-  const expectedBuf = Buffer.from(expectedSignature, 'utf8');
-  const actualBuf = Buffer.from(razorpay_signature, 'utf8');
-
-  // Must check buffer lengths first; unequal lengths in timingSafeEqual throw RangeError
-  if (expectedBuf.length !== actualBuf.length) {
-    return {
-      isValid: false,
-      code: 'INVALID_SIGNATURE',
-      message: 'Payment signature length mismatch. Verification failed.',
-    };
-  }
-
-  const isValid = crypto.timingSafeEqual(expectedBuf, actualBuf);
+  const expDigest = crypto.createHash('sha256').update(expectedSignature).digest();
+  const actDigest = crypto.createHash('sha256').update(razorpay_signature).digest();
+  const isValid = crypto.timingSafeEqual(expDigest, actDigest);
 
   return {
     isValid,

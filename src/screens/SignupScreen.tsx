@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mail, Lock, AlertCircle, ArrowLeft, Loader2, Eye, EyeOff, Check, User, Phone, Building2, Hash, Layers, ShieldCheck, ArrowRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { validatePasswordStrength } from '@/lib/passwordPolicy';
 import { BrandSection } from '@/components/login/BrandSection';
 
 interface SignupScreenProps {
@@ -53,7 +54,7 @@ export const SignupScreen: React.FC<SignupScreenProps> = ({ onNavigateToLogin, o
     if (!fullName.trim()) return 'Please enter your full name.';
     if (!email.trim() || !/^\S+@\S+\.\S+$/.test(email)) return 'Please enter a valid email address.';
     if (!mobile.trim() || !/^\d{10}$/.test(mobile.replace(/\D/g, ''))) return 'Please enter a valid 10-digit mobile number.';
-    if (!password || password.length < 6) return 'Password must be at least 6 characters.';
+    const pwErr = validatePasswordStrength(password); if (pwErr) return pwErr;
     if (password !== confirmPassword) return 'Passwords do not match.';
     return null;
   };

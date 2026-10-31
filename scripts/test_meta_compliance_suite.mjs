@@ -134,10 +134,8 @@ async function runMetaComplianceSuite() {
     const server = app.listen(0);
     const port = server.address().port;
     const baseUrl = `http://127.0.0.1:${port}`;
-    const serverActiveSecret =
-      process.env.META_APP_SECRET ||
-      process.env.WHATSAPP_APP_SECRET ||
-      testSecret;
+    process.env.META_APP_SECRET = process.env.META_APP_SECRET || testSecret;
+    const serverActiveSecret = process.env.META_APP_SECRET;
 
     try {
       // 3.1: POST /api/meta/data-deletion-callback with valid signed_request
@@ -160,6 +158,32 @@ async function runMetaComplianceSuite() {
       assert(resMeta.status === 200, `Meta callback returned HTTP 200 (received ${resMeta.status})`);
       assert(typeof metaJson.url === 'string' && metaJson.url.includes('https://www.hotelmantri.com/data-deletion?code='), 'Meta callback returns required status URL');
       assert(typeof metaJson.confirmation_code === 'string' && metaJson.confirmation_code.startsWith('HM-DEL-META-'), 'Meta callback returns required confirmation_code format');
+
+      // 3.1b: POST with bad signature -> 401
+      const badSignedReq = `invalid_sig.${encodedPayload}`;
+      const resBad = await fetch(`${baseUrl}/api/meta/data-deletion-callback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signed_request: badSignedReq }),
+      });
+      assert(resBad.status === 401, `Meta callback with bad signature returned HTTP 401 (got ${resBad.status})`);
+
+      // 3.1c: POST with missing app secret -> 503
+      const origMetaSec = process.env.META_APP_SECRET;
+      const origWaSec = process.env.WHATSAPP_APP_SECRET;
+      try {
+        delete process.env.META_APP_SECRET;
+        delete process.env.WHATSAPP_APP_SECRET;
+        const resNoSecret = await fetch(`${baseUrl}/api/meta/data-deletion-callback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signed_request: testSignedReq }),
+        });
+        assert(resNoSecret.status === 503, `Meta callback with unconfigured secret returned HTTP 503 (got ${resNoSecret.status})`);
+      } finally {
+        if (origMetaSec) process.env.META_APP_SECRET = origMetaSec;
+        if (origWaSec) process.env.WHATSAPP_APP_SECRET = origWaSec;
+      }
 
       // 3.2: Check status using the returned confirmation code
       const resStatus = await fetch(`${baseUrl}/api/meta/deletion-status/${metaJson.confirmation_code}`);

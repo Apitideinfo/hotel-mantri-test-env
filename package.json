@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test": "node scripts/run_all_tests.mjs",
-    "benchmark": "node scripts/benchmark_redis_and_sync_comparison.mjs"
+    "benchmark": "node scripts/benchmark_redis_and_sync_comparison.mjs",
+    "security:scan": "node scripts/scan_git_history_secrets.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
@@ -20,6 +21,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "helmet": "^8.3.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.344.0",
@@ -27,7 +29,7 @@
     "razorpay": "^2.9.8",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

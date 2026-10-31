@@ -32,9 +32,18 @@ export const timingSafeSecretEqual = (a, b) => {
   return crypto.timingSafeEqual(hashA, hashB);
 };
 
-// In-memory cache for validated auth contexts (TTL: 60s)
+// In-memory cache for validated auth contexts (TTL: 15s per L1)
 const authContextCache = new Map();
-const AUTH_CACHE_TTL_MS = 60 * 1000;
+const AUTH_CACHE_TTL_MS = 15 * 1000;
+
+export const clearUserAuthCache = (userId) => {
+  if (!userId) return;
+  for (const [k, v] of authContextCache.entries()) {
+    if (v.context?.userId === userId) {
+      authContextCache.delete(k);
+    }
+  }
+};
 
 export const clearAuthCache = () => {
   authContextCache.clear();
@@ -64,6 +73,53 @@ export const resolveAuthorizedHotel = async (req) => {
     };
   }
 
+  // M3: Internal server-to-server call with dedicated INTERNAL_API_SECRET header
+  const internalSecret = req.headers['x-internal-secret'];
+  if (internalSecret) {
+    const configuredInternalSecret = process.env.INTERNAL_API_SECRET;
+    if (!configuredInternalSecret) {
+      return {
+        success: false,
+        status: 503,
+        code: 'INTERNAL_SECRET_UNCONFIGURED',
+        message: 'Internal API secret is not configured on the server.',
+      };
+    }
+    if (!timingSafeSecretEqual(internalSecret, configuredInternalSecret)) {
+      return {
+        success: false,
+        status: 401,
+        code: 'INVALID_INTERNAL_SECRET',
+        message: 'Invalid internal API secret.',
+      };
+    }
+    const requestedHotelId = req.headers['x-hotel-id'];
+    if (!requestedHotelId) {
+      return {
+        success: false,
+        status: 400,
+        code: 'HOTEL_CONTEXT_REQUIRED',
+        message: 'Hotel context (x-hotel-id header) is required for internal service operations.',
+      };
+    }
+    const supabaseConfig = getSupabaseConfig();
+    return {
+      success: true,
+      user: { id: 'internal-service', email: 'service@hotelmantri.com' },
+      userId: 'internal-service',
+      role: 'super_admin',
+      isSuperAdmin: true,
+      hotelId: requestedHotelId,
+      hotel: { id: requestedHotelId, hotel_name: 'System Service' },
+      scopedSupabase: createClient(supabaseConfig.url, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }),
+    };
+  }
+
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return {
@@ -85,35 +141,6 @@ export const resolveAuthorizedHotel = async (req) => {
   }
 
   const supabaseConfig = getSupabaseConfig();
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  // Privileged internal server-to-server call with service role key ONLY (SEC-09 timing-safe)
-  if (serviceKey && timingSafeSecretEqual(token, serviceKey)) {
-    const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
-    if (!requestedHotelId) {
-      return {
-        success: false,
-        status: 400,
-        code: 'HOTEL_CONTEXT_REQUIRED',
-        message: 'Hotel context is required for service role operations.',
-      };
-    }
-    return {
-      success: true,
-      user: { id: 'service-role-admin', email: 'service@hotelmantri.com' },
-      userId: 'service-role-admin',
-      role: 'super_admin',
-      isSuperAdmin: true,
-      hotelId: requestedHotelId,
-      hotel: { id: requestedHotelId, hotel_name: 'System Service' },
-      scopedSupabase: createClient(supabaseConfig.url, serviceKey, {
-        auth: {
-          persistSession: false,
-          autoRefreshToken: false,
-        },
-      }),
-    };
-  }
 
   // Fast-path: Check memory cache for validated user auth context
   const requestedHotelId = req.headers['x-hotel-id'] || req.query.hotelId || req.query.hotel_id || req.body?.hotel_id || req.body?.hotelId;
@@ -239,11 +266,21 @@ export const resolveAuthorizedHotel = async (req) => {
 
   // Hotel Owner / Hotel Admin / Staff Flow:
   // Authoritatively query assigned hotel from database
-  const { data: adminRecords, error: dbError } = await scopedSupabase
+  let { data: adminRecords, error: dbError } = await scopedSupabase
     .from('hotel_admins')
-    .select('role, hotel_id, status')
+    .select('role, staff_role, permissions, hotel_id, status')
     .eq('user_id', user.id)
     .eq('status', 'Active');
+
+  if (dbError && (dbError.code === '42703' || dbError.message?.includes('staff_role') || dbError.message?.includes('permissions'))) {
+    console.error('Database schema error: required staff_role/permissions columns missing in hotel_admins table.');
+    return {
+      success: false,
+      status: 503,
+      code: 'SCHEMA_MIGRATION_PENDING',
+      message: 'Database schema migration is pending. Required staff columns are not available.',
+    };
+  }
 
   if (dbError) {
     console.error('Database error checking hotel_admins:', dbError);
@@ -257,20 +294,16 @@ export const resolveAuthorizedHotel = async (req) => {
 
   const activeRecord = adminRecords && adminRecords[0];
   let authorizedHotelId = activeRecord?.hotel_id;
-  let userRole = activeRecord?.role || 'hotel_admin';
+  let userRole = activeRecord?.role || 'reception';
 
-  if (!authorizedHotelId && user.email) {
-    const { data: matchedHotel } = await scopedSupabase
-      .from('hotels')
-      .select('id, hotel_name, subscription_status, is_active')
-      .ilike('admin_email', user.email.trim())
-      .eq('is_active', true)
-      .maybeSingle();
-
-    if (matchedHotel) {
-      authorizedHotelId = matchedHotel.id;
-      userRole = 'hotel_admin';
-    }
+  // H1: Require confirmed email for non-synthetic accounts
+  if (user.email && !user.email.endsWith('.internal') && !user.email.endsWith('@internal') && !user.email_confirmed_at) {
+    return {
+      success: false,
+      status: 403,
+      code: 'EMAIL_NOT_CONFIRMED',
+      message: 'Email address has not been confirmed. Please confirm your email to proceed.',
+    };
   }
 
   if (!authorizedHotelId) {
@@ -299,19 +332,17 @@ export const resolveAuthorizedHotel = async (req) => {
     .eq('id', authorizedHotelId)
     .maybeSingle();
 
-  // Check user metadata role first (e.g. housekeeping, manager, reception, accounts)
-  const metaRole = user.user_metadata?.role;
-  let effectiveRole = metaRole || userRole;
-  if (effectiveRole === 'owner') effectiveRole = 'hotel_admin';
+  // C2: Authoritative role resolution from hotel_admins / app_metadata (NEVER user_metadata)
+  const ALLOWED_STAFF_ROLES = ['hotel_admin', 'manager', 'reception', 'accounts', 'housekeeping'];
+  let rawRole = activeRecord?.staff_role || user.app_metadata?.role || activeRecord?.role || 'reception';
+  if (rawRole === 'owner') rawRole = 'hotel_admin';
+  if (rawRole === 'hotel_staff') rawRole = 'reception';
 
-  const userPermissions = user.user_metadata?.permissions || {
-    canLaundry: Boolean(user.user_metadata?.can_laundry),
-    canMaintenance: user.user_metadata?.can_maintenance !== false,
-    canApproveInspection: Boolean(user.user_metadata?.can_approve_inspection),
-    assignedFloor: user.user_metadata?.assigned_floor || '',
-    assignedCategoryId: user.user_metadata?.assigned_category_id || '',
-    shift: user.user_metadata?.shift || 'General',
-  };
+  const effectiveRole = ALLOWED_STAFF_ROLES.includes(rawRole) ? rawRole : 'reception';
+
+  // C2: Authoritative permissions from hotel_admins / app_metadata (NEVER user_metadata)
+  const dbPermissions = activeRecord?.permissions || user.app_metadata?.permissions || {};
+  const userPermissions = typeof dbPermissions === 'object' && dbPermissions !== null ? dbPermissions : {};
 
   const resolvedContext = {
     success: true,

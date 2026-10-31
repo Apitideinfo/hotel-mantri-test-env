@@ -85,17 +85,38 @@ router.post('/data-deletion-callback', async (req, res) => {
       });
     }
 
-    const verification = parseAndVerifyMetaSignedRequest(signedRequest, appSecret);
-    if (!verification.valid) {
-      console.warn(`[MetaCompliance] Signed request rejected (${verification.error}) [${requestId}]`);
-      // If an appSecret is configured and signature mismatched, reject with 400
-      if (appSecret && verification.error === 'SIGNATURE_MISMATCH') {
-        return res.status(400).json({
-          error: 'Invalid Signature',
-          message: 'The signature in the signed_request does not match the configured Meta App Secret.',
+    if (!appSecret) {
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        code: 'APP_SECRET_NOT_CONFIGURED',
+        message: 'Meta App Secret is not configured on server.',
+        requestId,
+      });
+    }
+
+    let verification;
+    try {
+      verification = parseAndVerifyMetaSignedRequest(signedRequest, appSecret);
+    } catch (err) {
+      if (err.statusCode === 503 || err.code === 'APP_SECRET_NOT_CONFIGURED') {
+        return res.status(503).json({
+          error: 'Service Unavailable',
+          code: 'APP_SECRET_NOT_CONFIGURED',
+          message: 'Meta App Secret is not configured on server.',
           requestId,
         });
       }
+      throw err;
+    }
+
+    if (!verification.valid) {
+      console.warn(`[MetaCompliance] Signed request rejected (${verification.error}) [${requestId}]`);
+      return res.status(401).json({
+        error: 'Unauthorized',
+        code: verification.error || 'INVALID_SIGNATURE',
+        message: 'The signature in the signed_request does not match the configured Meta App Secret or payload is invalid.',
+        requestId,
+      });
     }
 
     const payload = verification.data || {};

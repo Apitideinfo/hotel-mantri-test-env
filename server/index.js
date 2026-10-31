@@ -1,4 +1,5 @@
-﻿import express from 'express';
+import express from 'express';
+import helmet from 'helmet';
 import { corsMiddleware, getAllowedOrigins } from './middleware/corsConfig.js';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
@@ -11,6 +12,32 @@ import { processPendingRoomAllocations } from './services/RoomAssignmentService.
 import { timingMiddleware } from './middleware/timing.js';
 
 dotenv.config();
+
+/**
+ * M6: Redacts sensitive query parameter values (tokens, secrets, credentials) from request logs.
+ */
+export const sanitizeUrlForLog = (urlStr) => {
+  if (!urlStr || typeof urlStr !== 'string') return '';
+  const qIdx = urlStr.indexOf('?');
+  if (qIdx === -1) return urlStr;
+  const pathPart = urlStr.slice(0, qIdx);
+  const rawQuery = urlStr.slice(qIdx + 1);
+  if (!rawQuery) return pathPart;
+
+  const sensitiveKeys = new Set(['token', 'auth', 'auth_token', 'key', 'signature', 'code', 'password', 'guest_token']);
+  const sanitizedParams = rawQuery.split('&').map((param) => {
+    const eqIdx = param.indexOf('=');
+    if (eqIdx === -1) return param;
+    const key = param.slice(0, eqIdx);
+    const keyLower = decodeURIComponent(key).toLowerCase().trim();
+    if (sensitiveKeys.has(keyLower)) {
+      return `${key}=[REDACTED]`;
+    }
+    return param;
+  });
+
+  return `${pathPart}?${sanitizedParams.join('&')}`;
+};
 
 // Server Lifecycle & Graceful Shutdown State
 let isShuttingDown = false;
@@ -54,11 +81,35 @@ process.on('uncaughtException', (err) => {
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// H5: Trust Vercel / reverse proxy 1-hop for accurate req.ip rate limiting
+app.set('trust proxy', 1);
+
+// M1: Helmet security headers (HSTS, nosniff, Referrer-Policy, frameguard/frame-ancestors)
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        frameAncestors: ["'none'"],
+      },
+    },
+    crossOriginEmbedderPolicy: false,
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    },
+    noSniff: true,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+    frameguard: { action: 'deny' },
+  })
+);
+
 app.use(corsMiddleware);
 
 app.use((req, res, next) => {
   const incomingReqId = req.headers['x-request-id'];
-  const requestId = incomingReqId || `HM-REQ-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  const isValidReqId = typeof incomingReqId === 'string' && /^[A-Za-z0-9-_]{8,64}$/.test(incomingReqId);
+  const requestId = isValidReqId ? incomingReqId : `HM-REQ-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   req.requestId = requestId;
   res.setHeader('X-Request-Id', requestId);
 
@@ -106,7 +157,9 @@ app.use((req, res, next) => {
 
   const start = Date.now();
   res.on('finish', () => {
-    console.log(`[HTTP ${requestId}] ${req.method} ${original}${original !== req.url ? ` (rewritten: ${req.url})` : ''} -> ${res.statusCode} (${Date.now() - start}ms)`);
+    const safeOriginal = sanitizeUrlForLog(original);
+    const safeUrl = sanitizeUrlForLog(req.url);
+    console.log(`[HTTP ${requestId}] ${req.method} ${safeOriginal}${safeOriginal !== safeUrl ? ` (rewritten: ${safeUrl})` : ''} -> ${res.statusCode} (${Date.now() - start}ms)`);
   });
   next();
 });
@@ -157,17 +210,30 @@ import {
   fetchOrderAssociation,
   getRazorpayClient,
 } from './services/paymentSecurityService.js';
+import {
+  authRateLimiter,
+  webhookRateLimiter,
+  exportRateLimiter,
+  generalApiRateLimiter,
+} from './middleware/rateLimiter.js';
 import { resolveAuthorizedHotel, requireHotelAccess } from './middleware/auth.js';
 import { validateCronConfiguration } from './middleware/cronAuth.js';
 import { supabaseServiceRole } from './supabaseClient.js';
 import * as redisService from './services/redisService.js';
 
-// Root / Health check endpoints (P4 Operations Telemetry)
+// Root / Health check endpoints (M2 Minimal Public Health Check)
 app.get(['/', '/api', '/api/health', '/health'], (req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
+// Detailed diagnostic health check behind requireHotelAccess + super admin (M2)
+app.get(['/api/health/detailed', '/health/detailed'], requireHotelAccess, (req, res) => {
+  if (req.hotelRole !== 'super_admin' && !req.isSuperAdmin) {
+    return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Detailed diagnostics require super admin privileges.' });
+  }
   const mem = process.memoryUsage();
   res.status(200).json({
-    success: true,
-    status: 'healthy',
+    status: 'ok',
     message: 'Hotel Mantri Backend API Server is running',
     version: '1.0.0',
     uptime: Number(process.uptime().toFixed(2)),
@@ -229,6 +295,15 @@ app.get(['/api/redis/status', '/redis/status'], requireHotelAccess, async (req, 
     requestId: req.requestId,
   });
 });
+
+// H5: Global API rate limiting on all /api routes (120 req/min per IP/user)
+app.use('/api', generalApiRateLimiter);
+
+// Specific stricter limiters on sensitive routes (H5)
+app.use(['/api/onboarding', '/onboarding'], authRateLimiter);
+app.use(['/api/whatsapp/webhook', '/whatsapp/webhook'], webhookRateLimiter);
+app.use(['/api/meta/data-deletion-callback', '/meta/data-deletion-callback'], webhookRateLimiter);
+app.use(['/api/reservations/export', '/reservations/export'], exportRateLimiter);
 
 // Mount API routes with both /api prefix and direct path for total serverless compatibility
 app.use('/api/aiosell', aiosellRoutes);
@@ -428,7 +503,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
         }
       } catch { /* proceed */ }
     }
-    const keySecret = process.env.RAZORPAY_KEY_SECRET || '';
+    const keySecret = process.env.RAZORPAY_KEY_SECRET;
     if (!keySecret) {
       return res.status(503).json({
         success: false,
@@ -481,42 +556,60 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
         });
       }
 
-      // 5. Order Context Binding: Verify order belongs to this tenant / reservation
+      // 5. Order Context Binding: Verify order belongs to this tenant / reservation (M7 Hardened)
       const orderRecord = await fetchOrderAssociation(razorpay_order_id, getRazorpayClient());
-      if (orderRecord) {
-        // Resolve optional caller auth context
-        let authContext = null;
-        const authHeader = req.headers?.authorization;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-          const authRes = await resolveAuthorizedHotel(req);
-          if (authRes.success) {
-            authContext = authRes;
-          }
-        }
+      if (!orderRecord) {
+        return res.status(404).json({
+          success: false,
+          code: 'ORDER_NOT_FOUND',
+          error: 'Razorpay order could not be resolved. Unverified orders cannot be settled.',
+          requestId,
+        });
+      }
 
-        // Cross-tenant check: if caller has hotel context and order has hotelId
-        if (authContext && !authContext.isSuperAdmin && orderRecord.hotelId) {
-          if (authContext.hotelId !== orderRecord.hotelId) {
-            return res.status(403).json({
-              success: false,
-              code: 'HOTEL_ACCESS_DENIED',
-              error: 'Cross-tenant payment violation: Order does not belong to authorized hotel.',
-              requestId,
-            });
-          }
+      // Resolve optional caller auth context
+      let authContext = null;
+      const authHeader = req.headers?.authorization;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const authRes = await resolveAuthorizedHotel(req);
+        if (authRes.success) {
+          authContext = authRes;
         }
+      }
 
-        // Reservation binding check
-        const targetReservationId = reservationId || req.body?.reservation_id;
-        const orderReservationId = orderRecord.notes?.reservationId;
-        if (targetReservationId && orderReservationId && targetReservationId !== orderReservationId) {
-          return res.status(400).json({
+      // Cross-tenant check: if caller has hotel context and order has hotelId
+      if (authContext && !authContext.isSuperAdmin && orderRecord.hotelId) {
+        if (authContext.hotelId !== orderRecord.hotelId) {
+          return res.status(403).json({
             success: false,
-            code: 'ORDER_MISMATCH',
-            error: 'Order does not match the target reservation.',
+            code: 'HOTEL_ACCESS_DENIED',
+            error: 'Cross-tenant payment violation: Order does not belong to authorized hotel.',
             requestId,
           });
         }
+      }
+
+      // Reservation binding check: ensure order is bound to the target reservation
+      const targetReservationId = reservationId || req.body?.reservation_id || orderRecord.notes?.reservationId;
+      const orderReservationId = orderRecord.notes?.reservationId;
+      if (orderReservationId && targetReservationId && orderReservationId !== targetReservationId) {
+        return res.status(400).json({
+          success: false,
+          code: 'ORDER_MISMATCH',
+          error: 'Order does not match the target reservation.',
+          requestId,
+        });
+      }
+
+      // Authoritative amount strictly from the resolved order record (M7: never trust req.body.amount)
+      const amountPaise = Number(orderRecord.amount);
+      if (!amountPaise || amountPaise <= 0 || isNaN(amountPaise)) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_ORDER_AMOUNT',
+          error: 'Resolved Razorpay order does not contain a valid authoritative amount.',
+          requestId,
+        });
       }
 
       // 6. Provider-side payment lifecycle verification
@@ -526,7 +619,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
           gateway,
           paymentId: razorpay_payment_id,
           expectedOrderId: razorpay_order_id,
-          expectedAmountPaise: orderRecord?.amount,
+          expectedAmountPaise: amountPaise,
           expectedCurrency: 'INR',
         });
 
@@ -541,9 +634,7 @@ app.post(['/api/verify-payment', '/verify-payment'], paymentRateLimiter, async (
       }
 
       // 7. Atomic & Durable Settlement (via RPC or durable ledger fallback)
-      const targetReservationId = reservationId || req.body?.reservation_id || orderRecord?.notes?.reservationId;
-      const targetHotelId = orderRecord?.hotelId || null;
-      const amountPaise = orderRecord?.amount || (req.body?.amount ? Math.round(Number(req.body.amount)) : 0);
+      const targetHotelId = orderRecord.hotelId || null;
 
       const durableResult = await processVerifiedPaymentDurable({
         orderId: razorpay_order_id,

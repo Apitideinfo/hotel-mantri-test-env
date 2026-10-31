@@ -1003,7 +1003,7 @@ export const generateAndDeliverConfirmation = async ({
               provider_message_id: sendResult.messageId,
               sent_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
-            }).eq('id', outboxId);
+            }).eq('id', outboxId).eq('hotel_id', hotelId);
           }
         } else {
           console.error(`[DELIVERY_SERVICE] Email FAILED to=${targetEmail} errorCode=${sendResult.errorCode}`);
@@ -1023,7 +1023,7 @@ export const generateAndDeliverConfirmation = async ({
               status: 'failed',
               last_error: sendResult.errorCode || sendResult.message,
               updated_at: new Date().toISOString(),
-            }).eq('id', outboxId);
+            }).eq('id', outboxId).eq('hotel_id', hotelId);
           }
         }
       }

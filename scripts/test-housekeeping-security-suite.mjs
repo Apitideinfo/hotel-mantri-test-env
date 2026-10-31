@@ -68,6 +68,20 @@ async function runTest() {
   }
   const hkUserId = signUpData.user.id;
 
+  // Set authoritative role & permissions in app_metadata (C2 compliance)
+  await supabaseServiceRole.auth.admin.updateUserById(hkUserId, {
+    app_metadata: {
+      role: 'housekeeping',
+      permissions: {
+        canLaundry: false,
+        canMaintenance: true,
+        canApproveInspection: false,
+        assignedFloor: '1st',
+        shift: 'Morning',
+      },
+    },
+  });
+
   // Insert into hotel_admins with role 'hotel_staff'
   const { error: adminErr } = await supabaseServiceRole
     .from('hotel_admins')
@@ -75,6 +89,7 @@ async function runTest() {
       user_id: hkUserId,
       hotel_id: TEST_HOTEL_ID,
       role: 'hotel_staff',
+      staff_role: 'housekeeping',
       email: testEmail,
       status: 'Active',
     });

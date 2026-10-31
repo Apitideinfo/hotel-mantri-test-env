@@ -78,7 +78,7 @@ export const resolveAuthoritativeRate = async ({ hotelId, categoryId }) => {
     .select('*')
     .eq('hotel_id', hotelId)
     .eq('is_active', true)
-    .ilike('plan_name', `%${cat.name}%`)
+    .ilike('plan_name', `%${String(cat.name || '').replace(/[(),.%]/g, '').trim()}%`)
     .limit(1);
 
   if (ratePlans && ratePlans.length > 0 && Number(ratePlans[0].base_rate) > 0) {

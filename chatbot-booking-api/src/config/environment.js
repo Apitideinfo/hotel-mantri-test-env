@@ -55,7 +55,15 @@ export const getEnvironmentConfig = () => {
   // 3. Razorpay Payment Gateway
   let razorpayKeyId = (process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '').trim();
   let razorpayKeySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
-  const razorpayWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET || 'rzp_test_webhook_secret_key_2026').trim();
+  const razorpayWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+
+  if (!isTest) {
+    if (!razorpayWebhookSecret) {
+      errors.push('RAZORPAY_WEBHOOK_SECRET is required in non-test environments.');
+    } else if (razorpayWebhookSecret.length < 32) {
+      errors.push('RAZORPAY_WEBHOOK_SECRET must be at least 32 characters long in non-test environments.');
+    }
+  }
 
   if (isProd) {
     if (!razorpayKeyId) {
@@ -72,17 +80,14 @@ export const getEnvironmentConfig = () => {
 
   // 4. Token & Security Secrets
   let bookingTokenSecret = (process.env.BOOKING_TOKEN_SECRET || '').trim();
-  if (!bookingTokenSecret) {
-    if (isProd) {
-      errors.push('BOOKING_TOKEN_SECRET must be configured with at least 32 characters in production.');
-    } else {
-      // In development or test, fall back safely to Razorpay key secret or deterministic dev secret
-      bookingTokenSecret = razorpayKeySecret || 'hotel_mantri_dev_booking_token_secret_min_32_chars';
+  if (!isTest) {
+    if (!bookingTokenSecret) {
+      errors.push('BOOKING_TOKEN_SECRET is required with at least 32 characters in non-test environments.');
+    } else if (bookingTokenSecret.length < 32) {
+      errors.push('BOOKING_TOKEN_SECRET must be at least 32 characters long in non-test environments.');
     }
-  }
-
-  if (isProd && bookingTokenSecret.length < 32) {
-    errors.push('BOOKING_TOKEN_SECRET must be at least 32 characters long in production.');
+  } else if (!bookingTokenSecret) {
+    bookingTokenSecret = 'test_booking_token_secret_for_unit_tests_32ch';
   }
 
   // 5. Port & CORS
@@ -110,7 +115,9 @@ export const getEnvironmentConfig = () => {
     for (const err of errors) {
       console.error(`  - ${err}`);
     }
-    throw new Error(`Environment validation failed with ${errors.length} error(s). Service cannot start.`);
+    const validationErr = new Error(`Environment validation failed with ${errors.length} error(s): ${errors.join('; ')}. Service cannot start.`);
+    validationErr.errors = errors;
+    throw validationErr;
   }
 
   return {
@@ -152,4 +159,8 @@ export const config = () => {
     cachedConfig = getEnvironmentConfig();
   }
   return cachedConfig;
+};
+
+export const resetConfigForTesting = () => {
+  cachedConfig = null;
 };

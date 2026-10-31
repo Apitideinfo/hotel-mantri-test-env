@@ -1009,7 +1009,7 @@ router.get(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req, 
       providerEnabled: providerConfig.enabled ?? false,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to fetch WhatsApp configuration.' });
   }
 });
 
@@ -1129,7 +1129,7 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
         .eq('id', hotelId);
 
       if (retryResult.error) {
-        return res.status(500).json({ success: false, message: retryResult.error.message });
+        return res.status(500).json({ success: false, error: 'RETRY_FAILED', message: 'Failed to retry notification.' });
       }
     }
 
@@ -1153,7 +1153,7 @@ router.post(['/whatsapp/settings', '/settings'], requireHotelAccess, async (req,
       message: 'WhatsApp recipient and report delivery settings saved successfully.',
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: 'Failed to save WhatsApp settings.' });
   }
 });
 
@@ -1167,9 +1167,35 @@ const handleMetaNotificationWebhook = async (req, res) => {
     return res.status(200).type('text/plain').send(result.challenge);
   }
 
+  const signatureHeader = req.headers['x-hub-signature-256'] || req.headers['x-hub-signature'];
+  const rawBody = req.rawBody;
+
+  if (!rawBody) {
+    return res.status(400).json({
+      success: false,
+      code: 'RAW_BODY_MISSING',
+      error: 'Missing raw request body for webhook signature verification.',
+    });
+  }
+
+  const appSecret = (process.env.WHATSAPP_APP_SECRET || process.env.META_WHATSAPP_APP_SECRET || '').trim();
+  const sigResult = verifyMetaWebhookSignature({
+    rawBody,
+    signatureHeader,
+    appSecret,
+  });
+
+  if (!sigResult.valid) {
+    console.warn(`[MetaNotificationWebhook] Rejected invalid webhook: ${sigResult.error}`);
+    return res.status(sigResult.statusCode).json({
+      success: false,
+      error: sigResult.error,
+    });
+  }
+
   res.status(200).json({ success: true, received: true });
   try {
-    const payload = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    const payload = typeof req.body === 'object' ? req.body : JSON.parse(rawBody.toString('utf8') || '{}');
     await processMetaWebhookEvents(payload);
   } catch (err) {
     console.error('[MetaWebhookHandler] Error:', err.message);
@@ -1249,7 +1275,7 @@ router.post(['/whatsapp/retry-send', '/retry-send'], requireHotelAccess, async (
       whatsappDirectUrl: sendResult.whatsappDirectUrl,
     });
   } catch (err) {
-    return res.status(500).json({ success: false, message: 'Failed to retry notification: ' + err.message });
+    return res.status(500).json({ success: false, error: 'RETRY_ERROR', message: 'Internal error retrying notification.' });
   }
 });
 

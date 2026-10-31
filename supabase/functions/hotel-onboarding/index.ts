@@ -8,10 +8,20 @@ declare const Deno: {
   };
 };
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey, x-request-id",
+const getCorsHeaders = (reqOrigin: string | null) => {
+  const allowedOrigins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://hotel-mantri-test-env.vercel.app",
+    "https://hotelmantri.com",
+    "https://www.hotelmantri.com",
+  ];
+  const origin = reqOrigin && allowedOrigins.includes(reqOrigin) ? reqOrigin : allowedOrigins[0];
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey, x-request-id",
+  };
 };
 
 interface OnboardingPayload {
@@ -47,6 +57,8 @@ const STEPS = [
 
 Deno.serve(async (req: Request) => {
   const requestId = req.headers.get("x-request-id") || crypto.randomUUID();
+  const reqOrigin = req.headers.get("Origin");
+  const corsHeaders = getCorsHeaders(reqOrigin);
 
   // 1. CORS Preflight
   if (req.method === "OPTIONS") {
@@ -92,7 +104,31 @@ Deno.serve(async (req: Request) => {
           auth: { autoRefreshToken: false, persistSession: false },
         });
 
-        let query = adminClient.from("onboarding_attempts").select("*");
+        // H3: Super Admin access required to view onboarding attempts
+        let isSuperAdmin = false;
+        const { data: rpcSuperAdmin, error: rpcErr } = await userClient.rpc("is_super_admin");
+        if (!rpcErr && rpcSuperAdmin === true) {
+          isSuperAdmin = true;
+        } else {
+          const { data: adminRecord } = await adminClient
+            .from("hotel_admins")
+            .select("role")
+            .eq("user_id", user.id)
+            .eq("role", "super_admin")
+            .maybeSingle();
+          if (adminRecord) {
+            isSuperAdmin = true;
+          }
+        }
+
+        if (!isSuperAdmin) {
+          return errorResponse("auth", "FORBIDDEN", "Forbidden: Super Admin access is required to view onboarding attempts.", false, null, null, 403, requestId, corsHeaders);
+        }
+
+        // H3: Never return form_data in status response to prevent credential leakage
+        let query = adminClient
+          .from("onboarding_attempts")
+          .select("id, attempt_key, hotel_id, status, current_step, completed_steps, error_message, hotel_name, owner_name, admin_email, mobile, property_code, plan_id, created_at, updated_at");
         if (attemptIdParam) {
           query = query.eq("id", attemptIdParam);
         } else {
@@ -102,13 +138,17 @@ Deno.serve(async (req: Request) => {
 
         const { data: attempt, error: attemptError } = await query.maybeSingle();
         if (attemptError) {
-          return errorResponse("status", "QUERY_FAILED", "Failed to retrieve onboarding attempt status.", true, null, null, 500, requestId);
+          return errorResponse("status", "QUERY_FAILED", "Failed to retrieve onboarding attempt status.", true, null, null, 500, requestId, corsHeaders);
+        }
+
+        if (attempt && (attempt as any).form_data) {
+          delete (attempt as any).form_data;
         }
 
         return jsonResponse({
           success: true,
           attempt: attempt || null,
-        }, 200, requestId);
+        }, 200, requestId, corsHeaders);
       } catch (err) {
         console.error(`[ONBOARDING_STATUS_GET_ERROR] [${requestId}]`, err);
         return errorResponse("status", "STATUS_CHECK_FAILED", "Unable to verify onboarding status.", true, null, null, 500, requestId);
@@ -790,8 +830,15 @@ function validatePayload(body: OnboardingPayload): { valid: boolean; error?: str
       return { valid: false, error: "All room categories must have a valid name." };
     }
   }
-  if (!body.password || typeof body.password !== "string" || body.password.length < 6) {
-    return { valid: false, error: "Password must be at least 6 characters long." };
+  if (!body.password || typeof body.password !== "string" || body.password.length < 12) {
+    return { valid: false, error: "Password must be at least 12 characters long." };
+  }
+  const WEAK_PASSWORDS = new Set([
+    "password1234", "password12345", "admin1234567", "hotelmantri12", "welcome12345",
+    "123456789012", "qwerty123456", "letmein12345", "password@1234", "admin@123456"
+  ]);
+  if (WEAK_PASSWORDS.has(body.password.toLowerCase().trim())) {
+    return { valid: false, error: "Password is too common or insecure. Please choose a stronger password." };
   }
   return { valid: true };
 }
@@ -843,11 +890,11 @@ function generateMissingRooms(
   return result;
 }
 
-function jsonResponse(data: Record<string, unknown>, status = 200, requestId?: string) {
+function jsonResponse(data: Record<string, unknown>, status = 200, requestId?: string, headers = getCorsHeaders(null)) {
   return new Response(JSON.stringify({ ...data, request_id: requestId }), {
     status,
     headers: {
-      ...corsHeaders,
+      ...headers,
       "Content-Type": "application/json",
       ...(requestId ? { "x-request-id": requestId } : {}),
     },
@@ -863,6 +910,7 @@ function errorResponse(
   hotelId?: string | null,
   status = 500,
   requestId?: string,
+  headers = getCorsHeaders(null),
 ) {
   return jsonResponse(
     {
@@ -878,5 +926,6 @@ function errorResponse(
     },
     status,
     requestId,
+    headers,
   );
 }

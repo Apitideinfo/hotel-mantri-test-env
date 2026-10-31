@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { requireHotelAccess as checkAuth } from '../middleware/auth.js';
+import { supabaseServiceRole } from '../supabaseClient.js';
 import {
   getHotelBranding,
   updateHotelBranding,
@@ -164,7 +165,26 @@ router.post('/logo', checkAuth, async (req, res) => {
       fs.writeFileSync(filePath, buffer);
 
       // Use a persistent relative/local path or data url
-      finalLogoUrl = incomingData; // preserve high-quality data URI for zero-latency PDF rendering
+      finalLogoUrl = incomingData;
+
+      // Upload to Supabase Storage strictly scoped to caller's hotel_id directory: <hotelId>/logo.<ext>
+      const storagePath = `${hotelId}/logo.${ext}`;
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+      try {
+        const { error: storageErr } = await supabaseServiceRole.storage
+          .from('hotel-assets')
+          .upload(storagePath, buffer, { upsert: true, contentType: mimeType });
+        if (!storageErr) {
+          const { data: pubData } = supabaseServiceRole.storage
+            .from('hotel-assets')
+            .getPublicUrl(storagePath);
+          if (pubData?.publicUrl) {
+            finalLogoUrl = pubData.publicUrl;
+          }
+        }
+      } catch (uploadErr) {
+        console.warn('[BRANDING_API] Supabase storage upload notice:', uploadErr.message);
+      }
     }
 
     const updated = await updateHotelBranding(hotelId, { logoUrl: finalLogoUrl });

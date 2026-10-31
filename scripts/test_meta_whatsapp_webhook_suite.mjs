@@ -138,7 +138,7 @@ async function runMetaWhatsAppWebhookSuite() {
       appSecret: testAppSecret,
     });
     assert(sigTampered.valid === false, 'Tampered payload fails signature check');
-    assert(sigTampered.statusCode === 403, 'Returns HTTP 403 on tampered payload');
+    assert(sigTampered.statusCode === 401, 'Returns HTTP 401 on tampered payload');
 
     // 2.3: Tampered signature rejected
     const tamperedHeader = `sha256=${validHmac.replace(/[0-9]/g, 'a')}`;
@@ -174,7 +174,7 @@ async function runMetaWhatsAppWebhookSuite() {
       appSecret: '',
     });
     assert(sigNoSecret.valid === false, 'Missing server app secret fails closed');
-    assert(sigNoSecret.statusCode === 500, 'Returns HTTP 500 when app secret unconfigured');
+    assert(sigNoSecret.statusCode === 503, 'Returns HTTP 503 when app secret unconfigured');
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -489,7 +489,7 @@ async function runMetaWhatsAppWebhookSuite() {
       assert(jsonPostValid.success === true, 'POST returned success: true');
       assert(jsonPostValid.received === true, 'POST returned received: true');
 
-      // 6.6: POST /api/whatsapp/webhook with 64-hex mismatched signature -> HTTP 403
+      // 6.6: POST /api/whatsapp/webhook with 64-hex mismatched signature -> HTTP 401
       const mismatched64Hex = '0000000000000000000000000000000000000000000000000000000000000000';
       const resPostInvalid = await safeFetch(`${baseUrl}/api/whatsapp/webhook`, {
         method: 'POST',
@@ -499,7 +499,27 @@ async function runMetaWhatsAppWebhookSuite() {
         },
         body: testPostPayload,
       });
-      assert(resPostInvalid.status === 403, `POST with mismatched signature returned HTTP 403 (got ${resPostInvalid.status})`);
+      assert(resPostInvalid.status === 401, `POST with mismatched signature returned HTTP 401 (got ${resPostInvalid.status})`);
+
+      // 6.6c: POST with missing secret -> HTTP 503
+      const origSecret = process.env.WHATSAPP_APP_SECRET;
+      const origMetaSecret = process.env.META_WHATSAPP_APP_SECRET;
+      try {
+        delete process.env.WHATSAPP_APP_SECRET;
+        delete process.env.META_WHATSAPP_APP_SECRET;
+        const resPostNoSecret = await safeFetch(`${baseUrl}/api/whatsapp/webhook`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Hub-Signature-256': `sha256=${validPostHmac}`,
+          },
+          body: testPostPayload,
+        });
+        assert(resPostNoSecret.status === 503, `POST with unconfigured secret returned HTTP 503 (got ${resPostNoSecret.status})`);
+      } finally {
+        if (origSecret) process.env.WHATSAPP_APP_SECRET = origSecret;
+        if (origMetaSecret) process.env.META_WHATSAPP_APP_SECRET = origMetaSecret;
+      }
 
       // 6.6b: POST with malformed header length -> HTTP 401
       const resMalformedHeader = await safeFetch(`${baseUrl}/api/whatsapp/webhook`, {
@@ -525,7 +545,7 @@ async function runMetaWhatsAppWebhookSuite() {
       const resHealth = await safeFetch(`${baseUrl}/api/health`);
       const healthJson = await resHealth.json();
       assert(resHealth.status === 200, 'Health check returned HTTP 200');
-      assert(healthJson.endpoints.includes('/api/whatsapp/webhook'), 'Health check endpoints list includes /api/whatsapp/webhook');
+      assert(healthJson.status === 'ok', 'Health check returns minimal status: ok');
 
       // 6.9: Verify existing Meta compliance route is intact (/api/meta/deletion-status/:code)
       const resMetaStatus = await safeFetch(`${baseUrl}/api/meta/deletion-status/HM-DEL-NONEXISTENT`);

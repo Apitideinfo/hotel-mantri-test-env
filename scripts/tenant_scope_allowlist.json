@@ -1,0 +1,20 @@
+[
+  {
+    "file": "server/services/laundryService.js",
+    "line": 1110,
+    "table": "laundry_bill_items",
+    "reason": "Batch insertion where hotel_id is injected into each element of billItemsPayload prior to insert"
+  },
+  {
+    "file": "server/services/metaWhatsAppService.js",
+    "line": 1359,
+    "table": "whatsapp_webhook_events",
+    "reason": "Inbound Meta WhatsApp delivery status webhook event captured at gateway level before hotel resolution by phone_number_id"
+  },
+  {
+    "file": "server/services/metaWhatsAppService.js",
+    "line": 1444,
+    "table": "whatsapp_webhook_events",
+    "reason": "Inbound Meta WhatsApp message webhook event captured at gateway level before hotel resolution by phone_number_id"
+  }
+]

@@ -80,8 +80,11 @@ const router = express.Router();
 
 // Strict RBAC: All reservation operations require valid hotel context and forbid Housekeeping role
 // Guest confirmation PDF route (/:id/confirmation/pdf) handles its own scoped HMAC token authentication
+const CONFIRMATION_PDF_REGEX = /^\/[0-9a-f-]{36}\/confirmation\/pdf$/i;
+
 router.use((req, res, next) => {
-  if (req.path.includes('/confirmation/pdf')) {
+  // L2: Exact anchored regex match to prevent path traversal / bypass
+  if (CONFIRMATION_PDF_REGEX.test(req.path)) {
     return next();
   }
   return checkAuth(req, res, (err) => {
@@ -187,10 +190,12 @@ router.get('/', checkAuth, async (req, res) => {
       query = query.lte('check_in_date', toDate);
     }
 
-    // Search query: guest name, phone, email, room, id
+    // Search query: guest name, phone, email, room, id (Sanitized to prevent PostgREST grammar injection)
     if (search && search.trim()) {
-      const s = search.trim();
-      query = query.or(`guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%,guest_email.ilike.%${s}%,room_no.ilike.%${s}%,payment_ref.ilike.%${s}%`);
+      const sanitized = search.trim().replace(/[,()"'\\]/g, '');
+      if (sanitized) {
+        query = query.or(`guest_name.ilike.%${sanitized}%,guest_phone.ilike.%${sanitized}%,guest_email.ilike.%${sanitized}%,room_no.ilike.%${sanitized}%,payment_ref.ilike.%${sanitized}%`);
+      }
     }
 
     // Sort order
@@ -1058,7 +1063,7 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching reservation confirmation:', err);
-    res.status(500).json({ success: false, code: 'CONFIRMATION_FETCH_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'CONFIRMATION_FETCH_FAILED', message: 'Failed to retrieve confirmation document.' });
   }
 });
 
@@ -1073,7 +1078,10 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
  */
 const authenticatePdfAccess = async (req, reservationId) => {
   const authHeader = req.headers.authorization;
-  const rawToken = req.query.token || req.query.auth_token || req.query.auth || req.headers['x-guest-token'];
+  const headerGuestToken = req.headers['x-guest-token'];
+  const queryGuestToken = req.query.token || req.query.auth_token || req.query.auth;
+  const rawToken = headerGuestToken || queryGuestToken;
+  const isFromHeader = Boolean(headerGuestToken);
 
   // 0. Prohibit Bearer JWTs in URL query parameters to eliminate credential leakage
   // via browser navigation history, reverse proxy access logs, and Referer headers (CWE-598 / RFC 6750).
@@ -1139,6 +1147,19 @@ const authenticatePdfAccess = async (req, reservationId) => {
           code: guestRes.code,
           message: guestRes.message,
         };
+      }
+
+      // M6: Scoped query-parameter download links are short-lived (<= 15 minutes)
+      if (!isFromHeader) {
+        const tokenIssuedAt = guestRes.payload.iat || (guestRes.payload.exp ? guestRes.payload.exp - 24 * 60 * 60 * 1000 : null);
+        if (tokenIssuedAt && Date.now() - tokenIssuedAt > 15 * 60 * 1000) {
+          return {
+            authorized: false,
+            status: 401,
+            code: 'QUERY_TOKEN_EXPIRED',
+            message: 'Direct URL download link has expired (15-minute validity limit exceeded). Please refresh confirmation from the application.',
+          };
+        }
       }
 
       return {
@@ -1286,7 +1307,7 @@ router.post('/:id/confirmation/regenerate', pdfRateLimiter, checkAuth, async (re
     });
   } catch (err) {
     console.error('Error regenerating confirmation:', err);
-    res.status(500).json({ success: false, code: 'REGENERATE_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'REGENERATE_FAILED', message: 'Failed to regenerate confirmation document.' });
   }
 });
 
@@ -1458,7 +1479,7 @@ router.post('/:id/confirmation/send-email', checkAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Error sending confirmation email:', err);
-    res.status(500).json({ success: false, code: 'EMAIL_SEND_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'EMAIL_SEND_FAILED', message: 'Failed to send confirmation email.' });
   }
 });
 
@@ -1616,7 +1637,7 @@ router.post('/:id/confirmation/send-whatsapp', checkAuth, async (req, res) => {
     }
   } catch (err) {
     console.error('Error sending confirmation WhatsApp:', err);
-    res.status(500).json({ success: false, code: 'WHATSAPP_SEND_FAILED', message: err.message });
+    res.status(500).json({ success: false, code: 'WHATSAPP_SEND_FAILED', message: 'Failed to send confirmation WhatsApp message.' });
   }
 });
 

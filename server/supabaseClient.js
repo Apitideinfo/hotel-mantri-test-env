@@ -83,7 +83,7 @@ let lastUsedUrl = null;
  * Configured with persistSession: false to prevent cross-request session leakage.
  */
 export const getServiceRoleClient = () => {
-  const currentKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const currentKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const currentUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 
   if (!currentUrl) {

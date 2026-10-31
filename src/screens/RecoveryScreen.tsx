@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '@/lib/auth';
+import { validatePasswordStrength } from '@/lib/passwordPolicy';
 import { BrandLogo } from '@/components/BrandLogo';
 
 export const RecoveryScreen = () => {
@@ -12,8 +13,9 @@ export const RecoveryScreen = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    const pwErr = validatePasswordStrength(password);
+    if (pwErr) {
+      setError(pwErr);
       return;
     }
     if (password !== confirmPassword) {
