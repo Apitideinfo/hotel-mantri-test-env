@@ -55,7 +55,15 @@ export const getEnvironmentConfig = () => {
   // 3. Razorpay Payment Gateway
   let razorpayKeyId = (process.env.RAZORPAY_KEY_ID || process.env.VITE_RAZORPAY_KEY_ID || '').trim();
   let razorpayKeySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
-  const razorpayWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET || 'rzp_test_webhook_secret_key_2026').trim();
+  const razorpayWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+
+  if (!isTest) {
+    if (!razorpayWebhookSecret) {
+      errors.push('RAZORPAY_WEBHOOK_SECRET is required in non-test environments.');
+    } else if (razorpayWebhookSecret.length < 32) {
+      errors.push('RAZORPAY_WEBHOOK_SECRET must be at least 32 characters long in non-test environments.');
+    }
+  }
 
   if (isProd) {
     if (!razorpayKeyId) {
@@ -110,7 +118,9 @@ export const getEnvironmentConfig = () => {
     for (const err of errors) {
       console.error(`  - ${err}`);
     }
-    throw new Error(`Environment validation failed with ${errors.length} error(s). Service cannot start.`);
+    const validationErr = new Error(`Environment validation failed with ${errors.length} error(s): ${errors.join('; ')}. Service cannot start.`);
+    validationErr.errors = errors;
+    throw validationErr;
   }
 
   return {
@@ -152,4 +162,8 @@ export const config = () => {
     cachedConfig = getEnvironmentConfig();
   }
   return cachedConfig;
+};
+
+export const resetConfigForTesting = () => {
+  cachedConfig = null;
 };

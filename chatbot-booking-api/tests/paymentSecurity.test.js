@@ -8,7 +8,9 @@ import {
   setRazorpayClientForTesting,
 } from '../src/services/paymentService.js';
 import { setConfiguredHotelForTesting } from '../src/services/hotelConfigService.js';
-import { config } from '../src/config/environment.js';
+// Ensure test environment has valid test webhook secret (>= 32 chars)
+process.env.RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'test_webhook_secret_min_32_chars_12345';
+import { config, resetConfigForTesting } from '../src/config/environment.js';
 
 test('PaymentSecurity: Razorpay Checkout Signature Verification', async (t) => {
   const orderId = 'order_test_12345';
@@ -91,6 +93,25 @@ test('PaymentSecurity: Razorpay Webhook Raw-Body HMAC Signature Verification', a
   await t.test('rejects webhook with missing raw buffer or signature', () => {
     assert.strictEqual(verifyRazorpayWebhookSignature({ rawBody: null, signature: validWebhookSig }), false);
     assert.strictEqual(verifyRazorpayWebhookSignature({ rawBody: rawBuffer, signature: '' }), false);
+  });
+
+  await t.test('rejects webhook with 503 error when webhook secret is not configured', () => {
+    const savedSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    try {
+      delete process.env.RAZORPAY_WEBHOOK_SECRET;
+      resetConfigForTesting();
+      assert.throws(
+        () => verifyRazorpayWebhookSignature({ rawBody: rawBuffer, signature: validWebhookSig }),
+        (err) => {
+          assert.strictEqual(err.statusCode, 503);
+          assert.strictEqual(err.code, 'WEBHOOK_SECRET_NOT_CONFIGURED');
+          return true;
+        }
+      );
+    } finally {
+      process.env.RAZORPAY_WEBHOOK_SECRET = savedSecret;
+      resetConfigForTesting();
+    }
   });
 });
 

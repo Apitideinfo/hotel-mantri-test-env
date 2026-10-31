@@ -56,6 +56,10 @@ const SUITES = [
     name: 'Staff Role Escalation Prevention Audit',
     file: 'scripts/test_role_escalation.mjs',
   },
+  {
+    name: 'Hardcoded Secrets & Fail-Closed Audit',
+    file: 'scripts/test_hardcoded_secrets.mjs',
+  },
 ];
 
 async function runCommand(scriptPath) {

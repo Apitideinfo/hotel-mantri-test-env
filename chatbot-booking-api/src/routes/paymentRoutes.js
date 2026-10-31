@@ -36,10 +36,23 @@ router.post('/razorpay/webhook', async (req, res, next) => {
   }
 
   // 1. Verify HMAC-SHA256 signature
-  const isValid = verifyRazorpayWebhookSignature({ rawBody, signature });
+  let isValid = false;
+  try {
+    isValid = verifyRazorpayWebhookSignature({ rawBody, signature });
+  } catch (err) {
+    if (err.statusCode === 503 || err.code === 'WEBHOOK_SECRET_NOT_CONFIGURED') {
+      return res.status(503).json({
+        success: false,
+        error: { code: 'SERVICE_UNAVAILABLE', message: 'Webhook secret is not configured.' },
+        requestId: req.requestId,
+      });
+    }
+    throw err;
+  }
+
   if (!isValid) {
     console.warn('[RazorpayWebhook] Signature mismatch. Webhook rejected.');
-    return res.status(400).json({
+    return res.status(401).json({
       success: false,
       error: { code: 'SIGNATURE_INVALID', message: 'Webhook signature verification failed.' },
       requestId: req.requestId,

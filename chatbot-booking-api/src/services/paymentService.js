@@ -281,18 +281,23 @@ export const verifyRazorpayCheckoutSignature = ({ orderId, paymentId, signature 
  * Verifies Razorpay webhook HMAC signature against raw request body bytes.
  */
 export const verifyRazorpayWebhookSignature = ({ rawBody, signature }) => {
+  const webhookSecret = config().razorpay.webhookSecret;
+  if (!webhookSecret) {
+    console.error('[PaymentService] RAZORPAY_WEBHOOK_SECRET is not configured on server.');
+    const err = new Error('RAZORPAY_WEBHOOK_SECRET is not configured on server.');
+    err.statusCode = 503;
+    err.code = 'WEBHOOK_SECRET_NOT_CONFIGURED';
+    throw err;
+  }
+
   if (!rawBody || !signature) {
     return false;
   }
 
-  const webhookSecret = config().razorpay.webhookSecret;
-  if (!webhookSecret) {
-    console.error('[PaymentService] RAZORPAY_WEBHOOK_SECRET is not configured on server.');
-    return false;
-  }
-
   const expectedSig = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('hex');
-  return timingSafeEqual(signature, expectedSig);
+  const sigBuf = crypto.createHash('sha256').update(String(signature)).digest();
+  const expBuf = crypto.createHash('sha256').update(expectedSig).digest();
+  return crypto.timingSafeEqual(sigBuf, expBuf);
 };
 
 /**
