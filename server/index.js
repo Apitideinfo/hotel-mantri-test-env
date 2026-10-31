@@ -13,6 +13,32 @@ import { timingMiddleware } from './middleware/timing.js';
 
 dotenv.config();
 
+/**
+ * M6: Redacts sensitive query parameter values (tokens, secrets, credentials) from request logs.
+ */
+export const sanitizeUrlForLog = (urlStr) => {
+  if (!urlStr || typeof urlStr !== 'string') return '';
+  const qIdx = urlStr.indexOf('?');
+  if (qIdx === -1) return urlStr;
+  const pathPart = urlStr.slice(0, qIdx);
+  const rawQuery = urlStr.slice(qIdx + 1);
+  if (!rawQuery) return pathPart;
+
+  const sensitiveKeys = new Set(['token', 'auth', 'auth_token', 'key', 'signature', 'code', 'password', 'guest_token']);
+  const sanitizedParams = rawQuery.split('&').map((param) => {
+    const eqIdx = param.indexOf('=');
+    if (eqIdx === -1) return param;
+    const key = param.slice(0, eqIdx);
+    const keyLower = decodeURIComponent(key).toLowerCase().trim();
+    if (sensitiveKeys.has(keyLower)) {
+      return `${key}=[REDACTED]`;
+    }
+    return param;
+  });
+
+  return `${pathPart}?${sanitizedParams.join('&')}`;
+};
+
 // Server Lifecycle & Graceful Shutdown State
 let isShuttingDown = false;
 let activeRequests = 0;
@@ -131,7 +157,9 @@ app.use((req, res, next) => {
 
   const start = Date.now();
   res.on('finish', () => {
-    console.log(`[HTTP ${requestId}] ${req.method} ${original}${original !== req.url ? ` (rewritten: ${req.url})` : ''} -> ${res.statusCode} (${Date.now() - start}ms)`);
+    const safeOriginal = sanitizeUrlForLog(original);
+    const safeUrl = sanitizeUrlForLog(req.url);
+    console.log(`[HTTP ${requestId}] ${req.method} ${safeOriginal}${safeOriginal !== safeUrl ? ` (rewritten: ${safeUrl})` : ''} -> ${res.statusCode} (${Date.now() - start}ms)`);
   });
   next();
 });

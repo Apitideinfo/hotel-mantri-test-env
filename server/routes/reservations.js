@@ -1075,7 +1075,10 @@ router.get('/:id/confirmation', checkAuth, async (req, res) => {
  */
 const authenticatePdfAccess = async (req, reservationId) => {
   const authHeader = req.headers.authorization;
-  const rawToken = req.query.token || req.query.auth_token || req.query.auth || req.headers['x-guest-token'];
+  const headerGuestToken = req.headers['x-guest-token'];
+  const queryGuestToken = req.query.token || req.query.auth_token || req.query.auth;
+  const rawToken = headerGuestToken || queryGuestToken;
+  const isFromHeader = Boolean(headerGuestToken);
 
   // 0. Prohibit Bearer JWTs in URL query parameters to eliminate credential leakage
   // via browser navigation history, reverse proxy access logs, and Referer headers (CWE-598 / RFC 6750).
@@ -1141,6 +1144,19 @@ const authenticatePdfAccess = async (req, reservationId) => {
           code: guestRes.code,
           message: guestRes.message,
         };
+      }
+
+      // M6: Scoped query-parameter download links are short-lived (<= 15 minutes)
+      if (!isFromHeader) {
+        const tokenIssuedAt = guestRes.payload.iat || (guestRes.payload.exp ? guestRes.payload.exp - 24 * 60 * 60 * 1000 : null);
+        if (tokenIssuedAt && Date.now() - tokenIssuedAt > 15 * 60 * 1000) {
+          return {
+            authorized: false,
+            status: 401,
+            code: 'QUERY_TOKEN_EXPIRED',
+            message: 'Direct URL download link has expired (15-minute validity limit exceeded). Please refresh confirmation from the application.',
+          };
+        }
       }
 
       return {

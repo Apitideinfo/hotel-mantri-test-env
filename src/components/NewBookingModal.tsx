@@ -282,14 +282,8 @@ export const NewBookingModal = ({
         headers['x-guest-token'] = confirmationToken;
       }
 
-      const params = new URLSearchParams();
-      // If no header token could be attached, fallback to scoped HMAC confirmation token only (never JWT)
-      if (!token && confirmationToken && confirmationToken.split('.').length === 2) {
-        params.set('token', confirmationToken);
-      }
-
-      const qs = params.toString();
-      const url = `/api/reservations/${savedReservationId}/confirmation/pdf${qs ? `?${qs}` : ''}`;
+      // M6: Guest token is passed in X-Guest-Token header to prevent URL credential exposure
+      const url = `/api/reservations/${savedReservationId}/confirmation/pdf`;
       const res = await fetch(url, { headers });
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));

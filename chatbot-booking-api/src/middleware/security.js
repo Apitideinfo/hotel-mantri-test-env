@@ -205,6 +205,32 @@ export const sanitizeError = (msg) => {
 /**
  * Centralized error handler.
  */
+/**
+ * M6: Redacts sensitive query parameter values from URL in logs.
+ */
+export const sanitizeUrlForLog = (urlStr) => {
+  if (!urlStr || typeof urlStr !== 'string') return '';
+  const qIdx = urlStr.indexOf('?');
+  if (qIdx === -1) return urlStr;
+  const pathPart = urlStr.slice(0, qIdx);
+  const rawQuery = urlStr.slice(qIdx + 1);
+  if (!rawQuery) return pathPart;
+
+  const sensitiveKeys = new Set(['token', 'auth', 'auth_token', 'key', 'signature', 'code', 'password', 'guest_token']);
+  const sanitizedParams = rawQuery.split('&').map((param) => {
+    const eqIdx = param.indexOf('=');
+    if (eqIdx === -1) return param;
+    const key = param.slice(0, eqIdx);
+    const keyLower = decodeURIComponent(key).toLowerCase().trim();
+    if (sensitiveKeys.has(keyLower)) {
+      return `${key}=[REDACTED]`;
+    }
+    return param;
+  });
+
+  return `${pathPart}?${sanitizedParams.join('&')}`;
+};
+
 export const errorHandlerMiddleware = (err, req, res, next) => {
   if (res.headersSent) {
     return next(err);
@@ -228,7 +254,7 @@ export const errorHandlerMiddleware = (err, req, res, next) => {
   const isProd = config().isProd;
 
   console.error(`[${requestId}] API Error:`, {
-    path: req.originalUrl || req.url,
+    path: sanitizeUrlForLog(req.originalUrl || req.url),
     method: req.method,
     status,
     code: err?.code || 'INTERNAL_ERROR',
