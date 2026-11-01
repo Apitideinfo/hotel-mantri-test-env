@@ -57,6 +57,10 @@ const SUITES = [
     file: 'scripts/test_role_escalation.mjs',
   },
   {
+    name: 'Hotel Admins Tamper & Super Admin Escalation Audit (N1)',
+    file: 'scripts/test_hotel_admins_tamper.mjs',
+  },
+  {
     name: 'Hardcoded Secrets & Fail-Closed Audit',
     file: 'scripts/test_hardcoded_secrets.mjs',
   },

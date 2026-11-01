@@ -101,7 +101,8 @@ Deno.serve(async (req: Request) => {
         .from("hotel_admins")
         .select("role")
         .eq("user_id", user.id)
-        .eq("role", "super_admin");
+        .eq("role", "super_admin")
+        .eq("status", "Active");
       if (adminRows && adminRows.length > 0) isSuperAdmin = true;
     }
 
@@ -286,23 +287,52 @@ Deno.serve(async (req: Request) => {
       if (createError) throw createError;
       const userId = newUserData.user.id;
 
-      await adminClient.from("company_users").insert({
+      const { data: createdRow, error: insertError } = await adminClient.from("company_users").insert({
         user_id: userId,
         email: cleanEmail,
         name: name || cleanEmail,
         role: assignedRole,
+        status: "Active",
         is_active: true,
-      });
+      }).select("*").single();
+
+      if (insertError) throw insertError;
 
       await logSuperAdminAudit("create_company_user", userId, { email: cleanEmail, role: assignedRole });
-      return new Response(JSON.stringify({ success: true, userId, email: cleanEmail }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ success: true, userId, email: cleanEmail, company_user: createdRow }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ── ACTION: update_company_user ──────────────────────────────────────────
+    if (action === "update_company_user") {
+      const { id, user_id, patch } = body;
+      if (!id && !user_id) {
+        return new Response(JSON.stringify({ error: "id or user_id is required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      let query = adminClient.from("company_users").update({ ...patch, updated_at: new Date().toISOString() });
+      if (id) query = query.eq("id", id);
+      else query = query.eq("user_id", user_id);
+
+      const { data: updatedRow, error: updateError } = await query.select("*").single();
+      if (updateError) {
+        return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      await logSuperAdminAudit("update_company_user", updatedRow.id, { patch });
+      return new Response(JSON.stringify({ success: true, user: updatedRow }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // ── ACTION: remove_company_user ──────────────────────────────────────────
     if (action === "remove_company_user") {
-      const { user_id } = body;
-      if (!user_id) {
-        return new Response(JSON.stringify({ error: "user_id is required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      let { user_id, id } = body;
+      if (!user_id && !id) {
+        return new Response(JSON.stringify({ error: "user_id or id is required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      if (!user_id && id) {
+        const { data: cu } = await adminClient.from("company_users").select("user_id").eq("id", id).maybeSingle();
+        if (cu?.user_id) user_id = cu.user_id;
+        else {
+          await adminClient.from("company_users").delete().eq("id", id);
+          return new Response(JSON.stringify({ success: true, id }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
       }
 
       // H3: Block removing caller themselves
@@ -342,6 +372,72 @@ Deno.serve(async (req: Request) => {
       return new Response(JSON.stringify({ success: true, user_id }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // ── ACTION: record_subscription_payment ─────────────────────────────────
+    if (action === "record_subscription_payment") {
+      const { payload } = body;
+      if (!payload || !payload.hotel_id) {
+        return new Response(JSON.stringify({ error: "Valid payload with hotel_id is required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const { data: paymentRow, error: payErr } = await adminClient.from("subscription_payments").insert(payload).select("*").single();
+      if (payErr) {
+        return new Response(JSON.stringify({ error: payErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      await logSuperAdminAudit("record_subscription_payment", paymentRow.id, { hotel_id: payload.hotel_id });
+      return new Response(JSON.stringify({ success: true, payment: paymentRow }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ── ACTION: add_subscription_note ───────────────────────────────────────
+    if (action === "add_subscription_note") {
+      const { hotel_id, note } = body;
+      if (!hotel_id || !note) {
+        return new Response(JSON.stringify({ error: "hotel_id and note are required" }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const { error: noteErr } = await adminClient.from("subscription_notes").insert({
+        hotel_id,
+        note,
+        created_by: user.id,
+        created_by_email: user.email ?? "",
+      });
+      if (noteErr) {
+        return new Response(JSON.stringify({ error: noteErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      await logSuperAdminAudit("add_subscription_note", hotel_id, { hotel_id, note });
+      return new Response(JSON.stringify({ success: true }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ── ACTION: start_impersonation ─────────────────────────────────────────
+    if (action === "start_impersonation") {
+      const { hotel_id, hotel_name, reason } = body;
+      const { data: impData, error: impErr } = await adminClient.from("impersonation_sessions").insert({
+        admin_user_id: user.id,
+        admin_email: user.email ?? "",
+        hotel_id,
+        hotel_name,
+        reason,
+        started_at: new Date().toISOString(),
+        is_active: true,
+      }).select("*").single();
+      if (impErr) {
+        return new Response(JSON.stringify({ error: impErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      await logSuperAdminAudit("start_impersonation", impData.id, { hotel_id, hotel_name, reason });
+      return new Response(JSON.stringify({ success: true, session: impData }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ── ACTION: end_impersonation ───────────────────────────────────────────
+    if (action === "end_impersonation") {
+      const { session_id } = body;
+      const { error: endErr } = await adminClient.from("impersonation_sessions").update({
+        is_active: false,
+        ended_at: new Date().toISOString(),
+      }).eq("id", session_id);
+      if (endErr) {
+        return new Response(JSON.stringify({ error: endErr.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      await logSuperAdminAudit("end_impersonation", session_id, {});
+      return new Response(JSON.stringify({ success: true }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // ── ACTION: deactivate_hotel (Soft-delete per H3) ────────────────────────
     if (action === "deactivate_hotel") {
       const { hotel_id } = body;
@@ -353,6 +449,7 @@ Deno.serve(async (req: Request) => {
         .from("hotels")
         .update({
           is_active: false,
+          subscription_status: "Suspended",
           deactivated_at: new Date().toISOString(),
         })
         .eq("id", hotel_id);
@@ -360,6 +457,11 @@ Deno.serve(async (req: Request) => {
       if (updateError) {
         return new Response(JSON.stringify({ error: updateError.message }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
+
+      await adminClient
+        .from("hotel_admins")
+        .update({ status: "Inactive" })
+        .eq("hotel_id", hotel_id);
 
       await logSuperAdminAudit("deactivate_hotel", hotel_id, { soft_deleted: true });
       return new Response(JSON.stringify({ success: true, hotel_id, status: "deactivated" }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
