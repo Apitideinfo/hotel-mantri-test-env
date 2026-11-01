@@ -249,8 +249,12 @@ export const getPayments = async (hotelId?: string): Promise<SubscriptionPayment
 };
 
 export const createPayment = async (payload: Record<string, unknown>): Promise<SubscriptionPayment> => {
-  const { data, error } = await supabase.from('subscription_payments').insert(payload).select('*').single();
-  if (error) throw error;
+  const { data: result, error: fnErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'record_subscription_payment', payload },
+  });
+  if (fnErr) throw new Error(fnErr.message || 'Failed to record subscription payment');
+  if (result?.error) throw new Error(result.error);
+  const data = result.payment as SubscriptionPayment;
   await logAudit({
     action: 'record_payment',
     module: 'subscriptions',
@@ -258,7 +262,7 @@ export const createPayment = async (payload: Record<string, unknown>): Promise<S
     record_id: data.id,
     new_value: data as Record<string, unknown>,
   });
-  return data as SubscriptionPayment;
+  return data;
 };
 
 // ── Hotel Features ──
@@ -313,17 +317,16 @@ export const saveCompanyUser = async (
   if (id) {
     const { password, ...patch } = input;
     void password;
-    const { data, error } = await supabase
-      .from('company_users')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
+    const { data: result, error: updateErr } = await supabase.functions.invoke('setup-super-admin', {
+      body: { action: 'update_company_user', id, patch },
+    });
+    if (updateErr) throw new Error(updateErr.message || 'Failed to update company user');
+    if (result?.error) throw new Error(result.error);
+    const data = result.user as CompanyUser;
     await logAudit({ action: 'update_company_user', module: 'users', record_id: id, new_value: data as Record<string, unknown> });
-    return data as CompanyUser;
+    return data;
   }
-  // Create auth user first via edge function
+  // Create auth user and company_users row via setup-super-admin edge function
   if (!input.password || input.password.length < 12) throw new Error('Password must be at least 12 characters');
   const { data: result, error: fetchErr } = await supabase.functions.invoke('setup-super-admin', {
     body: { action: 'create_company_user', email: input.email, password: input.password, name: input.name, role: input.role },
@@ -331,22 +334,18 @@ export const saveCompanyUser = async (
   if (fetchErr) {
     throw new Error(fetchErr.message || 'Failed to create user account');
   }
-  const userId = result.userId as string;
-  const { password, ...insertPayload } = input;
-  void password;
-  const { data, error } = await supabase
-    .from('company_users')
-    .insert({ ...insertPayload, user_id: userId })
-    .select('*')
-    .single();
-  if (error) throw error;
+  if (result?.error) throw new Error(result.error);
+  const data = (result.company_user || { id: result.userId, user_id: result.userId, email: input.email, name: input.name, role: input.role, status: 'Active' }) as CompanyUser;
   await logAudit({ action: 'create_company_user', module: 'users', record_id: data.id, new_value: data as Record<string, unknown> });
-  return data as CompanyUser;
+  return data;
 };
 
 export const deleteCompanyUser = async (id: string): Promise<void> => {
-  const { error } = await supabase.from('company_users').delete().eq('id', id);
-  if (error) throw error;
+  const { data: result, error: delErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'remove_company_user', id },
+  });
+  if (delErr) throw new Error(delErr.message || 'Failed to delete company user');
+  if (result?.error) throw new Error(result.error);
   await logAudit({ action: 'delete_company_user', module: 'users', record_id: id });
 };
 
@@ -538,21 +537,12 @@ export const updateSystemSetting = async (key: string, value: Record<string, unk
 // ── Impersonation ──
 
 export const startImpersonation = async (hotelId: string, hotelName: string, reason: string): Promise<ImpersonationSession> => {
-  const { data: userData } = await supabase.auth.getUser();
-  const { data, error } = await supabase
-    .from('impersonation_sessions')
-    .insert({
-      admin_user_id: userData.user?.id ?? '',
-      admin_email: userData.user?.email ?? '',
-      hotel_id: hotelId,
-      hotel_name: hotelName,
-      reason,
-      started_at: new Date().toISOString(),
-      is_active: true,
-    })
-    .select('*')
-    .single();
-  if (error) throw error;
+  const { data: result, error: fnErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'start_impersonation', hotel_id: hotelId, hotel_name: hotelName, reason },
+  });
+  if (fnErr) throw new Error(fnErr.message || 'Failed to start impersonation');
+  if (result?.error) throw new Error(result.error);
+  const data = result.session as ImpersonationSession;
   await logAudit({
     action: 'start_impersonation',
     module: 'impersonation',
@@ -562,19 +552,15 @@ export const startImpersonation = async (hotelId: string, hotelName: string, rea
     reason,
     severity: 'warning',
   });
-  return data as ImpersonationSession;
+  return data;
 };
 
 export const endImpersonation = async (sessionId: string): Promise<void> => {
-  const { error } = await supabase
-    .from('impersonation_sessions')
-    .update({
-      is_active: false,
-      ended_at: new Date().toISOString(),
-      duration_seconds: Math.floor(Date.now() / 1000) - 0,
-    })
-    .eq('id', sessionId);
-  if (error) throw error;
+  const { data: result, error: fnErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'end_impersonation', session_id: sessionId },
+  });
+  if (fnErr) throw new Error(fnErr.message || 'Failed to end impersonation');
+  if (result?.error) throw new Error(result.error);
   await logAudit({
     action: 'end_impersonation',
     module: 'impersonation',
@@ -1805,12 +1791,9 @@ export const getSubscriptionNotes = async (hotelId: string): Promise<Subscriptio
 };
 
 export const addSubscriptionNote = async (hotelId: string, note: string): Promise<void> => {
-  const { data: userData } = await supabase.auth.getUser();
-  const { error } = await supabase.from('subscription_notes').insert({
-    hotel_id: hotelId,
-    note,
-    created_by: userData.user?.id,
-    created_by_email: userData.user?.email ?? '',
+  const { data: result, error: fnErr } = await supabase.functions.invoke('setup-super-admin', {
+    body: { action: 'add_subscription_note', hotel_id: hotelId, note },
   });
-  if (error) throw error;
+  if (fnErr) throw new Error(fnErr.message || 'Failed to add subscription note');
+  if (result?.error) throw new Error(result.error);
 };
