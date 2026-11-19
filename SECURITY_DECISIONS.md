@@ -98,6 +98,31 @@ All operational tables containing `hotel_id` are restricted to the caller's acti
 
 - **Decision:** Authoritative database settlement verification in `/api/verify-payment`.
 - **Rationale:** Attackers can tamper with the payment amount or order reference on the client side. The backend must never trust client-supplied payment amounts.
+
+---
+
+## 6. Role-Aware Database RLS & Table Classifications (N2)
+
+Migration `20261102010000_role_aware_policies.sql` establishes database-level role isolation using `auth_staff_role()` and `auth_has_role(VARIADIC text[])`.
+
+### A. Role Hierarchy
+- `super_admin`: Full platform access via `is_super_admin()`.
+- `hotel_admin`: Full management of own hotel profile, rooms, rates, reservations, folios, finance, staff.
+- `manager`: Full operational and financial management of own hotel; cannot edit subscription tier or platform configs.
+- `accounts`: Read and write access to financial ledgers, vouchers, journals, folios, invoices; read-only to reservations.
+- `reception`: Create/edit reservations, check-in, check-out, room inventory, folios; zero access to financial ledgers or hotel configuration.
+- `housekeeping`: Zero access to finance or reservations; write access strictly restricted to own assigned housekeeping tasks (`assigned_to = auth.uid()`).
+
+### B. Table Classification Matrix
+| Classification | Tables | Allowed Operations |
+| :--- | :--- | :--- |
+| **Server-Only (No Client Writes)** | `audit_logs`, `channel_sync_jobs`, `notification_outbox`, `channel_ota_reservations`, `channel_connections`, `channel_rate_mappings`, `channel_inventory_restrictions`, `ota_settlements`, `hotel_extranet_codes`, `billing_settings`, `subscription_*`, `company_users`, `impersonation_sessions`, `hotel_invitations` | **No client mutations.** Mutations executed strictly by backend server via `service_role`. `audit_logs` permits client INSERT for own hotel only; UPDATE/DELETE strictly revoked. |
+| **Finance & Accounting (Strict Roles)** | `chart_of_accounts`, `journal_entries`, `journal_lines`, `vouchers`, `vendors`, `expense_entries`, `salary_entries`, `budgets`, `bank_reconciliation` | `hotel_admin`, `manager`, `accounts` only. Prohibited for `reception` and `housekeeping`. |
+| **Operational & PMS (Desk Roles)** | `reservations`, `folios`, `folio_charges`, `payments` | Read for all staff. Writes restricted to `hotel_admin`, `manager`, `reception`, `accounts`. Prohibited for `housekeeping`. |
+| **Configuration (Admin Roles)** | `rooms`, `room_categories`, `rate_plans`, `public.hotels` | Writes restricted to `hotel_admin`, `manager`. Normal staff cannot change room rates or hotel profile. |
+| **Housekeeping** | `housekeeping_tasks` | Reads for all staff. Housekeeping staff can update only their own assigned tasks (`assigned_to = auth.uid()`). |
+| **Tenant-Open (Collaborative)** | `room_chart_entries`, `other_daily_entries`, `room_shifts`, `laundry_entries`, `booking_timeline` | All authenticated hotel staff for collaborative daily desk operations. |
+
 - **Enforcement:**
   - The settlement amount is fetched directly from the authoritative database reservation record.
   - Razorpay order ID is strictly verified against the reservation record.
