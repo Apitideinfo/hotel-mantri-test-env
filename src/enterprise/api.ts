@@ -260,7 +260,7 @@ export const createPayment = async (payload: Record<string, unknown>): Promise<S
     module: 'subscriptions',
     hotel_id: payload.hotel_id as string,
     record_id: data.id,
-    new_value: data as Record<string, unknown>,
+    new_value: data as unknown as Record<string, unknown>,
   });
   return data;
 };
@@ -323,7 +323,7 @@ export const saveCompanyUser = async (
     if (updateErr) throw new Error(updateErr.message || 'Failed to update company user');
     if (result?.error) throw new Error(result.error);
     const data = result.user as CompanyUser;
-    await logAudit({ action: 'update_company_user', module: 'users', record_id: id, new_value: data as Record<string, unknown> });
+    await logAudit({ action: 'update_company_user', module: 'users', record_id: id, new_value: data as unknown as Record<string, unknown> });
     return data;
   }
   // Create auth user and company_users row via setup-super-admin edge function
@@ -336,7 +336,7 @@ export const saveCompanyUser = async (
   }
   if (result?.error) throw new Error(result.error);
   const data = (result.company_user || { id: result.userId, user_id: result.userId, email: input.email, name: input.name, role: input.role, status: 'Active' }) as CompanyUser;
-  await logAudit({ action: 'create_company_user', module: 'users', record_id: data.id, new_value: data as Record<string, unknown> });
+  await logAudit({ action: 'create_company_user', module: 'users', record_id: data.id, new_value: data as unknown as Record<string, unknown> });
   return data;
 };
 
