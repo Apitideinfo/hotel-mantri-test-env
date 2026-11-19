@@ -228,32 +228,18 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // H3: Prefer secure recovery link over setting cleartext password
-      if (prefer_link || !password) {
-        const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
-          type: "recovery",
-          email: cleanEmail,
-        });
-        if (linkErr) throw linkErr;
+      // N7: Reset password exclusively generates secure recovery links (direct password overwrite removed)
+      const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
+        type: "recovery",
+        email: cleanEmail,
+      });
+      if (linkErr) throw linkErr;
 
-        await logSuperAdminAudit("generate_recovery_link", existing.id, { email: cleanEmail });
-        return new Response(
-          JSON.stringify({ success: true, email: cleanEmail, link: linkData.properties?.action_link }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Validate new password policy
-      const pwErr = validatePasswordPolicy(password);
-      if (pwErr) {
-        return new Response(JSON.stringify({ error: pwErr }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-
-      const { error: updateError } = await adminClient.auth.admin.updateUserById(existing.id, { password, email_confirm: true });
-      if (updateError) throw updateError;
-
-      await logSuperAdminAudit("reset_password", existing.id, { email: cleanEmail });
-      return new Response(JSON.stringify({ success: true, email: cleanEmail }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      await logSuperAdminAudit("generate_recovery_link", existing.id, { email: cleanEmail });
+      return new Response(
+        JSON.stringify({ success: true, email: cleanEmail, link: linkData.properties?.action_link }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // ── ACTION: create_company_user ──────────────────────────────────────────

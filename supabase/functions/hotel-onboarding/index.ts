@@ -588,17 +588,17 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        userId = existingAuthUser.id;
-        if (body.password) {
-          const { error: updatePwErr } = await adminClient.auth.admin.updateUserById(userId, {
-            password: body.password,
-            email_confirm: true,
-          });
-          if (updatePwErr) {
-            console.warn(`[ONBOARDING_WARNING] [${requestId}] password update warning: ${updatePwErr.message}`);
-          }
-        }
-        console.log(`[ONBOARDING_OWNER_AUTH_REUSED] [${requestId}] userId=${userId} email=${cleanEmail}`);
+        // N7: Never overwrite or reset an existing user's password silently
+        return errorResponse(
+          "owner_auth",
+          "OWNER_EMAIL_EXISTS",
+          `An account with email "${cleanEmail}" already exists. Please use a unique owner email or sign in to attach this hotel.`,
+          false,
+          attemptId,
+          hotelId,
+          409,
+          requestId
+        );
       } else {
         const { data: newUserData, error: createError } = await adminClient.auth.admin.createUser({
           email: cleanEmail,
@@ -636,12 +636,13 @@ Deno.serve(async (req: Request) => {
         console.log(`[ONBOARDING_OWNER_AUTH_CREATED] [${requestId}] userId=${userId} email=${cleanEmail}`);
       }
 
-      // Link owner to this hotel in hotel_admins
+      // Link owner to this hotel in hotel_admins (explicit staff_role: 'hotel_admin' per N5)
       const { error: linkError } = await adminClient.from("hotel_admins").upsert(
         {
           user_id: userId,
           hotel_id: hotelId,
           role: "hotel_admin",
+          staff_role: "hotel_admin",
           status: "Active",
           email: cleanEmail,
         },
