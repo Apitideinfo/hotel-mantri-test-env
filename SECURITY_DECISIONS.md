@@ -123,6 +123,34 @@ Migration `20261102010000_role_aware_policies.sql` establishes database-level ro
 | **Housekeeping** | `housekeeping_tasks` | Reads for all staff. Housekeeping staff can update only their own assigned tasks (`assigned_to = auth.uid()`). |
 | **Tenant-Open (Collaborative)** | `room_chart_entries`, `other_daily_entries`, `room_shifts`, `laundry_entries`, `booking_timeline` | All authenticated hotel staff for collaborative daily desk operations. |
 
+---
+
+## 7. Function Grants & Closed-by-Default Architecture (N3)
+
+Migration `20261102020000_function_grants.sql` revokes broad `EXECUTE` privileges on functions in schema `public` from `PUBLIC`, `anon`, and `authenticated`. Default privileges are altered so all future tables and functions remain closed by default.
+
+### A. Allowed Functions for `authenticated` Role
+| Function Signature | Purpose / Justification |
+| :--- | :--- |
+| `auth_hotel_id()` | Evaluates tenant context for RLS policy enforcement. |
+| `is_super_admin()` | Evaluates platform administrator privileges for RLS policies. |
+| `auth_staff_role()` | Resolves caller's database staff role (`hotel_admin`, `manager`, etc.). |
+| `auth_has_role(VARIADIC text[])` | Evaluates role membership for table-level write policies. |
+| `is_company_user()` | Checks company-level role membership for internal staff. |
+| `company_user_role()` | Resolves company-level role identifier. |
+| `get_hotel_record_counts(uuid)` | Itemized record count helper for data management UI; enforces tenant ownership check. |
+
+### B. Revoked Functions (Accessible strictly via `service_role` on backend)
+- `get_auth_user_by_email`: Prevents email and UUID enumeration.
+- `delete_hotel_permanently`: Prevents unverified tenant deletion.
+- `reset_hotel_operational_data`: Prevents accidental or hostile tenant wipes.
+- `export_hotel_data`: Enforces backend audit logging prior to data export.
+- `change_plan`, `suspend_subscription`, `reactivate_subscription`, `extend_grace_period`, `convert_trial_to_paid`: Subscription mutations restricted strictly to backend service role.
+- `update_billing_settings`, `update_subscription_settings`: Financial and platform configuration restricted to backend.
+- `register_new_hotel`: Multi-step onboarding managed by backend / Edge Function.
+- Trigger functions (`sanitize_auth_user_tokens`, `auto_confirm_user`): Database triggers; direct caller execution revoked.
+
+
 - **Enforcement:**
   - The settlement amount is fetched directly from the authoritative database reservation record.
   - Razorpay order ID is strictly verified against the reservation record.
