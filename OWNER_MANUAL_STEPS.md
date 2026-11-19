@@ -56,7 +56,15 @@ The repository changes provide server-side and database-level protections, but s
 
 ## 2. Applying Database Migrations to Supabase
 
-The security remediation introduces 3 sequential migrations that must be executed on staging and production databases.
+The security remediation introduces sequential migrations that must be executed on staging and production databases:
+1. `supabase/migrations/20261101000000_lockdown_rls.sql` (Enables RLS on all public tables, revokes anon privileges).
+2. `supabase/migrations/20261101010000_staff_roles.sql` (Adds staff_role and permissions columns to hotel_admins).
+3. `supabase/migrations/20261101020000_public_branding_view.sql` (Creates public branding view with safe columns).
+4. `supabase/migrations/20261102000000_protect_hotel_admins.sql` (Blocks client mutations on hotel_admins via trigger).
+5. `supabase/migrations/20261102000001_fix_public_branding_permissions.sql` (Column-level grants and extensions relocation).
+6. `supabase/migrations/20261102010000_role_aware_policies.sql` (Database-level staff role isolation on tables).
+7. `supabase/migrations/20261102020000_function_grants.sql` (Function execute lockdown and closed-by-default privileges).
+8. `supabase/migrations/20261102030000_email_trust.sql` (Eliminates admin email fallback and auto_confirm trigger).
 
 ### Migration Order
 1. `supabase/migrations/20261101000000_lockdown_rls.sql` (Drops public anon policies, revokes schema privileges, establishes multi-tenant RLS).
