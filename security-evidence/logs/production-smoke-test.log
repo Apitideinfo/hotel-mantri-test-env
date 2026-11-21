@@ -1,0 +1,20 @@
+========================================================================
+HOTEL MANTRI — PRODUCTION SMOKE TEST RUNNER
+Timestamp: 2026-11-21T18:03:04.893Z
+Target Endpoint: https://mtfycmdoqzzyxhjmfvuv.supabase.co
+Execution Scope: Non-Destructive Integrity & Gateway Verifications
+========================================================================
+
+  ✓ PASS: Supabase Edge Gateway Reachability (HTTP 404)
+  ✓ PASS: Public Branding View Availability (Anon) (HTTP 200, returned 2 hotels)
+  ✓ PASS: Sensitive Base Table hotels Protected Against Anon (PostgreSQL 42501)
+  ✓ PASS: Financial Invoices Protected Against Anon (PostgreSQL 42501)
+  ✓ PASS: Hotel Admins Mutation Guard Blocks Anonymous Writes (PostgreSQL 42501)
+  ✓ PASS: Private Storage Bucket hotel-documents Enforces Privacy (0 items returned)
+  ✓ PASS: Service Role Backend Bypass Authorized (Count: 6 hotels)
+  ✓ PASS: Supabase Auth Gateway Heartbeat (HTTP 200)
+
+========================================================================
+SMOKE TEST SUMMARY: 8 PASSED | 0 FAILED
+========================================================================
+
