@@ -1,0 +1,19 @@
+Evidence ID,Artifact Name,Category,File Path,Format,Description,Verification Status
+EVID-01,Baseline Security Audit Report,Audit Report,security-evidence/01-baseline-audit.md,Markdown,Comprehensive baseline audit of repository architecture; commits; and live settings,VERIFIED
+EVID-02,Row Level Security Audit Report,RLS Audit,security-evidence/02-rls-audit.md,Markdown,Detailed audit of database RLS architecture; migrations; and policy enforcement,VERIFIED
+EVID-03,Historical CI Verification Report,CI Analysis,security-evidence/03-historical-ci-verification.md,Markdown,Independent verification of commit 6e6678f; CI workflow; and assertions accounting,VERIFIED
+EVID-04,Current Test Results Ledger,Test Execution,security-evidence/04-current-test-results.md,Markdown,Suite-by-suite execution ledger of 14 security test suites and 212 assertions,VERIFIED
+EVID-05,Security Test Plan and Strategy,Test Strategy,security-evidence/05-security-test-plan.md,Markdown,Four-layer defense-in-depth security verification test plan,VERIFIED
+EVID-06,Granular Security Test Results,Test Execution,security-evidence/06-security-test-results.md,Markdown,Assertion-by-assertion outcomes across all 14 security test suites,VERIFIED
+EVID-07,Key Rotation Record and Threat Analysis,Key Management,security-evidence/07-key-rotation-record.md,Markdown,Tracking record and exposure analysis for Supabase anon and service_role keys,PENDING ROTATION
+EVID-08,Key Rotation Operator Runbook,Operations SOP,security-evidence/08-key-rotation-runbook.md,Markdown,Step-by-step instructions for Supabase dashboard key rolling and Vercel redeploy,VERIFIED RUNBOOK
+EVID-09,Production Smoke Test Report,Smoke Testing,security-evidence/09-production-smoke-test.md,Markdown,Verification outcomes for non-destructive production gateway probes,VERIFIED (8/8)
+EVID-10,Production RLS Table Inventory,Database Inventory,security-evidence/rls-table-inventory.csv,CSV,Complete inventory of all 124 tables across public and storage schemas,VERIFIED (124/124)
+EVID-11,Client Acceptance Matrix,Compliance Matrix,security-evidence/acceptance-matrix.csv,CSV,Status mapping of all 8 client-mandated security acceptance requirements,VERIFIED
+EVID-12,Audit Findings Register,Remediation Register,security-evidence/findings-register.csv,CSV,Granular ledger of all 28 audited security findings (C1-C3; H1-H5; M1-M8; L1-L5; N1-N7),VERIFIED (28/28)
+EVID-13,PostgreSQL RLS Audit Script,SQL Script,security-evidence/sql/rls-audit.sql,SQL,Authoritative SQL query script to audit table-level RLS and policies in Supabase,VERIFIED
+EVID-14,Master Test Execution Raw Log,Test Log,security-evidence/logs/test-run-6e6678f.log,Log Text,Sanitized raw execution log proving 14/14 suites and 212 assertions passed,VERIFIED (212 Assertions)
+EVID-15,Production Smoke Test Raw Log,Test Log,security-evidence/logs/production-smoke-test.log,Log Text,Sanitized raw execution log proving 8/8 production smoke test probes passed,VERIFIED (8/8 Probes)
+EVID-16,Supabase Dashboard Evidence Guide,Visual Evidence,security-evidence/screenshots/SUPABASE_DASHBOARD_EVIDENCE_GUIDE.md,Markdown,Screenshot capture instructions; UI selectors; and probe verification runbook,VERIFIED GUIDE
+EVID-17,Publication-Grade Client PDF Report,Executive Report,security-evidence/Production_Security_Remediation_Verification_Report.pdf,PDF Document,Comprehensive 5-page publication-grade PDF report for client delivery,GENERATED
+EVID-18,Production Security Evidence Package,Evidence Archive,security-evidence/Production_Security_Evidence_Package.zip,ZIP Archive,Bundled package containing all evidence reports; CSVs; scripts; and logs,GENERATED

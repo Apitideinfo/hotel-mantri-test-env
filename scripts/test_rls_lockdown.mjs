@@ -83,6 +83,13 @@ async function runStaticMigrationCheck() {
   assert(!brandingContent.includes('owner_name'), 'public_hotel_branding view does NOT expose owner_name');
   assert(!brandingContent.includes('mobile'), 'public_hotel_branding view does NOT expose mobile');
 
+  const fixPermissionsPath = path.join(ROOT_DIR, 'supabase', 'migrations', '20261102000001_fix_public_branding_permissions.sql');
+  assert(fs.existsSync(fixPermissionsPath), 'Migration 20261102000001_fix_public_branding_permissions.sql exists');
+  const fixContent = fs.readFileSync(fixPermissionsPath, 'utf8');
+  assert(fixContent.includes('security_invoker = on') || fixContent.includes('security_invoker = true'), 'View enforces security_invoker = on');
+  assert(fixContent.includes('GRANT SELECT (id, hotel_name, city, state, address, is_active) ON public.hotels TO anon'), 'Grants column-level SELECT on safe columns to anon');
+  assert(fixContent.includes('ALTER EXTENSION pgcrypto SET SCHEMA extensions'), 'Relocates pgcrypto to extensions schema');
+
   // Verify ten originally vulnerable tables are explicitly covered
   const criticalTen = [
     'daily_reports',

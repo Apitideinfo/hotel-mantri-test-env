@@ -46,6 +46,13 @@ jobs:
       - name: Staff Role Escalation Prevention Audit
         run: node scripts/test_role_escalation.mjs
 
+      - name: Hotel Admins Tamper & Super Admin Escalation Audit (N1)
+        run: node scripts/test_hotel_admins_tamper.mjs
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
       - name: Hardcoded Secrets & Fail-Closed Audit
         run: node scripts/test_hardcoded_secrets.mjs
 

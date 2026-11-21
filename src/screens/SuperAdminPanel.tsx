@@ -342,16 +342,11 @@ export const SuperAdminPanel = ({ onSignOut, onNavigateDbTools, onViewDashboard 
     try {
       setRemoving(true);
       
-      const { error: hErr } = await supabase.from('hotels').update({ 
-        subscription_status: 'Suspended', 
-        is_active: false 
-      }).eq('id', removeHotel.id);
-      if (hErr) throw hErr;
-
-      const { error: aErr } = await supabase.from('hotel_admins').update({ 
-        status: 'Inactive' 
-      }).eq('hotel_id', removeHotel.id);
-      if (aErr) throw aErr;
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke('setup-super-admin', {
+        body: { action: 'deactivate_hotel', hotel_id: removeHotel.id }
+      });
+      if (fnErr) throw fnErr;
+      if (fnData?.error) throw new Error(fnData.error);
 
       setSuccess(`Hotel "${removeHotel.hotel_name}" successfully removed and deactivated.`);
       setRemoveHotel(null);

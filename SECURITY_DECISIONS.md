@@ -98,6 +98,77 @@ All operational tables containing `hotel_id` are restricted to the caller's acti
 
 - **Decision:** Authoritative database settlement verification in `/api/verify-payment`.
 - **Rationale:** Attackers can tamper with the payment amount or order reference on the client side. The backend must never trust client-supplied payment amounts.
+
+---
+
+## 6. Role-Aware Database RLS & Table Classifications (N2)
+
+Migration `20261102010000_role_aware_policies.sql` establishes database-level role isolation using `auth_staff_role()` and `auth_has_role(VARIADIC text[])`.
+
+### A. Role Hierarchy
+- `super_admin`: Full platform access via `is_super_admin()`.
+- `hotel_admin`: Full management of own hotel profile, rooms, rates, reservations, folios, finance, staff.
+- `manager`: Full operational and financial management of own hotel; cannot edit subscription tier or platform configs.
+- `accounts`: Read and write access to financial ledgers, vouchers, journals, folios, invoices; read-only to reservations.
+- `reception`: Create/edit reservations, check-in, check-out, room inventory, folios; zero access to financial ledgers or hotel configuration.
+- `housekeeping`: Zero access to finance or reservations; write access strictly restricted to own assigned housekeeping tasks (`assigned_to = auth.uid()`).
+
+### B. Table Classification Matrix
+| Classification | Tables | Allowed Operations |
+| :--- | :--- | :--- |
+| **Server-Only (No Client Writes)** | `audit_logs`, `channel_sync_jobs`, `notification_outbox`, `channel_ota_reservations`, `channel_connections`, `channel_rate_mappings`, `channel_inventory_restrictions`, `ota_settlements`, `hotel_extranet_codes`, `billing_settings`, `subscription_*`, `company_users`, `impersonation_sessions`, `hotel_invitations` | **No client mutations.** Mutations executed strictly by backend server via `service_role`. `audit_logs` permits client INSERT for own hotel only; UPDATE/DELETE strictly revoked. |
+| **Finance & Accounting (Strict Roles)** | `chart_of_accounts`, `journal_entries`, `journal_lines`, `vouchers`, `vendors`, `expense_entries`, `salary_entries`, `budgets`, `bank_reconciliation` | `hotel_admin`, `manager`, `accounts` only. Prohibited for `reception` and `housekeeping`. |
+| **Operational & PMS (Desk Roles)** | `reservations`, `folios`, `folio_charges`, `payments` | Read for all staff. Writes restricted to `hotel_admin`, `manager`, `reception`, `accounts`. Prohibited for `housekeeping`. |
+| **Configuration (Admin Roles)** | `rooms`, `room_categories`, `rate_plans`, `public.hotels` | Writes restricted to `hotel_admin`, `manager`. Normal staff cannot change room rates or hotel profile. |
+| **Housekeeping** | `housekeeping_tasks` | Reads for all staff. Housekeeping staff can update only their own assigned tasks (`assigned_to = auth.uid()`). |
+| **Tenant-Open (Collaborative)** | `room_chart_entries`, `other_daily_entries`, `room_shifts`, `laundry_entries`, `booking_timeline` | All authenticated hotel staff for collaborative daily desk operations. |
+
+---
+
+## 7. Function Grants & Closed-by-Default Architecture (N3)
+
+Migration `20261102020000_function_grants.sql` revokes broad `EXECUTE` privileges on functions in schema `public` from `PUBLIC`, `anon`, and `authenticated`. Default privileges are altered so all future tables and functions remain closed by default.
+
+### A. Allowed Functions for `authenticated` Role
+| Function Signature | Purpose / Justification |
+| :--- | :--- |
+| `auth_hotel_id()` | Evaluates tenant context for RLS policy enforcement. |
+| `is_super_admin()` | Evaluates platform administrator privileges for RLS policies. |
+| `auth_staff_role()` | Resolves caller's database staff role (`hotel_admin`, `manager`, etc.). |
+| `auth_has_role(VARIADIC text[])` | Evaluates role membership for table-level write policies. |
+| `is_company_user()` | Checks company-level role membership for internal staff. |
+| `company_user_role()` | Resolves company-level role identifier. |
+| `get_hotel_record_counts(uuid)` | Itemized record count helper for data management UI; enforces tenant ownership check. |
+
+### B. Revoked Functions (Accessible strictly via `service_role` on backend)
+- `get_auth_user_by_email`: Prevents email and UUID enumeration.
+- `delete_hotel_permanently`: Prevents unverified tenant deletion.
+- `reset_hotel_operational_data`: Prevents accidental or hostile tenant wipes.
+- `export_hotel_data`: Enforces backend audit logging prior to data export.
+- `change_plan`, `suspend_subscription`, `reactivate_subscription`, `extend_grace_period`, `convert_trial_to_paid`: Subscription mutations restricted strictly to backend service role.
+- `update_billing_settings`, `update_subscription_settings`: Financial and platform configuration restricted to backend.
+- `register_new_hotel`: Multi-step onboarding managed by backend / Edge Function.
+- Trigger functions (`sanitize_auth_user_tokens`, `auto_confirm_user`): Database triggers; direct caller execution revoked.
+
+---
+
+## 8. Storage Bucket Policies & Private Documents (N6)
+
+Migration `20261102040000_storage_bucket_policies.sql` establishes explicit bucket isolation and RLS policies on `storage.objects`:
+
+### A. Bucket Configuration
+1. **`hotel-assets` (Public Read):**
+   - **Purpose:** Public delivery of hotel branding logos, invoice header graphics, and theme assets.
+   - **Privacy:** `public = true`.
+   - **Writes:** Restricted strictly to caller's active hotel context (`split_part(name, '/', 1) = auth_hotel_id()::text`) or `is_super_admin()`. Max size 5 MB, allowed MIME types: PNG, JPEG, WEBP.
+2. **`hotel-documents` (Private & Confidential):**
+   - **Purpose:** Storage of guest registration cards, guest identity documents, reservation confirmation PDFs, daily operational report snapshots, and GST invoice exports.
+   - **Privacy:** `public = false`.
+   - **Access Control:** Direct public (`anon`) access is strictly forbidden (zero anon policies). Authenticated access requires `is_super_admin()` or the caller's active hotel ID matching the root folder segment (`split_part(name, '/', 1) = auth_hotel_id()::text`).
+   - **Delivery:** Delivered to guests strictly via time-limited HMAC signed URLs generated by the backend server.
+
+
+
 - **Enforcement:**
   - The settlement amount is fetched directly from the authoritative database reservation record.
   - Razorpay order ID is strictly verified against the reservation record.
